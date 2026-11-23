@@ -114,17 +114,93 @@ test("a second open of the same data directory throws until the first closes", (
     expect((err as Error).message).toContain(String(process.pid));
   }
   wb.close();
-  expect(existsSync(join(dir, "workbench.lock"))).toBe(false);
-  wb = Workbench.open(dir, { now, onError });
-});
-
-test("a lock left by a dead process is taken over", async () => {
-  const child = Bun.spawn(["bun", "-e", "0"]);
-  await child.exited;
-  wb.close();
-  writeFileSync(join(dir, "workbench.lock"), String(child.pid));
   wb = Workbench.open(dir, { now, onError });
   expect(wb.createCase(newCase, human).id).toBe("CASE-1");
+});
+
+// ---------- final review, finding 2: the operating system holds the lock ----------
+const OPENER = join(import.meta.dir, "..", "helpers", "workbench-opener.ts");
+
+/** Reads lines from a child's stdout as they arrive. */
+function lines(proc: { stdout: ReadableStream<Uint8Array> }): () => Promise<string> {
+  const reader = proc.stdout.getReader();
+  let buffered = "";
+  return async () => {
+    for (;;) {
+      const i = buffered.indexOf("\n");
+      if (i >= 0) {
+        const line = buffered.slice(0, i);
+        buffered = buffered.slice(i + 1);
+        return line;
+      }
+      const { value, done } = await reader.read();
+      if (done) return buffered;
+      buffered += new TextDecoder().decode(value);
+    }
+  };
+}
+
+/** Leaves `data` as a crash would: a holder killed with SIGKILL while it held the lock. */
+async function crashHolder(data: string): Promise<void> {
+  const holder = Bun.spawn([process.execPath, OPENER, data, "-", "-"], { stdout: "pipe", stderr: "pipe" });
+  const next = lines(holder);
+  expect(await next()).toBe("ready");
+  expect(await next()).toBe(`held ${holder.pid}`);
+  holder.kill("SIGKILL");
+  await holder.exited;
+}
+
+test("several processes opening at once after a crash: exactly one holds the lock, in every round", async () => {
+  wb.close();
+  for (let round = 0; round < 10; round++) {
+    const data = join(dir, `round-${round}`);
+    await crashHolder(data);
+    const go = join(dir, `go-${round}`), release = join(dir, `release-${round}`);
+    const procs = Array.from({ length: 6 }, () => Bun.spawn([process.execPath, OPENER, data, go, release], { stdout: "pipe", stderr: "pipe" }));
+    const next = procs.map(lines);
+    expect(await Promise.all(next.map((n) => n()))).toEqual(Array(6).fill("ready"));
+    writeFileSync(go, "");
+    const said = await Promise.all(next.map((n) => n()));
+    const held = said.filter((l) => l.startsWith("held "));
+    expect(held, `round ${round}: ${said.join(", ")}`).toHaveLength(1);
+    const holder = held[0]!.slice(5);
+    // the losers name the holder, or no one if they looked before the new holder had written its pid,
+    // but never the crashed process
+    const named = said.filter((l) => l.startsWith("locked ")).map((l) => l.slice(7));
+    expect(named, `round ${round}`).toHaveLength(5);
+    for (const pid of named) expect(["null", holder], `round ${round}`).toContain(pid);
+    writeFileSync(release, "");
+    const codes = await Promise.all(procs.map((p) => p.exited));
+    if (codes.some((c) => c !== 0)) throw new Error(await Promise.all(procs.map((p) => new Response(p.stderr).text())).then((e) => e.join("\n")));
+  }
+  wb = Workbench.open(dir, { now, onError });
+}, 60000);
+
+test("the lock goes when the holding process dies, however it dies", async () => {
+  wb.close();
+  const holder = Bun.spawn([process.execPath, OPENER, dir, "-", "-"], { stdout: "pipe", stderr: "pipe" });
+  const next = lines(holder);
+  expect(await next()).toBe("ready");
+  expect(await next()).toBe(`held ${holder.pid}`);
+  expect(() => Workbench.open(dir, { onError })).toThrow(WorkbenchLockedError);
+  try {
+    Workbench.open(dir, { onError });
+  } catch (err) {
+    expect((err as WorkbenchLockedError).pid).toBe(holder.pid);
+  }
+  holder.kill("SIGKILL");
+  await holder.exited;
+  wb = Workbench.open(dir, { now, onError });
+  expect(wb.createCase(newCase, human).id).toBe("CASE-1");
+});
+
+test("the lock is a SQLite database in the data directory; there is no pid file", () => {
+  expect(existsSync(join(dir, "workbench.lock.sqlite"))).toBe(true);
+  expect(existsSync(join(dir, "workbench.lock"))).toBe(false);
+  // a leftover pid file from an older version means nothing
+  wb.close();
+  writeFileSync(join(dir, "workbench.lock"), "1");
+  wb = Workbench.open(dir, { now, onError });
 });
 
 test("listCases leaves out a case that cannot be loaded and reports it", () => {
@@ -158,7 +234,8 @@ test("close closes everything even if one session fails, then rethrows", () => {
   expect(() => wb.close()).toThrow("close failed");
   expect(bClosed).toBe(true);
   expect(chainClosed).toBe(true);
-  expect(existsSync(join(dir, "workbench.lock"))).toBe(false);
+  // the lock was released: the data directory opens again
+  Workbench.open(dir, { onError }).close();
 });
 
 test("an empty or non-string data directory is a TypeError", () => {

@@ -1,4 +1,5 @@
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { BlobStore } from "./blobs";
 import { ignoreThrow, logToStderr } from "./deliver";
@@ -16,9 +17,10 @@ export class CaseNotFoundError extends Error {
 }
 
 export class WorkbenchLockedError extends Error {
-  readonly pid: number;
-  constructor(dataDir: string, pid: number) {
-    super(`data directory ${dataDir} is in use by process ${pid}`);
+  /** The holder's pid, when it could be read; null otherwise. For the message only. */
+  readonly pid: number | null;
+  constructor(dataDir: string, pid: number | null) {
+    super(`data directory ${dataDir} is in use by ${pid === null ? "another process" : `process ${pid}`}`);
     this.name = "WorkbenchLockedError";
     this.pid = pid;
   }
@@ -31,40 +33,72 @@ export type ErrorHandler = (error: unknown, entry?: Entry) => void;
 /** At most 9 digits, so the number is always an exact integer. */
 const CASE_ID = /^CASE-[1-9][0-9]{0,8}$/;
 
-function processAlive(pid: number): boolean {
+/** The lock: a SQLite database the holding process keeps exclusively locked. */
+const LOCK_FILE = "workbench.lock.sqlite";
+const holderText = (pid: number): string => `[workbench lock holder pid=${pid}]`;
+/** How long an opener keeps trying when the lock is busy, and the base of its random back-off. */
+const LOCK_RETRY_MS = 100;
+const LOCK_BACKOFF_MS = 5;
+const HOLDER = /\[workbench lock holder pid=([1-9][0-9]{0,9})\]/g;
+
+/**
+ * One writer process per data directory. The operating system holds the lock: `<dataDir>/workbench.lock.sqlite`
+ * is opened with locking_mode = EXCLUSIVE and a zero busy timeout, and a write takes the exclusive lock,
+ * which SQLite then keeps until the connection closes. A second opener, in this process or another,
+ * cannot even read the file and gets WorkbenchLockedError (after a short, bounded retry that only
+ * resolves openers racing each other). The lock goes when the holder closes it or dies for any reason,
+ * so there is no stale state and nothing to take over.
+ */
+function acquireLock(dataDir: string): Database {
+  const path = join(dataDir, LOCK_FILE);
+  const deadline = Date.now() + LOCK_RETRY_MS;
+  for (;;) {
+    const db = new Database(path, { create: true });
+    try {
+      db.exec("PRAGMA busy_timeout = 0");
+      db.exec("PRAGMA locking_mode = EXCLUSIVE");
+      // So an earlier holder's pid never lingers in the file's free space.
+      db.exec("PRAGMA secure_delete = ON");
+      db.exec("BEGIN EXCLUSIVE");
+      db.exec("CREATE TABLE IF NOT EXISTS holder (id INTEGER PRIMARY KEY CHECK (id = 1), pid TEXT NOT NULL)");
+      db.query("INSERT OR REPLACE INTO holder (id, pid) VALUES (1, ?)").run(holderText(process.pid));
+      db.exec("COMMIT");
+      return db;
+    } catch (err) {
+      db.close();
+      if ((err as { code?: unknown }).code !== "SQLITE_BUSY") throw err;
+      if (Date.now() >= deadline) throw new WorkbenchLockedError(dataDir, holderPid(path));
+      // Busy can also mean another opener is half way up the same lock ladder (each holds SHARED while
+      // asking for EXCLUSIVE, so with no wait both are refused). Back off for a random moment, having
+      // released everything, and try again: one of them gets through. A real holder never lets go.
+      Bun.sleepSync(LOCK_BACKOFF_MS + Math.random() * LOCK_BACKOFF_MS * 3);
+    }
+  }
+}
+
+/**
+ * The pid the holder wrote, for the error message only; it plays no part in deciding who holds the lock.
+ * The holder keeps SQLite out, so this reads the file's bytes (the operating system's lock is advisory).
+ * A holder that has just taken the lock may not have written its pid yet, so the file can still name a
+ * previous holder: a pid that is not a live process is not reported. Null when unknown.
+ */
+function holderPid(path: string): number | null {
+  try {
+    const found = new Set([...new TextDecoder("latin1").decode(readFileSync(path)).matchAll(HOLDER)].map((m) => Number(m[1])));
+    const pid = found.size === 1 ? [...found][0]! : null;
+    return pid !== null && alive(pid) ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM";
+    return (err as { code?: unknown }).code === "EPERM";
   }
-}
-
-/** One writer process per data directory: takes `<dataDir>/workbench.lock`, taking over one left by a dead process. */
-function acquireLock(dataDir: string): string {
-  const path = join(dataDir, "workbench.lock");
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const fd = openSync(path, "wx");
-      try {
-        writeFileSync(fd, String(process.pid));
-      } finally {
-        closeSync(fd);
-      }
-      return path;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-    }
-    let pid = NaN;
-    try {
-      pid = Number.parseInt(readFileSync(path, "utf8").trim(), 10);
-    } catch {
-      continue; // vanished since we looked; try again
-    }
-    if (Number.isInteger(pid) && pid > 0 && processAlive(pid)) throw new WorkbenchLockedError(dataDir, pid);
-    rmSync(path, { force: true }); // stale: owner is gone (or the file is unreadable junk)
-  }
-  throw new Error(`could not take the lock on ${dataDir}`);
 }
 
 export class Workbench {
@@ -72,29 +106,29 @@ export class Workbench {
   readonly chain: Ledger;
   private readonly now: (() => string) | undefined;
   private readonly onError: ErrorHandler;
-  private readonly lockPath: string;
+  private readonly lock: Database;
   private readonly sessions: Record<string, CaseSession> = Object.create(null) as Record<string, CaseSession>;
 
-  private constructor(dataDir: string, chain: Ledger, now: (() => string) | undefined, onError: ErrorHandler, lockPath: string) {
+  private constructor(dataDir: string, chain: Ledger, now: (() => string) | undefined, onError: ErrorHandler, lock: Database) {
     this.dataDir = dataDir;
     this.chain = chain;
     this.now = now;
     this.onError = onError;
-    this.lockPath = lockPath;
+    this.lock = lock;
   }
 
   static open(dataDir: string, opts: { now?: () => string; onError?: ErrorHandler } = {}): Workbench {
     if (typeof dataDir !== "string" || dataDir === "") throw new TypeError("dataDir must be a non-empty string");
     const onError: ErrorHandler = opts.onError ?? logToStderr("workbench");
     mkdirSync(dataDir, { recursive: true });
-    const lockPath = acquireLock(dataDir);
+    const lock = acquireLock(dataDir);
     try {
       mkdirSync(join(dataDir, "cases"), { recursive: true });
       mkdirSync(join(dataDir, "blobs"), { recursive: true });
       const chain = Ledger.open(join(dataDir, "workbench.sqlite"), "workbench", { ...(opts.now ? { now: opts.now } : {}), onError });
-      return new Workbench(dataDir, chain, opts.now, onError, lockPath);
+      return new Workbench(dataDir, chain, opts.now, onError, lock);
     } catch (err) {
-      rmSync(lockPath, { force: true });
+      lock.close();
       throw err;
     }
   }
@@ -172,9 +206,7 @@ export class Workbench {
       attempt(() => s.close());
     }
     attempt(() => this.chain.close());
-    attempt(() => {
-      if (existsSync(this.lockPath) && readFileSync(this.lockPath, "utf8").trim() === String(process.pid)) rmSync(this.lockPath, { force: true });
-    });
+    attempt(() => this.lock.close());
     if (errors.length > 0) throw errors[0];
   }
 
