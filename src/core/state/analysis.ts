@@ -9,8 +9,18 @@ const isOneOf = <T extends string>(x: unknown, set: readonly T[]): x is T => isS
 const has = <T>(rec: Record<string, T>, id: unknown): id is string => isStr(id) && Object.hasOwn(rec, id);
 const isFinding = (x: unknown): x is CheckFinding => isObj(x) && isStr(x.check) && isStr(x.where) && isStr(x.message);
 const isFindings = (x: unknown): x is CheckFinding[] => Array.isArray(x) && x.every(isFinding);
+const MARKINGS = ["TLP:CLEAR", "TLP:GREEN", "TLP:AMBER", "TLP:AMBER+STRICT", "TLP:RED"] as const;
+const isFindingRecord = (x: unknown): boolean =>
+  isObj(x) && isStr(x.id) && isStr(x.statement) && isStr(x.likelihood) && isOneOf(x.confidence, ["low", "moderate", "high"])
+  && isStr(x.confidence_basis) && isStrList(x.cites) && isStrList(x.assumptions) && isStr(x.reasoning);
+const isProduct = (x: unknown): boolean =>
+  isObj(x) && isStr(x.objective) && isStr(x.question) && isOneOf(x.marking, MARKINGS) && isStr(x.summary)
+  && Array.isArray(x.key_findings) && x.key_findings.every(isFindingRecord)
+  && isStr(x.gaps_and_limits) && isStr(x.alternatives) && isStr(x.assessment)
+  && Array.isArray(x.sources) && x.sources.every((v) => isObj(v) && isStr(v.source) && isStr(v.quality))
+  && isStrList(x.assumptions) && isStr(x.change);
 const isDraft = (x: unknown): x is Draft =>
-  isObj(x) && isNum(x.n) && isStr(x.hash) && isObj(x.author) && isObj(x.product) && isStr(x.reason);
+  isObj(x) && isNum(x.n) && isStr(x.hash) && isObj(x.author) && isProduct(x.product) && isStr(x.reason);
 
 function withReview(s: CaseState, hash: unknown, change: (r: ReviewState) => ReviewState): CaseState {
   if (!has(s.reviews, hash)) return s;
@@ -21,7 +31,9 @@ function applyDrafts(s: CaseState, entry: Entry): CaseState {
   switch (entry.type) {
     case "draft.revised": {
       const d = entry.payload.draft;
-      if (!isDraft(d) || Object.hasOwn(s.reviews, d.hash)) return s;
+      if (!isDraft(d)) return s;
+      // a repeated hash is a new revision of bytes that were already reviewed: keep its record
+      if (Object.hasOwn(s.reviews, d.hash)) return { ...s, drafts: [...s.drafts, d] };
       const review: ReviewState = { checks: [], evaluation: null, challenges: [], passed_stages: [] };
       return { ...s, drafts: [...s.drafts, d], reviews: { ...s.reviews, [d.hash]: review } };
     }
@@ -40,11 +52,26 @@ function applyDrafts(s: CaseState, entry: Entry): CaseState {
       return withReview(s, draft_hash, (r) => ({ ...r, evaluation: { pass, findings } }));
     }
     case "stage.finished": {
-      // applyRun sets the stage status; this records the pass against the draft it examined
+      // applyRun sets the stage status; this records the verdict against the draft it examined. The latest verdict wins.
       const { stage, outcome, draft_hash } = entry.payload;
-      if (outcome !== "pass" || !isStr(stage) || !isStr(draft_hash)) return s;
-      if (!has(s.reviews, draft_hash) || s.reviews[draft_hash]!.passed_stages.includes(stage)) return s;
-      return withReview(s, draft_hash, (r) => ({ ...r, passed_stages: [...r.passed_stages, stage] }));
+      if (!isStr(stage) || !isStr(draft_hash) || !has(s.reviews, draft_hash)) return s;
+      const passed = s.reviews[draft_hash]!.passed_stages;
+      if (outcome === "pass") {
+        return passed.includes(stage) ? s : withReview(s, draft_hash, (r) => ({ ...r, passed_stages: [...passed, stage] }));
+      }
+      if (outcome === "fail" || outcome === "declined") {
+        return passed.includes(stage) ? withReview(s, draft_hash, (r) => ({ ...r, passed_stages: passed.filter((x) => x !== stage) })) : s;
+      }
+      return s;
+    }
+    case "run.started": {
+      // a new run reviews afresh; applyRun has already installed it. Checks, evaluations and challenges stay.
+      if (!isStr(entry.payload.run) || s.run.id !== entry.payload.run) return s;
+      const hashes = Object.keys(s.reviews).filter((h) => s.reviews[h]!.passed_stages.length > 0);
+      if (hashes.length === 0) return s;
+      const reviews = { ...s.reviews };
+      for (const h of hashes) reviews[h] = { ...reviews[h]!, passed_stages: [] };
+      return { ...s, reviews };
     }
     default:
       return s;

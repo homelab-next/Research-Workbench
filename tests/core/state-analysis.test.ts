@@ -136,6 +136,72 @@ test("a new revision is not publishable on the old revision's passes", () => {
   expect(publishable(s, "h1")).toBe(false);
 });
 
+test("a repeated draft hash is a new revision and keeps that hash's review record", () => {
+  const b = run();
+  revise(b, 1, "h1");
+  passAll(b, "h1");
+  revise(b, 2, "h2");
+  revise(b, 3, "h1");
+  let s = fold(b.entries);
+  expect(s.drafts.map((d) => [d.n, d.hash])).toEqual([[1, "h1"], [2, "h2"], [3, "h1"]]);
+  expect(latestDraft(s)).toMatchObject({ n: 3, hash: "h1" });
+  expect(publishable(s, "h1")).toBe(true);
+  expect(publishable(s, "h2")).toBe(false);
+  const c = run();
+  revise(c, 1, "h1");
+  passAll(c, "h1");
+  c.add("challenge.raised", { challenge: chal("x1", "h1") });
+  revise(c, 2, "h2");
+  revise(c, 3, "h1");
+  s = fold(c.entries);
+  expect(s.reviews.h1!.challenges).toEqual(["x1"]);
+  expect(publishable(s, "h1")).toBe(false);
+});
+
+test("the latest verdict wins: a later failure on the same hash removes the pass", () => {
+  const b = run();
+  revise(b, 1, "h1");
+  passAll(b, "h1");
+  pass(b, "evaluate", "h1", "fail");
+  let s = fold(b.entries);
+  expect(s.reviews.h1!.passed_stages).toEqual(["checks", "challenge"]);
+  expect(publishable(s, "h1")).toBe(false);
+  pass(b, "evaluate", "h1");
+  expect(publishable(fold(b.entries), "h1")).toBe(true);
+  b.add("stage.finished", { stage: "checks", attempt: 2, outcome: "declined", draft_hash: "h1", output: null, reason: null });
+  s = fold(b.entries);
+  expect(s.reviews.h1!.passed_stages).toEqual(["challenge", "evaluate"]);
+});
+
+test("a new run reviews afresh", () => {
+  const b = run();
+  revise(b, 1, "h1");
+  b.add("check.run", { check: "c", script_hash: "x", input: { blob: "b", bytes: 1 }, draft_hash: "h1", pass: true, findings: [] });
+  passAll(b, "h1");
+  expect(publishable(fold(b.entries), "h1")).toBe(true);
+  b.add("run.started", { run: "run-2", pipeline: "p", pipeline_hash: "h", stages });
+  const s = fold(b.entries);
+  expect(s.reviews.h1!.passed_stages).toEqual([]);
+  expect(s.reviews.h1!.checks.length).toBe(1);
+  expect(publishable(s, "h1")).toBe(false);
+  passAll(b, "h1");
+  expect(publishable(fold(b.entries), "h1")).toBe(true);
+});
+
+test("a draft with a malformed product is ignored", () => {
+  const base = fold(run().entries);
+  const bad: unknown[] = [
+    {}, { ...product, marking: "secret" }, { ...product, key_findings: [{}] }, { ...product, sources: [1] },
+    { ...product, assumptions: [1] }, { ...product, change: undefined },
+  ];
+  for (const p of bad) {
+    const e = raw("draft.revised", { draft: { ...draft(1, "h1"), product: p } });
+    const out = apply(base, e);
+    expect(out.drafts).toEqual([]);
+    expect(out.reviews).toEqual({});
+  }
+});
+
 test("a run with no review stages publishes nothing", () => {
   const b = new EntryBuilder();
   b.add("run.started", { run: "run-1", pipeline: "p", pipeline_hash: "h", stages: [stages[0]!, stages[4]!] });
@@ -282,9 +348,7 @@ test("malformed payloads never throw and change nothing", () => {
       const e = raw(type, payload);
       let out: CaseState | undefined;
       expect(() => { out = apply(base, e); }).not.toThrow();
-      const { skipped, ...rest } = out!;
-      const { skipped: _s, ...was } = base;
-      expect({ ...rest, seq: was.seq, head_ts: was.head_ts, counters: was.counters }, `${type} ${label}`).toEqual(was);
+      expect({ ...out!, seq: base.seq, head_ts: base.head_ts, counters: base.counters, skipped: base.skipped }, `${type} ${label}`).toEqual(base);
     }
   }
 });
