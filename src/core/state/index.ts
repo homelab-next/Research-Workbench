@@ -2,7 +2,7 @@ import type { Entry } from "../types";
 import { apply } from "./apply";
 import type { CaseState, IdKind } from "./types";
 
-export { apply } from "./apply";
+export { apply, countedKind } from "./apply";
 export { runUsage } from "./run";
 export { applyAnalysis, blockers, latestDraft, publishable } from "./analysis";
 export { cardLocation } from "./cards";

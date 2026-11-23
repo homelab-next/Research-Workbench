@@ -3,9 +3,33 @@ import { Delivery, logToStderr } from "./deliver";
 import { draftHashMatches, InvalidEntryError } from "./ledger";
 import type { Ledger } from "./ledger";
 import { IdAllocator } from "./ids";
-import { apply, fold, initial, isNext } from "./state";
-import type { CaseState } from "./state";
+import { apply, countedKind, fold, initial, isNext } from "./state";
+import type { CaseState, IdKind } from "./state";
 import type { Entry, EntryInput } from "./types";
+
+/** A commit whose builder took ids it did not use for creating entries, or created entries with ids it did not take. */
+export class IdAllocationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "IdAllocationError";
+  }
+}
+
+/** Throws unless, for every id kind, the ids taken equal the creating entries in the commit (the rule on IdAllocator). */
+function checkIds(inputs: readonly EntryInput[], ids: IdAllocator): void {
+  const taken = ids.taken();
+  const created: Partial<Record<IdKind, number>> = {};
+  for (const input of inputs) {
+    const kind = countedKind(input?.type);
+    if (kind !== undefined) created[kind] = (created[kind] ?? 0) + 1;
+  }
+  const kinds = [...new Set([...Object.keys(taken), ...Object.keys(created)] as IdKind[])].sort();
+  const wrong = kinds.filter((k) => (taken[k] ?? 0) !== (created[k] ?? 0));
+  if (wrong.length > 0) {
+    const detail = wrong.map((k) => `${k}: ${taken[k] ?? 0} taken, ${created[k] ?? 0} created`).join("; ");
+    throw new IdAllocationError(`every id taken must be used by one creating entry of the same commit (${detail})`);
+  }
+}
 
 type Listener = (entry: Entry, state: Readonly<CaseState>) => void;
 
@@ -46,12 +70,14 @@ export class CaseSession {
     if (this.building) throw new Error("commit called from inside a commit builder");
     this.catchUp();
     let inputs: EntryInput[];
+    const ids = new IdAllocator(this.current);
     this.building = true;
     try {
-      inputs = build(this.current, new IdAllocator(this.current));
+      inputs = build(this.current, ids);
     } finally {
       this.building = false;
     }
+    checkIds(inputs, ids);
     for (const input of inputs) {
       if (input?.type === "draft.revised" && !draftHashMatches(input.payload?.draft)) {
         throw new InvalidEntryError(`draft ${String(input.payload?.draft?.n)}: hash is not the hash of its product`);

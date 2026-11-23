@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BlobStore } from "../../src/core/blobs";
 import { Ledger } from "../../src/core/ledger";
-import { CaseSession } from "../../src/core/session";
+import type { IdAllocator } from "../../src/core/ids";
+import { CaseSession, IdAllocationError } from "../../src/core/session";
 import { fold, isNext } from "../../src/core/state";
 import type { CaseState } from "../../src/core/state";
 import { canonical } from "../../src/core/canonical";
@@ -33,7 +34,9 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-const newCard = (id: string): EntryInput => ({ type: "card.created", payload: { card: card(id) }, actor: human });
+/** Creating entries take their id from the allocator: every id taken must be used by one creating entry of the commit. */
+const newCard = (ids: IdAllocator): EntryInput => ({ type: "card.created", payload: { card: card(ids.next("card")) }, actor: human });
+const newLane = (ids: IdAllocator, title: string): EntryInput => ({ type: "lane.created", payload: { lane: ids.next("lane"), title, subgoal: null }, actor: human });
 
 test("commit appends what the builder returns and advances state", () => {
   const out = s.commit((_state, ids) => [{ type: "card.created", payload: { card: card(ids.next("card")) }, actor: human }]);
@@ -43,24 +46,25 @@ test("commit appends what the builder returns and advances state", () => {
 });
 
 test("the allocator counts up within one commit and across commits", () => {
-  s.commit((_st, ids) => [newCard(ids.next("card")), newCard(ids.next("card"))]);
+  s.commit((_st, ids) => [newCard(ids), newCard(ids)]);
   expect(s.state.incoming).toEqual(["c1", "c2"]);
   let seen: string[] = [];
-  s.commit((_st, ids) => {
+  // Taking ids without creating them is refused (finding 15), so nothing is handed out twice.
+  expect(() => s.commit((_st, ids) => {
     seen = [ids.next("card"), ids.next("card")];
     return [];
-  });
+  })).toThrow(IdAllocationError);
   expect(seen).toEqual(["c3", "c4"]);
-  s.commit((_st, ids) => [newCard(ids.next("card"))]);
+  s.commit((_st, ids) => [newCard(ids)]);
   expect(s.state.incoming).toEqual(["c1", "c2", "c3"]);
 });
 
 test("the builder sees the state as of the previous commit", () => {
-  s.commit(() => [newCard("c1")]);
+  s.commit((_st, ids) => [newCard(ids)]);
   let seenIncoming: string[] = [];
-  s.commit((state) => {
+  s.commit((state, ids) => {
     seenIncoming = state.incoming;
-    return [newCard("c2")];
+    return [newCard(ids)];
   });
   expect(seenIncoming).toEqual(["c1"]);
   expect(s.state.incoming).toEqual(["c1", "c2"]);
@@ -76,7 +80,7 @@ test("a builder that throws writes nothing and leaves state unchanged", () => {
 test("an invalid entry in a commit writes none of them", () => {
   const before = s.state, head = s.head();
   const bad = { type: "setting.changed", payload: { key: "k", value: NaN }, actor: human } as EntryInput;
-  expect(() => s.commit(() => [newCard("c1"), bad])).toThrow();
+  expect(() => s.commit((_st, ids) => [newCard(ids), bad])).toThrow();
   expect(s.head()).toEqual(head);
   expect(s.state).toBe(before);
 });
@@ -91,10 +95,10 @@ test("a builder returning no entries is a no-op", () => {
 test("subscribers get each entry with the state after it", () => {
   const got: { seq: number; incoming: number; stateSeq: number }[] = [];
   const stop = s.subscribe((e, st) => got.push({ seq: e.seq, incoming: st.incoming.length, stateSeq: st.seq }));
-  s.commit(() => [newCard("c1"), newCard("c2")]);
+  s.commit((_st, ids) => [newCard(ids), newCard(ids)]);
   expect(got).toEqual([{ seq: 1, incoming: 1, stateSeq: 1 }, { seq: 2, incoming: 2, stateSeq: 2 }]);
   stop();
-  s.commit(() => [newCard("c3")]);
+  s.commit((_st, ids) => [newCard(ids)]);
   expect(got).toHaveLength(2);
 });
 
@@ -102,7 +106,7 @@ test("a throwing subscriber does not undo the commit or starve others", () => {
   let reached = 0;
   s.subscribe(() => { throw new Error("bad listener"); });
   s.subscribe(() => { reached += 1; });
-  const out = s.commit(() => [newCard("c1"), newCard("c2")]);
+  const out = s.commit((_st, ids) => [newCard(ids), newCard(ids)]);
   expect(out).toHaveLength(2);
   expect(s.state.incoming).toEqual(["c1", "c2"]);
   expect(reached).toBe(2);
@@ -112,18 +116,15 @@ test("a throwing subscriber does not undo the commit or starve others", () => {
 test("state at entry N is the same live and replayed", () => {
   const recorded: CaseState[] = [];
   s.subscribe((_e: Entry, st) => { recorded[st.seq] = structuredClone(st); });
-  s.commit(() => [
-    { type: "lane.created", payload: { lane: "l1", title: "One", subgoal: null }, actor: human },
-    { type: "lane.created", payload: { lane: "l2", title: "Two", subgoal: null }, actor: human },
-  ]);
-  for (let i = 1; i <= 8; i++) s.commit((_st, ids) => [newCard(ids.next("card"))]);
+  s.commit((_st, ids) => [newLane(ids, "One"), newLane(ids, "Two")]);
+  for (let i = 1; i <= 8; i++) s.commit((_st, ids) => [newCard(ids)]);
   for (let i = 1; i <= 8; i++) {
     s.commit(() => [{ type: "card.kept", payload: { card: `c${i}`, lane: i % 2 ? "l1" : "l2", index: null }, actor: human }]);
   }
   s.commit(() => [{ type: "card.discarded", payload: { card: "c1" }, actor: human }]);
   const target = s.state.undoable[s.state.undoable.length - 1]!;
   s.commit(() => [{ type: "undo", payload: { target: target.seq, card: target.card, place: target.place, lane: target.lane, index: target.index }, actor: human }]);
-  for (let i = 9; i <= 18; i++) s.commit((_st, ids) => [newCard(ids.next("card"))]);
+  for (let i = 9; i <= 18; i++) s.commit((_st, ids) => [newCard(ids)]);
   expect(s.head().seq).toBe(30);
   const all = s.entries();
   for (let n = 1; n <= 30; n++) {
@@ -135,10 +136,7 @@ test("state at entry N is the same live and replayed", () => {
 });
 
 test("a session opened on an existing case rebuilds the same state", () => {
-  s.commit(() => [
-    { type: "lane.created", payload: { lane: "l1", title: "One", subgoal: null }, actor: human },
-    newCard("c1"),
-  ]);
+  s.commit((_st, ids) => [newLane(ids, "One"), newCard(ids)]);
   s.commit(() => [{ type: "card.kept", payload: { card: "c1", lane: "l1", index: null }, actor: human }]);
   const expected = s.state, head = s.head();
   ledger.close();
@@ -154,10 +152,10 @@ test("a nested commit from a subscriber keeps state equal to the ledger fold, de
     delivered.push({ seq: e.seq, stateSeq: st.seq });
     if (e.seq === 1 && !nested) {
       nested = true;
-      s.commit(() => [newCard("c3")]);
+      s.commit((_st, ids) => [newCard(ids)]);
     }
   });
-  s.commit(() => [newCard("c1"), newCard("c2")]);
+  s.commit((_st, ids) => [newCard(ids), newCard(ids)]);
   expect(delivered).toEqual([{ seq: 1, stateSeq: 1 }, { seq: 2, stateSeq: 2 }, { seq: 3, stateSeq: 3 }]);
   expect(s.state).toEqual(fold(s.entries()));
   expect(s.state.seq).toBe(s.head().seq);
@@ -166,9 +164,9 @@ test("a nested commit from a subscriber keeps state equal to the ledger fold, de
 
 test("a builder that calls commit throws and nothing is appended", () => {
   const head = s.head();
-  expect(() => s.commit(() => { s.commit(() => [newCard("c1")]); return [newCard("c2")]; })).toThrow("commit called from inside a commit builder");
+  expect(() => s.commit((_st, ids) => { s.commit((_s, inner) => [newCard(inner)]); return [newCard(ids)]; })).toThrow("commit called from inside a commit builder");
   expect(s.head()).toEqual(head);
-  s.commit(() => [newCard("c1")]);
+  s.commit((_st, ids) => [newCard(ids)]);
   expect(s.state.incoming).toEqual(["c1"]);
 });
 
@@ -183,7 +181,7 @@ test("a draft.revised whose hash is not the hash of its product is refused befor
   const good: Draft = { n: 1, hash: sha256Hex(canonical(product as never)), author: human, product, reason: "first" };
   const head = s.head(), before = s.state;
   for (const hash of ["h1", good.hash.toUpperCase(), sha256Hex(canonical({ ...product, summary: "other" } as never))]) {
-    expect(() => s.commit(() => [newCard("c1"), revised({ ...good, hash })])).toThrow(InvalidEntryError);
+    expect(() => s.commit((_st, ids) => [newCard(ids), revised({ ...good, hash })])).toThrow(InvalidEntryError);
     expect(() => s.commit(() => [revised({ ...good, hash })])).toThrow(/not the hash of its product/);
   }
   expect(s.head()).toEqual(head);
@@ -201,13 +199,13 @@ function isDeepFrozen(x: unknown): boolean {
 test("entries are deep-frozen when appended, read, fetched and delivered", () => {
   const delivered: Entry[] = [];
   s.subscribe((e) => delivered.push(e));
-  const out = s.commit((_st, ids) => [newCard(ids.next("card"))]);
+  const out = s.commit((_st, ids) => [newCard(ids)]);
   for (const e of [...out, ...delivered, ...s.entries(), ledger.get(1)!]) expect(isDeepFrozen(e)).toBe(true);
   expect(() => { (out[0]!.payload as { card: { rows: unknown[][] } }).card.rows[0]!.push("trimmed"); }).toThrow(TypeError);
 });
 
 test("state that shares entry payloads cannot be changed through them", () => {
-  s.commit((_st, ids) => [newCard(ids.next("card"))]);
+  s.commit((_st, ids) => [newCard(ids)]);
   const c1 = s.state.cards.c1!;
   expect(() => { c1.rows.length = 0; }).toThrow(TypeError);
   expect(() => { c1.columns.sort(); c1.columns.push("x"); }).toThrow(TypeError);
@@ -217,7 +215,7 @@ test("state that shares entry payloads cannot be changed through them", () => {
 // ---------- final review, finding 3: the session notices entries it did not write ----------
 
 test("isNext is true only for the entry right after the state", () => {
-  s.commit(() => [newCard("c1")]);
+  s.commit((_st, ids) => [newCard(ids)]);
   const [e1] = s.entries();
   expect(isNext(fold([]), e1!)).toBe(true);
   expect(isNext(s.state, e1!)).toBe(false); // delivered twice
@@ -249,7 +247,7 @@ test("if another writer slips in between the check and the append, the session c
   s.subscribe((e) => heard.push(e.seq));
   s.commit((_st, ids) => {
     other.append({ type: "case.phase_changed", payload: { phase: "theirs" }, actor: human });
-    return [newCard(ids.next("card"))];
+    return [newCard(ids)];
   });
   expect(s.state.seq).toBe(2);
   expect(s.state.phase).toBe("theirs");
@@ -257,4 +255,27 @@ test("if another writer slips in between the check and the append, the session c
   expect(s.state).toEqual(fold(s.entries()));
   expect(heard).toEqual([1, 2]);
   other.close();
+});
+
+// ---------- final review, finding 15: every id taken is used by one creating entry of the commit ----------
+test("a builder that takes ids it does not create, or creates without taking, is refused before appending", () => {
+  const head = s.head(), before = s.state;
+  // takes c1 and c2, creates only c2: c2 would be handed out again next time
+  expect(() => s.commit((_st, ids) => { ids.next("card"); return [{ type: "card.created", payload: { card: card(ids.next("card")) }, actor: human }]; }))
+    .toThrow(/card: 2 taken, 1 created/);
+  // a literal id that did not come from the allocator
+  expect(() => s.commit(() => [{ type: "card.created", payload: { card: card("c1") }, actor: human }])).toThrow(IdAllocationError);
+  // per kind: a lane id used for a card
+  expect(() => s.commit((_st, ids) => [{ type: "card.created", payload: { card: card(ids.next("lane")) }, actor: human }])).toThrow(/card: 0 taken, 1 created.*lane: 1 taken, 0 created/);
+  expect(s.head()).toEqual(head);
+  expect(s.state).toBe(before);
+  s.commit((_st, ids) => [newCard(ids), newLane(ids, "L"), newCard(ids)]);
+  expect(s.state.incoming).toEqual(["c1", "c2"]);
+  expect(s.state.lanes.map((l) => l.id)).toEqual(["l1"]);
+});
+
+test("every counted kind is checked: queries, jobs, runs and the rest", () => {
+  expect(() => s.commit(() => [{ type: "job.started", payload: { job: "j1", title: "t", kind: "query", source: null }, actor: human }])).toThrow(/job: 0 taken, 1 created/);
+  s.commit((_st, ids) => [{ type: "job.started", payload: { job: ids.next("job"), title: "t", kind: "query", source: null }, actor: human }]);
+  expect(Object.keys(s.state.jobs)).toEqual(["j1"]);
 });

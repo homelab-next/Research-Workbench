@@ -72,10 +72,10 @@ test("session of an unknown id throws CaseNotFoundError", () => {
 test("listCases is newest first with a summary of each", () => {
   const a = wb.createCase(newCase, human);
   wb.createCase({ ...newCase, title: "Second", marking: "TLP:RED" }, human);
-  a.commit(() => [
-    { type: "lane.created", payload: { lane: "l1", title: "L", subgoal: null }, actor: human },
-    { type: "card.created", payload: { card: { ...cardStub("c1") } }, actor: human },
-    { type: "card.created", payload: { card: { ...cardStub("c2") } }, actor: human },
+  a.commit((_st, ids) => [
+    { type: "lane.created", payload: { lane: ids.next("lane"), title: "L", subgoal: null }, actor: human },
+    { type: "card.created", payload: { card: cardStub(ids.next("card")) }, actor: human },
+    { type: "card.created", payload: { card: cardStub(ids.next("card")) }, actor: human },
   ]);
   a.commit(() => [{ type: "card.kept", payload: { card: "c1", lane: "l1", index: null }, actor: human }]);
   const list = wb.listCases();

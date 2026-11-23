@@ -8,7 +8,7 @@ import type { CaseState, IdKind } from "./types";
 
 export type Reducer = (state: CaseState, entry: Entry) => CaseState;
 
-/** Which counter an entry type advances. */
+/** Which counter an entry type advances: the creating entries of each id kind. */
 const COUNTED: Partial<Record<Entry["type"], IdKind>> = {
   "card.created": "card",
   "lane.created": "lane",
@@ -22,6 +22,11 @@ const COUNTED: Partial<Record<Entry["type"], IdKind>> = {
   "run.started": "run",
   "plan.proposed": "plan",
 };
+
+/** The id kind an entry of this type creates, if any. */
+export function countedKind(type: string): IdKind | undefined {
+  return Object.hasOwn(COUNTED, type) ? COUNTED[type as Entry["type"]] : undefined;
+}
 
 function applyCase(s: CaseState, entry: Entry): CaseState {
   if (entry.type === "case.created") return isCaseCreated(entry.payload) ? { ...s, meta: caseFields(entry.payload) } : malformed(s, entry);
@@ -42,7 +47,7 @@ export function applyWith(state: CaseState, entry: Entry, reducers: readonly Red
   if (!isObj(entry.payload)) return skip(state, entry, "malformed payload");
   try {
     let next: CaseState = { ...state, seq: entry.seq, head_ts: entry.ts };
-    const kind = Object.hasOwn(COUNTED, entry.type) ? COUNTED[entry.type] : undefined;
+    const kind = countedKind(entry.type);
     if (kind) next.counters = { ...state.counters, [kind]: state.counters[kind] + 1 };
     for (const reduce of reducers) next = reduce(next, entry);
     return next;
