@@ -67,3 +67,69 @@ test("nested paths use dots and indexes", () => {
   const s: Schema = { properties: { a: { items: { properties: { b: { type: "string" } } } } } };
   expect(validate(s, { a: [{ b: 1 }] }).map(e => e.path)).toEqual(["$.a[0].b"]);
 });
+test("patterns valid in ordinary JSON Schema use compile", () => {
+  expect(validate({ pattern: "^a\\-b$" }, "a-b")).toEqual([]);
+  expect(validate({ pattern: "[a-z\\d-_]+" }, "ab_1")).toEqual([]);
+  expect(validate({ pattern: "^\\_$" }, "_")).toEqual([]);
+});
+test("a pattern that cannot compile throws UnsupportedSchemaError naming it", () => {
+  expect(() => validate({ pattern: "^(" }, "x")).toThrow(UnsupportedSchemaError);
+  expect(() => validate({ pattern: "^(" }, "x")).toThrow(/\^\(/);
+});
+test("unknown keywords fail closed and name keyword and path", () => {
+  for (const k of ["exclusiveMinimum", "multipleOf", "uniqueItems", "format", "patternProperties", "$defs"]) {
+    expect(() => validate({ [k]: 1 } as never, 1)).toThrow(UnsupportedSchemaError);
+  }
+  expect(() => validate({ properties: { a: { format: "email" } } } as never, {})).toThrow(/format at \$\.properties\.a/);
+  expect(() => validate({ items: [{ type: "string" }] } as never, [])).toThrow(UnsupportedSchemaError);
+});
+test("ignored annotation keywords are accepted", () => {
+  const s = { title: "t", description: "d", $schema: "x", $id: "y", default: 1, examples: [1], $comment: "c", type: "number" } as Schema;
+  expect(validate(s, 1)).toEqual([]);
+});
+test("schema nodes that are not plain objects throw", () => {
+  for (const bad of [null, true, [], 5]) {
+    expect(() => validate(bad as never, 1)).toThrow(UnsupportedSchemaError);
+    expect(() => validate({ properties: { a: bad } } as never, {})).toThrow(UnsupportedSchemaError);
+  }
+  expect(() => validate({ additionalProperties: null } as never, {})).toThrow(UnsupportedSchemaError);
+});
+test("rejection does not depend on the value", () => {
+  expect(() => validate({ properties: { a: { $ref: "#/x" } } } as never, {})).toThrow(UnsupportedSchemaError);
+  expect(() => validate({ items: { $ref: "#/x" } } as never, [])).toThrow(UnsupportedSchemaError);
+  expect(() => validate({ additionalProperties: { not: {} } } as never, {})).toThrow(UnsupportedSchemaError);
+  const s = { anyOf: [{ type: "string" }, { oneOf: [] }] } as never;
+  expect(() => validate(s, "x")).toThrow(UnsupportedSchemaError);
+  expect(() => validate(s, "x")).toThrow(UnsupportedSchemaError);
+});
+test("non-JSON values are errors whatever the schema", () => {
+  for (const v of [NaN, Infinity, -Infinity, undefined, 1n, () => 1, Symbol("s")]) {
+    expect(validate({}, v)).toEqual([{ path: "$", message: "not a JSON value" }]);
+  }
+  expect(validate({}, { a: [undefined] }).map(e => e.path)).toEqual([]);
+  expect(validate({ properties: { a: {} } }, { a: NaN }).map(e => e.path)).toEqual(["$.a"]);
+  expect(validate({ items: {} }, [1, NaN]).map(e => e.path)).toEqual(["$[1]"]);
+});
+test("length limits count code points", () => {
+  expect(validate({ maxLength: 1 }, "\u{1F600}")).toEqual([]);
+  expect(validate({ minLength: 2 }, "\u{1F600}").length).toBe(1);
+  expect(validate({ minLength: 2, maxLength: 2 }, "\u{1F600}\u{1F600}")).toEqual([]);
+});
+test("a parsed __proto__ key is an unexpected property", () => {
+  const v = JSON.parse('{"__proto__": 1}');
+  expect(validate({ type: "object", additionalProperties: false }, v).map(e => e.path)).toEqual(["$.__proto__"]);
+});
+test("enum of objects", () => {
+  const s: Schema = { enum: [{ a: 1 }, [1, 2]] };
+  expect(validate(s, { a: 1 })).toEqual([]);
+  expect(validate(s, [1, 2])).toEqual([]);
+  expect(validate(s, { a: 2 }).length).toBe(1);
+});
+test("required and additionalProperties false at a nested path", () => {
+  const s: Schema = { properties: { o: { required: ["x"], additionalProperties: false, properties: { x: {} } } } };
+  expect(validate(s, { o: {} })).toEqual([{ path: "$.o", message: "missing required property: x" }]);
+  expect(validate(s, { o: { x: 1, y: 2 } }).map(e => e.path)).toEqual(["$.o.y"]);
+});
+test("an unsupported keyword in a later anyOf branch throws even if an earlier branch matches", () => {
+  expect(() => validate({ anyOf: [{ type: "string" }, { $ref: "#/x" }] } as never, "x")).toThrow(UnsupportedSchemaError);
+});

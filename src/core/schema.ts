@@ -34,7 +34,54 @@ export class UnsupportedSchemaError extends Error {
   }
 }
 
-const UNSUPPORTED = ["$ref", "allOf", "oneOf", "not", "if"];
+const SUPPORTED = new Set([
+  "type", "enum", "const", "properties", "required", "additionalProperties", "items",
+  "minItems", "maxItems", "minLength", "maxLength", "minimum", "maximum", "pattern", "anyOf",
+]);
+const IGNORED = new Set(["title", "description", "$schema", "$id", "default", "examples", "$comment"]);
+
+const checked = new WeakSet<object>();
+const patterns = new WeakMap<object, RegExp>();
+
+/** Walks the whole schema once so it is accepted or rejected regardless of the value. */
+function precheck(schema: unknown, path: string): void {
+  if (typeof schema !== "object" || schema === null || Array.isArray(schema)) {
+    throw new UnsupportedSchemaError(`schema at ${path} is not an object`);
+  }
+  if (checked.has(schema)) return;
+  const node = schema as Schema;
+  for (const k of Object.keys(node)) {
+    if (!SUPPORTED.has(k) && !IGNORED.has(k)) throw new UnsupportedSchemaError(`${k} at ${path}`);
+  }
+  if (node.pattern !== undefined) {
+    try {
+      patterns.set(node, new RegExp(node.pattern));
+    } catch {
+      throw new UnsupportedSchemaError(`pattern at ${path} does not compile: ${String(node.pattern)}`);
+    }
+  }
+  if (node.properties !== undefined) {
+    for (const [name, sub] of Object.entries(node.properties)) precheck(sub, `${path}.properties.${name}`);
+  }
+  if (node.items !== undefined) precheck(node.items, `${path}.items`);
+  if (node.additionalProperties !== undefined && typeof node.additionalProperties !== "boolean") {
+    precheck(node.additionalProperties, `${path}.additionalProperties`);
+  }
+  if (node.anyOf !== undefined) {
+    if (!Array.isArray(node.anyOf)) throw new UnsupportedSchemaError(`anyOf at ${path} is not an array`);
+    node.anyOf.forEach((sub, i) => precheck(sub, `${path}.anyOf[${i}]`));
+  }
+  checked.add(schema);
+}
+
+function isJsonValue(v: unknown): boolean {
+  switch (typeof v) {
+    case "string": case "boolean": return true;
+    case "number": return Number.isFinite(v);
+    case "object": return true;
+    default: return false;
+  }
+}
 
 function has(o: object, k: string): boolean {
   return Object.prototype.hasOwnProperty.call(o, k);
@@ -75,8 +122,11 @@ function deepEqual(a: unknown, b: unknown): boolean {
 }
 
 function check(schema: Schema, value: unknown, path: string, errors: SchemaError[]): void {
-  for (const k of UNSUPPORTED) if (has(schema, k)) throw new UnsupportedSchemaError(k);
   const fail = (message: string, at = path) => errors.push({ path: at, message });
+  if (!isJsonValue(value)) {
+    fail("not a JSON value");
+    return;
+  }
 
   if (schema.type !== undefined) {
     const types = Array.isArray(schema.type) ? schema.type : [schema.type];
@@ -95,9 +145,11 @@ function check(schema: Schema, value: unknown, path: string, errors: SchemaError
   }
 
   if (typeof value === "string") {
-    if (schema.minLength !== undefined && value.length < schema.minLength) fail(`shorter than ${schema.minLength} characters`);
-    if (schema.maxLength !== undefined && value.length > schema.maxLength) fail(`longer than ${schema.maxLength} characters`);
-    if (schema.pattern !== undefined && !new RegExp(schema.pattern, "u").test(value)) fail(`does not match pattern ${schema.pattern}`);
+    const length = schema.minLength !== undefined || schema.maxLength !== undefined ? [...value].length : 0;
+    if (schema.minLength !== undefined && length < schema.minLength) fail(`shorter than ${schema.minLength} characters`);
+    if (schema.maxLength !== undefined && length > schema.maxLength) fail(`longer than ${schema.maxLength} characters`);
+    const re = patterns.get(schema);
+    if (re !== undefined && !re.test(value)) fail(`does not match pattern ${schema.pattern}`);
   }
 
   if (typeof value === "number") {
@@ -132,6 +184,7 @@ function check(schema: Schema, value: unknown, path: string, errors: SchemaError
 
 /** Returns every violation; an empty array means the value is valid. */
 export function validate(schema: Schema, value: unknown): SchemaError[] {
+  precheck(schema, "$");
   const errors: SchemaError[] = [];
   check(schema, value, "$", errors);
   return errors;
