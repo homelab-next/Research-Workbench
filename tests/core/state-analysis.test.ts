@@ -442,3 +442,18 @@ test("a failing check on another hash does not block this one", () => {
   passAll(b, "h1");
   expect(publishable(fold(b.entries), "h1")).toBe(true);
 });
+
+// ---------- final review, finding 4: a repeated hash must carry the same product ----------
+test("a revision that reuses a reviewed hash with a different product is refused and recorded", () => {
+  const b = run();
+  revise(b, 1, "h1");
+  passAll(b, "h1");
+  const forged = b.add("draft.revised", { draft: { ...draft(2, "h1"), product: { ...product, summary: "text nobody reviewed" } } });
+  const s = fold(b.entries);
+  expect(s.drafts.map((d) => d.n)).toEqual([1]);
+  expect(latestDraft(s)!.product.summary).toBe(product.summary);
+  expect(s.skipped).toEqual([{ seq: forged.seq, type: "draft.revised", reason: "draft hash h1 already names a different product" }]);
+  // the same bytes under the same hash are still a new revision
+  revise(b, 3, "h1");
+  expect(fold(b.entries).drafts.map((d) => d.n)).toEqual([1, 3]);
+});

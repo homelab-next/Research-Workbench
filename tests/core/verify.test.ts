@@ -5,9 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BlobStore } from "../../src/core/blobs";
 import { GENESIS } from "../../src/core/hash";
-import { Ledger } from "../../src/core/ledger";
+import { canonical } from "../../src/core/canonical";
+import { sha256Hex } from "../../src/core/hash";
+import { entryHash, InvalidEntryError, Ledger } from "../../src/core/ledger";
 import { formatReport, UnreadableLedgerError, verifyCase, verifyLedger } from "../../src/core/verify";
-import type { BlobRef } from "../../src/core/types";
+import type { BlobRef, Product } from "../../src/core/types";
 
 const human = { kind: "human", id: "analyst" } as const;
 const phase = (p: string) => ({ type: "case.phase_changed", payload: { phase: p }, actor: human }) as const;
@@ -208,4 +210,33 @@ test("the command prints the entry count and the failing entry", () => {
 test("formatReport shows a shortened head", () => {
   const text = formatReport(verifyCase(dir));
   expect(text).toBe(`case CASE-1: chain intact · 5 entries · head ${ledger.head().hash.slice(0, 8)}…\nblobs: 1 referenced · 0 missing · 0 corrupt\ncompare the head with one recorded elsewhere: removing the newest entries cannot be detected from this file alone`);
+});
+
+// ---------- final review, finding 4: verify rechecks draft hashes ----------
+const product: Product = {
+  objective: "o", question: "q", marking: "TLP:AMBER", summary: "s", key_findings: [], gaps_and_limits: "", alternatives: "",
+  assessment: "", sources: [], assumptions: [], change: "",
+};
+
+test("a draft whose hash is not the hash of its product is reported as draft_hash_mismatch", () => {
+  const good = sha256Hex(canonical(product as never));
+  ledger.append({ type: "draft.revised", payload: { draft: { n: 1, hash: good, author: human, product, reason: "r" } }, actor: human });
+  expect(verifyCase(dir).ok).toBe(true);
+  // A writer other than Ledger appends a correctly chained row whose draft hash does not match its product.
+  const head = ledger.head();
+  const payload = { draft: { n: 2, hash: good, author: human, product: { ...product, summary: "changed" }, reason: "r" } };
+  const row = { seq: head.seq + 1, ts: "2026-11-23T21:00:00.000Z", case: "CASE-1", actor: human, type: "draft.revised", payload, cause: null, run: null, stage: null, job: null, prev_hash: head.hash };
+  const hash = entryHash(row as never);
+  const db = new Database(join(dir, "ledger.sqlite"));
+  db.query("INSERT INTO entries VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?)").run(row.seq, row.ts, canonical(human), row.type, canonical(payload as never), row.prev_hash, hash);
+  db.close();
+  expect(verifyCase(dir)).toMatchObject({ ok: false, firstBad: { seq: row.seq, reason: "draft_hash_mismatch" } });
+});
+
+test("the ledger itself refuses such a draft", () => {
+  const before = ledger.head();
+  const payload = { draft: { n: 1, hash: "h1", author: human, product, reason: "r" } };
+  expect(() => ledger.append({ type: "draft.revised", payload, actor: human })).toThrow(InvalidEntryError);
+  expect(() => ledger.append({ type: "draft.revised", payload, actor: human })).toThrow(/draft_hash_mismatch/);
+  expect(ledger.head()).toEqual(before);
 });

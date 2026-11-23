@@ -7,7 +7,10 @@ import { Ledger } from "../../src/core/ledger";
 import { CaseSession } from "../../src/core/session";
 import { fold } from "../../src/core/state";
 import type { CaseState } from "../../src/core/state";
-import type { Actor, Entry, EntryInput } from "../../src/core/types";
+import { canonical } from "../../src/core/canonical";
+import { sha256Hex } from "../../src/core/hash";
+import { InvalidEntryError } from "../../src/core/ledger";
+import type { Actor, Draft, Entry, EntryInput, Product } from "../../src/core/types";
 import { card } from "../helpers/entries";
 
 const human: Actor = { kind: "human", id: "analyst" };
@@ -167,4 +170,24 @@ test("a builder that calls commit throws and nothing is appended", () => {
   expect(s.head()).toEqual(head);
   s.commit(() => [newCard("c1")]);
   expect(s.state.incoming).toEqual(["c1"]);
+});
+
+// ---------- final review, finding 4: commit checks every draft hash before appending ----------
+const product: Product = {
+  objective: "o", question: "q", marking: "TLP:AMBER", summary: "s", key_findings: [], gaps_and_limits: "", alternatives: "",
+  assessment: "", sources: [], assumptions: [], change: "",
+};
+const revised = (d: Draft): EntryInput => ({ type: "draft.revised", payload: { draft: d }, actor: human });
+
+test("a draft.revised whose hash is not the hash of its product is refused before anything is appended", () => {
+  const good: Draft = { n: 1, hash: sha256Hex(canonical(product as never)), author: human, product, reason: "first" };
+  const head = s.head(), before = s.state;
+  for (const hash of ["h1", good.hash.toUpperCase(), sha256Hex(canonical({ ...product, summary: "other" } as never))]) {
+    expect(() => s.commit(() => [newCard("c1"), revised({ ...good, hash })])).toThrow(InvalidEntryError);
+    expect(() => s.commit(() => [revised({ ...good, hash })])).toThrow(/not the hash of its product/);
+  }
+  expect(s.head()).toEqual(head);
+  expect(s.state).toBe(before);
+  s.commit(() => [revised(good)]);
+  expect(s.state.drafts.map((d) => d.hash)).toEqual([good.hash]);
 });

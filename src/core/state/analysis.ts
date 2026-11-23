@@ -1,6 +1,8 @@
 import { ANSWER_ACTIONS, CONFIDENCES, FEEDBACK_KINDS, isMarking, SEVERITIES } from "../types";
 import type { Challenge, CheckFinding, Draft, Entry, Payloads } from "../types";
-import { has, isBool, isNum, isObj, isOneOf, isStr, isStrList, malformed } from "./guards";
+import { canonical } from "../canonical";
+import type { Json } from "../canonical";
+import { has, isBool, isNum, isObj, isOneOf, isStr, isStrList, malformed, recordSkip } from "./guards";
 import { stageFinishedCounts } from "./run";
 import { isBlobRefShape } from "./shapes";
 import type { CaseState, ChallengeState, ReviewState } from "./types";
@@ -29,8 +31,15 @@ function applyDrafts(s: CaseState, entry: Entry): CaseState {
     case "draft.revised": {
       const d = entry.payload.draft;
       if (!isDraft(d)) return malformed(s, entry);
-      // a repeated hash is a new revision of bytes that were already reviewed: keep its record
-      if (Object.hasOwn(s.reviews, d.hash)) return { ...s, drafts: [...s.drafts, d] };
+      // A repeated hash is a new revision of bytes that were already reviewed, and keeps its record,
+      // but only if it carries those same bytes: what is published must be what was reviewed.
+      if (Object.hasOwn(s.reviews, d.hash)) {
+        const earlier = s.drafts.find((x) => x.hash === d.hash);
+        if (earlier !== undefined && canonical(earlier.product as unknown as Json) !== canonical(d.product as unknown as Json)) {
+          return recordSkip(s, entry, `draft hash ${d.hash} already names a different product`);
+        }
+        return { ...s, drafts: [...s.drafts, d] };
+      }
       const review: ReviewState = { checks: [], evaluation: null, challenges: [], passed_stages: [], rejected: null };
       return { ...s, drafts: [...s.drafts, d], reviews: { ...s.reviews, [d.hash]: review } };
     }

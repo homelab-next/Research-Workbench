@@ -1,5 +1,6 @@
 import type { BlobStore } from "./blobs";
 import { Delivery, logToStderr } from "./deliver";
+import { draftHashMatches, InvalidEntryError } from "./ledger";
 import type { Ledger } from "./ledger";
 import { IdAllocator } from "./ids";
 import { apply, fold, initial } from "./state";
@@ -41,6 +42,11 @@ export class CaseSession {
       inputs = build(this.current, new IdAllocator(this.current));
     } finally {
       this.building = false;
+    }
+    for (const input of inputs) {
+      if (input?.type === "draft.revised" && !draftHashMatches(input.payload?.draft)) {
+        throw new InvalidEntryError(`draft ${String(input.payload?.draft?.n)}: hash is not the hash of its product`);
+      }
     }
     const entries = this.ledger.appendMany(inputs);
     // Advance state over the whole batch first, so state always equals the fold of the ledger,

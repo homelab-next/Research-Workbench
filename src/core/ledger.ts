@@ -77,7 +77,17 @@ export interface LedgerRow {
 }
 
 /** Why a stored row fails verification. */
-export type RowFault = "seq_gap" | "prev_hash_mismatch" | "bad_json" | "hash_mismatch";
+export type RowFault = "seq_gap" | "prev_hash_mismatch" | "bad_json" | "hash_mismatch" | "draft_hash_mismatch";
+
+/** True when `draft` carries a product and its `hash` is sha256Hex(canonical(product)), the rule types.ts states for Draft. */
+export function draftHashMatches(draft: unknown): boolean {
+  if (typeof draft !== "object" || draft === null || !("product" in draft) || !("hash" in draft) || typeof draft.hash !== "string") return false;
+  try {
+    return sha256Hex(canonical(draft.product as Json)) === draft.hash;
+  } catch {
+    return false;
+  }
+}
 
 function parseJson(text: unknown): { value: Json } | null {
   if (typeof text !== "string") return null;
@@ -106,11 +116,18 @@ export function checkRow(row: LedgerRow, caseId: string, prevSeq: number, prevHa
       seq: row.seq, ts: row.ts, case: caseId, actor: actor.value, type: row.type, payload: payload.value,
       cause: row.cause, run: row.run, stage: row.stage, job: row.job, prev_hash: row.prev_hash,
     } as unknown as Omit<Entry, "hash">);
-    return recomputed === row.hash ? null : "hash_mismatch";
+    if (recomputed !== row.hash) return "hash_mismatch";
   } catch {
     // A value the canonical form rejects cannot have been written by the ledger.
     return "hash_mismatch";
   }
+  // A draft's hash names its product; one that does not would let unreviewed text pass as reviewed.
+  if (row.type === "draft.revised") {
+    const p = payload.value;
+    const draft = typeof p === "object" && p !== null && !Array.isArray(p) ? p.draft : undefined;
+    if (!draftHashMatches(draft)) return "draft_hash_mismatch";
+  }
+  return null;
 }
 
 const isWellFormed = (s: string): boolean => s.isWellFormed();
