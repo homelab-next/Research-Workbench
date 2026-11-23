@@ -349,6 +349,8 @@ test("malformed payloads never throw and change nothing", () => {
       let out: CaseState | undefined;
       expect(() => { out = apply(base, e); }).not.toThrow();
       expect({ ...out!, seq: base.seq, head_ts: base.head_ts, counters: base.counters, skipped: base.skipped }, `${type} ${label}`).toEqual(base);
+      const reason = payload === null || payload === undefined || Array.isArray(payload) ? "malformed payload" : `malformed ${type}`;
+      expect(out!.skipped, `${type} ${label}`).toEqual([...base.skipped, { seq: e.seq, type, reason }]);
     }
   }
 });

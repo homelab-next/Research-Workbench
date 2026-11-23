@@ -1,6 +1,7 @@
 import { ANSWER_ACTIONS, CONFIDENCES, FEEDBACK_KINDS, isMarking, SEVERITIES } from "../types";
-import type { CheckFinding, Draft, Entry } from "../types";
-import { has, isNum, isObj, isOneOf, isStr, isStrList } from "./guards";
+import type { Challenge, CheckFinding, Draft, Entry } from "../types";
+import { has, isBool, isNum, isObj, isOneOf, isStr, isStrList, malformed } from "./guards";
+import { isBlobRefShape, isStageFinishedShape } from "./shapes";
 import type { CaseState, ChallengeState, ReviewState } from "./types";
 
 const isFinding = (x: unknown): x is CheckFinding => isObj(x) && isStr(x.check) && isStr(x.where) && isStr(x.message);
@@ -26,15 +27,17 @@ function applyDrafts(s: CaseState, entry: Entry): CaseState {
   switch (entry.type) {
     case "draft.revised": {
       const d = entry.payload.draft;
-      if (!isDraft(d)) return s;
+      if (!isDraft(d)) return malformed(s, entry);
       // a repeated hash is a new revision of bytes that were already reviewed: keep its record
       if (Object.hasOwn(s.reviews, d.hash)) return { ...s, drafts: [...s.drafts, d] };
       const review: ReviewState = { checks: [], evaluation: null, challenges: [], passed_stages: [] };
       return { ...s, drafts: [...s.drafts, d], reviews: { ...s.reviews, [d.hash]: review } };
     }
     case "check.run": {
-      const { check, draft_hash, pass, findings } = entry.payload;
-      if (!isStr(check) || typeof pass !== "boolean" || !isFindings(findings)) return s;
+      const { check, script_hash, input, draft_hash, pass, findings } = entry.payload;
+      if (!isStr(check) || !isStr(script_hash) || !isBlobRefShape(input) || !isStr(draft_hash) || !isBool(pass) || !isFindings(findings)) {
+        return malformed(s, entry);
+      }
       return withReview(s, draft_hash, (r) => {
         const result = { check, pass, findings };
         const i = r.checks.findIndex((c) => c.check === check);
@@ -43,24 +46,22 @@ function applyDrafts(s: CaseState, entry: Entry): CaseState {
     }
     case "evaluation.made": {
       const { draft_hash, pass, findings } = entry.payload;
-      if (typeof pass !== "boolean" || !isFindings(findings)) return s;
+      if (!isStr(draft_hash) || !isBool(pass) || !isFindings(findings)) return malformed(s, entry);
       return withReview(s, draft_hash, (r) => ({ ...r, evaluation: { pass, findings } }));
     }
     case "stage.finished": {
       // applyRun sets the stage status; this records the verdict against the draft it examined. The latest verdict wins.
+      if (!isStageFinishedShape(entry.payload)) return malformed(s, entry);
       const { stage, outcome, draft_hash } = entry.payload;
-      if (!isStr(stage) || !isStr(draft_hash) || !has(s.reviews, draft_hash)) return s;
+      if (draft_hash === null || !has(s.reviews, draft_hash)) return s;
       const passed = s.reviews[draft_hash]!.passed_stages;
       if (outcome === "pass") {
         return passed.includes(stage) ? s : withReview(s, draft_hash, (r) => ({ ...r, passed_stages: [...passed, stage] }));
       }
-      if (outcome === "fail" || outcome === "declined") {
-        return passed.includes(stage) ? withReview(s, draft_hash, (r) => ({ ...r, passed_stages: passed.filter((x) => x !== stage) })) : s;
-      }
-      return s;
+      return passed.includes(stage) ? withReview(s, draft_hash, (r) => ({ ...r, passed_stages: passed.filter((x) => x !== stage) })) : s;
     }
     case "run.started": {
-      // a new run reviews afresh; applyRun has already installed it. Checks, evaluations and challenges stay.
+      // a new run reviews afresh; applyRun has already installed it (or recorded it malformed). Checks, evaluations and challenges stay.
       if (!isStr(entry.payload.run) || s.run.id !== entry.payload.run) return s;
       const hashes = Object.keys(s.reviews).filter((h) => s.reviews[h]!.passed_stages.length > 0);
       if (hashes.length === 0) return s;
@@ -73,19 +74,24 @@ function applyDrafts(s: CaseState, entry: Entry): CaseState {
   }
 }
 
+const isChallenge = (c: unknown): c is Challenge =>
+  isObj(c) && isStr(c.id) && isStr(c.draft_hash) && isOneOf(c.severity, SEVERITIES) && isStr(c.text) && isStrList(c.cites);
+
 function applyChallenges(s: CaseState, entry: Entry): CaseState {
   switch (entry.type) {
     case "challenge.raised": {
       const c = entry.payload.challenge;
-      if (!isObj(c) || !isStr(c.id) || !isStr(c.draft_hash) || !isOneOf(c.severity, SEVERITIES) || !isStr(c.text) || !isStrList(c.cites)) return s;
+      if (!isChallenge(c)) return malformed(s, entry);
       if (Object.hasOwn(s.challenges, c.id) || !Object.hasOwn(s.reviews, c.draft_hash)) return s;
-      const opened: ChallengeState = { ...c, status: "open", answer: null, action: null };
-      const next = withReview(s, c.draft_hash, (r) => ({ ...r, challenges: [...r.challenges, c.id] }));
-      return { ...next, challenges: { ...s.challenges, [c.id]: opened } };
+      const { id, draft_hash, severity, text, cites } = c;
+      const opened: ChallengeState = { id, draft_hash, severity, text, cites, status: "open", answer: null, action: null };
+      const next = withReview(s, draft_hash, (r) => ({ ...r, challenges: [...r.challenges, id] }));
+      return { ...next, challenges: { ...s.challenges, [id]: opened } };
     }
     case "challenge.answered": {
       const { challenge, answer, action } = entry.payload;
-      if (!has(s.challenges, challenge) || s.challenges[challenge]!.status !== "open" || !isStr(answer) || !isOneOf(action, ANSWER_ACTIONS)) return s;
+      if (!isStr(challenge) || !isStr(answer) || !isOneOf(action, ANSWER_ACTIONS)) return malformed(s, entry);
+      if (!has(s.challenges, challenge) || s.challenges[challenge]!.status !== "open") return s;
       return { ...s, challenges: { ...s.challenges, [challenge]: { ...s.challenges[challenge]!, status: "answered", answer, action } } };
     }
     default:
@@ -97,22 +103,23 @@ function applyOutputs(s: CaseState, entry: Entry): CaseState {
   switch (entry.type) {
     case "product.published": {
       const { n, draft_hash, head_hash, dir, bundle } = entry.payload;
-      if (!isNum(n) || !isStr(draft_hash) || !isStr(head_hash) || !isStr(dir) || !isObj(bundle)) return s;
+      if (!isNum(n) || !isStr(draft_hash) || !isStr(head_hash) || !isStr(dir) || !isBlobRefShape(bundle)) return malformed(s, entry);
       return { ...s, published: [...s.published, { n, draft_hash, head_hash, dir, seq: entry.seq, ts: entry.ts }] };
     }
     case "feedback.recorded": {
       const { measure, kind, value, note } = entry.payload;
-      if (!isStr(measure) || !isOneOf(kind, FEEDBACK_KINDS) || !(isNum(value) || isStr(value)) || !isStr(note)) return s;
+      if (!isStr(measure) || !isOneOf(kind, FEEDBACK_KINDS) || !(isNum(value) || isStr(value)) || !isStr(note)) return malformed(s, entry);
       return { ...s, feedback: [...s.feedback, { measure, kind, value, note }] };
     }
     case "agent.asked": {
       const { turn, text, left_out, added } = entry.payload;
-      if (!isStr(turn) || !isStr(text) || !isStrList(left_out) || !isStrList(added) || s.conversation.some((t) => t.turn === turn)) return s;
+      if (!isStr(turn) || !isStr(text) || !isStrList(left_out) || !isStrList(added)) return malformed(s, entry);
+      if (s.conversation.some((t) => t.turn === turn)) return s;
       return { ...s, conversation: [...s.conversation, { turn, asked: text, answer: null, cites: [], request: null }] };
     }
     case "agent.answered": {
       const { turn, request, text, cites } = entry.payload;
-      if (!isStr(turn) || !isStr(request) || !isStr(text) || !isStrList(cites)) return s;
+      if (!isStr(turn) || !isStr(request) || !isStr(text) || !isStrList(cites)) return malformed(s, entry);
       const i = s.conversation.findIndex((t) => t.turn === turn);
       if (i < 0 || s.conversation[i]!.answer !== null) return s;
       return { ...s, conversation: s.conversation.map((t, j) => (j === i ? { ...t, answer: text, cites, request } : t)) };

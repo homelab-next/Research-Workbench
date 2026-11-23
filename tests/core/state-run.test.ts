@@ -456,6 +456,8 @@ test("malformed payloads never throw and change nothing", () => {
       const { skipped: _s, ...was } = base;
       // seq, head_ts and counters are advanced by the pipeline, not by this reducer
       expect({ ...rest, seq: was.seq, head_ts: was.head_ts, counters: was.counters }, `${type} ${label}`).toEqual(was);
+      const reason = payload === null || payload === undefined || Array.isArray(payload) ? "malformed payload" : `malformed ${type}`;
+      expect(skipped, `${type} ${label}`).toEqual([...base.skipped, { seq: e.seq, type, reason }]);
     }
   }
 });

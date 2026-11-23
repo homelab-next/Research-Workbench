@@ -368,9 +368,8 @@ test("malformed payloads never throw and change nothing but seq, head_ts and ski
       const { skipped: _s, ...was } = base;
       // counters count entries by kind, so a well-formed-object payload still bumps them
       expect({ ...rest, seq: was.seq, head_ts: was.head_ts, counters: was.counters }, `${type} ${label}`).toEqual(was);
-      if (payload === null || payload === undefined || Array.isArray(payload)) {
-        expect(skipped.at(-1), `${type} ${label}`).toEqual({ seq: e.seq, type, reason: "malformed payload" });
-      }
+      const reason = payload === null || payload === undefined || Array.isArray(payload) ? "malformed payload" : `malformed ${type}`;
+      expect(skipped, `${type} ${label}`).toEqual([...base.skipped, { seq: e.seq, type, reason }]);
     }
   }
 });

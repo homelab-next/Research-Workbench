@@ -1,7 +1,7 @@
 import type { Entry } from "../types";
 import { applyAnalysis } from "./analysis";
 import { applyCards } from "./cards";
-import { isObj } from "./guards";
+import { isObj, isStr, malformed, recordSkip } from "./guards";
 import { applyRun } from "./run";
 import { caseFields, isCaseCreated } from "./shapes";
 import type { CaseState, IdKind } from "./types";
@@ -24,19 +24,17 @@ const COUNTED: Partial<Record<Entry["type"], IdKind>> = {
 };
 
 function applyCase(s: CaseState, entry: Entry): CaseState {
-  if (entry.type === "case.created") return isCaseCreated(entry.payload) ? { ...s, meta: caseFields(entry.payload) } : s;
-  if (entry.type === "case.phase_changed") return typeof entry.payload.phase === "string" ? { ...s, phase: entry.payload.phase } : s;
+  if (entry.type === "case.created") return isCaseCreated(entry.payload) ? { ...s, meta: caseFields(entry.payload) } : malformed(s, entry);
+  if (entry.type === "case.phase_changed") return isStr(entry.payload.phase) ? { ...s, phase: entry.payload.phase } : malformed(s, entry);
   return s;
 }
 
 /** One reducer per area; each takes the state and the entry and returns a state. Add new areas here. */
 export const REDUCERS: readonly Reducer[] = [applyCase, applyCards, applyRun, applyAnalysis];
 
-const SKIP_LIMIT = 100;
-
+/** Leaves everything as it was except seq, head_ts and the record of what was skipped. */
 function skip(state: CaseState, entry: Entry, reason: string): CaseState {
-  const skipped = [...state.skipped, { seq: entry.seq, type: String(entry.type), reason }].slice(-SKIP_LIMIT);
-  return { ...state, seq: entry.seq, head_ts: entry.ts, skipped };
+  return recordSkip({ ...state, seq: entry.seq, head_ts: entry.ts }, entry, reason);
 }
 
 /** `apply` with an explicit reducer list; exists so tests can inject a failing reducer. */

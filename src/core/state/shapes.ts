@@ -1,7 +1,7 @@
 // Shape checks for the records the fold and the workbench share. Browser-safe: no runtime imports.
-import { CARD_KINDS, CARD_MAKERS, EMPTY_MEANS, isMarking, PARTIAL_REASONS } from "../types";
-import type { Card, Coverage, Observable, Payloads, TimeWindow } from "../types";
-import { isObj, isOneOf, isStr, isStrList, isStrOrNull } from "./guards";
+import { CARD_KINDS, CARD_MAKERS, EMPTY_MEANS, isMarking, PARTIAL_REASONS, STAGE_OUTCOMES } from "../types";
+import type { BlobRef, Card, Coverage, Observable, Payloads, TimeWindow } from "../types";
+import { isNum, isObj, isOneOf, isStr, isStrList, isStrOrNull } from "./guards";
 
 export const isCount = (x: unknown): x is number => Number.isSafeInteger(x) && (x as number) >= 0;
 export const isTimeWindow = (x: unknown): x is TimeWindow => isObj(x) && isStrOrNull(x.from) && isStrOrNull(x.to);
@@ -34,4 +34,13 @@ export const isCaseCreated = (x: unknown): x is CaseCreated =>
 export function caseFields(c: CaseCreated): CaseCreated {
   const { id, title, asked, why, starting, window, objective, marking } = c;
   return { id, title, asked, why, starting, window, objective, marking };
+}
+
+/** The shape of a blob reference. The fold does not check that `blob` is a hash; the verifier checks the bytes. */
+export const isBlobRefShape = (x: unknown): x is BlobRef => isObj(x) && isStr(x.blob) && isNum(x.bytes) && (x.media === undefined || isStr(x.media));
+
+/** Is this payload the shape of a `stage.finished`? */
+export function isStageFinishedShape(x: unknown): x is Payloads["stage.finished"] {
+  return isObj(x) && isStr(x.stage) && isNum(x.attempt) && isOneOf(x.outcome, STAGE_OUTCOMES) && isStrOrNull(x.draft_hash)
+    && (x.output === null || isBlobRefShape(x.output)) && isStrOrNull(x.reason);
 }
