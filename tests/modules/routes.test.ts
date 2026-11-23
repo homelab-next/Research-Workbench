@@ -22,6 +22,8 @@ const TYPES = [
   { id: "registrar", title: "Registrar", pattern: "Registrar [A-Za-z]+" },
   { id: "owner", title: "Owner", pattern: "Example [A-Za-z]+" },
   { id: "rating", title: "Rating", pattern: "rating-\\d" },
+  { id: "tag", title: "Tag", pattern: "tag-\\d" },
+  { id: "label", title: "Label", pattern: "label-\\d" },
 ];
 const observables = new Observables(TYPES);
 
@@ -45,6 +47,8 @@ beforeEach(() => {
   d("registrars.csv", ["domain,registrar", "example.org,Registrar Alpha", ...many.slice(0, 2).map((m) => m + ",Registrar Alpha")]);
   d("regowners.csv", ["registrar,owner", "Registrar Alpha,Example Hosting"]);
   d("ratings.csv", ["domain,rating", "paid.example.org,rating-1"]);
+  d("tags.csv", ["address,tag", "192.0.2.70,tag-1", "192.0.2.70,tag-2"]);
+  d("labels.csv", ["address,label", "192.0.2.70,label-1"]);
   const source = (id: string, file: string, cols: [string, string][], extra = ""): void => writeFileSync(join(root, `${id}.yaml`), `kind: source
 id: ${id}
 title: ${id}
@@ -61,6 +65,8 @@ tables:
   source("registrars", "registrars.csv", [["domain", "domain"], ["registrar", "registrar"]]);
   source("regowners", "regowners.csv", [["registrar", "registrar"], ["owner", "owner"]]);
   source("paid", "ratings.csv", [["domain", "domain"], ["rating", "rating"]], "cost: { weight: 3, unit: lookups }");
+  source("small", "tags.csv", [["address", "address"], ["tag", "tag"]], "limits: { max_rows: 1, timeout_ms: 1000 }");
+  source("unconf", "labels.csv", [["address", "address"], ["label", "label"]], "confirmed: false");
   writeFileSync(join(root, "types.yaml"), `kind: types\ntypes:\n${TYPES.map((t) => `  - { id: ${t.id}, title: ${t.title}, pattern: '${t.pattern}' }`).join("\n")}\n`);
   const pv = (id: string, from: string, to: string, src: string, col: string, key: string): string =>
     `  - { id: ${id}, title: ${id} title, from: ${from}, to: ${to}, source: ${src}, query: "select ${col} from ${src} where ${key} = {value}", weight: ${src === "paid" ? "null" : "0"}, empty_means: not-seen, yields: { ${col}: ${to} } }`;
@@ -70,6 +76,8 @@ tables:
     pv("dr", "domain", "registrar", "registrars", "registrar", "domain"),
     pv("ro", "registrar", "owner", "regowners", "owner", "registrar"),
     pv("dq", "domain", "rating", "paid", "rating", "domain"),
+    pv("at", "address", "tag", "small", "tag", "address"),
+    pv("au", "address", "label", "unconf", "label", "address"),
   ].join("\n")}\n`);
   const registry = Registry.load([{ path: root, trusted_scripts: false }]);
   expect(registry.problems).toEqual([]);
@@ -159,6 +167,7 @@ test("the total number of pivot runs is capped at 50", async () => {
   const r = await go(many2, "owner", { max_fanout: 100 });
   expect(r.outcome).toBe("blocked");
   expect(r.trail).toHaveLength(50);
+  expect(r.caveats).toContain("stopped after 50 lookups");
 });
 
 test("every query in the trail is in the ledger with its why", async () => {
@@ -166,4 +175,34 @@ test("every query in the trail is in the ledger with its why", async () => {
   const issued = s.entries().filter((e) => e.type === "query.issued").map((e) => e.payload as { query: string; why: string; pivot: string });
   expect(issued.map((i) => i.query)).toEqual(r.trail.map((t) => t.query!));
   expect(issued.map((i) => i.why)).toEqual(r.trail.map((t) => `who owns it — ${t.hop.title}`));
+});
+
+test("a clean answer has no caveats", async () => {
+  expect((await go(addr("192.0.2.17"), "owner")).caveats).toEqual([]);
+});
+
+test("a partial hop is a caveat on the answer", async () => {
+  const r = await go(addr("192.0.2.70"), "tag");
+  expect(r.outcome).toBe("answered");
+  expect(r.caveats).toEqual(["at: partial coverage (row_limit)"]);
+});
+
+test("an unconfirmed source is a caveat when it is allowed", async () => {
+  const lim = { max_weight: null, allow_unconfirmed: true, max_hops: 4 };
+  const r = await go(addr("192.0.2.70"), "label", { limits: lim });
+  expect(r.outcome).toBe("answered");
+  expect(r.caveats).toEqual(["au: unconfirmed source unconf"]);
+});
+
+test("values beyond the fan-out limit are a caveat", async () => {
+  const r = await go(addr("192.0.2.50"), "owner", { max_fanout: 3 });
+  expect(r.caveats).toContain("do1: 5 values not tried (fan-out limit 3)");
+});
+
+test("once the goal is known, the hop's remaining values are not run", async () => {
+  const have = ["192.0.2.17", "192.0.2.50", "192.0.2.60", "192.0.2.61", "192.0.2.62"].map((value) => ({ type: "address", value }));
+  const r = await go(have, "domain");
+  expect(r.outcome).toBe("answered");
+  expect(r.trail.map((t) => [t.hop.pivot, t.value])).toEqual([["ad", "192.0.2.17"]]);
+  expect(r.caveats).toEqual([]);
 });

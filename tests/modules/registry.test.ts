@@ -349,3 +349,13 @@ test("a catastrophic type pattern is a problem naming the type; safe ones load",
     expect(r.problems).toEqual([]);
   }
 });
+
+test("a pivot whose yields map no column to its target type is a problem naming the pivot", () => {
+  const bare = PIVOTS.replace("    yields: { domain: domain }\n", "");
+  const wrongType = PIVOTS.replace("yields: { domain: domain }", "yields: { name: address }");
+  for (const text of [bare, wrongType]) {
+    const r = Registry.load([root({ ...GOOD, "pivots.yaml": text })]);
+    expect(r.pivot("address_to_domains")).toBeNull();
+    expect(r.problems.map(p => p.error)).toEqual([`pivot "address_to_domains": yields maps no column to its target type "domain"`]);
+  }
+});

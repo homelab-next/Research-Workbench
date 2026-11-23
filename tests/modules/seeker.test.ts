@@ -20,7 +20,7 @@ where: machine
 ${extra}
 `;
 const pivot = (id: string, from: string, to: string, source: string, weight: string): string =>
-  `  - { id: ${id}, title: Pivot ${id}, from: ${from}, to: ${to}, source: ${source}, query: "select 1 from t where x = {value}"${weight}, empty_means: proven-negative }`;
+  `  - { id: ${id}, title: Pivot ${id}, from: ${from}, to: ${to}, source: ${source}, query: "select 1 from t where x = {value}"${weight}, empty_means: proven-negative, yields: { x: ${to} } }`;
 
 beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), "seeker-"));
@@ -117,4 +117,27 @@ test("at most five routes are returned", () => {
 test("SEEKERS has cheapest", () => {
   expect(Object.keys(SEEKERS)).toEqual(["cheapest"]);
   expect(SEEKERS.cheapest!(registry).routes(["a"], "b", DEFAULT_LIMITS)).toHaveLength(1);
+});
+
+test("the order of routes does not depend on the order of `have`", () => {
+  const want = ids(seeker.routes(["a", "b", "c"], "d", { ...DEFAULT_LIMITS, allow_unconfirmed: true }));
+  for (const have of [["c", "b", "a"], ["b", "a", "c"], ["a", "c", "b"], ["b", "c", "a"], ["c", "a", "b"]]) {
+    expect(ids(seeker.routes(have, "d", { ...DEFAULT_LIMITS, allow_unconfirmed: true }))).toEqual(want);
+  }
+});
+
+test("routes of equal weight and length are ordered by their pivot ids", () => {
+  const dir2 = mkdtempSync(join(tmpdir(), "seeker-tie-"));
+  try {
+    mkdirSync(join(dir2, "data"));
+    writeFileSync(join(dir2, "s.yaml"), src("s", ""));
+    writeFileSync(join(dir2, "types.yaml"), `kind: types\ntypes:\n${["a", "b", "c"].map((t) => `  - { id: ${t}, title: ${t}, pattern: '${t}' }`).join("\n")}\n`);
+    // declared in the opposite order to the expected result
+    writeFileSync(join(dir2, "pivots.yaml"), `kind: pivots\npivots:\n${[pivot("zz", "a", "c", "s", ", weight: 1"), pivot("mm", "a", "c", "s", ", weight: 1"), pivot("aa", "a", "c", "s", ", weight: 1")].join("\n")}\n`);
+    const r = Registry.load([{ path: dir2, trusted_scripts: false }]);
+    expect(r.problems).toEqual([]);
+    expect(ids(cheapestSeeker(r).routes(["a"], "c", DEFAULT_LIMITS))).toEqual([["aa"], ["mm"], ["zz"]]);
+  } finally {
+    rmSync(dir2, { recursive: true, force: true });
+  }
 });

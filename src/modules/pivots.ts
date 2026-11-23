@@ -43,13 +43,13 @@ export async function runPivot(session: CaseSession, deps: RunnerDeps, input: Pi
 }
 
 /**
- * Distinct values of the pivot's `to` type in a finished result. The columns the pivot says it yields as that type are read;
- * a pivot that names none reads every column. Nulls, non-strings and values that fail the type's pattern are dropped.
+ * Distinct values of the pivot's `to` type in a finished result. Only the columns the pivot's `yields` maps to that type are read
+ * (the registry refuses a pivot with none). Nulls, non-strings and values that fail the type's pattern are dropped.
  */
 export function yielded(pivot: PivotManifest, result: RunQueryResult, observables: Observables): Observable[] {
   if (result.status !== "done") return [];
   const named = result.columns.map((c, i) => ({ c, i })).filter(({ c }) => Object.hasOwn(pivot.yields, c) && pivot.yields[c] === pivot.to);
-  const cols = named.length > 0 ? named.map((x) => x.i) : result.columns.map((_, i) => i);
+  const cols = named.map((x) => x.i);
   const seen = new Set<string>();
   const out: Observable[] = [];
   for (const row of result.data) {

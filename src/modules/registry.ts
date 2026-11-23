@@ -231,6 +231,7 @@ export class Registry {
       const missingType = names.find(t => !this.typeById.has(t));
       if (!this.sourceById.has(p.source)) reject("pivot", p.id, `pivot "${p.id}": source "${p.source}" is not loaded`);
       else if (missingType !== undefined) reject("pivot", p.id, `pivot "${p.id}": type "${missingType}" is not a known observable type`);
+      else if (!Object.values(p.yields).includes(p.to)) reject("pivot", p.id, `pivot "${p.id}": yields maps no column to its target type "${p.to}"`);
     }
   }
 

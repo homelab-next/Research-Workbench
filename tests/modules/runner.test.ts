@@ -72,9 +72,9 @@ types:
   "pivots.yaml": `kind: pivots
 pivots:
   - { id: peers, title: Peers of an address, from: address, to: address, source: flows, query: "select dst as peer from flows where src = {value}", needs_window: false, empty_means: proven-negative, yields: { peer: address } }
-  - { id: seen, title: Seen, from: address, to: address, source: flows, query: "select dst from flows where src = {value}", empty_means: not-seen }
-  - { id: paid_rep, title: Paid reputation, from: address, to: address, source: rep, query: reputation, empty_means: not-seen }
-  - { id: free_rep, title: Free reputation, from: address, to: address, source: rep, query: reputation, weight: 0, empty_means: not-seen }
+  - { id: seen, title: Seen, from: address, to: address, source: flows, query: "select dst from flows where src = {value}", empty_means: not-seen, yields: { dst: address } }
+  - { id: paid_rep, title: Paid reputation, from: address, to: address, source: rep, query: reputation, empty_means: not-seen, yields: { address: address } }
+  - { id: free_rep, title: Free reputation, from: address, to: address, source: rep, query: reputation, weight: 0, empty_means: not-seen, yields: { address: address } }
 `,
 });
 

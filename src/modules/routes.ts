@@ -13,7 +13,7 @@ export interface RouteInput {
   have: Observable[]; want: string; window: TimeWindow; why: string; actor: Actor; limits?: SeekLimits; subgoal?: string | null;
   max_fanout?: number; run?: string | null; stage?: string | null; job?: string | null;
 }
-export interface RouteResult { outcome: "answered" | "blocked"; reached: Observable[]; trail: TrailItem[]; cards: string[]; blocked: string[] }
+export interface RouteResult { outcome: "answered" | "blocked"; reached: Observable[]; trail: TrailItem[]; cards: string[]; blocked: string[]; caveats: string[] }
 
 /** The most pivot runs one call makes, whatever the routes and values. */
 export const MAX_PIVOT_RUNS = 50;
@@ -21,6 +21,7 @@ export const MAX_PIVOT_RUNS = 50;
 /**
  * Follows the seeker's best route hop by hop. A hop that finds nothing of its target type, is refused, fails or needs a budget
  * blocks its pivot and the run re-routes from what it knows. Never runs a pivot on the same value twice; stops after MAX_PIVOT_RUNS runs.
+ * `caveats` says, in plain words, what an answer rests on that a reader should know: partial coverage, unconfirmed sources, the run cap, the fan-out cap.
  */
 export async function runRoute(session: CaseSession, deps: RunnerDeps, seeker: Seeker, input: RouteInput): Promise<RouteResult> {
   const limits = input.limits ?? DEFAULT_LIMITS;
@@ -37,11 +38,13 @@ export async function runRoute(session: CaseSession, deps: RunnerDeps, seeker: S
   const done = new Set<string>();
   const blocked: string[] = [];
   const trail: TrailItem[] = [];
+  const caveats: string[] = [];
+  const caveat = (text: string): void => { if (!caveats.includes(text)) caveats.push(text); };
   let runs = 0;
 
   const finish = (): RouteResult => {
     const reached = (known.get(input.want) ?? []).map((value) => ({ type: input.want, value }));
-    return { outcome: reached.length > 0 ? "answered" : "blocked", reached, trail, cards: trail.flatMap((t) => (t.card === null ? [] : [t.card])), blocked };
+    return { outcome: reached.length > 0 ? "answered" : "blocked", reached, trail, cards: trail.flatMap((t) => (t.card === null ? [] : [t.card])), blocked, caveats };
   };
   const block = (pivot: string): void => { if (!blocked.includes(pivot)) blocked.push(pivot); };
 
@@ -59,9 +62,13 @@ export async function runRoute(session: CaseSession, deps: RunnerDeps, seeker: S
     }
     const pending = (known.get(hop.from) ?? []).filter((v) => !done.has(`${hop.pivot}|${v}`));
     for (const v of pending) done.add(`${hop.pivot}|${v}`); // values beyond the fan-out cap are never run for this pivot
+    let reachedGoal = false;
     let gained = false;
     for (const value of pending.slice(0, fanout)) {
-      if (runs >= MAX_PIVOT_RUNS) return finish();
+      if (runs >= MAX_PIVOT_RUNS) {
+        caveat(`stopped after ${MAX_PIVOT_RUNS} lookups`);
+        return finish();
+      }
       runs++;
       const r = await runPivot(session, deps, {
         pivot: hop.pivot, value, window: input.window, why: `${input.why} — ${hop.title}`, actor: input.actor,
@@ -71,13 +78,22 @@ export async function runRoute(session: CaseSession, deps: RunnerDeps, seeker: S
       const found = pivot !== null ? yielded(pivot, r, deps.observables) : [];
       for (const o of found) add(o);
       if (found.length > 0) gained = true;
+      if (r.status === "done") {
+        if (r.coverage.kind === "partial") caveat(`${hop.pivot}: partial coverage (${r.coverage.reason})`);
+        if (!hop.confirmed) caveat(`${hop.pivot}: unconfirmed source ${hop.source}`);
+      }
       trail.push({
         hop, value, status: r.status, outcome: r.status === "done" ? r.outcome : null,
         card: r.status === "done" ? r.card : null, query: r.status === "done" || r.status === "failed" ? r.query : null,
         found: found.map((o) => o.value),
       });
       if (r.status === "needs_budget") break; // asking again for the next value would only repeat the request
+      if (hop.to === input.want && (known.get(input.want)?.length ?? 0) > 0) {
+        reachedGoal = true; // the goal is known; the hop's other values are not worth a lookup
+        break;
+      }
     }
+    if (!reachedGoal && pending.length > fanout) caveat(`${hop.pivot}: ${pending.length - fanout} values not tried (fan-out limit ${fanout})`);
     if (!gained) block(hop.pivot);
   }
 }
