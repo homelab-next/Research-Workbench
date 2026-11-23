@@ -17,12 +17,17 @@ const ISO_MS = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2}\.\d{3})Z$/;
 const CONTROL = /[\x00-\x1f\x7f-\x9f\u2028\u2029]/;
 
 class TimedOut extends Error {}
+/** The engine reported the query failed: it has already ended, so there is nothing to cancel. */
+class EngineError extends ConnectorError {}
 class TooBig extends Error {
   constructor(readonly limit: "page" | "total") { super(limit); }
 }
 
 /** One value as a SQL literal. The window ends become zoned timestamps; strings double their quotes. */
 export function renderLiteral(name: string, value: string | number | null): string {
+  if (value !== null && typeof value !== "string" && typeof value !== "number") {
+    throw new ConnectorError(`the value for {${name}} is a ${Array.isArray(value) ? "array" : typeof value}; only strings, numbers and null can be bound`);
+  }
   if (name === "window.from" || name === "window.to") {
     const m = typeof value === "string" ? ISO_MS.exec(value) : null;
     if (m === null) throw new ConnectorError(`the value for {${name}} is not a UTC timestamp like 2026-11-20T00:00:00.000Z`);
@@ -38,7 +43,7 @@ export function renderLiteral(name: string, value: string | number | null): stri
 }
 
 interface Page { columns?: unknown; data?: unknown; nextUri?: unknown; error?: unknown }
-interface Paged { columns: string[]; rows: Json[][]; pages: unknown[]; coverage: QueryOutcome["coverage"] }
+interface Paged { columns: string[]; rows: Json[][]; pages: Uint8Array[]; coverage: QueryOutcome["coverage"] }
 interface Auth { headers: Record<string, string>; redact: string[] }
 
 export class TrinoConnector implements Connector {
@@ -92,7 +97,7 @@ export class TrinoConnector implements Connector {
     const sql = this.render(req);
     const out = await this.execute(sql, req.max_rows, req.timeout_ms);
     return {
-      columns: out.columns, rows: out.rows, raw: new TextEncoder().encode(JSON.stringify(out.pages)),
+      columns: out.columns, rows: out.rows, raw: joinPages(out.pages),
       media: "application/json", coverage: out.coverage, cost: null,
     };
   }
@@ -162,10 +167,11 @@ export class TrinoConnector implements Connector {
   private async execute(sql: string, maxRows: number, timeoutMs: number): Promise<Paged> {
     const base = this.base();
     const { headers, redact } = this.auth();
+    const echoes = redact.flatMap(r => (r === "" ? [] : [r, JSON.stringify(r).slice(1, -1)]));
     const ctl = new AbortController();
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; ctl.abort(); }, timeoutMs);
-    const pages: unknown[] = [];
+    const pages: Uint8Array[] = [];
     const rows: Json[][] = [];
     let columns: string[] = [];
     let pending: string | null = null;
@@ -186,6 +192,10 @@ export class TrinoConnector implements Connector {
       }
       const bytes = await readCapped(res, ctl.signal, limit, which);
       total += bytes.length;
+      if (echoes.length > 0) {
+        const seen = new TextDecoder("utf-8").decode(bytes);
+        if (echoes.some(e => seen.includes(e))) throw new ConnectorError("the source echoed the credential; result refused");
+      }
       let page: Page;
       try {
         const doc: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
@@ -194,11 +204,28 @@ export class TrinoConnector implements Connector {
       } catch {
         throw new ConnectorError("the engine sent a page that is not a JSON object");
       }
-      pages.push(page);
+      pages.push(bytes);
+      // Learn the query's nextUri before anything else can fail or time out, so it can be cancelled.
+      // An unusable nextUri leaves the last good one in place; a page with none (an error page, the last page) leaves nothing to cancel.
+      let next: string | null = null;
+      if (page.nextUri !== undefined && page.nextUri !== null) {
+        if (typeof page.nextUri !== "string") throw new ConnectorError("the engine sent a malformed nextUri");
+        let u: URL;
+        try {
+          u = new URL(page.nextUri);
+        } catch {
+          throw new ConnectorError("the engine sent a nextUri that is not a URL");
+        }
+        if (u.origin !== base.origin) {
+          throw new ConnectorError(`the engine's nextUri is on another origin (${u.origin}); it was not contacted and no credential was sent there`);
+        }
+        next = page.nextUri;
+      }
+      pending = next;
       if (page.error !== undefined && page.error !== null) {
         const msg = typeof page.error === "object" && typeof (page.error as { message?: unknown }).message === "string"
           ? (page.error as { message: string }).message : "unspecified error";
-        throw new ConnectorError(this.scrub(`the engine reported an error: ${msg}`, redact));
+        throw new EngineError(this.scrub(`the engine reported an error: ${msg}`, redact));
       }
       if (page.columns !== undefined) {
         if (!Array.isArray(page.columns) || !page.columns.every(x => typeof x === "object" && x !== null && typeof (x as { name?: unknown }).name === "string")) {
@@ -209,21 +236,6 @@ export class TrinoConnector implements Connector {
       if (page.data !== undefined) {
         if (!Array.isArray(page.data) || !page.data.every(r => Array.isArray(r))) throw new ConnectorError("the engine sent malformed row data");
         for (const r of page.data as Json[][]) rows.push(r);
-      }
-      if (page.nextUri === undefined || page.nextUri === null) {
-        pending = null;
-      } else {
-        if (typeof page.nextUri !== "string") throw new ConnectorError("the engine sent a malformed nextUri");
-        let next: URL;
-        try {
-          next = new URL(page.nextUri);
-        } catch {
-          throw new ConnectorError("the engine sent a nextUri that is not a URL");
-        }
-        if (next.origin !== base.origin) {
-          throw new ConnectorError(`the engine's nextUri is on another origin (${next.origin}); it was not contacted and no credential was sent there`);
-        }
-        pending = page.nextUri;
       }
     };
 
@@ -241,18 +253,20 @@ export class TrinoConnector implements Connector {
         coverage: capped ? { kind: "partial", reason: "row_limit", detail: `stopped at ${maxRows} rows` } : { kind: "full" },
       };
     } catch (err) {
-      if (err instanceof ConnectorError) throw err;
-      if (err instanceof TooBig) {
-        if (pending !== null) await this.cancel(pending, headers);
-        const lim = err.limit === "page" ? `${MAX_PAGE_BYTES} bytes for one page` : `${MAX_TOTAL_BYTES} bytes for all pages`;
-        throw new ConnectorError(`the engine's response is larger than the limit of ${lim}`);
-      }
-      if (err instanceof TimedOut || timedOut) {
+      if (err instanceof EngineError) throw err;
+      // From here the query may still be running: cancel the last same-origin URI the engine gave us.
+      if (err instanceof TimedOut || (timedOut && !(err instanceof ConnectorError))) {
         if (pending !== null) await this.cancel(pending, headers);
         return {
           columns, rows: rows.slice(0, maxRows), pages,
           coverage: { kind: "partial", reason: "timeout", detail: `no complete result within ${timeoutMs} ms` },
         };
+      }
+      if (pending !== null) await this.cancel(pending, headers);
+      if (err instanceof ConnectorError) throw err;
+      if (err instanceof TooBig) {
+        const lim = err.limit === "page" ? `${MAX_PAGE_BYTES} bytes for one page` : `${MAX_TOTAL_BYTES} bytes for all pages`;
+        throw new ConnectorError(`the engine's response is larger than the limit of ${lim}`);
       }
       throw new ConnectorError(this.scrub(`the request to the engine failed: ${(err as Error).message}`, redact));
     } finally {
@@ -282,5 +296,19 @@ async function readCapped(res: Response, signal: AbortSignal, limit: number, whi
   const out = new Uint8Array(total);
   let at = 0;
   for (const c of chunks) { out.set(c, at); at += c.length; }
+  return out;
+}
+
+/** `[` page1 `,` page2 ... `]`, each page's bytes exactly as received. */
+function joinPages(pages: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(pages.reduce((n, p) => n + p.length, 0) + pages.length + 1);
+  let at = 0;
+  out[at++] = 0x5b;
+  pages.forEach((p, i) => {
+    if (i > 0) out[at++] = 0x2c;
+    out.set(p, at);
+    at += p.length;
+  });
+  out[at] = 0x5d;
   return out;
 }

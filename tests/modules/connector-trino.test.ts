@@ -249,6 +249,7 @@ test("a nextUri on another origin stops the query without contacting it or cance
   }
   expect(other.hits).toEqual([]);
   expect(s.hits).toEqual(["POST /v1/statement"]);
+  // the query is not left running: nothing to cancel here, the POST reply gave no usable URI
   // a different port on the same host is another origin too
   const s2 = raw((_r, base) => json({ id: "q1", nextUri: base.replace(/:\d+$/, ":1") + "/v1/statement/q1/1" }));
   await expect(make(s2.url).run(okReq)).rejects.toBeInstanceOf(ConnectorError);
@@ -319,4 +320,95 @@ test("estimate is null when the engine cannot say", async () => {
 test("estimate still refuses a query the guard refuses, without sending anything", async () => {
   await expect(c.estimate(req("delete from iceberg.s.events"))).rejects.toThrow(GuardError);
   expect(t.statements).toHaveLength(0);
+});
+
+/** A server whose POST gives a good nextUri, GET 1 gives a good page with a nextUri to 2, and GET 2 is whatever `bad` makes. */
+function failing(bad: (r: Request, base: string) => Response | Promise<Response>): { url: string; hits: string[] } {
+  return raw((r, base) => {
+    const path = new URL(r.url).pathname;
+    if (r.method === "DELETE") return new Response(null, { status: 204 });
+    if (r.method === "POST") return json({ id: "q1", nextUri: `${base}/v1/statement/q1/1` });
+    if (path.endsWith("/1")) return json({ id: "q1", columns: [{ name: "a" }], data: [[1]], nextUri: `${base}/v1/statement/q1/2` });
+    return bad(r, base);
+  });
+}
+const deletes = (hits: string[]): string[] => hits.filter(h => h.startsWith("DELETE"));
+
+test("a failure after paging has begun cancels the last same-origin URI", async () => {
+  const other = raw(() => new Response("hit"));
+  const cases: [string, string, (r: Request, base: string) => Response | Promise<Response>][] = [
+    ["foreign nextUri", "2", () => json({ id: "q1", nextUri: `${other.url}/v1/statement/q1/3` })],
+    ["malformed data", "3", (_r, base) => json({ id: "q1", data: "nope", nextUri: `${base}/v1/statement/q1/3` })],
+    ["malformed columns", "3", (_r, base) => json({ id: "q1", columns: [1], nextUri: `${base}/v1/statement/q1/3` })],
+    ["non-JSON body", "2", () => new Response("<html>")],
+    ["HTTP 500", "2", () => new Response("no", { status: 500 })],
+    ["HTTP 302", "2", () => new Response(null, { status: 302, headers: { location: `${other.url}/x` } })],
+    ["malformed nextUri", "2", () => json({ id: "q1", nextUri: 7 })],
+  ];
+  for (const [label, last, bad] of cases) {
+    const s = failing(bad);
+    await expect(make(s.url).run(req(TEXT, {}, win, { timeout_ms: 5000 }))).rejects.toBeInstanceOf(ConnectorError);
+    expect([label, deletes(s.hits)]).toEqual([label, [`DELETE /v1/statement/q1/${last}`]]);
+  }
+  expect(other.hits).toEqual([]);
+});
+
+test("a network failure mid-paging cancels the query", async () => {
+  const s = failing(() => new Response("unused"));
+  globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: RequestInit) =>
+    (String(input).endsWith("/q1/2") && init?.method === "GET" ? Promise.reject(new TypeError("socket closed")) : realFetch(input, init))) as typeof fetch;
+  await expect(make(s.url).run(req(TEXT, {}, win, { timeout_ms: 5000 }))).rejects.toBeInstanceOf(ConnectorError);
+  expect(deletes(s.hits)).toEqual(["DELETE /v1/statement/q1/2"]);
+});
+
+test("an engine error page is not cancelled", async () => {
+  const s = failing(() => json({ id: "q1", error: { message: "boom" } }));
+  await expect(make(s.url).run(req(TEXT, {}, win, { timeout_ms: 5000 }))).rejects.toThrow(/boom/);
+  expect(deletes(s.hits)).toEqual([]);
+});
+
+test("raw keeps every page's bytes exactly, large numbers and all", async () => {
+  const post = '{"id":"q1",  "nextUri":"BASE/v1/statement/q1/1"}';
+  const page = '{"id":"q1","columns":[{"name":"a"},{"name":"b"}],"data":[[12345678901234567890,1.0]]}';
+  const s = raw((r, base) => new Response(r.method === "POST" ? post.replace("BASE", base) : page));
+  const out = await make(s.url).run(okReq);
+  expect(text(out.raw)).toBe(`[${post.replace("BASE", s.url)},${page}]`);
+  expect(out.rows).toHaveLength(1);
+});
+
+test("a timeout after the POST reply cancels the query", async () => {
+  const s = raw(async (r, base) => {
+    if (r.method === "DELETE") return new Response(null, { status: 204 });
+    if (r.method === "GET") { await Bun.sleep(400); return json({ id: "q1" }); }
+    return json({ id: "q1", nextUri: `${base}/v1/statement/q1/1` });
+  });
+  const out = await make(s.url).run(okReq);
+  expect(out.coverage).toMatchObject({ kind: "partial", reason: "timeout" });
+  expect(deletes(s.hits)).toEqual(["DELETE /v1/statement/q1/1"]);
+});
+
+test("a source that echoes the credential has its result refused and the query cancelled", async () => {
+  const tokenOf = btoa(`workbench:${PW}`);
+  for (const echoed of [`Basic ${tokenOf}`, PW]) {
+    const s = failing(r => json({ id: "q1", columns: [{ name: "h" }], data: [[echoed ?? r.method]] }));
+    const cc = make(s.url, { credential: "LAKE_PW" }, { LAKE_PW: PW });
+    try {
+      await cc.run(req(TEXT, {}, win, { timeout_ms: 5000 }));
+      throw new Error("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ConnectorError);
+      expect((e as Error).message).toContain("echoed the credential");
+      expect((e as Error).message).not.toContain(PW);
+      expect((e as Error).message).not.toContain(tokenOf);
+    }
+    expect(deletes(s.hits)).toEqual(["DELETE /v1/statement/q1/2"]);
+  }
+});
+
+test("a bound boolean, object or array is a ConnectorError naming the placeholder", () => {
+  for (const v of [true, {}, [1]]) {
+    expect(() => renderLiteral("thing", v as unknown as string)).toThrow(ConnectorError);
+    expect(() => renderLiteral("thing", v as unknown as string)).toThrow(/\{thing\}/);
+  }
+  expect(() => c.render(req("select a from iceberg.s.events where ts >= {window.from} and h = {v}", { v: true as unknown as string }))).toThrow(ConnectorError);
 });
