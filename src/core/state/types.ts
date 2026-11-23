@@ -65,6 +65,8 @@ export interface ReviewState {
   challenges: string[];
   /** Ids of stages that finished with outcome "pass" for this draft hash. */
   passed_stages: string[];
+  /** The latest publish.rejected for this hash: the person's verdict, shown in the Narrative lens. It clears passed_stages. */
+  rejected: { reason: string; stop: boolean; seq: number; ts: string } | null;
 }
 export type ChallengeState = Challenge & { status: "open" | "answered"; answer: string | null; action: "revised" | "rebutted" | null };
 

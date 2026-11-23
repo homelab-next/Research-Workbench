@@ -31,7 +31,7 @@ function applyDrafts(s: CaseState, entry: Entry): CaseState {
       if (!isDraft(d)) return malformed(s, entry);
       // a repeated hash is a new revision of bytes that were already reviewed: keep its record
       if (Object.hasOwn(s.reviews, d.hash)) return { ...s, drafts: [...s.drafts, d] };
-      const review: ReviewState = { checks: [], evaluation: null, challenges: [], passed_stages: [] };
+      const review: ReviewState = { checks: [], evaluation: null, challenges: [], passed_stages: [], rejected: null };
       return { ...s, drafts: [...s.drafts, d], reviews: { ...s.reviews, [d.hash]: review } };
     }
     case "check.run": {
@@ -103,6 +103,12 @@ function applyChallenges(s: CaseState, entry: Entry): CaseState {
 
 function applyOutputs(s: CaseState, entry: Entry): CaseState {
   switch (entry.type) {
+    case "publish.rejected": {
+      // The person's rejection is the latest and most authoritative verdict: the hash must pass review again.
+      const { draft_hash, reason, stop } = entry.payload;
+      if (!isStr(draft_hash) || !isStr(reason) || !isBool(stop)) return malformed(s, entry);
+      return withReview(s, draft_hash, (r) => ({ ...r, passed_stages: [], rejected: { reason, stop, seq: entry.seq, ts: entry.ts } }));
+    }
     case "product.published": {
       const { n, draft_hash, head_hash, dir, bundle } = entry.payload;
       if (!isNum(n) || !isStr(draft_hash) || !isStr(head_hash) || !isStr(dir) || !isBlobRefShape(bundle)) return malformed(s, entry);

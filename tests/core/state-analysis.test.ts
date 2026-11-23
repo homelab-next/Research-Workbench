@@ -37,7 +37,7 @@ test("draft.revised appends a revision and opens its review record", () => {
   const s = fold(b.entries);
   expect(s.drafts.length).toBe(1);
   expect(s.drafts[0]!.hash).toBe("h1");
-  expect(s.reviews.h1).toEqual({ checks: [], evaluation: null, challenges: [], passed_stages: [] });
+  expect(s.reviews.h1).toEqual({ checks: [], evaluation: null, challenges: [], passed_stages: [], rejected: null });
 });
 
 test("latestDraft is the last revision, or null", () => {
@@ -358,4 +358,51 @@ test("malformed payloads never throw and change nothing", () => {
 test("a state with no drafts also survives malformed payloads", () => {
   const base = initial();
   for (const type of HANDLED) expect(() => apply(base, raw(type, {}))).not.toThrow();
+});
+
+// ---------- final review, finding 5: the person's rejection is a verdict ----------
+test("publish.rejected clears the passes on that hash and records the reason", () => {
+  const b = run();
+  revise(b, 1, "h1");
+  passAll(b, "h1");
+  b.add("gate.waiting", { gate: "publish" });
+  expect(publishable(fold(b.entries), "h1")).toBe(true);
+  const rejected = b.add("publish.rejected", { draft_hash: "h1", reason: "the summary overstates the evidence", stop: false });
+  b.add("stage.sent_back", { from: "publish", to: "assemble", reason: "rejected", count: 1 });
+  const s = fold(b.entries);
+  expect(publishable(s, "h1")).toBe(false);
+  expect(blockers(s, "h1")).toEqual(["Checks has not passed this revision", "Evaluate has not passed this revision", "Challenge has not passed this revision"]);
+  expect(s.reviews.h1!.passed_stages).toEqual([]);
+  expect(s.reviews.h1!.rejected).toEqual({ reason: "the summary overstates the evidence", stop: false, seq: rejected.seq, ts: rejected.ts });
+});
+
+test("the same bytes sent back by Assemble must pass review again, and the rejection stays on record", () => {
+  const b = run();
+  revise(b, 1, "h1");
+  passAll(b, "h1");
+  b.add("publish.rejected", { draft_hash: "h1", reason: "no", stop: false });
+  revise(b, 2, "h1");
+  expect(publishable(fold(b.entries), "h1")).toBe(false);
+  passAll(b, "h1");
+  const s = fold(b.entries);
+  expect(publishable(s, "h1")).toBe(true);
+  expect(s.reviews.h1!.rejected).toMatchObject({ reason: "no", stop: false });
+});
+
+test("publish.rejected for an unknown hash changes nothing; a malformed one is recorded", () => {
+  const b = run();
+  revise(b, 1, "h1");
+  const base = fold(b.entries);
+  b.add("publish.rejected", { draft_hash: "zz", reason: "no", stop: true });
+  const s = fold(b.entries);
+  expect(s.reviews).toEqual(base.reviews);
+  expect(s.skipped).toEqual([]);
+  b.add("publish.rejected", { draft_hash: "h1", reason: "no", stop: "yes" } as never);
+  expect(fold(b.entries).skipped).toEqual([{ seq: b.entries.length, type: "publish.rejected", reason: "malformed publish.rejected" }]);
+});
+
+test("a new review record has no rejection", () => {
+  const b = run();
+  revise(b, 1, "h1");
+  expect(fold(b.entries).reviews.h1!.rejected).toBeNull();
 });
