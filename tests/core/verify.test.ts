@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { BlobStore } from "../../src/core/blobs";
 import { GENESIS } from "../../src/core/hash";
 import { Ledger } from "../../src/core/ledger";
-import { formatReport, verifyCase } from "../../src/core/verify";
+import { formatReport, UnreadableLedgerError, verifyCase, verifyLedger } from "../../src/core/verify";
 import type { BlobRef } from "../../src/core/types";
 
 const human = { kind: "human", id: "analyst" } as const;
@@ -29,7 +29,7 @@ beforeEach(() => {
   });
   ref = blobs.put("rows go here", "application/json");
   ledger.append(phase("collect"));
-  ledger.append(phase("analyse"));
+  ledger.append({ ...phase("analyse"), cause: 1, run: "run-1", stage: "plan", job: "job-1" });
   ledger.append(phase("review"));
   ledger.append({
     type: "query.result",
@@ -109,6 +109,81 @@ test("an empty ledger verifies with zero entries", () => {
   expect(r).toMatchObject({ ok: true, case: "CASE-2", entries: 0, head: GENESIS, firstBad: null });
 });
 
+test("whitespace or key-order edits to the stored text are caught", () => {
+  rawSql(dir, `UPDATE entries SET payload = '{ "phase": "review" }' WHERE seq = 3`);
+  expect(verifyCase(dir)).toMatchObject({ ok: false, firstBad: { seq: 3, reason: "hash_mismatch" } });
+});
+
+test("a large integer rewritten to a nearby value is caught", () => {
+  rawSql(dir, `UPDATE entries SET payload = '{"phase":9007199254740993}' WHERE seq = 3`);
+  expect(verifyCase(dir)).toMatchObject({ ok: false, firstBad: { seq: 3, reason: "hash_mismatch" } });
+});
+
+test("an edit to the actor text is caught even when it parses the same", () => {
+  rawSql(dir, `UPDATE entries SET actor = '{ "kind": "human", "id": "analyst" }' WHERE seq = 3`);
+  expect(verifyCase(dir)).toMatchObject({ ok: false, firstBad: { seq: 3, reason: "hash_mismatch" } });
+});
+
+const columnEdits: [string, string][] = [
+  ["actor", `actor = '{"id":"someone-else","kind":"human"}'`],
+  ["type", `type = 'case.created'`],
+  ["cause", `cause = 3`],
+  ["run", `run = 'run-2'`],
+  ["stage", `stage = 'other'`],
+  ["job", `job = 'job-2'`],
+  ["hash", `hash = '${"2".repeat(64)}'`],
+  ["cause cleared", `cause = NULL`],
+];
+for (const [name, set] of columnEdits) {
+  test(`an edit to ${name} is caught`, () => {
+    rawSql(dir, `UPDATE entries SET ${set} WHERE seq = 2`);
+    const r = verifyCase(dir);
+    expect(r.ok).toBe(false);
+    // Editing the hash column breaks the next link as well; the first failure is at entry 2 either way.
+    expect(r.firstBad).toMatchObject({ seq: 2, reason: "hash_mismatch" });
+  });
+}
+
+test("an edit to meta.case_id is caught at entry 1", () => {
+  rawSql(dir, `UPDATE meta SET value = 'CASE-9' WHERE key = 'case_id'`);
+  expect(verifyCase(dir)).toMatchObject({ ok: false, case: "CASE-9", firstBad: { seq: 1, reason: "hash_mismatch" } });
+});
+
+function badLedger(name: string, sql: string | null): string {
+  const d = join(root, name);
+  mkdirSync(d);
+  if (sql === null) writeFileSync(join(d, "ledger.sqlite"), "this is not a database, just text padding".repeat(20));
+  else rawSql(d, sql);
+  return d;
+}
+
+test("a file that is not SQLite is unreadable", () => {
+  expect(() => verifyCase(badLedger("notdb", null))).toThrow(UnreadableLedgerError);
+});
+test("a database missing the meta or entries table is unreadable", () => {
+  expect(() => verifyCase(badLedger("nometa", "CREATE TABLE entries (seq INTEGER)"))).toThrow(UnreadableLedgerError);
+  expect(() => verifyCase(badLedger("noentries", "CREATE TABLE meta (key TEXT, value TEXT); INSERT INTO meta VALUES ('case_id','C')"))).toThrow(UnreadableLedgerError);
+});
+test("a missing case id is unreadable, even with no entries", () => {
+  const d = badLedger("nocase", `CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE entries (seq INTEGER PRIMARY KEY, ts TEXT, actor TEXT, type TEXT, payload TEXT, cause INTEGER, run TEXT, stage TEXT, job TEXT, prev_hash TEXT, hash TEXT)`);
+  expect(() => verifyCase(d)).toThrow(/case id/);
+});
+test("a blob path that is a directory is reported corrupt", () => {
+  rmSync(join(dir, "blobs", ref.blob));
+  mkdirSync(join(dir, "blobs", ref.blob));
+  expect(verifyCase(dir).blobs.corrupt).toEqual([ref.blob]);
+});
+test("a blob directory that is a regular file reports its blobs corrupt", () => {
+  rmSync(join(dir, "blobs"), { recursive: true });
+  writeFileSync(join(dir, "blobs"), "not a directory");
+  expect(verifyLedger(join(dir, "ledger.sqlite"), join(dir, "blobs"))).toMatchObject({ ok: false, blobs: { corrupt: [ref.blob] } });
+});
+test("the command reports an unreadable ledger on stdout and exits 1", () => {
+  const r = run(badLedger("cli-notdb", null));
+  expect(r.exitCode).toBe(1);
+  expect(r.stdout.toString()).toContain("UNREADABLE (");
+});
+
 function run(...args: string[]) {
   return Bun.spawnSync(["bun", "run", "src/cli/verify.ts", ...args], { cwd: join(import.meta.dir, "../..") });
 }
@@ -123,11 +198,14 @@ test("the command exits 0 for intact, 1 for broken, 2 with no argument", () => {
 
 test("the command prints the entry count and the failing entry", () => {
   expect(run(dir).stdout.toString()).toContain("chain intact · 5 entries");
+  expect(run(dir).stdout.toString()).toContain("compare the head with one recorded elsewhere");
   rawSql(dir, `UPDATE entries SET payload = '{"phase":"edited"}' WHERE seq = 3`);
-  expect(run(dir).stdout.toString()).toContain("BROKEN at entry 3 (hash_mismatch)");
+  const broken = run(dir).stdout.toString();
+  expect(broken).not.toContain("compare the head");
+  expect(broken).toContain("BROKEN at entry 3 (hash_mismatch)");
 });
 
 test("formatReport shows a shortened head", () => {
   const text = formatReport(verifyCase(dir));
-  expect(text).toBe(`case CASE-1: chain intact · 5 entries · head ${ledger.head().hash.slice(0, 8)}…\nblobs: 1 referenced · 0 missing · 0 corrupt`);
+  expect(text).toBe(`case CASE-1: chain intact · 5 entries · head ${ledger.head().hash.slice(0, 8)}…\nblobs: 1 referenced · 0 missing · 0 corrupt\ncompare the head with one recorded elsewhere: removing the newest entries cannot be detected from this file alone`);
 });

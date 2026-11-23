@@ -1,7 +1,8 @@
 import { Database } from "bun:sqlite";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { BlobStore, collectBlobRefs } from "./blobs";
+import { canonical } from "./canonical";
 import type { Json } from "./canonical";
 import { GENESIS } from "./hash";
 import { entryHash } from "./ledger";
@@ -14,6 +15,14 @@ export interface VerifyReport {
   head: string;
   firstBad: null | { seq: number; reason: "seq_gap" | "prev_hash_mismatch" | "bad_json" | "hash_mismatch" };
   blobs: { referenced: number; missing: string[]; corrupt: string[] };
+}
+
+/** The ledger file cannot be read as a ledger at all (not SQLite, tables missing, no case id). */
+export class UnreadableLedgerError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "UnreadableLedgerError";
+  }
 }
 
 interface RawRow {
@@ -40,11 +49,24 @@ function parse(text: string): { value: Json } | null {
 
 /** Checks a ledger file and its blobs without going through `Ledger`, so it can inspect a file `Ledger` would refuse. */
 export function verifyLedger(ledgerPath: string, blobDir: string): VerifyReport {
-  const db = new Database(ledgerPath, { readonly: true });
+  let db: Database;
   try {
-    const meta = db.query("SELECT value FROM meta WHERE key = 'case_id'").get() as { value: string } | null;
-    const caseId = meta?.value ?? "";
-    const rows = db.query("SELECT * FROM entries ORDER BY seq ASC").all() as RawRow[];
+    db = new Database(ledgerPath, { readonly: true });
+  } catch (err) {
+    throw new UnreadableLedgerError(reasonOf(err));
+  }
+  try {
+    let caseId: string;
+    let rows: RawRow[];
+    try {
+      const meta = db.query("SELECT value FROM meta WHERE key = 'case_id'").get() as { value: string } | null;
+      if (meta === null) throw new UnreadableLedgerError("no case id in the ledger");
+      caseId = meta.value;
+      rows = db.query("SELECT * FROM entries ORDER BY seq ASC").all() as RawRow[];
+    } catch (err) {
+      if (err instanceof UnreadableLedgerError) throw err;
+      throw new UnreadableLedgerError(reasonOf(err));
+    }
 
     let firstBad: VerifyReport["firstBad"] = null;
     const fail = (seq: number, reason: NonNullable<VerifyReport["firstBad"]>["reason"]): void => {
@@ -63,7 +85,12 @@ export function verifyLedger(ledgerPath: string, blobDir: string): VerifyReport 
         else if (row.prev_hash !== prevHash) fail(row.seq, "prev_hash_mismatch");
         else if (actor === null || payload === null) fail(row.seq, "bad_json");
         else {
-          const recomputed = entryHash({
+          // Ledger stores canonical text, so any other spelling of the same value is an edit.
+          let canonicalText = false;
+          let recomputed = "";
+          try {
+            canonicalText = row.actor === canonical(actor.value) && row.payload === canonical(payload.value);
+            recomputed = entryHash({
             seq: row.seq,
             ts: row.ts,
             case: caseId,
@@ -76,7 +103,10 @@ export function verifyLedger(ledgerPath: string, blobDir: string): VerifyReport 
             job: row.job,
             prev_hash: row.prev_hash,
           } as unknown as Omit<Entry, "hash">);
-          if (recomputed !== row.hash) fail(row.seq, "hash_mismatch");
+          } catch {
+            // A value the canonical form rejects cannot have been written by the ledger.
+          }
+          if (!canonicalText || recomputed !== row.hash) fail(row.seq, "hash_mismatch");
         }
       }
       prevSeq = row.seq;
@@ -84,11 +114,12 @@ export function verifyLedger(ledgerPath: string, blobDir: string): VerifyReport 
     }
 
     // Do not create the directory: verification must not touch the case.
-    const store = existsSync(blobDir) ? new BlobStore(blobDir) : null;
+    const blobDirKind = !existsSync(blobDir) ? "absent" : statSync(blobDir).isDirectory() ? "dir" : "not_a_dir";
+    const store = blobDirKind === "dir" ? new BlobStore(blobDir) : null;
     const missing: string[] = [];
     const corrupt: string[] = [];
     for (const hash of refs.keys()) {
-      const state = store === null ? "missing" : store.check(hash);
+      const state = store !== null ? store.check(hash) : blobDirKind === "absent" ? "missing" : "corrupt";
       if (state === "missing") missing.push(hash);
       else if (state === "corrupt") corrupt.push(hash);
     }
@@ -106,6 +137,10 @@ export function verifyLedger(ledgerPath: string, blobDir: string): VerifyReport 
   }
 }
 
+function reasonOf(err: unknown): string {
+  return (err instanceof Error ? err.message : String(err)).split("\n")[0]!;
+}
+
 export function verifyCase(caseDir: string): VerifyReport {
   return verifyLedger(join(caseDir, "ledger.sqlite"), join(caseDir, "blobs"));
 }
@@ -114,9 +149,13 @@ export function hasLedger(caseDir: string): boolean {
   return existsSync(join(caseDir, "ledger.sqlite"));
 }
 
+const TRUNCATION_NOTE = "compare the head with one recorded elsewhere: removing the newest entries cannot be detected from this file alone";
+
 export function formatReport(r: VerifyReport): string {
   const first = r.firstBad
     ? `case ${r.case}: BROKEN at entry ${r.firstBad.seq} (${r.firstBad.reason})`
     : `case ${r.case}: chain intact · ${r.entries} entries · head ${r.head.slice(0, 8)}…`;
-  return `${first}\nblobs: ${r.blobs.referenced} referenced · ${r.blobs.missing.length} missing · ${r.blobs.corrupt.length} corrupt`;
+  const lines = [first, `blobs: ${r.blobs.referenced} referenced · ${r.blobs.missing.length} missing · ${r.blobs.corrupt.length} corrupt`];
+  if (r.firstBad === null) lines.push(TRUNCATION_NOTE);
+  return lines.join("\n");
 }

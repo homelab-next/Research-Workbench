@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, statSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Json } from "./canonical";
 import { sha256Hex } from "./hash";
@@ -49,8 +49,15 @@ export class BlobStore {
   }
 
   check(hash: string): "ok" | "missing" | "corrupt" {
-    if (!this.has(hash)) return "missing";
-    return sha256Hex(this.get(hash)) === hash ? "ok" : "corrupt";
+    if (!HASH.test(hash)) return "missing";
+    const path = join(this.dir, hash);
+    if (!existsSync(path)) return "missing";
+    try {
+      if (!statSync(path).isFile()) return "corrupt";
+      return sha256Hex(readFileSync(path)) === hash ? "ok" : "corrupt";
+    } catch {
+      return "corrupt"; // present but unreadable
+    }
   }
 }
 
