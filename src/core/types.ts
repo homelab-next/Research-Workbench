@@ -203,6 +203,43 @@ export const SEVERITIES = listOf<Challenge["severity"]>({ must_address: true, co
 export const ANSWER_ACTIONS = listOf<Payloads["challenge.answered"]["action"]>({ revised: true, rebutted: true });
 export const FEEDBACK_KINDS = listOf<Payloads["feedback.recorded"]["kind"]>({ mop: true, moe: true });
 
+/** Every entry type, as a runtime list. Built from an object keyed by EntryType, so a name missing from Payloads or extra to it is a type error. */
+export const ENTRY_TYPES = listOf<EntryType>({
+  "case.created": true, "case.phase_changed": true, "run.started": true, "run.paused": true, "run.resumed": true,
+  "run.interrupted": true, "run.finished": true, "stage.model_set": true, "stage.started": true,
+  "stage.finished": true, "stage.sent_back": true, "gate.waiting": true, "gate.passed": true, "budget.set": true,
+  "job.started": true, "job.finished": true, "plan.proposed": true, "plan.accepted": true, "plan.denied": true,
+  "plan.replan_requested": true, "step.started": true, "step.finished": true, "query.issued": true,
+  "query.result": true, "query.failed": true, "verify.run": true, "model.request": true, "model.response": true,
+  "model.declined": true, "model.blocked": true, "tool.called": true, "tool.returned": true, "card.created": true,
+  "card.kept": true, "card.moved": true, "card.discarded": true, "card.restored": true, "card.sent_back": true,
+  "card.pinned": true, "lane.created": true, "lane.renamed": true, "lane.removed": true, "lane.target_set": true,
+  "undo": true, "proposal.created": true, "proposal.accepted": true, "proposal.rejected": true,
+  "assessment.made": true, "research.requested": true, "draft.revised": true, "check.run": true,
+  "evaluation.made": true, "challenge.raised": true, "challenge.answered": true, "publish.rejected": true,
+  "product.published": true, "feedback.recorded": true, "agent.asked": true, "agent.answered": true,
+  "module.loaded": true, "module.rejected": true, "setting.changed": true,
+});
+const ENTRY_TYPE_SET: ReadonlySet<string> = new Set(ENTRY_TYPES);
+export const isEntryType = (x: unknown): x is EntryType => typeof x === "string" && ENTRY_TYPE_SET.has(x);
+
+const isPlainObject = (x: unknown): x is Record<string, unknown> => {
+  if (typeof x !== "object" || x === null || Array.isArray(x)) return false;
+  const proto = Object.getPrototypeOf(x);
+  return proto === Object.prototype || proto === null;
+};
+const AGENT_KEYS = ["effort", "id", "kind", "model", "profile", "stage", "where"].join();
+
+/** A well-formed Actor: one of the three kinds, with exactly the fields that kind has, each of the right type. */
+export function isActor(x: unknown): x is Actor {
+  if (!isPlainObject(x)) return false;
+  const keys = Object.keys(x).sort().join();
+  if (x.kind === "human" || x.kind === "system") return keys === "id,kind" && typeof x.id === "string";
+  if (x.kind !== "agent" || keys !== AGENT_KEYS) return false;
+  return typeof x.id === "string" && typeof x.stage === "string" && typeof x.profile === "string" && typeof x.model === "string"
+    && (x.effort === null || typeof x.effort === "string") && (WHERES as readonly unknown[]).includes(x.where);
+}
+
 export function isMarking(x: unknown): x is Marking {
   return typeof x === "string" && (MARKINGS as readonly string[]).includes(x);
 }

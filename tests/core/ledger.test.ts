@@ -5,8 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonical, CanonicalError } from "../../src/core/canonical";
 import { GENESIS, sha256Hex } from "../../src/core/hash";
-import { entryHash, Ledger, LedgerCaseMismatchError, PayloadTooLargeError } from "../../src/core/ledger";
-import { strictest } from "../../src/core/types";
+import { entryHash, InvalidEntryError, Ledger, LedgerCaseMismatchError, PayloadTooLargeError } from "../../src/core/ledger";
+import { ENTRY_TYPES, isActor, strictest } from "../../src/core/types";
+import { verifyLedger } from "../../src/core/verify";
 import type { Entry } from "../../src/core/types";
 
 const dirs: string[] = [];
@@ -282,4 +283,102 @@ test("the file uses a rollback journal, and open switches a WAL file back", () =
 test("strictest picks the most restrictive marking", () => {
   expect(strictest("TLP:GREEN", "TLP:RED", "TLP:AMBER")).toBe("TLP:RED");
   expect(strictest()).toBe("TLP:CLEAR");
+});
+
+// ---------- final review, finding 1: the ledger only commits valid entries ----------
+
+function refuses(l: Ledger, input: unknown, message?: RegExp): void {
+  const before = l.head();
+  expect(() => l.append(input as never)).toThrow(InvalidEntryError);
+  if (message) expect(() => l.append(input as never)).toThrow(message);
+  expect(l.head()).toEqual(before);
+}
+
+test("an entry type that is not a known entry type is refused", () => {
+  const l = open(tmp());
+  for (const type of [5, true, null, undefined, "", "nope", "case.created ", "toString", "__proto__"]) refuses(l, { ...phase("a"), type }, /type/);
+  l.close();
+});
+
+test("ENTRY_TYPES lists every entry type once", () => {
+  expect(new Set(ENTRY_TYPES).size).toBe(ENTRY_TYPES.length);
+  expect(ENTRY_TYPES).toContain("case.created");
+  expect(ENTRY_TYPES).toContain("setting.changed");
+  expect(ENTRY_TYPES.length).toBe(62);
+});
+
+const agent = { kind: "agent", id: "a1", stage: "plan", profile: "p", model: "m", effort: null, where: "machine" } as const;
+test("an actor that is not a well-formed Actor is refused", () => {
+  const l = open(tmp());
+  const bad: unknown[] = [
+    null, undefined, "analyst", 5, [], {}, { kind: "root", id: "x" }, { kind: "human" }, { kind: "human", id: 5 }, { kind: "system", id: null },
+    { kind: "human", id: "a", extra: 1 }, { ...agent, where: "moon" }, { ...agent, effort: 5 }, { ...agent, model: undefined },
+    { kind: "agent", id: "a1" }, { ...agent, stage: 1 },
+  ];
+  for (const actor of bad) {
+    expect(isActor(actor), JSON.stringify(actor)).toBe(false);
+    refuses(l, { ...phase("a"), actor }, /actor/);
+  }
+  for (const actor of [human, { kind: "system", id: "s" }, agent, { ...agent, effort: "high", where: "hosted" }]) expect(isActor(actor)).toBe(true);
+  l.close();
+});
+
+test("a payload that is not a plain object is refused", () => {
+  const l = open(tmp());
+  class Thing { phase = "a"; }
+  for (const payload of ["text", [], [1], null, undefined, 5, new Date(0), new Thing()]) refuses(l, { ...phase("a"), payload }, /payload/);
+  l.close();
+});
+
+test("cause must name an entry before this one, in the ledger or earlier in the batch", () => {
+  const l = open(tmp());
+  l.append(phase("a"));
+  refuses(l, { ...phase("b"), cause: 2 }, /cause/); // would be this entry itself
+  refuses(l, { ...phase("b"), cause: 9 }, /cause/);
+  refuses(l, { ...phase("b"), cause: 2 ** 53 }, /cause/);
+  const before = l.head();
+  expect(() => l.appendMany([phase("b"), { ...phase("c"), cause: 4 }])).toThrow(InvalidEntryError);
+  expect(l.head()).toEqual(before);
+  const ok = l.appendMany([{ ...phase("b"), cause: 1 }, { ...phase("c"), cause: 2 }]);
+  expect(ok.map((e) => e.cause)).toEqual([1, 2]);
+  l.close();
+});
+
+test("ill-formed strings in ts, type, run, stage, job and the case id are refused", () => {
+  const dir = tmp();
+  const lone = "a\ud800";
+  const l = open(dir);
+  for (const field of ["run", "stage", "job"]) refuses(l, { ...phase("a"), [field]: lone }, new RegExp(field));
+  refuses(l, { ...phase("a"), type: "case.phase_changed\udc00" }, /type/);
+  l.close();
+  const clocked = open(tmp(), { now: () => `2026-11-23T20:00:00.000Z${lone}` });
+  refuses(clocked, phase("a"), /clock/);
+  clocked.close();
+  expect(() => Ledger.open(join(dir, "other.sqlite"), `CASE-${lone}`)).toThrow(InvalidEntryError);
+});
+
+test("everything the ledger accepted verifies", () => {
+  const dir = tmp();
+  const l = open(dir);
+  l.append({ type: "tool.called", payload: { request: "r", call: "c", tool: "t", args: { s: "lone \ud800 in a payload is escaped", n: [1, 2.5, -0] }, why: "w" }, actor: agent, cause: null, run: "run-1", stage: "plan", job: "j1" });
+  l.append({ type: "setting.changed", payload: { key: "é", value: { z: null, a: [true] } }, actor: { kind: "system", id: "s" }, cause: 1 });
+  l.close();
+  expect(verifyLedger(join(dir, "ledger.sqlite"), join(dir, "blobs")).ok).toBe(true);
+});
+
+test("a row that does not read back to the same hash is rolled back before commit", () => {
+  const dir = tmp();
+  const l = open(dir);
+  const e1 = l.append(phase("a"));
+  // A trigger stands in for storage that alters a value on write.
+  const raw = new Database(join(dir, "ledger.sqlite"));
+  raw.exec(`CREATE TRIGGER alter_payload AFTER INSERT ON entries WHEN NEW.seq = 2 BEGIN UPDATE entries SET payload = '{"phase":"x"}' WHERE seq = NEW.seq; END`);
+  raw.close();
+  const seen: number[] = [];
+  l.subscribe((e) => seen.push(e.seq));
+  expect(() => l.appendMany([phase("b"), phase("c")])).toThrow(/entry 2 would not verify \(hash_mismatch\)/);
+  expect(l.head()).toEqual({ seq: 1, hash: e1.hash });
+  expect(l.read()).toEqual([e1]);
+  expect(seen).toEqual([]);
+  l.close();
 });
