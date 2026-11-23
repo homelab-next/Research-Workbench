@@ -191,3 +191,25 @@ test("a draft.revised whose hash is not the hash of its product is refused befor
   s.commit(() => [revised(good)]);
   expect(s.state.drafts.map((d) => d.hash)).toEqual([good.hash]);
 });
+
+// ---------- final review, finding 16: entries are frozen where the ledger makes them ----------
+function isDeepFrozen(x: unknown): boolean {
+  if (typeof x !== "object" || x === null) return true;
+  return Object.isFrozen(x) && Object.values(x).every(isDeepFrozen);
+}
+
+test("entries are deep-frozen when appended, read, fetched and delivered", () => {
+  const delivered: Entry[] = [];
+  s.subscribe((e) => delivered.push(e));
+  const out = s.commit((_st, ids) => [newCard(ids.next("card"))]);
+  for (const e of [...out, ...delivered, ...s.entries(), ledger.get(1)!]) expect(isDeepFrozen(e)).toBe(true);
+  expect(() => { (out[0]!.payload as { card: { rows: unknown[][] } }).card.rows[0]!.push("trimmed"); }).toThrow(TypeError);
+});
+
+test("state that shares entry payloads cannot be changed through them", () => {
+  s.commit((_st, ids) => [newCard(ids.next("card"))]);
+  const c1 = s.state.cards.c1!;
+  expect(() => { c1.rows.length = 0; }).toThrow(TypeError);
+  expect(() => { c1.columns.sort(); c1.columns.push("x"); }).toThrow(TypeError);
+  expect(s.state).toEqual(fold(s.entries()));
+});

@@ -7,7 +7,7 @@ import { apply, fold, initial } from "./state";
 import type { CaseState } from "./state";
 import type { Entry, EntryInput } from "./types";
 
-type Listener = (entry: Entry, state: CaseState) => void;
+type Listener = (entry: Entry, state: Readonly<CaseState>) => void;
 
 export class CaseSession {
   readonly id: string;
@@ -29,12 +29,16 @@ export class CaseSession {
     this.current = fold(opts.ledger.read());
   }
 
-  get state(): CaseState {
+  /**
+   * The state as of the newest entry. It is read-only: it is shared with every subscriber and builder,
+   * parts of it are the (frozen) entry payloads, and the next commit builds on it. Copy before changing.
+   */
+  get state(): Readonly<CaseState> {
     return this.current;
   }
 
   /** Builds entries from the current state, appends them in one transaction, then advances state. */
-  commit(build: (state: CaseState, ids: IdAllocator) => EntryInput[]): Entry[] {
+  commit(build: (state: Readonly<CaseState>, ids: IdAllocator) => EntryInput[]): Entry[] {
     if (this.building) throw new Error("commit called from inside a commit builder");
     let inputs: EntryInput[];
     this.building = true;
@@ -63,7 +67,7 @@ export class CaseSession {
     return this.ledger.read(after, limit);
   }
 
-  stateAt(seq: number): CaseState {
+  stateAt(seq: number): Readonly<CaseState> {
     return seq <= 0 ? initial() : fold(this.ledger.read(), seq);
   }
 

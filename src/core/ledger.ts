@@ -141,6 +141,15 @@ export function checkRow(row: LedgerRow, caseId: string, prevSeq: number, prevHa
 }
 
 const isWellFormed = (s: string): boolean => s.isWellFormed();
+
+/** Freezes an entry and everything in it. Entries are shared by the ledger, state and every subscriber, so none may change one. */
+function deepFreeze<T>(x: T): T {
+  if (typeof x === "object" && x !== null && !Object.isFrozen(x)) {
+    Object.freeze(x);
+    for (const v of Object.values(x)) deepFreeze(v);
+  }
+  return x;
+}
 const isPlainObject = (x: unknown): boolean => {
   if (typeof x !== "object" || x === null || Array.isArray(x)) return false;
   const proto = Object.getPrototypeOf(x);
@@ -163,6 +172,7 @@ function checkInput(input: EntryInput): void {
   }
 }
 
+/** An append-only, hash-chained ledger in one SQLite file. Every entry it returns or delivers is deep-frozen. */
 export class Ledger {
   readonly caseId: string;
   private readonly db: Database;
@@ -262,7 +272,7 @@ export class Ledger {
         };
         const hash = entryHash(body as unknown as Omit<Entry, "hash">);
         insert.run(seq, body.ts, p.actorText, body.type, p.payloadText, body.cause, body.run, body.stage, body.job, prev, hash);
-        entries.push({ ...body, hash } as unknown as Entry);
+        entries.push(deepFreeze({ ...body, hash }) as unknown as Entry);
         prev = hash;
       }
       this.readBack(start, entries);
@@ -337,6 +347,7 @@ export class Ledger {
       prev_hash: row.prev_hash,
       hash: row.hash,
     } as unknown as Entry;
+    deepFreeze(entry);
     if (actor === null || payload === null) {
       const error = new UnreadableEntryError(row.seq, actor === null ? "actor" : "payload");
       ignoreThrow(() => this.onError(error, entry));
