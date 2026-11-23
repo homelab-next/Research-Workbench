@@ -152,7 +152,7 @@ test("estimate is null", async () => {
 });
 
 test("makeConnector refuses a kind it does not know, and the pool rebuilds on a new hash", () => {
-  expect(() => makeConnector(source({ connector: "http" }), ctx)).toThrow(ConnectorError);
+  expect(() => makeConnector(source({ connector: "nosuch" as SourceManifest["connector"] }), ctx)).toThrow(ConnectorError);
   const pool = new ConnectorPool(ctx);
   const a = pool.for(source());
   expect(pool.for(source())).toBe(a);
