@@ -3,6 +3,7 @@ import { applyAnalysis } from "./analysis";
 import { applyCards } from "./cards";
 import { isObj } from "./guards";
 import { applyRun } from "./run";
+import { caseFields, isCaseCreated } from "./shapes";
 import type { CaseState, IdKind } from "./types";
 
 export type Reducer = (state: CaseState, entry: Entry) => CaseState;
@@ -23,7 +24,7 @@ const COUNTED: Partial<Record<Entry["type"], IdKind>> = {
 };
 
 function applyCase(s: CaseState, entry: Entry): CaseState {
-  if (entry.type === "case.created") return typeof entry.payload.id === "string" && typeof entry.payload.title === "string" ? { ...s, meta: entry.payload } : s;
+  if (entry.type === "case.created") return isCaseCreated(entry.payload) ? { ...s, meta: caseFields(entry.payload) } : s;
   if (entry.type === "case.phase_changed") return typeof entry.payload.phase === "string" ? { ...s, phase: entry.payload.phase } : s;
   return s;
 }

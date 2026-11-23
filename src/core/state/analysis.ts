@@ -1,4 +1,4 @@
-import { ANSWER_ACTIONS, CONFIDENCES, FEEDBACK_KINDS, MARKINGS, SEVERITIES } from "../types";
+import { ANSWER_ACTIONS, CONFIDENCES, FEEDBACK_KINDS, isMarking, SEVERITIES } from "../types";
 import type { CheckFinding, Draft, Entry } from "../types";
 import { has, isNum, isObj, isOneOf, isStr, isStrList } from "./guards";
 import type { CaseState, ChallengeState, ReviewState } from "./types";
@@ -9,7 +9,7 @@ const isFindingRecord = (x: unknown): boolean =>
   isObj(x) && isStr(x.id) && isStr(x.statement) && isStr(x.likelihood) && isOneOf(x.confidence, CONFIDENCES)
   && isStr(x.confidence_basis) && isStrList(x.cites) && isStrList(x.assumptions) && isStr(x.reasoning);
 const isProduct = (x: unknown): boolean =>
-  isObj(x) && isStr(x.objective) && isStr(x.question) && isOneOf(x.marking, MARKINGS) && isStr(x.summary)
+  isObj(x) && isStr(x.objective) && isStr(x.question) && isMarking(x.marking) && isStr(x.summary)
   && Array.isArray(x.key_findings) && x.key_findings.every(isFindingRecord)
   && isStr(x.gaps_and_limits) && isStr(x.alternatives) && isStr(x.assessment)
   && Array.isArray(x.sources) && x.sources.every((v) => isObj(v) && isStr(v.source) && isStr(v.quality))

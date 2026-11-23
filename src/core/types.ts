@@ -203,9 +203,17 @@ export const SEVERITIES = listOf<Challenge["severity"]>({ must_address: true, co
 export const ANSWER_ACTIONS = listOf<Payloads["challenge.answered"]["action"]>({ revised: true, rebutted: true });
 export const FEEDBACK_KINDS = listOf<Payloads["feedback.recorded"]["kind"]>({ mop: true, moe: true });
 
-/** The most restrictive of the given markings; "TLP:CLEAR" when none are given. */
-export function strictest(...markings: Marking[]): Marking {
+export function isMarking(x: unknown): x is Marking {
+  return typeof x === "string" && (MARKINGS as readonly string[]).includes(x);
+}
+
+/**
+ * The most restrictive of the given markings; "TLP:CLEAR" when none are given. Anything that is not
+ * one of MARKINGS (a typo, a stray space, a missing field) counts as the most restrictive, so a
+ * mistake can only raise the result, never lower it.
+ */
+export function strictest(...markings: unknown[]): Marking {
   let best = 0;
-  for (const m of markings) best = Math.max(best, MARKINGS.indexOf(m));
+  for (const m of markings) best = Math.max(best, isMarking(m) ? MARKINGS.indexOf(m) : MARKINGS.length - 1);
   return MARKINGS[best]!;
 }

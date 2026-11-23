@@ -1,6 +1,7 @@
 import { PLACES } from "../types";
 import type { Entry, Place } from "../types";
-import { isObj, isOneOf, isStr } from "./guards";
+import { isOneOf, isStr } from "./guards";
+import { cardFields, isCard } from "./shapes";
 import type { CardState, CaseState, LaneState, UndoItem } from "./types";
 
 const UNDO_LIMIT = 50;
@@ -66,9 +67,9 @@ export function applyCards(s: CaseState, entry: Entry): CaseState {
   switch (entry.type) {
     case "card.created": {
       const c = entry.payload.card;
-      if (!isObj(c) || !isStr(c.id) || Object.hasOwn(s.cards, c.id)) return s;
+      if (!isCard(c) || Object.hasOwn(s.cards, c.id)) return s;
       const state: CardState = {
-        ...c, place: "incoming", lane: null, pinned: false,
+        ...cardFields(c), place: "incoming", lane: null, pinned: false,
         created_seq: entry.seq, created_ts: entry.ts, validated: null,
       };
       return { ...s, cards: { ...s.cards, [c.id]: state }, incoming: [...s.incoming, c.id] };

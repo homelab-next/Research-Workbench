@@ -5,6 +5,7 @@ import type { CaseState, IdKind } from "./types";
 export { apply } from "./apply";
 export { applyAnalysis, blockers, latestDraft, publishable } from "./analysis";
 export { cardLocation } from "./cards";
+export { cardFields, caseFields, isCard, isCaseCreated, isCoverage, isObservable, isTimeWindow } from "./shapes";
 export * from "./types";
 
 export function initial(): CaseState {

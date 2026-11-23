@@ -1,10 +1,10 @@
 import { EMPTY_MEANS, GATES, JOB_KINDS, JOB_OUTCOMES, RUN_OUTCOMES, SECTIONS, STAGE_OUTCOMES, STAGE_RUNS, STEP_OUTCOMES, VERIFY_OUTCOMES } from "../types";
-import type { Entry, ModelChoice, Plan, PlanStep, Proposal, StageDef, TimeWindow } from "../types";
+import type { Entry, ModelChoice, Plan, PlanStep, Proposal, StageDef } from "../types";
 import { has, isNum, isObj, isOneOf, isStr, isStrList } from "./guards";
+import { isTimeWindow } from "./shapes";
 import type { CaseState, JobState, PlanState, ProposalState, QueryState, RunState, StageState } from "./types";
 
 const isModel = (x: unknown): x is ModelChoice => isObj(x) && isStr(x.provider) && isStr(x.model) && (x.effort === null || isStr(x.effort));
-const isWindow = (x: unknown): x is TimeWindow => isObj(x) && (x.from === null || isStr(x.from)) && (x.to === null || isStr(x.to));
 const isStageDef = (x: unknown): x is StageDef =>
   isObj(x) && isStr(x.id) && isStr(x.title) && (x.phase === null || isStr(x.phase)) && isOneOf(x.runs, STAGE_RUNS)
   && (x.gate === null || isOneOf(x.gate, GATES)) && typeof x.reviews === "boolean" && (x.model === null || isModel(x.model));
@@ -12,12 +12,12 @@ const isStageDef = (x: unknown): x is StageDef =>
 const isCost = (x: unknown): boolean => isObj(x) && isNum(x.amount) && isStr(x.unit);
 const isStep = (x: unknown): x is PlanStep =>
   isObj(x) && isStr(x.id) && isStr(x.subgoal) && isStr(x.pivot) && isStr(x.source)
-  && isObj(x.from) && isStr(x.from.type) && isStr(x.from.value) && isStr(x.to) && isWindow(x.window)
+  && isObj(x.from) && isStr(x.from.type) && isStr(x.from.value) && isStr(x.to) && isTimeWindow(x.window)
   && typeof x.needs_window === "boolean" && typeof x.free === "boolean" && isNum(x.weight) && (x.estimate === null || isCost(x.estimate))
   && isOneOf(x.empty_means, EMPTY_MEANS) && isStrList(x.warnings);
 const isSubGoal = (x: unknown): boolean => isObj(x) && isStr(x.id) && isStr(x.title) && isStr(x.question) && isStrList(x.steps);
 const isPlan = (x: unknown): x is Plan =>
-  isObj(x) && isStr(x.id) && isStr(x.goal) && isWindow(x.window)
+  isObj(x) && isStr(x.id) && isStr(x.goal) && isTimeWindow(x.window)
   && Array.isArray(x.subgoals) && x.subgoals.every(isSubGoal) && Array.isArray(x.steps) && x.steps.every(isStep);
 const isProposal = (x: unknown): x is Proposal => {
   if (!isObj(x) || !isStr(x.id) || !isStr(x.title) || !isStr(x.by)) return false;
@@ -80,7 +80,7 @@ function applyQuery(s: CaseState, entry: Entry): CaseState {
   switch (entry.type) {
     case "query.issued": {
       const { query, source, text, why, window, step, verifies } = entry.payload;
-      if (!isStr(query) || Object.hasOwn(s.queries, query) || !isStr(source) || !isStr(text) || !isStr(why) || !isWindow(window)) return s;
+      if (!isStr(query) || Object.hasOwn(s.queries, query) || !isStr(source) || !isStr(text) || !isStr(why) || !isTimeWindow(window)) return s;
       if (!(step === null || isStr(step)) || !(verifies === null || isStr(verifies))) return s;
       const q: QueryState = {
         id: query, source, text, why, window, by: entry.actor, step, verifies,

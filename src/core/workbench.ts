@@ -5,6 +5,7 @@ import { ignoreThrow, logToStderr } from "./deliver";
 import { Ledger } from "./ledger";
 import { CaseSession } from "./session";
 import type { RunState } from "./state";
+import { isMarking } from "./types";
 import type { Actor, Entry, Marking, Observable, TimeWindow } from "./types";
 
 export class CaseNotFoundError extends Error {
@@ -99,6 +100,7 @@ export class Workbench {
   }
 
   createCase(input: NewCase, actor: Actor): CaseSession {
+    if (!isMarking(input.marking)) throw new TypeError(`unknown marking ${JSON.stringify(input.marking)}`);
     const id = `CASE-${this.nextNumber()}`;
     let session: CaseSession;
     try {
