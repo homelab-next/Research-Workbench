@@ -1,5 +1,6 @@
 import type { Entry } from "../types";
 import { applyCards } from "./cards";
+import { applyRun } from "./run";
 import type { CaseState, IdKind } from "./types";
 
 export type Reducer = (state: CaseState, entry: Entry) => CaseState;
@@ -26,7 +27,7 @@ function applyCase(s: CaseState, entry: Entry): CaseState {
 }
 
 /** One reducer per area; each takes the state and the entry and returns a state. Add new areas here. */
-export const REDUCERS: readonly Reducer[] = [applyCase, applyCards];
+export const REDUCERS: readonly Reducer[] = [applyCase, applyCards, applyRun];
 
 const SKIP_LIMIT = 100;
 const isRecord = (x: unknown): boolean => typeof x === "object" && x !== null && !Array.isArray(x);
