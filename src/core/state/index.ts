@@ -44,6 +44,15 @@ export function initial(): CaseState {
   };
 }
 
+/**
+ * True when `entry` is the one that comes right after `state`. A stream consumer (the session, plan 4's
+ * browser store) uses it to notice an entry that was dropped (a jump in seq) or delivered twice, and
+ * re-reads from the ledger instead of applying it.
+ */
+export function isNext(state: Readonly<CaseState>, entry: Entry): boolean {
+  return typeof entry === "object" && entry !== null && entry.seq === state.seq + 1;
+}
+
 /** Applies entries with `seq <= upTo` (all when omitted), in order. */
 export function fold(entries: Entry[], upTo?: number): CaseState {
   let s = initial();

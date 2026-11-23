@@ -3,7 +3,7 @@ import { Delivery, logToStderr } from "./deliver";
 import { draftHashMatches, InvalidEntryError } from "./ledger";
 import type { Ledger } from "./ledger";
 import { IdAllocator } from "./ids";
-import { apply, fold, initial } from "./state";
+import { apply, fold, initial, isNext } from "./state";
 import type { CaseState } from "./state";
 import type { Entry, EntryInput } from "./types";
 
@@ -37,9 +37,14 @@ export class CaseSession {
     return this.current;
   }
 
-  /** Builds entries from the current state, appends them in one transaction, then advances state. */
+  /**
+   * Builds entries from the current state, appends them in one transaction, then advances state.
+   * State always equals the fold of the ledger: entries another writer appended are applied (and told
+   * to subscribers) before the builder runs, and again if one slips in between the build and the append.
+   */
   commit(build: (state: Readonly<CaseState>, ids: IdAllocator) => EntryInput[]): Entry[] {
     if (this.building) throw new Error("commit called from inside a commit builder");
+    this.catchUp();
     let inputs: EntryInput[];
     this.building = true;
     try {
@@ -53,14 +58,30 @@ export class CaseSession {
       }
     }
     const entries = this.ledger.appendMany(inputs);
-    // Advance state over the whole batch first, so state always equals the fold of the ledger,
-    // then tell subscribers in seq order, each with the state as of its entry.
+    if (entries.length > 0 && !isNext(this.current, entries[0]!)) {
+      // Another writer appended between catching up and appending: read everything since, ours included.
+      this.catchUp();
+    } else {
+      this.advance(entries);
+    }
+    return entries;
+  }
+
+  /** Applies entries the ledger has beyond the current state, and tells subscribers. */
+  private catchUp(): void {
+    if (this.ledger.head().seq > this.current.seq) this.advance(this.ledger.read(this.current.seq));
+  }
+
+  /**
+   * Advances state over the whole batch first, so state always equals the fold of the ledger, then
+   * tells subscribers in seq order, each with the state as of its entry. A nested commit from a
+   * listener only queues; the outer loop delivers it.
+   */
+  private advance(entries: readonly Entry[]): void {
     let state = this.current;
     const items = entries.map((entry) => ({ entry, state: (state = apply(state, entry)) }));
     this.current = state;
-    // A nested commit from a listener only queues; the outer loop delivers it.
     this.delivery.send(items);
-    return entries;
   }
 
   entries(after = 0, limit = -1): Entry[] {

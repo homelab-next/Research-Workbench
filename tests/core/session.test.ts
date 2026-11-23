@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { BlobStore } from "../../src/core/blobs";
 import { Ledger } from "../../src/core/ledger";
 import { CaseSession } from "../../src/core/session";
-import { fold } from "../../src/core/state";
+import { fold, isNext } from "../../src/core/state";
 import type { CaseState } from "../../src/core/state";
 import { canonical } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
@@ -212,4 +212,49 @@ test("state that shares entry payloads cannot be changed through them", () => {
   expect(() => { c1.rows.length = 0; }).toThrow(TypeError);
   expect(() => { c1.columns.sort(); c1.columns.push("x"); }).toThrow(TypeError);
   expect(s.state).toEqual(fold(s.entries()));
+});
+
+// ---------- final review, finding 3: the session notices entries it did not write ----------
+
+test("isNext is true only for the entry right after the state", () => {
+  s.commit(() => [newCard("c1")]);
+  const [e1] = s.entries();
+  expect(isNext(fold([]), e1!)).toBe(true);
+  expect(isNext(s.state, e1!)).toBe(false); // delivered twice
+  expect(isNext(s.state, { ...e1!, seq: 3 })).toBe(false); // a jump
+  expect(isNext(s.state, { ...e1!, seq: 2 })).toBe(true);
+});
+
+test("before building, a commit catches up with entries another writer appended, and tells subscribers", () => {
+  const other = Ledger.open(join(dir, "ledger.sqlite"), "CASE-1");
+  const heard: number[] = [];
+  s.subscribe((e, st) => heard.push(e.seq * 100 + st.seq));
+  s.commit((_st, ids) => [{ type: "lane.created", payload: { lane: ids.next("lane"), title: "Mine", subgoal: null }, actor: human }]);
+  other.append({ type: "lane.created", payload: { lane: "l2", title: "Theirs", subgoal: null }, actor: human });
+  let seen: string[] = [];
+  s.commit((state, ids) => {
+    seen = state.lanes.map((l) => l.id);
+    return [{ type: "lane.created", payload: { lane: ids.next("lane"), title: "Mine again", subgoal: null }, actor: human }];
+  });
+  expect(seen).toEqual(["l1", "l2"]);
+  expect(s.state.lanes.map((l) => l.id)).toEqual(["l1", "l2", "l3"]);
+  expect(s.state).toEqual(fold(s.entries()));
+  expect(heard).toEqual([101, 202, 303]);
+  other.close();
+});
+
+test("if another writer slips in between the check and the append, the session catches up from the ledger", () => {
+  const other = Ledger.open(join(dir, "ledger.sqlite"), "CASE-1");
+  const heard: number[] = [];
+  s.subscribe((e) => heard.push(e.seq));
+  s.commit((_st, ids) => {
+    other.append({ type: "case.phase_changed", payload: { phase: "theirs" }, actor: human });
+    return [newCard(ids.next("card"))];
+  });
+  expect(s.state.seq).toBe(2);
+  expect(s.state.phase).toBe("theirs");
+  expect(s.state.incoming).toEqual(["c1"]);
+  expect(s.state).toEqual(fold(s.entries()));
+  expect(heard).toEqual([1, 2]);
+  other.close();
 });
