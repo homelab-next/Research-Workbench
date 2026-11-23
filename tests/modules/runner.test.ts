@@ -73,6 +73,7 @@ types:
 pivots:
   - { id: peers, title: Peers of an address, from: address, to: address, source: flows, query: "select dst as peer from flows where src = {value}", needs_window: false, empty_means: proven-negative, yields: { peer: address } }
   - { id: seen, title: Seen, from: address, to: address, source: flows, query: "select dst from flows where src = {value}", empty_means: not-seen }
+  - { id: paid_rep, title: Paid reputation, from: address, to: address, source: rep, query: reputation, empty_means: not-seen }
   - { id: free_rep, title: Free reputation, from: address, to: address, source: rep, query: reputation, weight: 0, empty_means: not-seen }
 `,
 });
@@ -161,7 +162,7 @@ test("the card carries provenance: source, why, marking, query, columns and thei
 
 test("a pivot supplies the card title, column types and empty meaning", async () => {
   const pivot = registry.pivot("peers")!;
-  const r = await runQuery(s, deps, { ...base, text: pivot.query.replace("dst as peer", "dst as peer"), pivot });
+  const r = await runQuery(s, deps, { ...base, text: pivot.query, pivot });
   expect(r).toMatchObject({ status: "done" });
   expect(s.state.cards.c1).toMatchObject({ title: "Peers of an address: 192.0.2.17", columns: ["peer"], column_types: ["address"] });
   const issued = s.entries().find((e) => e.type === "query.issued")!.payload as Record<string, unknown>;
@@ -246,7 +247,7 @@ test("a costly query with no budget from a person asks for one and writes nothin
 });
 
 test("a costly query with no budget from an agent becomes a proposal", async () => {
-  const r = await runQuery(s, deps, { ...repInput, actor: agent, pivot: { ...registry.pivot("free_rep")!, weight: null }, step: "st1" });
+  const r = await runQuery(s, deps, { ...repInput, actor: agent, pivot: registry.pivot("paid_rep")!, step: "st1" });
   expect(r).toMatchObject({ status: "needs_budget", proposal: "p1" });
   expect(s.state.proposals.p1).toMatchObject({ kind: "costly_query", source: "rep", estimate: { amount: 1, unit: "lookups" }, status: "open", why: "w", by: "a1", step: "st1" });
   expect(types().at(-1)).toBe("proposal.created");
@@ -266,6 +267,8 @@ test("a costly query with a budget runs and records its cost", async () => {
 test("a pivot's own weight overrides the source's", async () => {
   const r = await runQuery(s, deps, { ...repInput, pivot: registry.pivot("free_rep")! });
   expect(r.status).toBe("done");
+  expect((s.entries().find((e) => e.type === "query.issued")!.payload as { estimate: Cost | null }).estimate).toBeNull();
+  expect(standin.requests).toHaveLength(1);
 });
 
 test("a quality note overlapping the window is attached to the card", async () => {
@@ -312,4 +315,89 @@ test("the whole case still verifies", async () => {
   await runQuery(s, deps, base);
   await runQuery(s, deps, { ...repInput, budget: 1 });
   expect(verifyCase(s.dir).ok).toBe(true);
+});
+
+test("the stored blob holds the connector's raw bytes exactly", async () => {
+  const raw = new Uint8Array([0, 1, 2, 255, 10, 13, 200]);
+  await runQuery(s, stubDeps({ raw, media: "application/octet-stream", rows: [["x"]] }), base);
+  const ref = s.state.queries.q1!.result!;
+  expect(Array.from(s.blobs.get(ref.blob))).toEqual(Array.from(raw));
+  expect(ref.media).toBe("application/octet-stream");
+});
+
+test("a throwing connector writes query.failed and returns failed", async () => {
+  const r = await runQuery(s, stubDeps(async () => { throw new Error("source down\nmore"); }), base);
+  expect(r).toMatchObject({ status: "failed", error: "source down" });
+  expect(types().slice(-2)).toEqual(["query.issued", "query.failed"]);
+});
+
+test("a blob-store throw after the run writes query.failed", async () => {
+  const orig = s.blobs.put.bind(s.blobs);
+  s.blobs.put = () => { throw new Error("disk full"); };
+  const r = await runQuery(s, stubDeps({ rows: [["x"]] }), base);
+  s.blobs.put = orig;
+  expect(r).toMatchObject({ status: "failed", error: "disk full" });
+  expect(s.state.queries.q1!.status).toBe("failed");
+  expect(types()).not.toContain("card.created");
+});
+
+test("a pivot for another source is refused", async () => {
+  const before = s.head().seq;
+  const r = await runQuery(s, deps, { ...base, source: "assets", pivot: registry.pivot("peers")! });
+  expect(r.status).toBe("refused");
+  expect(s.head().seq).toBe(before);
+});
+
+test("a forged pivot is refused: unknown id or changed hash", async () => {
+  const before = s.head().seq;
+  const real = registry.pivot("paid_rep")!;
+  expect((await runQuery(s, deps, { ...repInput, pivot: { ...real, hash: "x" } })).status).toBe("refused");
+  expect((await runQuery(s, deps, { ...repInput, pivot: { ...real, id: "nope" } })).status).toBe("refused");
+  expect(s.head().seq).toBe(before);
+});
+
+test("a forged pivot weight does not make a costly query free", async () => {
+  const r = await runQuery(s, deps, { ...repInput, pivot: { ...registry.pivot("paid_rep")!, weight: 0 } });
+  expect(r).toMatchObject({ status: "needs_budget" });
+  expect(standin.requests).toHaveLength(0);
+});
+
+test("a forged empty_means does not forge a proven negative", async () => {
+  await runQuery(s, deps, { ...none, pivot: { ...registry.pivot("seen")!, empty_means: "proven-negative" } });
+  expect(s.state.cards.c1!.empty).toBe("not-seen");
+});
+
+test("agent text that differs from the pivot's query is refused as agent-written", async () => {
+  const before = s.head().seq;
+  const r = await runQuery(s, deps, { ...base, text: "select * from flows", actor: agent, pivot: registry.pivot("peers")! });
+  expect(r).toEqual({ status: "refused", reasons: ["this source does not allow agent-written queries"] });
+  expect(s.head().seq).toBe(before);
+  const ok = await runQuery(s, deps, { ...base, text: registry.pivot("peers")!.query, actor: agent, pivot: registry.pivot("peers")! });
+  expect(ok.status).toBe("done");
+});
+
+test("a budget that is 0, negative or NaN counts as missing", async () => {
+  for (const budget of [0, -1, NaN, Infinity]) {
+    expect(await runQuery(s, deps, { ...repInput, budget })).toEqual({ status: "needs_budget", proposal: null, estimate: { amount: 1, unit: "lookups" } });
+  }
+  expect(standin.requests).toHaveLength(0);
+});
+
+test("an estimate above the budget needs a budget (a proposal for an agent) and runs nothing", async () => {
+  expect(await runQuery(s, deps, { ...repInput, budget: 0.5 })).toMatchObject({ status: "needs_budget", proposal: null });
+  const r = await runQuery(s, deps, { ...repInput, actor: agent, pivot: registry.pivot("paid_rep")!, budget: 0.5 });
+  expect(r).toMatchObject({ status: "needs_budget", proposal: "p1" });
+  expect(standin.requests).toHaveLength(0);
+});
+
+test("a result the fold would refuse becomes query.failed, not a silent loss", async () => {
+  const bad = { kind: "partial", reason: "nonsense" } as unknown as QueryOutcome["coverage"];
+  const r = await runQuery(s, stubDeps({ coverage: bad }), base);
+  expect(r).toMatchObject({ status: "failed" });
+  if (r.status === "failed") expect(r.error).toContain("invalid result");
+  expect(s.state.queries.q1!.status).toBe("failed");
+  expect(types()).not.toContain("card.created");
+  const r2 = await runQuery(s, stubDeps({ columns: [1 as unknown as string] }), base);
+  expect(r2.status).toBe("failed");
+  expect(s.state.queries.q2!.status).toBe("failed");
 });

@@ -1,6 +1,7 @@
 import type { Json } from "../core/canonical";
 import { canonical } from "../core/canonical";
 import { sha256Hex } from "../core/hash";
+import { isCoverage } from "../core/state/shapes";
 import type { CaseSession } from "../core/session";
 import type { Actor, Card, Coverage, Cost, EmptyMeans, EntryInput, TimeWindow } from "../core/types";
 import { ConnectorError } from "./connectors";
@@ -62,13 +63,19 @@ function bodyOf(rows: number, coverage: Coverage, empty: EmptyMeans | null): str
 export async function runQuery(session: CaseSession, deps: RunnerDeps, input: RunQueryInput): Promise<RunQueryResult> {
   const source = deps.registry.source(input.source);
   if (source === null) return { status: "refused", reasons: [`unknown source: ${input.source}`] };
-  const pivot = input.pivot ?? null;
+  let pivot: PivotManifest | null = null;
+  if (input.pivot) {
+    // the registry's pivot decides weight, empty meaning and the agent gate; the caller's object is only a name and a hash
+    pivot = deps.registry.pivot(input.pivot.id);
+    if (pivot === null || pivot.hash !== input.pivot.hash) return { status: "refused", reasons: [`unknown or changed pivot: ${input.pivot.id}`] };
+  }
   if (pivot !== null && pivot.source !== source.id) return { status: "refused", reasons: [`pivot ${pivot.id} is for source ${pivot.source}`] };
-  if (input.actor.kind === "agent" && pivot === null && !source.adhoc) {
+  if (input.actor.kind === "agent" && (pivot === null || input.text !== pivot.query) && !source.adhoc) {
     return { status: "refused", reasons: ["this source does not allow agent-written queries"] };
   }
   const link = { run: input.run ?? null, stage: input.stage ?? null, job: input.job ?? null };
-  const budget = input.budget ?? null;
+  const given = input.budget ?? null;
+  const budget = typeof given === "number" && Number.isFinite(given) && given > 0 ? given : null;
   const req: QueryRequest = {
     text: input.text, bound: input.bound, window: input.window,
     max_rows: source.limits.max_rows, timeout_ms: source.limits.timeout_ms, budget,
@@ -95,9 +102,9 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
       if (err instanceof ConnectorError) return { status: "refused", reasons: [err.message] };
       throw err;
     }
-    if (budget === null) {
+    const priced: Cost = estimate ?? { amount: weight, unit: source.cost.unit };
+    if (budget === null || (estimate !== null && estimate.amount > budget)) {
       if (input.actor.kind !== "agent") return { status: "needs_budget", proposal: null, estimate };
-      const priced: Cost = estimate ?? { amount: weight, unit: source.cost.unit };
       const entries = session.commit((_state, ids) => {
         const id = ids.next("proposal");
         return [{
@@ -136,6 +143,10 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
   }
 
   try {
+    if (!isCoverage(out.coverage)) return fail("the source returned an invalid result: coverage is malformed");
+    if (!Array.isArray(out.columns) || !out.columns.every((c) => typeof c === "string") || !Array.isArray(out.rows)) {
+      return fail("the source returned an invalid result: columns are not a list of strings");
+    }
     const blob = session.blobs.put(out.raw, out.media);
     const hash = rowsHash(out.columns, out.rows);
     const rows = out.rows.length;
@@ -165,6 +176,10 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
       }
       return entries;
     });
+    const now = session.state.queries[query];
+    if (now?.status !== "done" || (makeCard && (cardId === null || !Object.hasOwn(session.state.cards, cardId)))) {
+      return fail("the result was not accepted into the case record");
+    }
     return { status: "done", query, card: cardId, outcome, rows, rows_hash: hash, coverage: out.coverage, columns: out.columns, data: out.rows };
   } catch (err) {
     return fail(firstLine(err));
