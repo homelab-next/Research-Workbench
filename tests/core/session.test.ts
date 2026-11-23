@@ -143,3 +143,28 @@ test("a session opened on an existing case rebuilds the same state", () => {
   expect(again.state).toEqual(expected);
   expect(again.head()).toEqual(head);
 });
+
+test("a nested commit from a subscriber keeps state equal to the ledger fold, delivered in order", () => {
+  const delivered: { seq: number; stateSeq: number }[] = [];
+  let nested = false;
+  s.subscribe((e, st) => {
+    delivered.push({ seq: e.seq, stateSeq: st.seq });
+    if (e.seq === 1 && !nested) {
+      nested = true;
+      s.commit(() => [newCard("c3")]);
+    }
+  });
+  s.commit(() => [newCard("c1"), newCard("c2")]);
+  expect(delivered).toEqual([{ seq: 1, stateSeq: 1 }, { seq: 2, stateSeq: 2 }, { seq: 3, stateSeq: 3 }]);
+  expect(s.state).toEqual(fold(s.entries()));
+  expect(s.state.seq).toBe(s.head().seq);
+  expect(s.state.incoming).toEqual(["c1", "c2", "c3"]);
+});
+
+test("a builder that calls commit throws and nothing is appended", () => {
+  const head = s.head();
+  expect(() => s.commit(() => { s.commit(() => [newCard("c1")]); return [newCard("c2")]; })).toThrow("commit called from inside a commit builder");
+  expect(s.head()).toEqual(head);
+  s.commit(() => [newCard("c1")]);
+  expect(s.state.incoming).toEqual(["c1"]);
+});
