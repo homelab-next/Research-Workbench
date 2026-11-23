@@ -10,6 +10,7 @@ import { sha256Hex } from "../../src/core/hash";
 import { entryHash, InvalidEntryError, Ledger } from "../../src/core/ledger";
 import { formatReport, UnreadableLedgerError, verifyCase, verifyLedger } from "../../src/core/verify";
 import type { BlobRef, Product } from "../../src/core/types";
+import { card } from "../helpers/entries";
 
 const human = { kind: "human", id: "analyst" } as const;
 const phase = (p: string) => ({ type: "case.phase_changed", payload: { phase: p }, actor: human }) as const;
@@ -53,7 +54,7 @@ function rawSql(d: string, sql: string): void {
 
 test("a clean case verifies", () => {
   const r = verifyCase(dir);
-  expect(r).toMatchObject({ ok: true, case: "CASE-1", entries: 5, firstBad: null, blobs: { referenced: 1, missing: [], corrupt: [] } });
+  expect(r).toMatchObject({ ok: true, case: "CASE-1", entries: 5, firstBad: null, blobs: { referenced: 1, bad: [], lookalikes: 0 } });
   expect(r.head).toBe(ledger.head().hash);
 });
 
@@ -94,7 +95,11 @@ test("a missing blob and a corrupt blob are reported", () => {
   const r = verifyCase(dir);
   expect(r.ok).toBe(false);
   expect(r.firstBad).toBeNull();
-  expect(r.blobs).toEqual({ referenced: 2, missing: [ref.blob], corrupt: [other.blob] });
+  expect(r.blobs).toEqual({
+    referenced: 2,
+    bad: [{ blob: ref.blob, state: "missing", seq: 4 }, { blob: other.blob, state: "corrupt", seq: 6 }],
+    lookalikes: 0,
+  });
 });
 
 test("verification works on a copy of the folder", () => {
@@ -173,12 +178,12 @@ test("a missing case id is unreadable, even with no entries", () => {
 test("a blob path that is a directory is reported corrupt", () => {
   rmSync(join(dir, "blobs", ref.blob));
   mkdirSync(join(dir, "blobs", ref.blob));
-  expect(verifyCase(dir).blobs.corrupt).toEqual([ref.blob]);
+  expect(verifyCase(dir).blobs.bad).toEqual([{ blob: ref.blob, state: "corrupt", seq: 4 }]);
 });
 test("a blob directory that is a regular file reports its blobs corrupt", () => {
   rmSync(join(dir, "blobs"), { recursive: true });
   writeFileSync(join(dir, "blobs"), "not a directory");
-  expect(verifyLedger(join(dir, "ledger.sqlite"), join(dir, "blobs"))).toMatchObject({ ok: false, blobs: { corrupt: [ref.blob] } });
+  expect(verifyLedger(join(dir, "ledger.sqlite"), join(dir, "blobs"))).toMatchObject({ ok: false, blobs: { bad: [{ blob: ref.blob, state: "corrupt", seq: 4 }] } });
 });
 test("the command reports an unreadable ledger on stdout and exits 1", () => {
   const r = run(badLedger("cli-notdb", null));
@@ -207,9 +212,9 @@ test("the command prints the entry count and the failing entry", () => {
   expect(broken).toContain("BROKEN at entry 3 (hash_mismatch)");
 });
 
-test("formatReport shows a shortened head", () => {
+test("formatReport shows the full 64-character head, so it can be compared with one recorded elsewhere", () => {
   const text = formatReport(verifyCase(dir));
-  expect(text).toBe(`case CASE-1: chain intact · 5 entries · head ${ledger.head().hash.slice(0, 8)}…\nblobs: 1 referenced · 0 missing · 0 corrupt\ncompare the head with one recorded elsewhere: removing the newest entries cannot be detected from this file alone`);
+  expect(text).toBe(`case CASE-1: chain intact · 5 entries · head ${ledger.head().hash}\nblobs: 1 referenced · 0 missing · 0 corrupt\ncompare the head with one recorded elsewhere: removing the newest entries cannot be detected from this file alone`);
 });
 
 // ---------- final review, finding 4: verify rechecks draft hashes ----------
@@ -239,4 +244,67 @@ test("the ledger itself refuses such a draft", () => {
   expect(() => ledger.append({ type: "draft.revised", payload, actor: human })).toThrow(InvalidEntryError);
   expect(() => ledger.append({ type: "draft.revised", payload, actor: human })).toThrow(/draft_hash_mismatch/);
   expect(ledger.head()).toEqual(before);
+});
+
+// ---------- final review, finding 8: the report names each bad blob and its entry, and the head in full ----------
+test("a bad blob makes the first line say BROKEN and names the blob and the entry that references it", () => {
+  const other = blobs.put("second blob");
+  ledger.append({ type: "tool.returned", payload: { call: "t1", ok: true, summary: "s", result: other }, actor: { kind: "system", id: "runner" } });
+  rmSync(join(dir, "blobs", ref.blob));
+  writeFileSync(join(dir, "blobs", other.blob), "tampered");
+  const text = formatReport(verifyCase(dir));
+  const lines = text.split("\n");
+  expect(lines[0]).toBe(`case CASE-1: BROKEN · 2 blobs missing or corrupt · chain intact · 6 entries · head ${ledger.head().hash}`);
+  expect(lines[1]).toBe("blobs: 2 referenced · 1 missing · 1 corrupt");
+  expect(lines).toContain(`  missing blob ${ref.blob}, referenced by entry 4`);
+  expect(lines).toContain(`  corrupt blob ${other.blob}, referenced by entry 6`);
+  const cli = run(dir);
+  expect(cli.exitCode).toBe(1);
+  expect(cli.stdout.toString().split("\n")[0]).toStartWith("case CASE-1: BROKEN");
+});
+
+test("each blob is reported against the first entry that references it", () => {
+  ledger.append({
+    type: "query.result",
+    payload: { query: "q2", result: ref, rows: 1, rows_hash: "a".repeat(64), coverage: { kind: "full" }, duration_ms: 5, cost: null },
+    actor: { kind: "system", id: "runner" },
+  });
+  rmSync(join(dir, "blobs", ref.blob));
+  expect(verifyCase(dir).blobs).toEqual({ referenced: 1, bad: [{ blob: ref.blob, state: "missing", seq: 4 }], lookalikes: 0 });
+});
+
+test("a broken chain with bad blobs reports both, BROKEN first", () => {
+  rmSync(join(dir, "blobs", ref.blob));
+  rawSql(dir, `UPDATE entries SET payload = '{"phase":"edited"}' WHERE seq = 3`);
+  const lines = formatReport(verifyCase(dir)).split("\n");
+  expect(lines[0]).toBe("case CASE-1: BROKEN at entry 3 (hash_mismatch)");
+  expect(lines).toContain(`  missing blob ${ref.blob}, referenced by entry 4`);
+  expect(lines).not.toContain("compare the head with one recorded elsewhere: removing the newest entries cannot be detected from this file alone");
+});
+
+// ---------- final review, finding 9: only the positions the types define are references ----------
+test("data shaped like a blob reference in a card row or a tool argument is a look-alike, not a failure", () => {
+  const lookalike = { blob: "ab".repeat(32), bytes: 1 };
+  ledger.append({ type: "tool.called", payload: { request: "r1", call: "t1", tool: "lookup", args: { target: lookalike }, why: "w" }, actor: { kind: "system", id: "s" } });
+  ledger.append({ type: "card.created", payload: { card: card("c1", { rows: [[lookalike, { nested: lookalike }]] }) }, actor: { kind: "system", id: "s" } });
+  const r = verifyCase(dir);
+  expect(r.ok).toBe(true);
+  expect(r.blobs).toEqual({ referenced: 1, bad: [], lookalikes: 3 });
+  expect(formatReport(r).split("\n")[1]).toBe("blobs: 1 referenced · 0 missing · 0 corrupt · 3 look-alikes outside reference fields, not checked");
+});
+
+test("every reference position the types define is checked, and a null one is skipped", () => {
+  const a = blobs.put("messages"), b = blobs.put("response"), c = blobs.put("reasoning");
+  const sys = { kind: "system", id: "s" } as const;
+  ledger.append({
+    type: "model.request",
+    payload: { request: "r1", provider: "p", model: "m", effort: null, where: "machine", marking: "TLP:AMBER", pack: [], left_out: [], messages: a, tools: [] },
+    actor: sys,
+  });
+  ledger.append({ type: "model.response", payload: { request: "r1", response: b, stop: "end", usage: { input: 1, output: 1, reasoning: 1 }, served_by: "m", reasoning: c }, actor: sys });
+  ledger.append({ type: "model.response", payload: { request: "r2", response: b, stop: "end", usage: { input: 1, output: 1, reasoning: 1 }, served_by: "m", reasoning: null }, actor: sys });
+  ledger.append({ type: "stage.finished", payload: { stage: "s", attempt: 1, outcome: "pass", draft_hash: null, output: null, reason: null }, actor: sys });
+  expect(verifyCase(dir).blobs).toEqual({ referenced: 4, bad: [], lookalikes: 0 });
+  rmSync(join(dir, "blobs", c.blob));
+  expect(verifyCase(dir).blobs.bad).toEqual([{ blob: c.blob, state: "missing", seq: 7 }]);
 });

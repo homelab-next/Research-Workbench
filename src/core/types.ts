@@ -163,6 +163,25 @@ export interface Payloads {
 }
 export type EntryType = keyof Payloads;
 
+/** The fields of payload P whose type is a blob reference (or a blob reference or null). */
+export type BlobField<P> = { [K in keyof P]-?: [P[K]] extends [never] ? never : P[K] extends BlobRef | null ? K : never }[keyof P];
+
+/**
+ * Where blob references live: for each entry type that has any, the payload fields that hold one.
+ * This is the only place the verifier looks for references; anything shaped like one elsewhere (in a
+ * card row, a tool argument, a setting) is source data, not a reference. The type requires every
+ * entry type with a BlobRef field to be listed, allows no other, and allows only BlobRef fields.
+ */
+export const BLOB_FIELDS: { readonly [T in EntryType as BlobField<Payloads[T]> extends never ? never : T]: readonly BlobField<Payloads[T]>[] } = {
+  "query.result": ["result"],
+  "model.request": ["messages"],
+  "model.response": ["response", "reasoning"],
+  "tool.returned": ["result"],
+  "check.run": ["input"],
+  "stage.finished": ["output"],
+  "product.published": ["bundle"],
+};
+
 export type EntryInput = {
   [T in EntryType]: { type: T; payload: Payloads[T]; actor: Actor; cause?: number | null; run?: string | null; stage?: string | null; job?: string | null };
 }[EntryType];
