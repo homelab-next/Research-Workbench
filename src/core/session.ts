@@ -43,7 +43,10 @@ export class CaseSession {
   private current: CaseState;
   private building = false;
 
-  constructor(opts: { id: string; dir: string; ledger: Ledger; blobs: BlobStore; onError?: (error: unknown, entry: Entry) => void }) {
+  private readonly onClose: (() => void) | undefined;
+
+  constructor(opts: { id: string; dir: string; ledger: Ledger; blobs: BlobStore; onError?: (error: unknown, entry: Entry) => void; onClose?: () => void }) {
+    this.onClose = opts.onClose;
     this.id = opts.id;
     this.dir = opts.dir;
     this.ledger = opts.ledger;
@@ -125,8 +128,13 @@ export class CaseSession {
     };
   }
 
+  /** Closes the ledger. The owner (the workbench) is told, so it stops handing out this session. */
   close(): void {
-    this.ledger.close();
+    try {
+      this.ledger.close();
+    } finally {
+      this.onClose?.();
+    }
   }
 
   head(): { seq: number; hash: string } {

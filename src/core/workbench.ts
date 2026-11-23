@@ -5,7 +5,8 @@ import { BlobStore } from "./blobs";
 import { ignoreThrow, logToStderr } from "./deliver";
 import { Ledger } from "./ledger";
 import { CaseSession } from "./session";
-import type { RunState } from "./state";
+import { caseFields, fold, isCaseCreated } from "./state";
+import type { CaseState, RunState } from "./state";
 import { isMarking } from "./types";
 import type { Actor, Entry, Marking, Observable, TimeWindow } from "./types";
 
@@ -23,6 +24,14 @@ export class WorkbenchLockedError extends Error {
     super(`data directory ${dataDir} is in use by ${pid === null ? "another process" : `process ${pid}`}`);
     this.name = "WorkbenchLockedError";
     this.pid = pid;
+  }
+}
+
+/** The workbench was used after close(). */
+export class WorkbenchClosedError extends Error {
+  constructor() {
+    super("the workbench is closed");
+    this.name = "WorkbenchClosedError";
   }
 }
 
@@ -104,14 +113,18 @@ function alive(pid: number): boolean {
 export class Workbench {
   readonly dataDir: string;
   readonly chain: Ledger;
+  /** The blob store for the workbench chain, `<dataDir>/blobs`. */
+  readonly chainBlobs: BlobStore;
   private readonly now: (() => string) | undefined;
   private readonly onError: ErrorHandler;
   private readonly lock: Database;
+  private closed = false;
   private readonly sessions: Record<string, CaseSession> = Object.create(null) as Record<string, CaseSession>;
 
   private constructor(dataDir: string, chain: Ledger, now: (() => string) | undefined, onError: ErrorHandler, lock: Database) {
     this.dataDir = dataDir;
     this.chain = chain;
+    this.chainBlobs = new BlobStore(join(dataDir, "blobs"));
     this.now = now;
     this.onError = onError;
     this.lock = lock;
@@ -134,8 +147,14 @@ export class Workbench {
   }
 
   createCase(input: NewCase, actor: Actor): CaseSession {
-    if (!isMarking(input.marking)) throw new TypeError(`unknown marking ${JSON.stringify(input.marking)}`);
+    this.open();
+    if (!isMarking(input?.marking)) throw new TypeError(`unknown marking ${JSON.stringify(input?.marking)}`);
     const id = `CASE-${this.nextNumber()}`;
+    // The seven case fields and nothing else, with the id last so nothing in the input can replace it.
+    const { title, asked, why, starting, window, objective, marking } = input;
+    const payload = caseFields({ title, asked, why, starting, window, objective, marking, id });
+    // Refuse what the fold would refuse, before anything is written.
+    if (!isCaseCreated(payload)) throw new TypeError("a new case needs title, asked and why strings, starting observables, a time window and an objective string or null");
     let session: CaseSession;
     try {
       session = this.load(id, true);
@@ -144,7 +163,7 @@ export class Workbench {
       throw err;
     }
     try {
-      session.commit(() => [{ type: "case.created", payload: { id, ...input }, actor }]);
+      session.commit(() => [{ type: "case.created", payload, actor }]);
     } catch (err) {
       delete this.sessions[id];
       try {
@@ -158,26 +177,28 @@ export class Workbench {
   }
 
   session(id: string): CaseSession {
+    this.open();
     if (typeof id !== "string" || !CASE_ID.test(id)) throw new CaseNotFoundError(String(id));
     if (Object.hasOwn(this.sessions, id)) return this.sessions[id]!;
     if (!existsSync(join(this.dataDir, "cases", id, "ledger.sqlite"))) throw new CaseNotFoundError(id);
     return this.load(id, false);
   }
 
+  /** A summary of every case, newest first. Reads each ledger and lets it go: no session is opened or kept for it. */
   listCases(): CaseSummary[] {
+    this.open();
     const out: CaseSummary[] = [];
     for (const n of this.caseNumbers().sort((a, b) => b - a)) {
       const id = `CASE-${n}`;
       if (!existsSync(join(this.dataDir, "cases", id, "ledger.sqlite"))) continue;
       try {
-        const session = this.session(id);
-        const s = session.state;
+        const { state: s, created_ts } = this.summaryOf(id);
         if (s.meta === null) continue;
         out.push({
           id,
           title: s.meta.title,
           marking: s.meta.marking,
-          created_ts: session.entries(0, 1)[0]?.ts ?? "",
+          created_ts,
           run_status: s.run.status,
           phase: s.phase,
           incoming: s.incoming.length,
@@ -192,6 +213,8 @@ export class Workbench {
 
   /** Closes every session and the chain even if some fail, releases the lock, then rethrows the first error. */
   close(): void {
+    if (this.closed) return;
+    this.closed = true;
     const errors: unknown[] = [];
     const attempt = (fn: () => void): void => {
       try {
@@ -210,6 +233,25 @@ export class Workbench {
     if (errors.length > 0) throw errors[0];
   }
 
+  private open(): void {
+    if (this.closed) throw new WorkbenchClosedError();
+  }
+
+  /** The state of a case: from its open session if there is one, else read from its ledger, which is closed again. */
+  private summaryOf(id: string): { state: Readonly<CaseState>; created_ts: string } {
+    if (Object.hasOwn(this.sessions, id)) {
+      const session = this.sessions[id]!;
+      return { state: session.state, created_ts: session.entries(0, 1)[0]?.ts ?? "" };
+    }
+    const ledger = Ledger.open(join(this.dataDir, "cases", id, "ledger.sqlite"), id, { onError: this.onError });
+    try {
+      const entries = ledger.read();
+      return { state: fold(entries), created_ts: entries[0]?.ts ?? "" };
+    } finally {
+      ledger.close();
+    }
+  }
+
   private reportError(error: unknown): void {
     ignoreThrow(() => this.onError(error));
   }
@@ -219,7 +261,13 @@ export class Workbench {
     if (create) mkdirSync(join(dir, "published"), { recursive: true });
     const ledger = Ledger.open(join(dir, "ledger.sqlite"), id, { ...(this.now ? { now: this.now } : {}), onError: this.onError });
     try {
-      const session = new CaseSession({ id, dir, ledger, blobs: new BlobStore(join(dir, "blobs")), onError: this.onError });
+      const session: CaseSession = new CaseSession({
+        id, dir, ledger, blobs: new BlobStore(join(dir, "blobs")), onError: this.onError,
+        // a session closed directly leaves the cache, so the next session(id) opens a fresh one
+        onClose: () => {
+          if (this.sessions[id] === session) delete this.sessions[id];
+        },
+      });
       this.sessions[id] = session;
       return session;
     } catch (err) {

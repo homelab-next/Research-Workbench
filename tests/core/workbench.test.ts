@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { verifyLedger } from "../../src/core/verify";
-import { CaseNotFoundError, Workbench, WorkbenchLockedError } from "../../src/core/workbench";
+import { CaseNotFoundError, Workbench, WorkbenchClosedError, WorkbenchLockedError } from "../../src/core/workbench";
 import type { NewCase } from "../../src/core/workbench";
 import type { Actor } from "../../src/core/types";
 import { card as cardStub } from "../helpers/entries";
@@ -258,4 +258,69 @@ test("a case with an unparseable row opens, and the fold records the row as skip
   expect(again.state.phase).toBeNull();
   expect(again.state.skipped).toEqual([{ seq: 2, type: "case.phase_changed", reason: "malformed payload" }]);
   expect(errors.some((e) => e instanceof Error && e.message.includes("entry 2"))).toBe(true);
+});
+
+// ---------- final review, finding 18: workbench edges ----------
+test("createCase builds the payload from the case fields only, with its own id", () => {
+  const input = { ...newCase, id: "CASE-999", api_key: "not-a-real-key" } as unknown as NewCase;
+  const s = wb.createCase(input, human);
+  expect(s.id).toBe("CASE-1");
+  expect(s.state.meta?.id).toBe("CASE-1");
+  const payload = s.entries()[0]!.payload as Record<string, unknown>;
+  expect(Object.keys(payload).sort()).toEqual(["asked", "id", "marking", "objective", "starting", "title", "why", "window"]);
+  expect(payload.id).toBe("CASE-1");
+});
+
+test("createCase refuses an input of the wrong shape before anything is written", () => {
+  for (const bad of [{ ...newCase, title: 5 }, { ...newCase, starting: [{ type: "ip" }] }, { ...newCase, window: null }, { ...newCase, objective: undefined }]) {
+    expect(() => wb.createCase(bad as never, human)).toThrow(TypeError);
+  }
+  expect(readdirSync(join(dir, "cases"))).toEqual([]);
+});
+
+test("after close the workbench refuses to work", () => {
+  wb.createCase(newCase, human);
+  wb.close();
+  expect(() => wb.createCase(newCase, human)).toThrow(WorkbenchClosedError);
+  expect(() => wb.session("CASE-1")).toThrow(WorkbenchClosedError);
+  expect(() => wb.listCases()).toThrow(WorkbenchClosedError);
+  expect(readdirSync(join(dir, "cases"))).toEqual(["CASE-1"]);
+  wb.close(); // closing twice is harmless
+  wb = Workbench.open(dir, { now, onError });
+});
+
+test("the chain and case ledgers report through the workbench's onError", () => {
+  wb.chain.subscribe(() => { throw new Error("chain listener broke"); });
+  wb.chain.append({ type: "setting.changed", payload: { key: "k", value: 1 }, actor: human });
+  expect(errors.map((e) => (e as Error).message)).toEqual(["chain listener broke"]);
+});
+
+test("the workbench chain has its own blob store under <dataDir>/blobs", () => {
+  const ref = wb.chainBlobs.put("manifest bytes");
+  expect(existsSync(join(dir, "blobs", ref.blob))).toBe(true);
+  expect(wb.chainBlobs.text(ref.blob)).toBe("manifest bytes");
+});
+
+test("listCases reads summaries without opening and keeping sessions", () => {
+  wb.createCase(newCase, human);
+  wb.createCase(newCase, human);
+  wb.close();
+  wb = Workbench.open(dir, { now, onError });
+  const cached = () => Object.keys((wb as unknown as { sessions: Record<string, unknown> }).sessions);
+  expect(wb.listCases().map((c) => c.id)).toEqual(["CASE-2", "CASE-1"]);
+  expect(cached()).toEqual([]);
+  const one = wb.session("CASE-1");
+  expect(cached()).toEqual(["CASE-1"]);
+  // an open session is used as it is
+  expect(wb.listCases().map((c) => c.id)).toEqual(["CASE-2", "CASE-1"]);
+  expect(wb.session("CASE-1")).toBe(one);
+});
+
+test("a session closed directly is dropped from the cache and reopened on demand", () => {
+  const s = wb.createCase(newCase, human);
+  s.close();
+  const again = wb.session("CASE-1");
+  expect(again).not.toBe(s);
+  again.commit(() => [{ type: "case.phase_changed", payload: { phase: "collect" }, actor: human }]);
+  expect(again.state.phase).toBe("collect");
 });
