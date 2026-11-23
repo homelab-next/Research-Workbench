@@ -1,0 +1,65 @@
+import type { EmptyMeans, Marking } from "../core/types";
+import type { PivotManifest, Registry, SourceManifest } from "./registry";
+
+export interface Hop {
+  pivot: string; title: string; source: string; from: string; to: string; free: boolean; weight: number;
+  needs_window: boolean; empty_means: EmptyMeans; confirmed: boolean; marking: Marking; unit: string;
+}
+export interface Route { hops: Hop[]; weight: number }
+export interface SeekLimits { max_weight: number | null; allow_unconfirmed: boolean; max_hops: number }
+export const DEFAULT_LIMITS: SeekLimits = { max_weight: null, allow_unconfirmed: false, max_hops: 4 };
+
+export interface Seeker {
+  routes(have: string[], want: string, limits: SeekLimits, blocked?: ReadonlySet<string>): Route[];
+}
+
+const MAX_ROUTES = 5;
+
+function hopOf(p: PivotManifest, s: SourceManifest): Hop {
+  const weight = p.weight ?? s.cost.weight;
+  return {
+    pivot: p.id, title: p.title, source: s.id, from: p.from, to: p.to, free: weight === 0, weight,
+    needs_window: p.needs_window, empty_means: p.empty_means, confirmed: s.confirmed, marking: s.marking, unit: s.cost.unit,
+  };
+}
+
+/** Cheapest first: each pivot is an edge between observable types; simple paths are enumerated depth-first and sorted by weight, hops, then pivot ids. */
+export function cheapestSeeker(registry: Registry): Seeker {
+  return {
+    routes(have, want, limits, blocked = new Set()) {
+      const edges = new Map<string, Hop[]>();
+      for (const p of registry.pivots()) {
+        const s = registry.source(p.source);
+        if (s === null || blocked.has(p.id) || (!s.confirmed && !limits.allow_unconfirmed)) continue;
+        const list = edges.get(p.from) ?? [];
+        list.push(hopOf(p, s));
+        edges.set(p.from, list);
+      }
+      if (have.includes(want)) return [{ hops: [], weight: 0 }];
+      const found = new Map<string, Route>();
+      const walk = (type: string, path: Hop[], visited: Set<string>, weight: number): void => {
+        if (limits.max_weight !== null && weight > limits.max_weight) return;
+        if (type === want) {
+          found.set(path.map((h) => h.pivot).join(">"), { hops: [...path], weight });
+          return;
+        }
+        if (path.length >= limits.max_hops) return;
+        for (const hop of edges.get(type) ?? []) {
+          if (visited.has(hop.to)) continue;
+          visited.add(hop.to);
+          path.push(hop);
+          walk(hop.to, path, visited, weight + hop.weight);
+          path.pop();
+          visited.delete(hop.to);
+        }
+      };
+      for (const start of new Set(have)) walk(start, [], new Set([start]), 0);
+      const key = (r: Route): string => r.hops.map((h) => h.pivot).join(">");
+      return [...found.values()]
+        .sort((a, b) => a.weight - b.weight || a.hops.length - b.hops.length || (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0))
+        .slice(0, MAX_ROUTES);
+    },
+  };
+}
+
+export const SEEKERS: Record<string, (registry: Registry) => Seeker> = { cheapest: cheapestSeeker };
