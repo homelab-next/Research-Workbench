@@ -3,6 +3,7 @@ import { apply } from "./apply";
 import type { CaseState, IdKind } from "./types";
 
 export { apply } from "./apply";
+export { applyAnalysis, blockers, latestDraft, publishable } from "./analysis";
 export { cardLocation } from "./cards";
 export * from "./types";
 
