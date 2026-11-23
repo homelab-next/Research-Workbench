@@ -69,19 +69,25 @@ export class Ledger {
   readonly caseId: string;
   private readonly db: Database;
   private readonly now: () => string;
+  private readonly onError: (error: unknown, entry: Entry) => void;
   private readonly subscribers = new Set<(entry: Entry) => void>();
+  private readonly queue: Entry[] = [];
+  private delivering = false;
 
-  private constructor(db: Database, caseId: string, now: () => string) {
+  private constructor(db: Database, caseId: string, now: () => string, onError: (error: unknown, entry: Entry) => void) {
     this.db = db;
     this.caseId = caseId;
     this.now = now;
+    this.onError = onError;
   }
 
-  static open(path: string, caseId: string, opts: { now?: () => string } = {}): Ledger {
+  static open(path: string, caseId: string, opts: { now?: () => string; onError?: (error: unknown, entry: Entry) => void } = {}): Ledger {
     const db = new Database(path, { create: true });
     try {
       // Wait for other writers on the same file instead of failing.
       db.exec("PRAGMA busy_timeout = 10000");
+      // One file per case: force the rollback journal even if the file was switched to WAL elsewhere.
+      db.exec("PRAGMA journal_mode = DELETE");
       db.exec("PRAGMA synchronous = FULL");
       db.exec(SCHEMA);
       db.exec("BEGIN IMMEDIATE");
@@ -101,7 +107,12 @@ export class Ledger {
       db.close();
       throw err;
     }
-    return new Ledger(db, caseId, opts.now ?? (() => new Date().toISOString()));
+    const onError =
+      opts.onError ??
+      ((error: unknown, entry: Entry) => {
+        console.error(`ledger subscriber failed on entry ${entry.seq}: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    return new Ledger(db, caseId, opts.now ?? (() => new Date().toISOString()), onError);
   }
 
   append(input: EntryInput): Entry {
@@ -111,6 +122,13 @@ export class Ledger {
   appendMany(inputs: EntryInput[]): Entry[] {
     // Canonicalise everything first so a bad payload throws before anything is written.
     const prepared: Prepared[] = inputs.map((input) => {
+      if (input.cause != null && !(Number.isInteger(input.cause) && input.cause >= 1)) {
+        throw new TypeError("cause must be an integer >= 1 or null");
+      }
+      for (const field of ["run", "stage", "job"] as const) {
+        const v = input[field];
+        if (v != null && typeof v !== "string") throw new TypeError(`${field} must be a string or null`);
+      }
       const payloadText = canonical(input.payload as unknown as Json);
       if (Buffer.byteLength(payloadText, "utf8") > MAX_PAYLOAD_BYTES) {
         throw new PayloadTooLargeError(`payload of ${input.type} exceeds ${MAX_PAYLOAD_BYTES} bytes`);
@@ -129,9 +147,11 @@ export class Ledger {
       for (const p of prepared) {
         seq += 1;
         const { input } = p;
+        const ts = this.now();
+        if (typeof ts !== "string") throw new TypeError("clock must return a string");
         const body = {
           seq,
-          ts: this.now(),
+          ts,
           case: this.caseId,
           actor: JSON.parse(p.actorText) as Actor,
           type: input.type,
@@ -152,7 +172,8 @@ export class Ledger {
       this.db.exec("ROLLBACK");
       throw err;
     }
-    for (const entry of entries) this.notify(entry);
+    this.queue.push(...entries);
+    this.deliver();
     return entries;
   }
 
@@ -182,13 +203,27 @@ export class Ledger {
     this.db.close();
   }
 
-  private notify(entry: Entry): void {
-    for (const fn of [...this.subscribers]) {
-      try {
-        fn(entry);
-      } catch {
-        // The entry is already committed; a failing subscriber must not fail the append or starve others.
+  /** Deliver queued entries in seq order. A nested append only queues; the outer loop delivers it. */
+  private deliver(): void {
+    if (this.delivering) return;
+    this.delivering = true;
+    try {
+      for (let entry = this.queue.shift(); entry !== undefined; entry = this.queue.shift()) {
+        for (const fn of [...this.subscribers]) {
+          try {
+            fn(entry);
+          } catch (err) {
+            // The entry is already committed; a failing subscriber must not fail the append or starve others.
+            try {
+              this.onError(err, entry);
+            } catch {
+              // an error handler that throws is ignored
+            }
+          }
+        }
       }
+    } finally {
+      this.delivering = false;
     }
   }
 }
