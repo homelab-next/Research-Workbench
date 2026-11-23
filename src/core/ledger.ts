@@ -1,9 +1,10 @@
 import { Database } from "bun:sqlite";
-import { canonical } from "./canonical";
+import { isBlobRef } from "./blobs";
+import { canonical, isPlainObject, parseJson } from "./canonical";
 import type { Json } from "./canonical";
 import { Delivery, ignoreThrow, logToStderr } from "./deliver";
 import { GENESIS, sha256Hex } from "./hash";
-import { isActor, isEntryType } from "./types";
+import { BLOB_FIELDS, isActor, isEntryType } from "./types";
 import type { Actor, Entry, EntryInput } from "./types";
 
 export class LedgerCaseMismatchError extends Error {
@@ -99,15 +100,6 @@ export function draftHashMatches(draft: unknown): boolean {
   }
 }
 
-function parseJson(text: unknown): { value: Json } | null {
-  if (typeof text !== "string") return null;
-  try {
-    return { value: JSON.parse(text) as Json };
-  } catch {
-    return null;
-  }
-}
-
 /**
  * The verifier's check of one stored row, given the case id and the row before it. Shared by the
  * verifier and by the ledger's read-back before COMMIT, so the ledger cannot commit a row the
@@ -150,11 +142,6 @@ function deepFreeze<T>(x: T): T {
   }
   return x;
 }
-const isPlainObject = (x: unknown): boolean => {
-  if (typeof x !== "object" || x === null || Array.isArray(x)) return false;
-  const proto = Object.getPrototypeOf(x);
-  return proto === Object.prototype || proto === null;
-};
 
 /** Checks everything about an input that does not depend on where it lands in the chain. */
 function checkInput(input: EntryInput): void {
@@ -162,6 +149,14 @@ function checkInput(input: EntryInput): void {
   if (!isEntryType(input.type)) throw new InvalidEntryError(`type must be a known entry type, not ${JSON.stringify(String(input.type))}`);
   if (!isActor(input.actor)) throw new InvalidEntryError(`actor of ${input.type} must be a well-formed human, system or agent actor`);
   if (!isPlainObject(input.payload)) throw new InvalidEntryError(`payload of ${input.type} must be a plain object`);
+  // A typed blob position holds null or a well-formed reference, or the bytes behind it could not be traced.
+  if (Object.hasOwn(BLOB_FIELDS, input.type)) {
+    for (const field of BLOB_FIELDS[input.type as keyof typeof BLOB_FIELDS] as readonly string[]) {
+      if (!Object.hasOwn(input.payload, field)) continue;
+      const v = (input.payload as unknown as Record<string, unknown>)[field];
+      if (v !== null && !isBlobRef(v)) throw new InvalidEntryError(`${input.type}: ${field} must be null or a blob reference ({ blob: <sha256 hex>, bytes })`);
+    }
+  }
   if (input.cause != null && !(Number.isSafeInteger(input.cause) && input.cause >= 1)) {
     throw new InvalidEntryError("cause must be a safe integer >= 1 naming an earlier entry, or null");
   }
@@ -180,6 +175,8 @@ export class Ledger {
   private readonly subscribers = new Set<(entry: Entry) => void>();
   private readonly delivery: Delivery<(entry: Entry) => void, Entry>;
   private readonly onError: (error: unknown, entry: Entry) => void;
+  /** The seqs of damaged rows already reported, so a row is reported once however often it is read. */
+  private readonly reported = new Set<number>();
 
   private constructor(db: Database, caseId: string, now: () => string, onError: (error: unknown, entry: Entry) => void) {
     this.db = db;
@@ -350,7 +347,8 @@ export class Ledger {
       hash: row.hash,
     } as unknown as Entry;
     deepFreeze(entry);
-    if (actor === null || payload === null) {
+    if ((actor === null || payload === null) && !this.reported.has(row.seq)) {
+      this.reported.add(row.seq);
       const error = new UnreadableEntryError(row.seq, actor === null ? "actor" : "payload");
       ignoreThrow(() => this.onError(error, entry));
     }

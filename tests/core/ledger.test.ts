@@ -405,3 +405,44 @@ test("a row that cannot be parsed reads back with a null payload and is reported
   expect(l.get(2)!.payload).toBeNull();
   l.close();
 });
+
+// ---------- close-out: blob references at typed positions, and damaged rows reported once ----------
+const validResult = { query: "q1", result: { blob: "a".repeat(64), bytes: 1 }, rows: 1, rows_hash: "a".repeat(64), coverage: { kind: "full" }, duration_ms: 5, cost: null } as const;
+const runner = { kind: "system", id: "runner" } as const;
+test("a malformed blob reference at a typed position is refused", () => {
+  const l = open(tmp());
+  l.append(phase("a"));
+  const before = l.head().seq;
+  for (const bad of [{ blob: "zz", bytes: 1 }, "text", 5, {}, [], { blob: "a".repeat(64) }]) {
+    expect(() => l.append({ type: "query.result", actor: runner, payload: { ...validResult, result: bad as never } })).toThrow(TypeError);
+  }
+  expect(() => l.append({ type: "query.result", actor: runner, payload: { ...validResult, result: { blob: "zz", bytes: 1 } as never } })).toThrow(/query\.result.*result/);
+  expect(l.head().seq).toBe(before);
+  l.append({ type: "query.result", actor: runner, payload: validResult });
+  expect(l.head().seq).toBe(before + 1);
+  l.close();
+});
+
+test("null is allowed where the type allows it", () => {
+  const l = open(tmp());
+  const e = l.append({ type: "stage.finished", actor: human, payload: { stage: "plan", attempt: 1, outcome: "pass", draft_hash: "h1", output: null, reason: null } });
+  expect(e.seq).toBe(1);
+  l.close();
+});
+
+test("a damaged row is reported once however often it is read", () => {
+  const dir = tmp();
+  const errors: number[] = [];
+  const l = open(dir, { now, onError: (_error, e) => errors.push(e.seq) });
+  l.append(phase("a"));
+  l.append(phase("b"));
+  const raw = new Database(join(dir, "ledger.sqlite"));
+  raw.exec(`UPDATE entries SET payload = '{' WHERE seq = 2`);
+  raw.close();
+  l.read();
+  l.read();
+  l.get(2);
+  l.read();
+  expect(errors).toEqual([2]);
+  l.close();
+});

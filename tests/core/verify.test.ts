@@ -368,3 +368,34 @@ test("the command verifies any ledger file and blob folder with --ledger and --b
   expect(unreadable.exitCode).toBe(1);
   expect(unreadable.stdout.toString()).toContain("UNREADABLE (");
 });
+
+// ---------- close-out: a malformed reference at a typed position ----------
+function insertMalformed(): void {
+  const head = ledger.head();
+  const body = {
+    seq: head.seq + 1, ts: "2026-11-23T20:10:00.000Z", case: "CASE-1", actor: { kind: "system", id: "runner" }, type: "query.result",
+    payload: { query: "q2", result: { blob: "zz", bytes: 1 }, rows: 1, rows_hash: "b".repeat(64), coverage: { kind: "full" }, duration_ms: 5, cost: null },
+    cause: null, run: null, stage: null, job: null, prev_hash: head.hash,
+  };
+  const hash = entryHash(body as never);
+  const db = new Database(join(dir, "ledger.sqlite"));
+  db.query("INSERT INTO entries (seq, ts, actor, type, payload, cause, run, stage, job, prev_hash, hash) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?)")
+    .run(body.seq, body.ts, canonical(body.actor), body.type, canonical(body.payload), body.prev_hash, hash);
+  db.close();
+}
+
+test("a malformed reference at a typed position is reported as bad", () => {
+  insertMalformed();
+  const r = verifyCase(dir);
+  expect(r.ok).toBe(false);
+  expect(r.firstBad).toBeNull();
+  expect(r.blobs.bad).toEqual([{ blob: '{"blob":"zz","bytes":1}', state: "malformed", seq: 6 }]);
+});
+
+test("the command prints a malformed reference with its entry", () => {
+  insertMalformed();
+  const lines = formatReport(verifyCase(dir)).split("\n");
+  expect(lines[0]).toStartWith("case CASE-1: BROKEN");
+  expect(lines).toContain('  malformed blob {"blob":"zz","bytes":1}, referenced by entry 6');
+  expect(run(dir).exitCode).toBe(1);
+});

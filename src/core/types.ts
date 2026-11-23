@@ -1,3 +1,4 @@
+import { isPlainObject } from "./canonical";
 import type { Json } from "./canonical";
 
 // ---------- primitives ----------
@@ -242,11 +243,6 @@ export const ENTRY_TYPES = listOf<EntryType>({
 const ENTRY_TYPE_SET: ReadonlySet<string> = new Set(ENTRY_TYPES);
 export const isEntryType = (x: unknown): x is EntryType => typeof x === "string" && ENTRY_TYPE_SET.has(x);
 
-const isPlainObject = (x: unknown): x is Record<string, unknown> => {
-  if (typeof x !== "object" || x === null || Array.isArray(x)) return false;
-  const proto = Object.getPrototypeOf(x);
-  return proto === Object.prototype || proto === null;
-};
 const AGENT_KEYS = ["effort", "id", "kind", "model", "profile", "stage", "where"].join();
 
 /** A well-formed Actor: one of the three kinds, with exactly the fields that kind has, each of the right type. */

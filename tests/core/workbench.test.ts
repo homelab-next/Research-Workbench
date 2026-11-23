@@ -105,6 +105,44 @@ test("a failed createCase leaves no directory and the number is reused", () => {
   expect(wb.createCase(newCase, human).id).toBe("CASE-1");
 });
 
+test("a refused second open in the same process does not release the lock", () => {
+  expect(() => Workbench.open(dir, { onError })).toThrow(WorkbenchLockedError);
+  // a child process must still be refused
+  const child = Bun.spawnSync(["bun", "run", "tests/helpers/open-workbench.ts", dir]);
+  expect(child.exitCode).toBe(3);
+  wb.close();
+  expect(Bun.spawnSync(["bun", "run", "tests/helpers/open-workbench.ts", dir]).exitCode).toBe(0);
+  wb = Workbench.open(dir, { now, onError });
+});
+
+test("the in-process refusal names this process", () => {
+  try {
+    Workbench.open(dir, { onError });
+    throw new Error("expected a refusal");
+  } catch (err) {
+    expect(err).toBeInstanceOf(WorkbenchLockedError);
+    expect((err as WorkbenchLockedError).pid).toBe(process.pid);
+  }
+});
+
+test("a failed open does not leave the path marked as held", () => {
+  const other = mkdtempSync(join(tmpdir(), "wb-fail-"));
+  try {
+    // "cases" is a file, so open fails after the lock is taken
+    writeFileSync(join(other, "cases"), "in the way");
+    let first: unknown;
+    try { Workbench.open(other, { onError }); } catch (err) { first = err; }
+    expect(first).toBeInstanceOf(Error);
+    expect(first).not.toBeInstanceOf(WorkbenchLockedError);
+    expect(Bun.spawnSync(["bun", "run", "tests/helpers/open-workbench.ts", other]).exitCode).toBe(1); // not locked by a leftover
+    rmSync(join(other, "cases"));
+    const again = Workbench.open(other, { onError });
+    again.close();
+  } finally {
+    rmSync(other, { recursive: true, force: true });
+  }
+});
+
 test("a second open of the same data directory throws until the first closes", () => {
   expect(() => Workbench.open(dir, { onError })).toThrow(WorkbenchLockedError);
   try {

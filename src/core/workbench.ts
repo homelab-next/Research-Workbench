@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { BlobStore } from "./blobs";
 import { ignoreThrow, logToStderr } from "./deliver";
 import { Ledger } from "./ledger";
@@ -51,6 +51,13 @@ const LOCK_BACKOFF_MS = 5;
 const HOLDER = /\[workbench lock holder pid=([1-9][0-9]{0,9})\]/g;
 
 /**
+ * The lock files this process holds. Closing any file handle a process has on a file drops every POSIX
+ * lock the process holds on it, SQLite's included, so the holder must never open or read its own lock
+ * file again: a second open in the holding process is refused from this set, without touching the file.
+ */
+const heldLocks = new Set<string>();
+
+/**
  * One writer process per data directory. The operating system holds the lock: `<dataDir>/workbench.lock.sqlite`
  * is opened with locking_mode = EXCLUSIVE and a zero busy timeout, and a write takes the exclusive lock,
  * which SQLite then keeps until the connection closes. A second opener, in this process or another,
@@ -60,6 +67,7 @@ const HOLDER = /\[workbench lock holder pid=([1-9][0-9]{0,9})\]/g;
  */
 function acquireLock(dataDir: string): Database {
   const path = join(dataDir, LOCK_FILE);
+  if (heldLocks.has(resolve(path))) throw new WorkbenchLockedError(dataDir, process.pid);
   const deadline = Date.now() + LOCK_RETRY_MS;
   for (;;) {
     const db = new Database(path, { create: true });
@@ -72,6 +80,7 @@ function acquireLock(dataDir: string): Database {
       db.exec("CREATE TABLE IF NOT EXISTS holder (id INTEGER PRIMARY KEY CHECK (id = 1), pid TEXT NOT NULL)");
       db.query("INSERT OR REPLACE INTO holder (id, pid) VALUES (1, ?)").run(holderText(process.pid));
       db.exec("COMMIT");
+      heldLocks.add(resolve(path));
       return db;
     } catch (err) {
       db.close();
@@ -118,16 +127,19 @@ export class Workbench {
   private readonly now: (() => string) | undefined;
   private readonly onError: ErrorHandler;
   private readonly lock: Database;
+  /** The key of this workbench's lock in heldLocks, fixed at open so a later chdir cannot change it. */
+  private readonly lockKey: string;
   private closed = false;
   private readonly sessions: Record<string, CaseSession> = Object.create(null) as Record<string, CaseSession>;
 
-  private constructor(dataDir: string, chain: Ledger, now: (() => string) | undefined, onError: ErrorHandler, lock: Database) {
+  private constructor(dataDir: string, chain: Ledger, now: (() => string) | undefined, onError: ErrorHandler, lock: Database, lockKey: string) {
     this.dataDir = dataDir;
     this.chain = chain;
     this.chainBlobs = new BlobStore(join(dataDir, "blobs"));
     this.now = now;
     this.onError = onError;
     this.lock = lock;
+    this.lockKey = lockKey;
   }
 
   static open(dataDir: string, opts: { now?: () => string; onError?: ErrorHandler } = {}): Workbench {
@@ -135,13 +147,18 @@ export class Workbench {
     const onError: ErrorHandler = opts.onError ?? logToStderr("workbench");
     mkdirSync(dataDir, { recursive: true });
     const lock = acquireLock(dataDir);
+    const held = resolve(dataDir, LOCK_FILE);
     try {
       mkdirSync(join(dataDir, "cases"), { recursive: true });
       mkdirSync(join(dataDir, "blobs"), { recursive: true });
       const chain = Ledger.open(join(dataDir, "workbench.sqlite"), "workbench", { ...(opts.now ? { now: opts.now } : {}), onError });
-      return new Workbench(dataDir, chain, opts.now, onError, lock);
+      return new Workbench(dataDir, chain, opts.now, onError, lock, held);
     } catch (err) {
-      lock.close();
+      try {
+        lock.close();
+      } finally {
+        heldLocks.delete(held);
+      }
       throw err;
     }
   }
@@ -229,7 +246,13 @@ export class Workbench {
       attempt(() => s.close());
     }
     attempt(() => this.chain.close());
-    attempt(() => this.lock.close());
+    attempt(() => {
+      try {
+        this.lock.close();
+      } finally {
+        heldLocks.delete(this.lockKey);
+      }
+    });
     if (errors.length > 0) throw errors[0];
   }
 

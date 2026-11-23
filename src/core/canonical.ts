@@ -1,5 +1,22 @@
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
+/** An object made by `{}`, `Object.create(null)` or JSON.parse: not an array, a class instance, a Date or a Map. */
+export function isPlainObject(x: unknown): x is Record<string, unknown> {
+  if (typeof x !== "object" || x === null || Array.isArray(x)) return false;
+  const proto = Object.getPrototypeOf(x);
+  return proto === Object.prototype || proto === null;
+}
+
+/** JSON.parse that returns null instead of throwing, and null for anything that is not a string. The value is boxed, so a parsed `null` is not a failure. */
+export function parseJson(text: unknown): { value: Json } | null {
+  if (typeof text !== "string") return null;
+  try {
+    return { value: JSON.parse(text) as Json };
+  } catch {
+    return null;
+  }
+}
+
 export class CanonicalError extends Error {
   constructor(message: string) {
     super(message);
@@ -27,8 +44,7 @@ function write(value: unknown, path: string): string {
         }
         return "[" + items.join(",") + "]";
       }
-      const proto = Object.getPrototypeOf(value);
-      if (proto !== Object.prototype && proto !== null) {
+      if (!isPlainObject(value)) {
         throw new CanonicalError(`unsupported object at ${path}`);
       }
       if (Object.getOwnPropertySymbols(value).length > 0) throw new CanonicalError(`symbol-keyed property at ${path}`);
