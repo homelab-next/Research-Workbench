@@ -1,30 +1,24 @@
+import { EMPTY_MEANS, GATES, JOB_KINDS, JOB_OUTCOMES, RUN_OUTCOMES, SECTIONS, STAGE_OUTCOMES, STAGE_RUNS, STEP_OUTCOMES, VERIFY_OUTCOMES } from "../types";
 import type { Entry, ModelChoice, Plan, PlanStep, Proposal, StageDef, TimeWindow } from "../types";
+import { has, isNum, isObj, isOneOf, isStr, isStrList } from "./guards";
 import type { CaseState, JobState, PlanState, ProposalState, QueryState, RunState, StageState } from "./types";
-
-const isStr = (x: unknown): x is string => typeof x === "string";
-const isNum = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
-const isObj = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
-const isStrList = (x: unknown): x is string[] => Array.isArray(x) && x.every(isStr);
-const isOneOf = <T extends string>(x: unknown, set: readonly T[]): x is T => isStr(x) && (set as readonly string[]).includes(x);
-const has = <T>(rec: Record<string, T>, id: unknown): id is string => isStr(id) && Object.hasOwn(rec, id);
 
 const isModel = (x: unknown): x is ModelChoice => isObj(x) && isStr(x.provider) && isStr(x.model) && (x.effort === null || isStr(x.effort));
 const isWindow = (x: unknown): x is TimeWindow => isObj(x) && (x.from === null || isStr(x.from)) && (x.to === null || isStr(x.to));
 const isStageDef = (x: unknown): x is StageDef =>
-  isObj(x) && isStr(x.id) && isStr(x.title) && (x.phase === null || isStr(x.phase)) && isOneOf(x.runs, ["agent", "script", "human"])
-  && (x.gate === null || isOneOf(x.gate, ["plan", "publish"])) && typeof x.reviews === "boolean" && (x.model === null || isModel(x.model));
+  isObj(x) && isStr(x.id) && isStr(x.title) && (x.phase === null || isStr(x.phase)) && isOneOf(x.runs, STAGE_RUNS)
+  && (x.gate === null || isOneOf(x.gate, GATES)) && typeof x.reviews === "boolean" && (x.model === null || isModel(x.model));
 
 const isCost = (x: unknown): boolean => isObj(x) && isNum(x.amount) && isStr(x.unit);
 const isStep = (x: unknown): x is PlanStep =>
   isObj(x) && isStr(x.id) && isStr(x.subgoal) && isStr(x.pivot) && isStr(x.source)
   && isObj(x.from) && isStr(x.from.type) && isStr(x.from.value) && isStr(x.to) && isWindow(x.window)
   && typeof x.needs_window === "boolean" && typeof x.free === "boolean" && isNum(x.weight) && (x.estimate === null || isCost(x.estimate))
-  && isOneOf(x.empty_means, ["proven-negative", "not-seen"]) && isStrList(x.warnings);
+  && isOneOf(x.empty_means, EMPTY_MEANS) && isStrList(x.warnings);
 const isSubGoal = (x: unknown): boolean => isObj(x) && isStr(x.id) && isStr(x.title) && isStr(x.question) && isStrList(x.steps);
 const isPlan = (x: unknown): x is Plan =>
   isObj(x) && isStr(x.id) && isStr(x.goal) && isWindow(x.window)
   && Array.isArray(x.subgoals) && x.subgoals.every(isSubGoal) && Array.isArray(x.steps) && x.steps.every(isStep);
-const SECTIONS = ["summary", "key_findings", "gaps_and_limits", "alternatives", "assessment"] as const;
 const isProposal = (x: unknown): x is Proposal => {
   if (!isObj(x) || !isStr(x.id) || !isStr(x.title) || !isStr(x.by)) return false;
   if (x.kind === "costly_query") return (x.step === null || isStr(x.step)) && isStr(x.source) && isStr(x.text) && isCost(x.estimate) && isStr(x.why);
@@ -32,7 +26,6 @@ const isProposal = (x: unknown): x is Proposal => {
   return false;
 };
 
-const GATES = ["plan", "publish"] as const;
 const OUTCOME_STATUS = { pass: "passed", fail: "failed", declined: "declined" } as const;
 
 function withStage(s: CaseState, id: unknown, change: (st: StageState) => StageState): CaseState {
@@ -76,7 +69,7 @@ function applyPlan(s: CaseState, entry: Entry): CaseState {
     }
     case "step.finished": {
       const { step, outcome, cards, note } = entry.payload;
-      if (!has(p.steps, step) || !isOneOf(outcome, ["answered", "empty", "partial", "blocked", "failed"]) || !isStrList(cards) || !isStr(note)) return s;
+      if (!has(p.steps, step) || !isOneOf(outcome, STEP_OUTCOMES) || !isStrList(cards) || !isStr(note)) return s;
       return { ...s, plan: { ...p, steps: { ...p.steps, [step]: { status: outcome, cards, note } } } };
     }
     default:
@@ -115,7 +108,7 @@ function applyQuery(s: CaseState, entry: Entry): CaseState {
     }
     case "verify.run": {
       const { card, outcome, detail } = entry.payload;
-      if (!has(s.cards, card) || !isOneOf(outcome, ["matches", "differs", "could_not_run"]) || !isStr(detail)) return s;
+      if (!has(s.cards, card) || !isOneOf(outcome, VERIFY_OUTCOMES) || !isStr(detail)) return s;
       return { ...s, cards: { ...s.cards, [card]: { ...s.cards[card]!, validated: { outcome, detail, seq: entry.seq, ts: entry.ts } } } };
     }
     default:
@@ -127,13 +120,13 @@ function applyJobsAndProposals(s: CaseState, entry: Entry): CaseState {
   switch (entry.type) {
     case "job.started": {
       const { job, title, kind, source } = entry.payload;
-      if (!isStr(job) || Object.hasOwn(s.jobs, job) || !isStr(title) || !isOneOf(kind, ["research", "query", "model", "check"]) || !(source === null || isStr(source))) return s;
+      if (!isStr(job) || Object.hasOwn(s.jobs, job) || !isStr(title) || !isOneOf(kind, JOB_KINDS) || !(source === null || isStr(source))) return s;
       const j: JobState = { id: job, title, kind, source, status: "running", started_ts: entry.ts, ended_ts: null };
       return { ...s, jobs: { ...s.jobs, [job]: j } };
     }
     case "job.finished": {
       const { job, outcome } = entry.payload;
-      if (!has(s.jobs, job) || s.jobs[job]!.status !== "running" || !isOneOf(outcome, ["done", "failed"])) return s;
+      if (!has(s.jobs, job) || s.jobs[job]!.status !== "running" || !isOneOf(outcome, JOB_OUTCOMES)) return s;
       return { ...s, jobs: { ...s.jobs, [job]: { ...s.jobs[job]!, status: outcome, ended_ts: entry.ts } } };
     }
     case "proposal.created": {
@@ -187,7 +180,7 @@ function applyPipeline(s: CaseState, entry: Entry): CaseState {
     case "run.interrupted":
       return hasRun(s) ? withRun(s, { status: "interrupted" }) : s;
     case "run.finished": {
-      if (!hasRun(s) || !isOneOf(entry.payload.outcome, ["published", "stopped"])) return s;
+      if (!hasRun(s) || !isOneOf(entry.payload.outcome, RUN_OUTCOMES)) return s;
       return withRun(s, { status: "finished", outcome: entry.payload.outcome });
     }
     case "stage.model_set": {
@@ -206,7 +199,7 @@ function applyPipeline(s: CaseState, entry: Entry): CaseState {
     }
     case "stage.finished": {
       const { stage, outcome, reason } = entry.payload;
-      if (!isOneOf(outcome, ["pass", "fail", "declined"]) || !(reason === null || isStr(reason))) return s;
+      if (!isOneOf(outcome, STAGE_OUTCOMES) || !(reason === null || isStr(reason))) return s;
       return withStage(s, stage, (st) => ({ ...st, status: OUTCOME_STATUS[outcome], last_reason: reason }));
     }
     case "stage.sent_back": {

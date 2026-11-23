@@ -1,17 +1,12 @@
+import { ANSWER_ACTIONS, CONFIDENCES, FEEDBACK_KINDS, MARKINGS, SEVERITIES } from "../types";
 import type { CheckFinding, Draft, Entry } from "../types";
+import { has, isNum, isObj, isOneOf, isStr, isStrList } from "./guards";
 import type { CaseState, ChallengeState, ReviewState } from "./types";
 
-const isStr = (x: unknown): x is string => typeof x === "string";
-const isNum = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
-const isObj = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
-const isStrList = (x: unknown): x is string[] => Array.isArray(x) && x.every(isStr);
-const isOneOf = <T extends string>(x: unknown, set: readonly T[]): x is T => isStr(x) && (set as readonly string[]).includes(x);
-const has = <T>(rec: Record<string, T>, id: unknown): id is string => isStr(id) && Object.hasOwn(rec, id);
 const isFinding = (x: unknown): x is CheckFinding => isObj(x) && isStr(x.check) && isStr(x.where) && isStr(x.message);
 const isFindings = (x: unknown): x is CheckFinding[] => Array.isArray(x) && x.every(isFinding);
-const MARKINGS = ["TLP:CLEAR", "TLP:GREEN", "TLP:AMBER", "TLP:AMBER+STRICT", "TLP:RED"] as const;
 const isFindingRecord = (x: unknown): boolean =>
-  isObj(x) && isStr(x.id) && isStr(x.statement) && isStr(x.likelihood) && isOneOf(x.confidence, ["low", "moderate", "high"])
+  isObj(x) && isStr(x.id) && isStr(x.statement) && isStr(x.likelihood) && isOneOf(x.confidence, CONFIDENCES)
   && isStr(x.confidence_basis) && isStrList(x.cites) && isStrList(x.assumptions) && isStr(x.reasoning);
 const isProduct = (x: unknown): boolean =>
   isObj(x) && isStr(x.objective) && isStr(x.question) && isOneOf(x.marking, MARKINGS) && isStr(x.summary)
@@ -82,7 +77,7 @@ function applyChallenges(s: CaseState, entry: Entry): CaseState {
   switch (entry.type) {
     case "challenge.raised": {
       const c = entry.payload.challenge;
-      if (!isObj(c) || !isStr(c.id) || !isStr(c.draft_hash) || !isOneOf(c.severity, ["must_address", "consider"]) || !isStr(c.text) || !isStrList(c.cites)) return s;
+      if (!isObj(c) || !isStr(c.id) || !isStr(c.draft_hash) || !isOneOf(c.severity, SEVERITIES) || !isStr(c.text) || !isStrList(c.cites)) return s;
       if (Object.hasOwn(s.challenges, c.id) || !Object.hasOwn(s.reviews, c.draft_hash)) return s;
       const opened: ChallengeState = { ...c, status: "open", answer: null, action: null };
       const next = withReview(s, c.draft_hash, (r) => ({ ...r, challenges: [...r.challenges, c.id] }));
@@ -90,7 +85,7 @@ function applyChallenges(s: CaseState, entry: Entry): CaseState {
     }
     case "challenge.answered": {
       const { challenge, answer, action } = entry.payload;
-      if (!has(s.challenges, challenge) || s.challenges[challenge]!.status !== "open" || !isStr(answer) || !isOneOf(action, ["revised", "rebutted"])) return s;
+      if (!has(s.challenges, challenge) || s.challenges[challenge]!.status !== "open" || !isStr(answer) || !isOneOf(action, ANSWER_ACTIONS)) return s;
       return { ...s, challenges: { ...s.challenges, [challenge]: { ...s.challenges[challenge]!, status: "answered", answer, action } } };
     }
     default:
@@ -107,7 +102,7 @@ function applyOutputs(s: CaseState, entry: Entry): CaseState {
     }
     case "feedback.recorded": {
       const { measure, kind, value, note } = entry.payload;
-      if (!isStr(measure) || !isOneOf(kind, ["mop", "moe"]) || !(isNum(value) || isStr(value)) || !isStr(note)) return s;
+      if (!isStr(measure) || !isOneOf(kind, FEEDBACK_KINDS) || !(isNum(value) || isStr(value)) || !isStr(note)) return s;
       return { ...s, feedback: [...s.feedback, { measure, kind, value, note }] };
     }
     case "agent.asked": {

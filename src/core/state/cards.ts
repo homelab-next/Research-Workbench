@@ -1,11 +1,9 @@
+import { PLACES } from "../types";
 import type { Entry, Place } from "../types";
+import { isObj, isOneOf, isStr } from "./guards";
 import type { CardState, CaseState, LaneState, UndoItem } from "./types";
 
 const UNDO_LIMIT = 50;
-const PLACES: readonly string[] = ["incoming", "lane", "discarded"];
-
-const isStr = (x: unknown): x is string => typeof x === "string";
-const isObj = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
 const idx = (x: unknown): number | null => (typeof x === "number" && Number.isFinite(x) ? x : null);
 /** Own-property lookup, so ids like "constructor" are ordinary keys. */
 function cardOf(s: CaseState, id: unknown): CardState | undefined {
@@ -142,7 +140,7 @@ export function applyCards(s: CaseState, entry: Entry): CaseState {
     }
     case "undo": {
       const { target, card, place, lane } = entry.payload;
-      if (!cardOf(s, card) || !isStr(place) || !PLACES.includes(place) || !(lane === null || isStr(lane))) return s;
+      if (!cardOf(s, card) || !isOneOf(place, PLACES) || !(lane === null || isStr(lane))) return s;
       const moved = relocate(s, card, { place, lane, index: idx(entry.payload.index) });
       return { ...moved, undoable: moved.undoable.filter((u) => u.seq !== target) };
     }

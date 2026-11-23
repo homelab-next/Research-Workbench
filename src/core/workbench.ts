@@ -1,6 +1,7 @@
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BlobStore } from "./blobs";
+import { ignoreThrow, logToStderr } from "./deliver";
 import { Ledger } from "./ledger";
 import { CaseSession } from "./session";
 import type { RunState } from "./state";
@@ -83,11 +84,7 @@ export class Workbench {
 
   static open(dataDir: string, opts: { now?: () => string; onError?: ErrorHandler } = {}): Workbench {
     if (typeof dataDir !== "string" || dataDir === "") throw new TypeError("dataDir must be a non-empty string");
-    const onError: ErrorHandler =
-      opts.onError ??
-      ((error, entry) => {
-        console.error(`workbench: ${error instanceof Error ? error.message : String(error)}${entry ? ` (entry ${entry.seq})` : ""}`);
-      });
+    const onError: ErrorHandler = opts.onError ?? logToStderr("workbench");
     mkdirSync(dataDir, { recursive: true });
     const lockPath = acquireLock(dataDir);
     try {
@@ -180,11 +177,7 @@ export class Workbench {
   }
 
   private reportError(error: unknown): void {
-    try {
-      this.onError(error);
-    } catch {
-      // an error handler that throws is ignored
-    }
+    ignoreThrow(() => this.onError(error));
   }
 
   private load(id: string, create: boolean): CaseSession {

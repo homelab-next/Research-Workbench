@@ -1,6 +1,7 @@
 import type { Entry } from "../types";
 import { applyAnalysis } from "./analysis";
 import { applyCards } from "./cards";
+import { isObj } from "./guards";
 import { applyRun } from "./run";
 import type { CaseState, IdKind } from "./types";
 
@@ -31,7 +32,6 @@ function applyCase(s: CaseState, entry: Entry): CaseState {
 export const REDUCERS: readonly Reducer[] = [applyCase, applyCards, applyRun, applyAnalysis];
 
 const SKIP_LIMIT = 100;
-const isRecord = (x: unknown): boolean => typeof x === "object" && x !== null && !Array.isArray(x);
 
 function skip(state: CaseState, entry: Entry, reason: string): CaseState {
   const skipped = [...state.skipped, { seq: entry.seq, type: String(entry.type), reason }].slice(-SKIP_LIMIT);
@@ -40,7 +40,7 @@ function skip(state: CaseState, entry: Entry, reason: string): CaseState {
 
 /** `apply` with an explicit reducer list; exists so tests can inject a failing reducer. */
 export function applyWith(state: CaseState, entry: Entry, reducers: readonly Reducer[]): CaseState {
-  if (!isRecord(entry.payload)) return skip(state, entry, "malformed payload");
+  if (!isObj(entry.payload)) return skip(state, entry, "malformed payload");
   try {
     let next: CaseState = { ...state, seq: entry.seq, head_ts: entry.ts };
     const kind = Object.hasOwn(COUNTED, entry.type) ? COUNTED[entry.type] : undefined;

@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { canonical } from "./canonical";
 import type { Json } from "./canonical";
+import { Delivery, logToStderr } from "./deliver";
 import { GENESIS, sha256Hex } from "./hash";
 import type { Actor, Entry, EntryInput } from "./types";
 
@@ -69,16 +70,15 @@ export class Ledger {
   readonly caseId: string;
   private readonly db: Database;
   private readonly now: () => string;
-  private readonly onError: (error: unknown, entry: Entry) => void;
   private readonly subscribers = new Set<(entry: Entry) => void>();
-  private readonly queue: Entry[] = [];
-  private delivering = false;
+  private readonly delivery: Delivery<(entry: Entry) => void, Entry>;
 
   private constructor(db: Database, caseId: string, now: () => string, onError: (error: unknown, entry: Entry) => void) {
     this.db = db;
     this.caseId = caseId;
     this.now = now;
-    this.onError = onError;
+    // The entry is already committed when subscribers hear of it; a failing subscriber must not fail the append or starve others.
+    this.delivery = new Delivery(this.subscribers, (fn, entry) => fn(entry), onError);
   }
 
   static open(path: string, caseId: string, opts: { now?: () => string; onError?: (error: unknown, entry: Entry) => void } = {}): Ledger {
@@ -107,12 +107,7 @@ export class Ledger {
       db.close();
       throw err;
     }
-    const onError =
-      opts.onError ??
-      ((error: unknown, entry: Entry) => {
-        console.error(`ledger subscriber failed on entry ${entry.seq}: ${error instanceof Error ? error.message : String(error)}`);
-      });
-    return new Ledger(db, caseId, opts.now ?? (() => new Date().toISOString()), onError);
+    return new Ledger(db, caseId, opts.now ?? (() => new Date().toISOString()), opts.onError ?? logToStderr("ledger subscriber failed"));
   }
 
   append(input: EntryInput): Entry {
@@ -172,8 +167,7 @@ export class Ledger {
       this.db.exec("ROLLBACK");
       throw err;
     }
-    this.queue.push(...entries);
-    this.deliver();
+    this.delivery.send(entries);
     return entries;
   }
 
@@ -201,30 +195,6 @@ export class Ledger {
 
   close(): void {
     this.db.close();
-  }
-
-  /** Deliver queued entries in seq order. A nested append only queues; the outer loop delivers it. */
-  private deliver(): void {
-    if (this.delivering) return;
-    this.delivering = true;
-    try {
-      for (let entry = this.queue.shift(); entry !== undefined; entry = this.queue.shift()) {
-        for (const fn of [...this.subscribers]) {
-          try {
-            fn(entry);
-          } catch (err) {
-            // The entry is already committed; a failing subscriber must not fail the append or starve others.
-            try {
-              this.onError(err, entry);
-            } catch {
-              // an error handler that throws is ignored
-            }
-          }
-        }
-      }
-    } finally {
-      this.delivering = false;
-    }
   }
 }
 

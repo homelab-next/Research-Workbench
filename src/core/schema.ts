@@ -1,5 +1,7 @@
 // A small JSON Schema validator shared by server and browser. No runtime imports.
 
+import { has, isObj as isObject } from "./state/guards";
+
 export type SchemaType = "object" | "array" | "string" | "number" | "integer" | "boolean" | "null";
 
 export interface Schema {
@@ -83,13 +85,6 @@ function isJsonValue(v: unknown): boolean {
   }
 }
 
-function has(o: object, k: string): boolean {
-  return Object.prototype.hasOwnProperty.call(o, k);
-}
-
-function isObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
 
 function typeOf(v: unknown): SchemaType | "other" {
   if (v === null) return "null";
@@ -133,7 +128,7 @@ function check(schema: Schema, value: unknown, path: string, errors: SchemaError
     if (!types.some(t => matchesType(t, value))) fail(`expected ${types.join(" or ")}`);
   }
   if (schema.enum !== undefined && !schema.enum.some(e => deepEqual(e, value))) fail("not one of the allowed values");
-  if (has(schema, "const") && !deepEqual(schema.const, value)) fail("does not match the required constant");
+  if (has(schema as Record<string, unknown>, "const") && !deepEqual(schema.const, value)) fail("does not match the required constant");
 
   if (schema.anyOf !== undefined) {
     const ok = schema.anyOf.some(s => {

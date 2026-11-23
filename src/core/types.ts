@@ -175,6 +175,34 @@ export type Entry = {
   };
 }[EntryType];
 
+// ---------- runtime lists ----------
+// Each list is built from an object with one key per member of its union, so a missing or extra
+// name is a type error and the list cannot drift from the type beside it.
+
+function listOf<T extends string>(members: { readonly [K in T]: true }): readonly T[] {
+  return Object.freeze(Object.keys(members) as T[]);
+}
+
+export const WHERES = listOf<Where>({ machine: true, network: true, hosted: true });
+export const SECTIONS = listOf<Section>({ summary: true, key_findings: true, gaps_and_limits: true, alternatives: true, assessment: true });
+export const GATES = listOf<NonNullable<StageDef["gate"]>>({ plan: true, publish: true });
+export const STAGE_RUNS = listOf<StageDef["runs"]>({ agent: true, script: true, human: true });
+export const STAGE_OUTCOMES = listOf<Payloads["stage.finished"]["outcome"]>({ pass: true, fail: true, declined: true });
+export const RUN_OUTCOMES = listOf<Payloads["run.finished"]["outcome"]>({ published: true, stopped: true });
+export const STEP_OUTCOMES = listOf<StepOutcome>({ answered: true, empty: true, partial: true, blocked: true, failed: true });
+export const JOB_KINDS = listOf<Payloads["job.started"]["kind"]>({ research: true, query: true, model: true, check: true });
+export const JOB_OUTCOMES = listOf<Payloads["job.finished"]["outcome"]>({ done: true, failed: true });
+export const VERIFY_OUTCOMES = listOf<Payloads["verify.run"]["outcome"]>({ matches: true, differs: true, could_not_run: true });
+export const PLACES = listOf<Place>({ incoming: true, lane: true, discarded: true });
+export const EMPTY_MEANS = listOf<EmptyMeans>({ "proven-negative": true, "not-seen": true });
+export const PARTIAL_REASONS = listOf<Extract<Coverage, { kind: "partial" }>["reason"]>({ row_limit: true, timeout: true, window_clipped: true, source_error: true, budget: true });
+export const CARD_KINDS = listOf<Card["kind"]>({ result: true, assessment: true, note: true });
+export const CARD_MAKERS = listOf<Card["made_by"]>({ agent: true, human: true, system: true });
+export const CONFIDENCES = listOf<Finding["confidence"]>({ low: true, moderate: true, high: true });
+export const SEVERITIES = listOf<Challenge["severity"]>({ must_address: true, consider: true });
+export const ANSWER_ACTIONS = listOf<Payloads["challenge.answered"]["action"]>({ revised: true, rebutted: true });
+export const FEEDBACK_KINDS = listOf<Payloads["feedback.recorded"]["kind"]>({ mop: true, moe: true });
+
 /** The most restrictive of the given markings; "TLP:CLEAR" when none are given. */
 export function strictest(...markings: Marking[]): Marking {
   let best = 0;
