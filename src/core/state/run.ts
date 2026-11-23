@@ -165,6 +165,17 @@ function applyJobsAndProposals(s: CaseState, entry: Entry): CaseState {
   }
 }
 
+/**
+ * Whether a stage.finished counts. Both reducers that read it (the stage strip here, the verdict on
+ * the draft in analysis.ts) call this, so they cannot disagree: it counts only when it is well
+ * formed, a run is in progress (started and not finished) and the stage is one of that run's stages.
+ */
+export function stageFinishedCounts(s: CaseState, payload: unknown): "malformed" | "ignored" | "counts" {
+  if (!isStageFinishedShape(payload)) return "malformed";
+  if (!hasRun(s) || s.run.status === "finished" || !s.run.stages.some((st) => st.id === payload.stage)) return "ignored";
+  return "counts";
+}
+
 function applyPipeline(s: CaseState, entry: Entry): CaseState {
   // Entries that cannot change a finished run are ignored (after their shape is checked); only the next run.started does.
   const finished = s.run.status === "finished";
@@ -212,8 +223,8 @@ function applyPipeline(s: CaseState, entry: Entry): CaseState {
       return withRun(next, { current: stage, status: s.run.status === "paused" ? "paused" : "running", waiting: leaving ? null : s.run.waiting });
     }
     case "stage.finished": {
-      if (!isStageFinishedShape(entry.payload)) return malformed(s, entry);
-      if (finished) return s;
+      const verdict = stageFinishedCounts(s, entry.payload);
+      if (verdict !== "counts") return verdict === "malformed" ? malformed(s, entry) : s;
       const { stage, outcome, reason } = entry.payload;
       return withStage(s, stage, (st) => ({ ...st, status: OUTCOME_STATUS[outcome], last_reason: reason }));
     }
@@ -232,7 +243,8 @@ function applyPipeline(s: CaseState, entry: Entry): CaseState {
       const target = s.run.stages.find((x) => x.gate === gate);
       if (!target) return s;
       const next = withStage(s, target.id, (st) => ({ ...st, status: "waiting" }));
-      return withRun(next, { status: "waiting", waiting: gate });
+      // a paused run stays paused: gate.passed and run.resumed take it on from there
+      return withRun(next, { status: s.run.status === "paused" ? "paused" : "waiting", waiting: gate });
     }
     case "gate.passed": {
       const { gate } = entry.payload;

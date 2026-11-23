@@ -1,7 +1,8 @@
 import { ANSWER_ACTIONS, CONFIDENCES, FEEDBACK_KINDS, isMarking, SEVERITIES } from "../types";
-import type { Challenge, CheckFinding, Draft, Entry } from "../types";
+import type { Challenge, CheckFinding, Draft, Entry, Payloads } from "../types";
 import { has, isBool, isNum, isObj, isOneOf, isStr, isStrList, malformed } from "./guards";
-import { isBlobRefShape, isStageFinishedShape } from "./shapes";
+import { stageFinishedCounts } from "./run";
+import { isBlobRefShape } from "./shapes";
 import type { CaseState, ChallengeState, ReviewState } from "./types";
 
 const isFinding = (x: unknown): x is CheckFinding => isObj(x) && isStr(x.check) && isStr(x.where) && isStr(x.message);
@@ -51,8 +52,9 @@ function applyDrafts(s: CaseState, entry: Entry): CaseState {
     }
     case "stage.finished": {
       // applyRun sets the stage status; this records the verdict against the draft it examined. The latest verdict wins.
-      if (!isStageFinishedShape(entry.payload)) return malformed(s, entry);
-      const { stage, outcome, draft_hash } = entry.payload;
+      const verdict = stageFinishedCounts(s, entry.payload);
+      if (verdict !== "counts") return verdict === "malformed" ? malformed(s, entry) : s;
+      const { stage, outcome, draft_hash } = entry.payload as Payloads["stage.finished"];
       if (draft_hash === null || !has(s.reviews, draft_hash)) return s;
       const passed = s.reviews[draft_hash]!.passed_stages;
       if (outcome === "pass") {
