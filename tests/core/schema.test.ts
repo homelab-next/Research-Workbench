@@ -133,3 +133,51 @@ test("required and additionalProperties false at a nested path", () => {
 test("an unsupported keyword in a later anyOf branch throws even if an earlier branch matches", () => {
   expect(() => validate({ anyOf: [{ type: "string" }, { $ref: "#/x" }] } as never, "x")).toThrow(UnsupportedSchemaError);
 });
+
+// ---------- malformed constraint values fail closed (final review, finding 12) ----------
+test.each([
+  ["required: null", { required: null }],
+  ["required: a string", { required: "name" }],
+  ["required: a number", { required: 5 }],
+  ["required: a list with a number", { required: ["a", 1] }],
+  ["enum: a string", { enum: "a" }],
+  ["enum: null", { enum: null }],
+  ["properties: null", { properties: null }],
+  ["properties: an array", { properties: [{}] }],
+  ["type: unknown name", { type: "text" }],
+  ["type: empty list", { type: [] }],
+  ["type: list with unknown name", { type: ["string", "date"] }],
+  ["type: a number", { type: 5 }],
+  ["minItems: null", { minItems: null }],
+  ["maxItems: a string", { maxItems: "3" }],
+  ["minLength: null", { minLength: null }],
+  ["maxLength: negative", { maxLength: -1 }],
+  ["minLength: fractional", { minLength: 1.5 }],
+  ["minimum: Infinity", { minimum: Infinity }],
+  ["maximum: a string", { maximum: "ten" }],
+  ["pattern: a number", { pattern: 5 }],
+  ["anyOf: an object", { anyOf: {} }],
+  ["items: an array", { items: [{}] }],
+])("%s is an UnsupportedSchemaError, never ignored or a TypeError", (_label, schema) => {
+  for (const value of [{}, [], "x", 1, null]) {
+    expect(() => validate(schema as never, value)).toThrow(UnsupportedSchemaError);
+  }
+  expect(() => validate({ properties: { a: schema } } as never, {})).toThrow(UnsupportedSchemaError);
+});
+
+test("a cyclic schema is an UnsupportedSchemaError; a shared subschema is fine", () => {
+  const s: Record<string, unknown> = { type: "object" };
+  s.properties = { self: s };
+  expect(() => validate(s as Schema, {})).toThrow(UnsupportedSchemaError);
+  const leaf: Schema = { type: "string" };
+  expect(validate({ properties: { a: leaf, b: leaf } }, { a: "x", b: 1 }).map((e) => e.path)).toEqual(["$.b"]);
+});
+
+test("a schema changed after first use is checked again, and its new pattern applies", () => {
+  const s: Record<string, unknown> = { type: "string", pattern: "^a" };
+  expect(validate(s as Schema, "abc")).toEqual([]);
+  s.pattern = "^b";
+  expect(validate(s as Schema, "abc").length).toBe(1);
+  s.minLength = null;
+  expect(() => validate(s as Schema, "b")).toThrow(UnsupportedSchemaError);
+});
