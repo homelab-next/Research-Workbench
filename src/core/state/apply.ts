@@ -28,7 +28,8 @@ export function countedKind(type: string): IdKind | undefined {
   return Object.hasOwn(COUNTED, type) ? COUNTED[type as Entry["type"]] : undefined;
 }
 
-function applyCase(s: CaseState, entry: Entry): CaseState {
+/** The case itself: case.created and case.phase_changed. */
+export function applyCase(s: CaseState, entry: Entry): CaseState {
   if (entry.type === "case.created") return isCaseCreated(entry.payload) ? { ...s, meta: caseFields(entry.payload) } : malformed(s, entry);
   if (entry.type === "case.phase_changed") return isStr(entry.payload.phase) ? { ...s, phase: entry.payload.phase } : malformed(s, entry);
   return s;
@@ -44,6 +45,8 @@ function skip(state: CaseState, entry: Entry, reason: string): CaseState {
 
 /** `apply` with an explicit reducer list; exists so tests can inject a failing reducer. */
 export function applyWith(state: CaseState, entry: Entry, reducers: readonly Reducer[]): CaseState {
+  // Not an entry at all: there is no seq to advance to, so nothing changes. The fold never throws.
+  if (!isObj(entry)) return state;
   if (!isObj(entry.payload)) return skip(state, entry, "malformed payload");
   try {
     let next: CaseState = { ...state, seq: entry.seq, head_ts: entry.ts };

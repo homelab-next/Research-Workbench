@@ -210,7 +210,7 @@ export class Ledger {
         }
         db.exec("COMMIT");
       } catch (err) {
-        db.exec("ROLLBACK");
+        if (db.inTransaction) db.exec("ROLLBACK");
         throw err;
       }
     } catch (err) {
@@ -278,7 +278,9 @@ export class Ledger {
       this.readBack(start, entries);
       this.db.exec("COMMIT");
     } catch (err) {
-      this.db.exec("ROLLBACK");
+      // SQLite may already have rolled back (a COMMIT that fails on a full disk does); a ROLLBACK then
+      // would throw "no transaction is active" and hide the real error.
+      if (this.db.inTransaction) this.db.exec("ROLLBACK");
       throw err;
     }
     this.delivery.send(entries);

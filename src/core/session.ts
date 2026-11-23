@@ -118,7 +118,7 @@ export class CaseSession {
   }
 
   stateAt(seq: number): Readonly<CaseState> {
-    return seq <= 0 ? initial() : fold(this.ledger.read(), seq);
+    return seq <= 0 ? initial() : fold(this.ledger.read(0, seq), seq);
   }
 
   subscribe(fn: Listener): () => void {
