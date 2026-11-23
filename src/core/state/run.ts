@@ -1,4 +1,4 @@
-import type { Entry, ModelChoice, PlanStep, StageDef, Window } from "../types";
+import type { Entry, ModelChoice, Plan, PlanStep, Proposal, StageDef, Window } from "../types";
 import type { CaseState, JobState, PlanState, ProposalState, QueryState, RunState, StageState } from "./types";
 
 const isStr = (x: unknown): x is string => typeof x === "string";
@@ -13,6 +13,24 @@ const isWindow = (x: unknown): x is Window => isObj(x) && (x.from === null || is
 const isStageDef = (x: unknown): x is StageDef =>
   isObj(x) && isStr(x.id) && isStr(x.title) && (x.phase === null || isStr(x.phase)) && isOneOf(x.runs, ["agent", "script", "human"])
   && (x.gate === null || isOneOf(x.gate, ["plan", "publish"])) && typeof x.reviews === "boolean" && (x.model === null || isModel(x.model));
+
+const isCost = (x: unknown): boolean => isObj(x) && isNum(x.amount) && isStr(x.unit);
+const isStep = (x: unknown): x is PlanStep =>
+  isObj(x) && isStr(x.id) && isStr(x.subgoal) && isStr(x.pivot) && isStr(x.source)
+  && isObj(x.from) && isStr(x.from.type) && isStr(x.from.value) && isStr(x.to) && isWindow(x.window)
+  && typeof x.needs_window === "boolean" && typeof x.free === "boolean" && isNum(x.weight) && (x.estimate === null || isCost(x.estimate))
+  && isOneOf(x.empty_means, ["proven-negative", "not-seen"]) && isStrList(x.warnings);
+const isSubGoal = (x: unknown): boolean => isObj(x) && isStr(x.id) && isStr(x.title) && isStr(x.question) && isStrList(x.steps);
+const isPlan = (x: unknown): x is Plan =>
+  isObj(x) && isStr(x.id) && isStr(x.goal) && isWindow(x.window)
+  && Array.isArray(x.subgoals) && x.subgoals.every(isSubGoal) && Array.isArray(x.steps) && x.steps.every(isStep);
+const SECTIONS = ["summary", "key_findings", "gaps_and_limits", "alternatives", "assessment"] as const;
+const isProposal = (x: unknown): x is Proposal => {
+  if (!isObj(x) || !isStr(x.id) || !isStr(x.title) || !isStr(x.by)) return false;
+  if (x.kind === "costly_query") return (x.step === null || isStr(x.step)) && isStr(x.source) && isStr(x.text) && isCost(x.estimate) && isStr(x.why);
+  if (x.kind === "narrative") return isOneOf(x.section, SECTIONS) && isStr(x.text) && isStrList(x.cites);
+  return false;
+};
 
 const GATES = ["plan", "publish"] as const;
 const OUTCOME_STATUS = { pass: "passed", fail: "failed", declined: "declined" } as const;
@@ -33,10 +51,10 @@ function applyPlan(s: CaseState, entry: Entry): CaseState {
   switch (entry.type) {
     case "plan.proposed": {
       const plan = entry.payload.plan;
-      if (!isObj(plan) || !isStr(plan.id) || !Array.isArray(plan.steps) || !plan.steps.every((x) => isObj(x) && isStr(x.id))) return s;
-      const steps: PlanState["steps"] = {};
-      for (const st of plan.steps as PlanStep[]) steps[st.id] = { status: "pending", cards: [], note: "" };
-      return { ...s, plan: { current: plan as unknown as PlanState["current"], status: "proposed", accepted_steps: [], budgets: {}, steps } };
+      if (!isPlan(plan)) return s;
+      // fromEntries defines own properties, so a step id of "__proto__" is an ordinary key
+      const steps: PlanState["steps"] = Object.fromEntries(plan.steps.map((st) => [st.id, { status: "pending" as const, cards: [], note: "" }]));
+      return { ...s, plan: { current: plan, status: "proposed", accepted_steps: [], budgets: {}, steps } };
     }
     case "plan.accepted": {
       const { plan, steps, budgets } = entry.payload;
@@ -120,8 +138,8 @@ function applyJobsAndProposals(s: CaseState, entry: Entry): CaseState {
     }
     case "proposal.created": {
       const p = entry.payload.proposal;
-      if (!isObj(p) || !isStr(p.id) || Object.hasOwn(s.proposals, p.id) || !isOneOf(p.kind, ["costly_query", "narrative"])) return s;
-      const state = { ...p, status: "open", seq: entry.seq, budget: null, reason: null } as unknown as ProposalState;
+      if (!isProposal(p) || Object.hasOwn(s.proposals, p.id)) return s;
+      const state: ProposalState = { ...p, status: "open", seq: entry.seq, budget: null, reason: null };
       return { ...s, proposals: { ...s.proposals, [p.id]: state } };
     }
     case "proposal.accepted": {
@@ -139,7 +157,14 @@ function applyJobsAndProposals(s: CaseState, entry: Entry): CaseState {
   }
 }
 
+/** Entries that cannot change a finished run; only the next run.started does. */
+const FROZEN_WHEN_FINISHED: readonly string[] = [
+  "run.paused", "run.resumed", "run.interrupted", "run.finished", "gate.waiting", "gate.passed",
+  "stage.started", "stage.finished", "stage.sent_back", "model.blocked",
+];
+
 function applyPipeline(s: CaseState, entry: Entry): CaseState {
+  if (s.run.status === "finished" && FROZEN_WHEN_FINISHED.includes(entry.type)) return s;
   switch (entry.type) {
     case "run.started": {
       const { run, stages } = entry.payload;
@@ -150,7 +175,7 @@ function applyPipeline(s: CaseState, entry: Entry): CaseState {
       }));
       return withRun(s, {
         id: run, status: "running", outcome: null, pause_reason: null, waiting: null, stages: built, current: null,
-        sendbacks: {}, usage: { input: 0, output: 0, reasoning: 0 }, model_calls: 0,
+        sendbacks: {},
       });
     }
     case "run.paused": {

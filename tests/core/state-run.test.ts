@@ -471,3 +471,130 @@ test("a state with no run also survives malformed payloads", () => {
     }
   }
 });
+
+// ---------- review fixes ----------
+test("a plan step with id '__proto__' is tracked like any other", () => {
+  const p = plan();
+  p.steps = [{ ...p.steps[0]!, id: "__proto__" }, p.steps[1]!];
+  const b = new EntryBuilder();
+  b.add("plan.proposed", { plan: p });
+  b.add("step.started", { step: "__proto__" });
+  expect(Object.hasOwn(fold(b.entries).plan.steps, "__proto__")).toBe(true);
+  expect(fold(b.entries).plan.steps["__proto__"]!.status).toBe("running");
+  b.add("step.finished", { step: "__proto__", outcome: "answered", cards: ["c1"], note: "n" });
+  expect(fold(b.entries).plan.steps["__proto__"]).toEqual({ status: "answered", cards: ["c1"], note: "n" });
+});
+
+test("a proposal missing a required field is ignored", () => {
+  const good = { id: "p1", kind: "narrative" as const, title: "T", by: "a", section: "summary" as const, text: "t", cites: [] };
+  const { title: _t, ...noTitle } = good;
+  const costly = { id: "p2", kind: "costly_query" as const, title: "T", by: "a", step: null, source: "s", text: "t", why: "w" };
+  const b = new EntryBuilder();
+  b.add("proposal.created", { proposal: noTitle } as never);
+  b.add("proposal.created", { proposal: costly } as never);
+  b.add("proposal.created", { proposal: { ...good, section: "bogus" } } as never);
+  expect(fold(b.entries).proposals).toEqual({});
+});
+
+test("a plan with a step missing source, or a bad subgoal, is ignored", () => {
+  const { source: _s, ...noSource } = plan().steps[0]!;
+  const b = new EntryBuilder();
+  b.add("plan.proposed", { plan: { ...plan(), steps: [noSource] } } as never);
+  b.add("plan.proposed", { plan: { ...plan(), subgoals: [{ id: "sg1", title: "T" }] } } as never);
+  const s = fold(b.entries);
+  expect(s.plan).toEqual(initial().plan);
+});
+
+test("a finished run ignores later pause, resume, gate and stage entries until run.started", () => {
+  const b = started();
+  b.add("run.finished", { outcome: "published" });
+  const done = fold(b.entries);
+  b.add("run.paused", { reason: "r" });
+  b.add("run.resumed", {});
+  b.add("run.interrupted", {});
+  b.add("gate.waiting", { gate: "plan" });
+  b.add("gate.passed", { gate: "plan" });
+  b.add("stage.started", { stage: "plan", attempt: 1 });
+  b.add("stage.finished", { stage: "plan", attempt: 1, outcome: "fail", draft_hash: null, output: null, reason: "x" });
+  b.add("stage.sent_back", { from: "checks", to: "plan", reason: "r", count: 1 });
+  b.add("model.blocked", { stage: "plan", marking: "TLP:RED", model: "m", where: "hosted" });
+  const s = fold(b.entries);
+  expect({ ...s, seq: done.seq, head_ts: done.head_ts }).toEqual(done);
+  b.add("run.started", { run: "run-2", pipeline: "p", pipeline_hash: "h", stages });
+  expect(fold(b.entries).run).toMatchObject({ id: "run-2", status: "running" });
+});
+
+test("an interrupted run can be resumed", () => {
+  const b = started();
+  b.add("run.interrupted", {});
+  b.add("run.resumed", {});
+  expect(fold(b.entries).run.status).toBe("running");
+});
+
+test("usage and model_calls are case totals that survive run.started", () => {
+  const resp = (n: number) => ({ request: "r", response: { blob: "b", bytes: 1 }, stop: "end" as const, usage: { input: n, output: n, reasoning: n }, served_by: "m", reasoning: null });
+  const b = new EntryBuilder();
+  b.add("model.response", resp(1));
+  b.add("run.started", { run: "run-1", pipeline: "p", pipeline_hash: "h", stages });
+  b.add("model.response", resp(2));
+  b.add("run.started", { run: "run-2", pipeline: "p", pipeline_hash: "h", stages });
+  const s = fold(b.entries);
+  expect(s.run.usage).toEqual({ input: 3, output: 3, reasoning: 3 });
+  expect(s.run.model_calls).toBe(2);
+});
+
+test("run.started is rejected for duplicate or malformed stages", () => {
+  const dup = [stages[0]!, { ...stages[1]!, id: "plan" }];
+  const bad = [stages[0]!, { ...stages[1]!, runs: "robot" }];
+  for (const list of [dup, bad, [{ id: "x" }]]) {
+    const b = new EntryBuilder();
+    b.add("run.started", { run: "run-1", pipeline: "p", pipeline_hash: "h", stages: list } as never);
+    expect(fold(b.entries).run.status, JSON.stringify(list)).toBe("none");
+  }
+});
+
+test("settled queries, jobs and proposals ignore a second outcome", () => {
+  const b = new EntryBuilder();
+  issue(b);
+  b.add("query.result", { query: "q1", result: { blob: "b", bytes: 9 }, rows: 4, rows_hash: "rh", coverage: { kind: "full" }, duration_ms: 5, cost: null });
+  b.add("job.started", { job: "j1", title: "T", kind: "query", source: null });
+  b.add("job.finished", { job: "j1", outcome: "done" });
+  b.add("proposal.created", { proposal: { id: "p1", kind: "narrative", title: "T", by: "a", section: "summary", text: "t", cites: [] } });
+  b.add("proposal.accepted", { proposal: "p1", budget: 1 });
+  const before = fold(b.entries);
+  b.add("query.result", { query: "q1", result: { blob: "z", bytes: 1 }, rows: 99, rows_hash: "zz", coverage: { kind: "full" }, duration_ms: 5, cost: null });
+  b.add("query.failed", { query: "q1", error: "late" });
+  b.add("job.finished", { job: "j1", outcome: "failed" });
+  b.add("proposal.accepted", { proposal: "p1", budget: 50 });
+  b.add("proposal.rejected", { proposal: "p1", reason: "late" });
+  const s = fold(b.entries);
+  expect({ ...s, seq: before.seq, head_ts: before.head_ts }).toEqual(before);
+});
+
+test("gate.passed for a gate that is not waiting changes nothing", () => {
+  const b = started();
+  b.add("gate.waiting", { gate: "plan" });
+  b.add("gate.passed", { gate: "publish" });
+  expect(fold(b.entries).run).toMatchObject({ status: "waiting", waiting: "plan" });
+  const c = started();
+  c.add("gate.passed", { gate: "plan" });
+  expect(fold(c.entries).run.stages[0]!.status).toBe("idle");
+});
+
+test("resuming a paused run with a gate pending returns to waiting", () => {
+  const b = started();
+  b.add("gate.waiting", { gate: "plan" });
+  b.add("run.paused", { reason: "r" });
+  b.add("run.resumed", {});
+  expect(fold(b.entries).run).toMatchObject({ status: "waiting", waiting: "plan", pause_reason: null });
+});
+
+test("a second attempt after a send-back counts attempts 2", () => {
+  const b = started();
+  b.add("stage.started", { stage: "plan", attempt: 1 });
+  b.add("stage.sent_back", { from: "checks", to: "plan", reason: "r", count: 1 });
+  expect(fold(b.entries).run.stages[0]).toMatchObject({ status: "idle", attempts: 1 });
+  b.add("stage.started", { stage: "plan", attempt: 2 });
+  expect(fold(b.entries).run.stages[0]).toMatchObject({ status: "running", attempts: 2 });
+  expect(fold(b.entries).run.sendbacks["checks>plan"]).toBe(1);
+});
