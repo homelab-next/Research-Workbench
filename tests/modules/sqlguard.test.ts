@@ -18,6 +18,9 @@ test.each([
   'select "set", call_count from t',
   "select 'a''b; drop table t' as s",
   "select /* ; delete */ 1",
+  "select m['k'], arr[1], ARRAY[1,2] from t",
+  "select truncate(x), merge(h) from t",
+  "show create table a.b.c",
 ])("allows read: %s", sql => { expect(() => assertReadOnly(sql)).not.toThrow(); });
 
 test.each([
@@ -43,6 +46,15 @@ test.each([
   ["select 1 where x = 'a'; drop table t", "one statement"],
   ["copy t to 'x'", "write"],
   ["(select 1)", "write"],
+  ["select `a'` from t; drop table t", "backtick"],
+  ["select [a'] from t; drop table t", "bracket"],
+  ["select [--] from t; drop table t", "bracket"],
+  ["select [/*] from t; drop table t", "bracket"],
+  ["select `--` from t; delete from t", "backtick"],
+  ["select (1) [x] from t", "bracket"],
+  ["truncate table t", "write"],
+  ["merge into t using s on t.a = s.a when matched then delete", "write"],
+  ["select load_extension('x')", "write"],
 ])("refuses: %s", (sql, why) => {
   expect(() => assertReadOnly(sql)).toThrow(GuardError);
   try { assertReadOnly(sql); } catch (e) { expect((e as GuardError).violations.join(" ")).toContain(why); }
@@ -63,6 +75,23 @@ test.each([
   ["select a, * from iceberg.wazuh_archive.events where event_timestamp > now() - interval '1' day", "select *"],
 ])("violation: %s", (sql, why) => { expect(checkGuardrails(sql, guards).join(" ")).toContain(why); });
 
+const W = "iceberg.wazuh_archive.events";
+const tf = "event_timestamp > now() - interval '1' day";
+test("whitespace or comments between the dots do not hide a guarded table", () => {
+  expect(checkGuardrails("select a from iceberg . wazuh_archive . events", guards).join(" ")).toContain("time filter");
+  expect(checkGuardrails("select a from iceberg /* x */ . wazuh_archive\n.events", guards).join(" ")).toContain("time filter");
+});
+test("a window order by needs no limit, a top-level one still does", () => {
+  expect(checkGuardrails(`select row_number() over (partition by a order by ts) from ${W} where ${tf}`, guards)).toEqual([]);
+  expect(checkGuardrails(`select row_number() over (partition by a order by ts) from ${W} where ${tf} order by a`, guards).join(" ")).toContain("limit");
+});
+test("named zones and +hhmm offsets pass; comments are not read", () => {
+  for (const z of ["2026-01-01 00:00:00 America/New_York", "2026-01-01 00:00:00 +0200", "2026-01-01 00:00:00 utc"]) {
+    expect(checkGuardrails(`select a from ${W} where event_timestamp >= timestamp '${z}' limit 1`, guards)).toEqual([]);
+  }
+  expect(checkGuardrails(`select a from ${W} where ${tf} limit 1 -- timestamp '2026-01-01 00:00:00'`, guards)).toEqual([]);
+  expect(checkGuardrails(`select a from ${W} where event_timestamp >= timestamp '2026-01-01 00:00:00' limit 1`, guards).join(" ")).toContain("time zone");
+});
 test("count(*) is not select *", () => {
   expect(checkGuardrails("select count(*) from iceberg.wazuh_archive.events where event_timestamp > now() - interval '1' day", guards)).toEqual([]);
 });

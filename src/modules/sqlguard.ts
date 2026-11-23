@@ -16,12 +16,25 @@ export interface TableGuard {
   large_columns: string[];
 }
 
+interface Scan {
+  /** Lower-cased, comments removed, literals emptied, whitespace collapsed. */
+  stripped: string;
+  /** Comments removed, literals and quoted identifiers kept verbatim. */
+  kept: string;
+  /** Things the scanner cannot read safely, found outside literals and comments. */
+  violations: string[];
+}
+
 /**
- * Lower-cased, comments removed, every string literal replaced by '',
- * quoted identifiers kept without their quotes, whitespace collapsed.
+ * The single scanning pass. Anything this scanner does not understand as an
+ * identifier quote could hide a literal or comment opener from it, so such
+ * characters are recorded as violations here, where they are met.
  */
-export function stripForAnalysis(sql: string): string {
+function scan(sql: string): Scan {
   let out = "";
+  let kept = "";
+  const violations: string[] = [];
+  const flag = (v: string): void => { if (!violations.includes(v)) violations.push(v); };
   let i = 0;
   const n = sql.length;
   while (i < n) {
@@ -40,21 +53,35 @@ export function stripForAnalysis(sql: string): string {
         j++;
       }
       out += c === "'" ? "''" : body;
+      kept += sql.slice(i, j);
       i = j;
     } else if (c === "-" && sql[i + 1] === "-") {
       const e = sql.indexOf("\n", i);
       out += " ";
+      kept += " ";
       i = e === -1 ? n : e + 1;
     } else if (c === "/" && sql[i + 1] === "*") {
       const e = sql.indexOf("*/", i + 2);
       out += " ";
+      kept += " ";
       i = e === -1 ? n : e + 2;
     } else {
+      if (c === "`") flag("backtick identifiers are not allowed");
+      else if (c === "[" && !(i > 0 && /[\w$)\]"]/.test(sql[i - 1]!))) flag("bracket identifiers are not allowed");
       out += c;
+      kept += c;
       i++;
     }
   }
-  return out.toLowerCase().replace(/\s+/g, " ").trim();
+  return { stripped: out.toLowerCase().replace(/\s+/g, " ").trim(), kept, violations };
+}
+
+/**
+ * Lower-cased, comments removed, every string literal replaced by '',
+ * quoted identifiers kept without their quotes, whitespace collapsed.
+ */
+export function stripForAnalysis(sql: string): string {
+  return scan(sql).stripped;
 }
 
 const READ_START = /^(?:select|with|show|describe|desc)\b/;
@@ -64,14 +91,17 @@ const WRITE_WORDS = [
   "insert", "update", "delete", "merge", "create", "drop", "alter", "truncate", "grant", "revoke",
   "commit", "rollback", "attach", "detach", "pragma", "vacuum",
 ];
-const WRITE_WORD_RE = new RegExp(`\\b(?:${WRITE_WORDS.join("|")})\\b`, "g");
+// A listed word directly followed by "(" is a function call (truncate(x)), not a statement.
+const WRITE_WORD_RE = new RegExp(`\\b(?:${WRITE_WORDS.join("|")})\\b(?!\\()`, "g");
+// Never an ordinary read, even as a call.
+const ALWAYS_REFUSED_RE = /\bload_extension\b/g;
 const REPLACE_INTO = /\breplace\s+into\b/;
 
 /** Throws GuardError unless `sql` is exactly one read statement. */
 export function assertReadOnly(sql: string): void {
-  const s = stripForAnalysis(sql);
+  const { stripped: s, violations: scanned } = scan(sql);
   if (s === "" || s === ";") throw new GuardError(["empty statement"]);
-  const violations: string[] = [];
+  const violations: string[] = [...scanned];
   const body = s.endsWith(";") ? s.slice(0, -1) : s;
   if (body.includes(";")) violations.push("only one statement is allowed");
 
@@ -81,8 +111,12 @@ export function assertReadOnly(sql: string): void {
   if (!isRead) violations.push("not a read statement (write refused)");
 
   const seen = new Set<string>();
-  for (const m of body.matchAll(WRITE_WORD_RE)) seen.add(m[0]);
-  if (REPLACE_INTO.test(body)) seen.add("replace into");
+  // A show statement (show create table ...) is a read whatever words it names.
+  if (!t.startsWith("show ")) {
+    for (const m of body.matchAll(WRITE_WORD_RE)) seen.add(m[0]);
+    if (REPLACE_INTO.test(body)) seen.add("replace into");
+  }
+  for (const m of body.matchAll(ALWAYS_REFUSED_RE)) seen.add(m[0]);
   for (const w of seen) violations.push(`write keyword refused: ${w}`);
 
   if (violations.length > 0) throw new GuardError(violations);
@@ -92,17 +126,38 @@ const escapeRe = (x: string): string => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 
 const SELECT_STAR = /(?:\b(?:select|distinct|all)\s+|,\s*)\*(?=\s*(?:,|from\b|$))|[\w$]\.\*/;
 const TS_LITERAL = /\btimestamp\s+'((?:[^']|'')*)'/gi;
-const ZONED = /(?:\sutc|z|[+-]\d{2}:\d{2})$/i;
+const ZONED = /(?:\sutc|z|[+-]\d{2}:?\d{2}|\s[a-z_]+(?:\/[\w+-]+)+)$/i;
+
+/** Blank the contents of every over ( ... ) and window w as ( ... ) span. */
+function blankWindows(s: string): string {
+  const re = /\b(?:over|window\s+[\w$]+\s+as)\s*\(/g;
+  let out = "";
+  let last = 0;
+  for (let m = re.exec(s); m !== null; m = re.exec(s)) {
+    if (m.index < last) continue;
+    let depth = 1;
+    let j = m.index + m[0].length;
+    while (j < s.length && depth > 0) {
+      if (s[j] === "(") depth++;
+      else if (s[j] === ")") depth--;
+      j++;
+    }
+    out += s.slice(last, m.index) + " ";
+    last = j;
+  }
+  return out + s.slice(last);
+}
 
 /** Plain-language guardrail violations for queries touching guarded tables; empty means allowed. */
 export function checkGuardrails(sql: string, guards: TableGuard[]): string[] {
-  const s = stripForAnalysis(sql);
+  const { stripped: s, kept } = scan(sql);
+  const noWindows = blankWindows(s);
   const violations: string[] = [];
   const add = (v: string): void => { if (!violations.includes(v)) violations.push(v); };
 
   for (const g of guards) {
     const table = g.table.toLowerCase();
-    if (!new RegExp(`(?<![\\w$])${escapeRe(table)}(?![\\w$])`).test(s)) continue;
+    if (!new RegExp(`(?<![\\w$])${table.split(".").map(escapeRe).join("\\s*\\.\\s*")}(?![\\w$])`).test(s)) continue;
 
     if (g.time_column !== null) {
       const col = escapeRe(g.time_column.toLowerCase());
@@ -111,9 +166,9 @@ export function checkGuardrails(sql: string, guards: TableGuard[]): string[] {
     }
     if (SELECT_STAR.test(s)) add(`select * is not allowed on ${g.table}; name the columns`);
     if (/\bcount\s*\(\s*distinct\b/.test(s)) add("exact distinct counts are not allowed; use approx_distinct");
-    if (/\border\s+by\b/.test(s) && !/\blimit\b|\bfetch\s+first\b/.test(s)) add("a sort needs a limit");
-    // Read from the original: stripping empties the literals.
-    for (const m of sql.matchAll(TS_LITERAL)) {
+    if (/\border\s+by\b/.test(noWindows) && !/\blimit\b|\bfetch\s+first\b/.test(s)) add("a sort needs a limit");
+    // Literals are emptied in the stripped text, so read the comment-free text with literals kept.
+    for (const m of kept.matchAll(TS_LITERAL)) {
       if (!ZONED.test(m[1]!.trim())) { add("time literals need an explicit time zone"); break; }
     }
   }
