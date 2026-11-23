@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { Ledger } from "../../src/core/ledger";
 import { sha256Hex } from "../../src/core/hash";
 import type { RootConfig } from "../../src/modules/config";
-import { Registry } from "../../src/modules/registry";
+import { Registry, staysInside } from "../../src/modules/registry";
 
 const dirs: string[] = [];
 const tmp = (): string => {
@@ -264,4 +264,88 @@ test("a missing root is a problem and the other roots still load", () => {
   expect(r.problems).toHaveLength(1);
   expect(r.problems[0]!.root).toBe(gone.path);
   expect(r.source("dns-logs")).not.toBeNull();
+});
+
+const withFile = (file: string): string => sourceWith("s", `tables:\n  - { name: t, file: "${file}", format: csv }\n`);
+
+test("a table file that climbs out of the root, or is absolute, is a problem", () => {
+  for (const file of ["../../../../etc/passwd", "/etc/passwd", "a/../../../x", "..\\\\x"]) {
+    const r = Registry.load([root({ "sources/s.yaml": withFile(file) })]);
+    expect(r.source("s")).toBeNull();
+    expect(r.problems[0]!.error).toContain("file");
+  }
+  expect(Registry.load([root({ "sources/s.yaml": withFile("sub/x.csv") })]).source("s")).not.toBeNull();
+});
+
+test("a table file reached through a symlink out of the root is a problem", () => {
+  const outside = tmp();
+  const rootA = root({ "sources/s.yaml": withFile("lnk/missing.csv"), "sources/data/keep": "" });
+  symlinkSync(outside, join(rootA.path, "sources/data/lnk"));
+  const r = Registry.load([rootA]);
+  expect(r.source("s")).toBeNull();
+  expect(r.problems[0]!.error).toContain("outside");
+});
+
+test("a location that is a symlink to outside, with a missing leaf, is a problem", () => {
+  const outside = tmp();
+  const rootA = root({ "sources/s.yaml": sourceWith("s").replace("location: data", "location: lnk/nonexistent") });
+  symlinkSync(outside, join(rootA.path, "sources/lnk"));
+  const r = Registry.load([rootA]);
+  expect(r.source("s")).toBeNull();
+  expect(r.problems).toHaveLength(1);
+});
+
+test("staysInside judges spelling, symlinks, and missing leaves", () => {
+  const outside = tmp();
+  const rootA = root({ "a/b.txt": "x" });
+  symlinkSync(outside, join(rootA.path, "out"));
+  symlinkSync(join(outside, "gone"), join(rootA.path, "dangling"));
+  symlinkSync(join(rootA.path, "a"), join(rootA.path, "inner"));
+  expect(staysInside(rootA.path, join(rootA.path, "a/b.txt"))).toBe(true);
+  expect(staysInside(rootA.path, join(rootA.path, "a/not-yet/x"))).toBe(true);
+  expect(staysInside(rootA.path, join(rootA.path, "inner/b.txt"))).toBe(true);
+  expect(staysInside(rootA.path, rootA.path)).toBe(true);
+  expect(staysInside(rootA.path, join(rootA.path, "../x"))).toBe(false);
+  expect(staysInside(rootA.path, join(rootA.path, "a/../../x"))).toBe(false);
+  expect(staysInside(rootA.path, join(rootA.path, "out/file"))).toBe(false);
+  expect(staysInside(rootA.path, join(rootA.path, "out/missing/deeper"))).toBe(false);
+  expect(staysInside(rootA.path, join(rootA.path, "dangling"))).toBe(false);
+  expect(staysInside(rootA.path, join(rootA.path, "dangling/x"))).toBe(false);
+  expect(staysInside(rootA.path, outside)).toBe(false);
+});
+
+test("a source records the absolute root it came from", () => {
+  const rootA = root(GOOD);
+  expect(Registry.load([rootA]).source("dns-logs")!.root).toBe(rootA.path);
+});
+
+test("a manifest over 1 MiB is not read and is a problem naming its size", () => {
+  const big = "kind: k\nid: big\nnote: " + "a".repeat(1048576) + "\n";
+  const r = Registry.load([root({ "big.yaml": big, "small.yaml": "kind: k\nid: small\n" })]);
+  expect(r.get("k", "big")).toBeNull();
+  expect(r.get("k", "small")).not.toBeNull();
+  expect(r.problems).toHaveLength(1);
+  expect(r.problems[0]!.error).toContain(String(big.length));
+});
+
+test("a manifest body that is not plain JSON is a problem naming the path", () => {
+  const r = Registry.load([root({ "a.yaml": "kind: k\nid: a\nnested:\n  w: 1e999\n", "b.yaml": "kind: k\nid: b\nwhen: 2026-11-20\nat: 2026-11-20T00:00:00Z\n" })]);
+  expect(r.get("k", "a")).toBeNull();
+  expect(r.problems).toHaveLength(1);
+  expect(r.problems[0]!.error).toContain("$.nested.w");
+  // Bun reads unquoted dates as strings, so they are plain JSON and load.
+  expect(r.get("k", "b")!.body.when).toBe("2026-11-20");
+});
+
+test("a catastrophic type pattern is a problem naming the type; safe ones load", () => {
+  const types = (p: string) => `kind: types\ntypes:\n  - { id: t, pattern: '${p}' }\n`;
+  for (const p of ["(a+)+", "(a*)*", "(?:a|aa)+", "(\\d+){2,}", "((a+)b)*", "(a{2,})+"]) {
+    const r = Registry.load([root({ "t.yaml": types(p) })]);
+    expect(r.types()).toEqual([]);
+    expect(r.problems[0]!.error).toContain('type "t"');
+  }
+  for (const p of ["^(?:\\d{1,3}\\.){3}\\d{1,3}$", "[(+*]+x", "(?=.{1,9}$)(?:[a-z]{1,63}\\.)+[a-z]+", "(a+)?", "(ab)+", "\\(a+\\)+"]) {
+    const r = Registry.load([root({ "t.yaml": types(p) })]);
+    expect(r.problems).toEqual([]);
+  }
 });

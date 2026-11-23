@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, realpathSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { Json } from "../core/canonical";
 import { sha256Hex } from "../core/hash";
@@ -37,16 +37,48 @@ function walk(dir: string, out: string[]): void {
   }
 }
 
-/** True when a `location` of a manifest in `dir` stays inside `root`, by its spelling and by where links lead. */
-function locationStaysInside(root: string, dir: string, location: string): boolean {
-  if (isAbsolute(location)) return false;
-  const target = resolve(dir, location);
-  if (!inside(resolve(root), target)) return false;
-  try {
-    return inside(realpathSync(root), realpathSync(target));
-  } catch {
-    return true; // nothing there to follow; the connector reports a missing location when it is used
+const MAX_MANIFEST_BYTES = 1048576;
+
+/** realpath of `target`, or of its deepest existing ancestor with the missing tail put back. A dangling link is followed by hand. */
+function resolveReal(target: string, hops = 0): string | null {
+  let p = resolve(target);
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      return join(realpathSync(p), ...tail.reverse());
+    } catch {
+      try {
+        if (lstatSync(p).isSymbolicLink()) {
+          if (hops > 32) return null;
+          const next = resolveReal(resolve(dirname(p), readlinkSync(p)), hops + 1);
+          return next === null ? null : join(next, ...tail.reverse());
+        }
+      } catch {
+        // nothing at p: climb
+      }
+      const parent = dirname(p);
+      if (parent === p) return null;
+      tail.push(p.slice(parent.length).replace(/^[\\/]+/, ""));
+      p = parent;
+    }
   }
+}
+
+/**
+ * True when `target` lies inside `root`, by its spelling and by where links lead. A target that does not exist yet is
+ * judged by its deepest existing ancestor. Reads the file system but changes nothing; cheap enough to call on every open.
+ */
+export function staysInside(root: string, target: string): boolean {
+  if (!inside(resolve(root), resolve(target))) return false;
+  const realRoot = resolveReal(root);
+  const realTarget = resolveReal(target);
+  return realRoot !== null && realTarget !== null && inside(realRoot, realTarget);
+}
+
+/** True when a relative path, taken from `base`, stays inside `root`. Absolute paths are refused, and so are `..` segments when `plain` is set. */
+function pathStaysInside(root: string, base: string, rel: string, plain = false): boolean {
+  if (isAbsolute(rel) || (plain && rel.split(/[\\/]/).includes(".."))) return false;
+  return staysInside(root, resolve(base, rel));
 }
 
 export class Registry {
@@ -100,8 +132,8 @@ export class Registry {
     return best === null ? null : { ...best };
   }
 
-  private reject(root: RootConfig, path: string, error: string): void {
-    this.problems.push({ root: root.path, path, error });
+  private reject(root: string, path: string, error: string): void {
+    this.problems.push({ root, path, error });
   }
 
   private readRoot(root: RootConfig): void {
@@ -109,14 +141,14 @@ export class Registry {
     try {
       walk(root.path, files);
     } catch (err) {
-      this.reject(root, root.path, `cannot read the module root: ${(err as Error).message}`);
+      this.reject(root.path, root.path, `cannot read the module root: ${(err as Error).message}`);
       return;
     }
     for (const path of files) {
       try {
         this.readFile(root, path);
       } catch (err) {
-        this.reject(root, path, err instanceof ManifestError ? err.message : `cannot be read: ${(err as Error).message}`);
+        this.reject(root.path, path, err instanceof ManifestError ? err.message : `cannot be read: ${(err as Error).message}`);
       }
     }
   }
@@ -124,7 +156,7 @@ export class Registry {
   private add(m: LoadedManifest): boolean {
     const k = key(m.kind, m.id);
     if (this.manifests.has(k)) {
-      this.reject({ path: m.root, trusted_scripts: false }, m.path, `duplicate ${m.kind} id "${m.id}"; the first one loaded is kept`);
+      this.reject(m.root, m.path, `duplicate ${m.kind} id "${m.id}"; the first one loaded is kept`);
       return false;
     }
     this.manifests.set(k, m);
@@ -132,7 +164,10 @@ export class Registry {
   }
 
   private readFile(root: RootConfig, path: string): void {
+    const size = statSync(path).size;
+    if (size > MAX_MANIFEST_BYTES) throw new ManifestError(`file is ${size} bytes, over the ${MAX_MANIFEST_BYTES} byte limit; not read`);
     const bytes = readFileSync(path);
+    if (bytes.length > MAX_MANIFEST_BYTES) throw new ManifestError(`file is ${bytes.length} bytes, over the ${MAX_MANIFEST_BYTES} byte limit`);
     const hash = sha256Hex(bytes);
     const dir = dirname(path);
     const parsed = parseManifestFile(path, bytes);
@@ -145,8 +180,8 @@ export class Registry {
         const id = item.id as string;
         try {
           if (parsed.kind === "types") compileType(item.pattern as string);
-        } catch {
-          this.reject(root, path, `type "${id}": pattern does not compile: ${item.pattern}`);
+        } catch (err) {
+          this.reject(root.path, path, `type "${id}": pattern ${JSON.stringify(item.pattern)} refused: ${(err as Error).message}`);
           continue;
         }
         const title = (item.title as string | undefined) ?? id;
@@ -162,12 +197,16 @@ export class Registry {
     const title = typeof body.title === "string" && body.title !== "" ? body.title : id;
     if (parsed.kind === "source") {
       const connector = body.connector as string;
-      if ((connector === "sql" || connector === "files") && !locationStaysInside(root.path, dir, body.location as string)) {
-        throw new ManifestError(`location "${body.location}" is outside the module root`);
+      if (connector === "sql" || connector === "files") {
+        if (!pathStaysInside(root.path, dir, body.location as string)) throw new ManifestError(`location "${body.location}" is outside the module root`);
+        const where = resolve(dir, body.location as string);
+        for (const t of (body.tables ?? []) as { name: string; file?: string }[]) {
+          if (t.file !== undefined && !pathStaysInside(root.path, where, t.file, true)) throw new ManifestError(`table "${t.name}": file "${t.file}" is outside the module root`);
+        }
       }
     }
     if (!this.add({ ...base, kind: parsed.kind, id, title, body })) return;
-    if (parsed.kind === "source") this.sourceById.set(id, toSource(body, hash, dir));
+    if (parsed.kind === "source") this.sourceById.set(id, toSource(body, hash, dir, resolve(root.path)));
   }
 
   private drop(kind: string, id: string): void {
@@ -180,7 +219,7 @@ export class Registry {
   private crossCheck(): void {
     const reject = (kind: string, id: string, error: string): void => {
       const m = this.manifests.get(key(kind, id))!;
-      this.reject({ path: m.root, trusted_scripts: false }, m.path, error);
+      this.reject(m.root, m.path, error);
       this.drop(kind, id);
     };
     for (const s of this.sources()) {

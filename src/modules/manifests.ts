@@ -1,5 +1,5 @@
 import type { Json } from "../core/canonical";
-import { isPlainObject } from "../core/canonical";
+import { canonical, CanonicalError, isPlainObject } from "../core/canonical";
 import { validate } from "../core/schema";
 import type { Schema } from "../core/schema";
 import { EMPTY_MEANS, MARKINGS, WHERES } from "../core/types";
@@ -24,7 +24,7 @@ export interface TableManifest {
 }
 export interface EndpointManifest { name: string; method: "GET" | "POST"; path: string; read: boolean; rows: string; columns: string[] }
 export interface SourceManifest {
-  id: string; title: string; hash: string; dir: string; connector: "sql" | "files" | "http" | "trino"; location: string;
+  id: string; title: string; hash: string; dir: string; root: string; connector: "sql" | "files" | "http" | "trino"; location: string;
   credential: string | null; user: string | null; tls_verify: boolean; marking: Marking; where: Where; confirmed: boolean; adhoc: boolean;
   cost: { weight: number; unit: string }; limits: { max_rows: number; timeout_ms: number };
   quality: string; quality_notes: QualityNote[]; tables: TableManifest[]; endpoints: EndpointManifest[];
@@ -164,6 +164,11 @@ export function parseManifestFile(path: string, bytes: Uint8Array): { kind: stri
   const parsed = parseYaml(yaml);
   if (!isPlainObject(parsed)) throw new ManifestError("must be a mapping with a kind");
   if (typeof parsed.kind !== "string" || parsed.kind === "") throw new ManifestError("missing or invalid kind");
+  try {
+    canonical(parsed as Json);
+  } catch (err) {
+    throw new ManifestError(`not plain JSON data: ${err instanceof CanonicalError ? err.message : "unsupported value"}`);
+  }
   return { kind: parsed.kind, body: parsed as Record<string, Json>, text };
 }
 
@@ -196,10 +201,10 @@ export function validateBody(kind: string, body: Record<string, Json>): Record<s
 }
 
 /** Builds a source from a validated body, filling the defaults. */
-export function toSource(body: Record<string, Json>, hash: string, dir: string): SourceManifest {
+export function toSource(body: Record<string, Json>, hash: string, dir: string, root: string): SourceManifest {
   const b = body as Record<string, any>; // validated against SOURCE_SCHEMA by the caller
   return {
-    id: b.id, title: b.title, hash, dir, connector: b.connector, location: b.location,
+    id: b.id, title: b.title, hash, dir, root, connector: b.connector, location: b.location,
     credential: b.credential ?? null, user: b.user ?? null, tls_verify: b.tls_verify ?? true,
     marking: b.marking, where: b.where, confirmed: b.confirmed ?? true, adhoc: b.adhoc ?? false,
     cost: { weight: b.cost?.weight ?? 0, unit: b.cost?.unit ?? "seconds" },

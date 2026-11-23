@@ -37,3 +37,16 @@ test("columnTypes needs more than half of the non-null strings, and a null hint 
   expect(obs.columnTypes(["a"], { a: null }, [["192.0.2.1"], ["192.0.2.2"], ["x"], [null]])).toEqual(["address"]);
   expect(obs.columnTypes(["a"], {}, [])).toEqual([null]);
 });
+
+test("a very long value matches no type, quickly", () => {
+  const start = performance.now();
+  expect(obs.recognise("a".repeat(10000))).toBeNull();
+  expect(obs.matches("domain", "a".repeat(10000) + ".org")).toBe(false);
+  expect(obs.columnTypes(["a"], {}, [["a".repeat(10000)]])).toEqual([null]);
+  expect(performance.now() - start).toBeLessThan(100);
+  expect(obs.recognise("a".repeat(500) + ".org")).toBeNull(); // label too long for the pattern, but it was tested
+});
+
+test("compiling a catastrophic pattern is refused", () => {
+  expect(() => new Observables([{ id: "x", title: "X", pattern: "(a+)+" }])).toThrow();
+});
