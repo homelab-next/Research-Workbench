@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { apply, fold, initial } from "../../src/core/state";
+import { apply, fold, initial, runUsage } from "../../src/core/state";
 import type { CaseState } from "../../src/core/state";
 import type { Entry, ModelChoice, Plan, StageDef } from "../../src/core/types";
 import { EntryBuilder, card } from "../helpers/entries";
@@ -599,4 +599,31 @@ test("a second attempt after a send-back counts attempts 2", () => {
   b.add("stage.started", { stage: "plan", attempt: 2 });
   expect(fold(b.entries).run.stages[0]).toMatchObject({ status: "running", attempts: 2 });
   expect(fold(b.entries).run.sendbacks["checks>plan"]).toBe(1);
+});
+
+// ---------- final review, finding 21: a per-run figure can be derived ----------
+test("run.started records the case totals at its start, and runUsage gives this run's own usage", () => {
+  const resp = (n: number) => ({ request: "r", response: { blob: "b", bytes: 1 }, stop: "end" as const, usage: { input: n, output: 2 * n, reasoning: 3 * n }, served_by: "m", reasoning: null });
+  const b = new EntryBuilder();
+  b.add("model.response", resp(1));
+  expect(runUsage(fold(b.entries))).toEqual({ usage: { input: 1, output: 2, reasoning: 3 }, model_calls: 1 });
+  b.add("run.started", { run: "run-1", pipeline: "p", pipeline_hash: "h", stages });
+  let s = fold(b.entries);
+  expect(s.run.usage_at_start).toEqual({ input: 1, output: 2, reasoning: 3 });
+  expect(s.run.calls_at_start).toBe(1);
+  expect(runUsage(s)).toEqual({ usage: { input: 0, output: 0, reasoning: 0 }, model_calls: 0 });
+  b.add("model.response", resp(2));
+  b.add("model.response", resp(5));
+  expect(runUsage(fold(b.entries))).toEqual({ usage: { input: 7, output: 14, reasoning: 21 }, model_calls: 2 });
+  b.add("run.started", { run: "run-2", pipeline: "p", pipeline_hash: "h", stages });
+  b.add("model.response", resp(10));
+  s = fold(b.entries);
+  expect(s.run.usage).toEqual({ input: 18, output: 36, reasoning: 54 });
+  expect(s.run.model_calls).toBe(4);
+  expect(runUsage(s)).toEqual({ usage: { input: 10, output: 20, reasoning: 30 }, model_calls: 1 });
+});
+
+test("before any run the baseline is zero", () => {
+  expect(initial().run.usage_at_start).toEqual({ input: 0, output: 0, reasoning: 0 });
+  expect(initial().run.calls_at_start).toBe(0);
 });

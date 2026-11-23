@@ -2,7 +2,7 @@ import { EMPTY_MEANS, GATES, JOB_KINDS, JOB_OUTCOMES, RUN_OUTCOMES, SECTIONS, ST
 import type { Cost, Entry, ModelChoice, Plan, PlanStep, Proposal, StageDef } from "../types";
 import { has, isBool, isNum, isObj, isOneOf, isStr, isStrList, isStrOrNull, malformed } from "./guards";
 import { isBlobRefShape, isCard, isCount, isCoverage, isObservable, isStageFinishedShape, isTimeWindow } from "./shapes";
-import type { CaseState, JobState, PlanState, ProposalState, QueryState, RunState, StageState } from "./types";
+import type { CaseState, JobState, PlanState, ProposalState, QueryState, RunState, StageState, Usage } from "./types";
 
 const isModel = (x: unknown): x is ModelChoice => isObj(x) && isStr(x.provider) && isStr(x.model) && (x.effort === null || isStr(x.effort));
 const isStageDef = (x: unknown): x is StageDef =>
@@ -190,7 +190,7 @@ function applyPipeline(s: CaseState, entry: Entry): CaseState {
       }));
       return withRun(s, {
         id: run, status: "running", outcome: null, pause_reason: null, waiting: null, stages: built, current: null,
-        sendbacks: {},
+        sendbacks: {}, usage_at_start: s.run.usage, calls_at_start: s.run.model_calls,
       });
     }
     case "run.paused": {
@@ -276,6 +276,18 @@ function applyPipeline(s: CaseState, entry: Entry): CaseState {
     default:
       return s;
   }
+}
+
+/**
+ * The current run's own model usage and call count: the case totals less the totals when it started.
+ * Before any run.started this is the whole case. The per-run budget (budget_tokens) is measured against this.
+ */
+export function runUsage(s: CaseState): { usage: Usage; model_calls: number } {
+  const { usage, usage_at_start: at, model_calls, calls_at_start } = s.run;
+  return {
+    usage: { input: usage.input - at.input, output: usage.output - at.output, reasoning: usage.reasoning - at.reasoning },
+    model_calls: model_calls - calls_at_start,
+  };
 }
 
 /** Run, plan, queries, jobs and proposals. A payload of the wrong shape is recorded in `skipped`; one pointing at something missing changes nothing. */

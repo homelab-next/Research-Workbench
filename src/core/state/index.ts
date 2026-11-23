@@ -3,6 +3,7 @@ import { apply } from "./apply";
 import type { CaseState, IdKind } from "./types";
 
 export { apply } from "./apply";
+export { runUsage } from "./run";
 export { applyAnalysis, blockers, latestDraft, publishable } from "./analysis";
 export { cardLocation } from "./cards";
 export { cardFields, caseFields, isCard, isCaseCreated, isCoverage, isObservable, isTimeWindow } from "./shapes";
@@ -27,7 +28,8 @@ export function initial(): CaseState {
     stage_models: {},
     run: {
       id: null, status: "none", outcome: null, pause_reason: null, waiting: null, stages: [], current: null,
-      sendbacks: {}, usage: { input: 0, output: 0, reasoning: 0 }, model_calls: 0, budget_tokens: null,
+      sendbacks: {}, usage: { input: 0, output: 0, reasoning: 0 }, model_calls: 0,
+      usage_at_start: { input: 0, output: 0, reasoning: 0 }, calls_at_start: 0, budget_tokens: null,
     },
     plan: { current: null, status: "none", accepted_steps: [], budgets: {}, steps: {} },
     jobs: {},

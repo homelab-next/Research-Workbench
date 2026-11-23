@@ -35,10 +35,15 @@ export interface RunState {
   current: string | null;
   /** Keyed "from>to". */
   sendbacks: Record<string, number>;
-  usage: { input: number; output: number; reasoning: number };
+  /** Case totals: every model.response in the case, in or out of a run. */
+  usage: Usage;
   model_calls: number;
+  /** The case totals when the current run started, so this run's own figures are `usage - usage_at_start` (see runUsage). */
+  usage_at_start: Usage;
+  calls_at_start: number;
   budget_tokens: number | null;
 }
+export interface Usage { input: number; output: number; reasoning: number }
 export interface PlanState {
   current: Plan | null;
   status: "none" | "proposed" | "accepted" | "denied" | "replanning";
