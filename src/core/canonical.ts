@@ -19,12 +19,19 @@ function write(value: unknown, path: string): string {
       return JSON.stringify(value);
     case "object": {
       if (Array.isArray(value)) {
-        return "[" + value.map((v, i) => write(v, `${path}[${i}]`)).join(",") + "]";
+        // Index by position: map() skips holes and would emit invalid JSON such as "[,1]".
+        const items: string[] = [];
+        for (let i = 0; i < value.length; i++) {
+          if (!Object.hasOwn(value, i)) throw new CanonicalError(`hole at ${path}[${i}]`);
+          items.push(write(value[i], `${path}[${i}]`));
+        }
+        return "[" + items.join(",") + "]";
       }
       const proto = Object.getPrototypeOf(value);
       if (proto !== Object.prototype && proto !== null) {
         throw new CanonicalError(`unsupported object at ${path}`);
       }
+      if (Object.getOwnPropertySymbols(value).length > 0) throw new CanonicalError(`symbol-keyed property at ${path}`);
       const obj = value as Record<string, unknown>;
       const parts = Object.keys(obj)
         .sort()
