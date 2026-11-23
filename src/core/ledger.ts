@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { canonical } from "./canonical";
 import type { Json } from "./canonical";
-import { Delivery, logToStderr } from "./deliver";
+import { Delivery, ignoreThrow, logToStderr } from "./deliver";
 import { GENESIS, sha256Hex } from "./hash";
 import { isActor, isEntryType } from "./types";
 import type { Actor, Entry, EntryInput } from "./types";
@@ -25,6 +25,16 @@ export class InvalidEntryError extends TypeError {
   constructor(message: string) {
     super(message);
     this.name = "InvalidEntryError";
+  }
+}
+
+/** A stored row whose actor or payload is not JSON. Reported through onError; the row reads back with a null payload. */
+export class UnreadableEntryError extends Error {
+  readonly seq: number;
+  constructor(seq: number, column: "actor" | "payload") {
+    super(`entry ${seq} cannot be read: its ${column} is not JSON`);
+    this.name = "UnreadableEntryError";
+    this.seq = seq;
   }
 }
 
@@ -159,6 +169,7 @@ export class Ledger {
   private readonly now: () => string;
   private readonly subscribers = new Set<(entry: Entry) => void>();
   private readonly delivery: Delivery<(entry: Entry) => void, Entry>;
+  private readonly onError: (error: unknown, entry: Entry) => void;
 
   private constructor(db: Database, caseId: string, now: () => string, onError: (error: unknown, entry: Entry) => void) {
     this.db = db;
@@ -166,6 +177,7 @@ export class Ledger {
     this.now = now;
     // The entry is already committed when subscribers hear of it; a failing subscriber must not fail the append or starve others.
     this.delivery = new Delivery(this.subscribers, (fn, entry) => fn(entry), onError);
+    this.onError = onError;
   }
 
   static open(path: string, caseId: string, opts: { now?: () => string; onError?: (error: unknown, entry: Entry) => void } = {}): Ledger {
@@ -195,7 +207,7 @@ export class Ledger {
       db.close();
       throw err;
     }
-    return new Ledger(db, caseId, opts.now ?? (() => new Date().toISOString()), opts.onError ?? logToStderr("ledger subscriber failed"));
+    return new Ledger(db, caseId, opts.now ?? (() => new Date().toISOString()), opts.onError ?? logToStderr("ledger"));
   }
 
   append(input: EntryInput): Entry {
@@ -279,12 +291,12 @@ export class Ledger {
 
   read(after = 0, limit = -1): Entry[] {
     const rows = this.db.query("SELECT * FROM entries WHERE seq > ? ORDER BY seq ASC LIMIT ?").all(after, limit) as LedgerRow[];
-    return rows.map(toEntry(this.caseId));
+    return rows.map((row) => this.toEntry(row));
   }
 
   get(seq: number): Entry | null {
     const row = this.db.query("SELECT * FROM entries WHERE seq = ?").get(seq) as LedgerRow | null;
-    return row === null ? null : toEntry(this.caseId)(row);
+    return row === null ? null : this.toEntry(row);
   }
 
   head(): { seq: number; hash: string } {
@@ -302,22 +314,33 @@ export class Ledger {
   close(): void {
     this.db.close();
   }
-}
 
-function toEntry(caseId: string): (row: LedgerRow) => Entry {
-  return (row) =>
-    ({
+  /**
+   * A stored row as an entry. A row whose actor or payload is not JSON comes back with a null payload
+   * (and a null actor if that is the unreadable part), so the fold skips and records it and a damaged
+   * case can still be opened; the damage is reported through onError.
+   */
+  private toEntry(row: LedgerRow): Entry {
+    const actor = parseJson(row.actor);
+    const payload = parseJson(row.payload);
+    const entry = {
       seq: row.seq,
       ts: row.ts,
-      case: caseId,
-      actor: JSON.parse(row.actor),
+      case: this.caseId,
+      actor: actor === null ? null : actor.value,
       type: row.type,
-      payload: JSON.parse(row.payload),
+      payload: actor === null || payload === null ? null : payload.value,
       cause: row.cause,
       run: row.run,
       stage: row.stage,
       job: row.job,
       prev_hash: row.prev_hash,
       hash: row.hash,
-    }) as unknown as Entry;
+    } as unknown as Entry;
+    if (actor === null || payload === null) {
+      const error = new UnreadableEntryError(row.seq, actor === null ? "actor" : "payload");
+      ignoreThrow(() => this.onError(error, entry));
+    }
+    return entry;
+  }
 }

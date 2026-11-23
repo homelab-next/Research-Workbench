@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -163,4 +164,21 @@ test("close closes everything even if one session fails, then rethrows", () => {
 test("an empty or non-string data directory is a TypeError", () => {
   expect(() => Workbench.open("")).toThrow(TypeError);
   expect(() => Workbench.open(undefined as unknown as string)).toThrow(TypeError);
+});
+
+// ---------- final review, finding 19: a damaged case still opens and shows what was skipped ----------
+test("a case with an unparseable row opens, and the fold records the row as skipped", () => {
+  const s = wb.createCase(newCase, human);
+  s.commit(() => [{ type: "case.phase_changed", payload: { phase: "collect" }, actor: human }]);
+  wb.close();
+  const raw = new Database(join(dir, "cases", "CASE-1", "ledger.sqlite"));
+  raw.exec(`UPDATE entries SET payload = 'garbage' WHERE seq = 2`);
+  raw.close();
+  errors.length = 0;
+  wb = Workbench.open(dir, { now, onError });
+  const again = wb.session("CASE-1");
+  expect(again.state.meta?.id).toBe("CASE-1");
+  expect(again.state.phase).toBeNull();
+  expect(again.state.skipped).toEqual([{ seq: 2, type: "case.phase_changed", reason: "malformed payload" }]);
+  expect(errors.some((e) => e instanceof Error && e.message.includes("entry 2"))).toBe(true);
 });

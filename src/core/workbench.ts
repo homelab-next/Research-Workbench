@@ -91,7 +91,7 @@ export class Workbench {
     try {
       mkdirSync(join(dataDir, "cases"), { recursive: true });
       mkdirSync(join(dataDir, "blobs"), { recursive: true });
-      const chain = Ledger.open(join(dataDir, "workbench.sqlite"), "workbench", opts.now ? { now: opts.now } : {});
+      const chain = Ledger.open(join(dataDir, "workbench.sqlite"), "workbench", { ...(opts.now ? { now: opts.now } : {}), onError });
       return new Workbench(dataDir, chain, opts.now, onError, lockPath);
     } catch (err) {
       rmSync(lockPath, { force: true });
@@ -185,7 +185,7 @@ export class Workbench {
   private load(id: string, create: boolean): CaseSession {
     const dir = join(this.dataDir, "cases", id);
     if (create) mkdirSync(join(dir, "published"), { recursive: true });
-    const ledger = Ledger.open(join(dir, "ledger.sqlite"), id, this.now ? { now: this.now } : {});
+    const ledger = Ledger.open(join(dir, "ledger.sqlite"), id, { ...(this.now ? { now: this.now } : {}), onError: this.onError });
     try {
       const session = new CaseSession({ id, dir, ledger, blobs: new BlobStore(join(dir, "blobs")), onError: this.onError });
       this.sessions[id] = session;

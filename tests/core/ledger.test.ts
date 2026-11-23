@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonical, CanonicalError } from "../../src/core/canonical";
 import { GENESIS, sha256Hex } from "../../src/core/hash";
-import { entryHash, InvalidEntryError, Ledger, LedgerCaseMismatchError, PayloadTooLargeError } from "../../src/core/ledger";
+import { entryHash, InvalidEntryError, Ledger, LedgerCaseMismatchError, PayloadTooLargeError, UnreadableEntryError } from "../../src/core/ledger";
 import { ENTRY_TYPES, isActor, strictest } from "../../src/core/types";
 import { verifyLedger } from "../../src/core/verify";
 import type { Entry } from "../../src/core/types";
@@ -380,5 +380,28 @@ test("a row that does not read back to the same hash is rolled back before commi
   expect(l.head()).toEqual({ seq: 1, hash: e1.hash });
   expect(l.read()).toEqual([e1]);
   expect(seen).toEqual([]);
+  l.close();
+});
+
+// ---------- final review, finding 19: a damaged row does not stop the ledger being read ----------
+test("a row that cannot be parsed reads back with a null payload and is reported through onError", () => {
+  const dir = tmp();
+  const errors: { error: unknown; seq: number }[] = [];
+  const l = open(dir, { now, onError: (error, e) => errors.push({ error, seq: e.seq }) });
+  l.append(phase("a"));
+  l.append(phase("b"));
+  l.append(phase("c"));
+  const raw = new Database(join(dir, "ledger.sqlite"));
+  raw.exec(`UPDATE entries SET payload = '{' WHERE seq = 2`);
+  raw.exec(`UPDATE entries SET actor = 'not json' WHERE seq = 3`);
+  raw.close();
+  const all = l.read();
+  expect(all.map((e) => e.seq)).toEqual([1, 2, 3]);
+  expect(all.map((e) => e.payload as unknown)).toEqual([{ phase: "a" }, null, null]);
+  expect(all[2]!.actor).toBeNull();
+  expect(errors.map((x) => x.seq)).toEqual([2, 3]);
+  expect(errors[0]!.error).toBeInstanceOf(UnreadableEntryError);
+  expect((errors[0]!.error as Error).message).toContain("entry 2");
+  expect(l.get(2)!.payload).toBeNull();
   l.close();
 });
