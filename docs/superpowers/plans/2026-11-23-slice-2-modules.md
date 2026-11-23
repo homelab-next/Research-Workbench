@@ -31,6 +31,19 @@
   Claude-Session: https://claude.ai/code/session_01D8GtDHHT7t7xiiX8BzcgNi
   ```
 
+## What plan 1 built, that this plan must respect
+
+Read `src/core/` before starting a task; these are the rules most likely to trip new code.
+
+- **Writing entries.** Everything is written through `CaseSession.commit(build)`. `build` receives the read-only state and an `IdAllocator`. Every id taken with `ids.next(kind)` must be matched by one creating entry of that kind **in the same commit** (`card` → `card.created`, `query` → `query.issued`, `proposal` → `proposal.created`, `job` → `job.started`), or the commit throws `IdAllocationError`. Calling `commit` from inside a builder throws.
+- **The ledger refuses invalid entries:** an unknown `type`, a malformed `Actor`, a payload that is not a plain object, a `cause` that does not name an earlier entry, or ill-formed strings.
+- **The fold validates what it applies.** A `card.created` must carry a complete `Card` exactly as `src/core/types.ts` defines it (every field, a valid marking, a valid `Coverage`), and a `query.result` a valid `Coverage`. A malformed one is not applied and is recorded in `state.skipped`. Tests should assert `session.state.skipped` is empty after a run.
+- **Types and helpers to reuse, not redefine:** `TimeWindow` (not `Window`), `Coverage`, `Cost`, `EmptyMeans`, `Marking`, `isMarking`, `strictest` (an unknown marking counts as the most restrictive), and the runtime lists in `types.ts` (`PARTIAL_REASONS`, `EMPTY_MEANS`, `WHERES`, ...). Shape guards are in `src/core/state/guards.ts` and `shapes.ts` (`isCard`, `isCoverage`, `isObservable`, `isTimeWindow`).
+- **Blobs.** `BlobStore.put` returns a `BlobRef`; `get` verifies the bytes and throws `BlobCorruptError`. Verification only follows blob references at the typed positions in `BLOB_FIELDS` (for this plan: `query.result.result`).
+- **Entries are frozen; state is read-only.** Copy before changing anything you read from either.
+- **One writer per data directory.** `Workbench.open` holds an exclusive lock until `close()`. Every test that opens a workbench must close it, including on failure; a second open throws `WorkbenchLockedError`.
+- **`canonical()` refuses** sparse arrays, `undefined`, non-finite numbers and non-plain objects. Anything hashed or logged must be plain JSON.
+
 ## Review Focus
 
 1. **A query that looks like a read but is not.** `WITH x AS (...) DELETE ...`, two statements separated by `;`, a write hidden behind a comment, `EXPLAIN ANALYZE` of a write. Each is refused before it reaches the source. (Task 2)
@@ -387,10 +400,10 @@ git commit -m "feat(modules): SQL guard for read-only statements and table guard
 - Test: `tests/modules/secrets.test.ts`, `tests/modules/connector-sqlite.test.ts`, `tests/modules/connector-files.test.ts`
 
 **Interfaces:**
-- Consumes: `SourceManifest`, `Observables` (Task 1); `assertReadOnly`, `GuardError` (Task 2); `Json`, `Coverage`, `Cost`, `Window` (plan 1).
+- Consumes: `SourceManifest`, `Observables` (Task 1); `assertReadOnly`, `GuardError` (Task 2); `Json`, `Coverage`, `Cost`, `TimeWindow` (plan 1).
 - Produces:
   - `type Bound = Record<string, string | number | null>`
-  - `interface QueryRequest { text: string; bound: Bound; window: Window; max_rows: number; timeout_ms: number; budget: number | null }`
+  - `interface QueryRequest { text: string; bound: Bound; window: TimeWindow; max_rows: number; timeout_ms: number; budget: number | null }`
   - `interface QueryOutcome { columns: string[]; rows: Json[][]; raw: Uint8Array; media: string; coverage: Coverage; cost: Cost | null }`
   - `interface Connector { readonly kind: "sql" | "files" | "http" | "trino"; render(req: QueryRequest): string; estimate(req: QueryRequest): Promise<Cost | null>; run(req: QueryRequest): Promise<QueryOutcome>; close(): void }`
   - `interface ConnectorContext { secrets: Secrets; observables: Observables }`
@@ -699,7 +712,7 @@ git commit -m "feat(modules): trino connector with enforced guardrails"
 - Consumes: `CaseSession`, `IdAllocator`, `sha256Hex`, `canonical` and the entry types (plan 1); `Registry`, `Observables`, `SourceManifest`, `PivotManifest` (Task 1); `ConnectorPool`, `QueryRequest`, `GuardError`, `ConnectorError`, `Bound` (Tasks 2, 3).
 - Produces:
   - `interface RunnerDeps { registry: Registry; pool: ConnectorPool; observables: Observables }`
-  - `interface RunQueryInput { source: string; text: string; bound: Bound; window: Window; why: string; actor: Actor; pivot?: PivotManifest | null; title?: string; step?: string | null; subgoal?: string | null; verifies?: string | null; budget?: number | null; run?: string | null; stage?: string | null; job?: string | null; make_card?: boolean }`
+  - `interface RunQueryInput { source: string; text: string; bound: Bound; window: TimeWindow; why: string; actor: Actor; pivot?: PivotManifest | null; title?: string; step?: string | null; subgoal?: string | null; verifies?: string | null; budget?: number | null; run?: string | null; stage?: string | null; job?: string | null; make_card?: boolean }`
   - `type RunQueryResult = | { status: "done"; query: string; card: string | null; outcome: "answered" | "empty" | "partial"; rows: number; rows_hash: string; coverage: Coverage; columns: string[]; data: Json[][] } | { status: "failed"; query: string; error: string } | { status: "needs_budget"; proposal: string | null; estimate: Cost | null } | { status: "refused"; reasons: string[] }`
   - `runQuery(session: CaseSession, deps: RunnerDeps, input: RunQueryInput): Promise<RunQueryResult>`
   - `rowsHash(columns: string[], rows: Json[][]): string` — `sha256Hex(canonical({ columns, rows }))`
@@ -781,7 +794,7 @@ Order of work:
 4. Weight is `pivot.weight` when it is a number, otherwise `source.cost.weight`. If weight is above zero and `budget` is null or undefined: get `estimate`; for an agent actor commit `proposal.created` (kind `costly_query`, `title` = the card title, `by` = the actor id, `text` = the rendered text) and return its id; for a person write nothing.
 5. Commit `query.issued` with the rendered text, the bound values, the estimate, the source hash, and the pivot id and hash when there is one.
 6. `await connector.run(...)` with `max_rows` and `timeout_ms` from the source's limits. On a thrown error commit `query.failed` and return `failed`.
-7. Store `raw` as a blob with its media type. In one commit write `query.result` and, unless `make_card` is false, `card.created`.
+7. Store `raw` as a blob with its media type. In one commit write `query.result` and, unless `make_card` is false, `card.created`. Take the query id in the commit that writes `query.issued`, the card id in the commit that writes `card.created`, and a proposal id in the commit that writes `proposal.created`; never take an id in one commit and use it in another.
 
 The card: `title` is `input.title`, else `"<pivot title>: <bound.value>"`, else `"Query on <source title>"`. `body` is one line: `"<n> rows"` plus `" · partial: <reason>"` when partial, or for zero rows `"No rows · proven negative"` / `"No rows · not seen (not proof of absence)"`. `column_types` come from `Observables.columnTypes` with hints from `pivot.yields`, then the source's table column types by column name. `rows` is the first `CARD_PREVIEW_ROWS`. `marking` is the source's. `empty` is `null` unless there are zero rows; then it is `"proven-negative"` only when the pivot says so and coverage is full, otherwise `"not-seen"`. `quality_notes` are the ids of the source's notes whose range overlaps the window (an open end overlaps everything). `event_time` is `null`.
 
@@ -808,11 +821,11 @@ git commit -m "feat(modules): query runner with cost rule, ledger entries and ca
 - Test: `tests/modules/pivots.test.ts`, `tests/modules/seeker.test.ts`, `tests/modules/routes.test.ts`
 
 **Interfaces:**
-- Consumes: `Registry`, `PivotManifest`, `Observables` (Task 1); `runQuery`, `RunnerDeps`, `RunQueryResult` (Task 6); `CaseSession`, `Observable`, `Window`, `Actor`, `EmptyMeans`, `Marking` (plan 1).
+- Consumes: `Registry`, `PivotManifest`, `Observables` (Task 1); `runQuery`, `RunnerDeps`, `RunQueryResult` (Task 6); `CaseSession`, `Observable`, `TimeWindow`, `Actor`, `EmptyMeans`, `Marking` (plan 1).
 - Produces:
   - `class PivotError extends Error`
   - `bindPivot(pivot: PivotManifest, value: string, observables: Observables): { text: string; bound: Bound }` — throws `PivotError` unless `value` matches the pivot's `from` type
-  - `runPivot(session: CaseSession, deps: RunnerDeps, input: { pivot: string; value: string; window: Window; why: string; actor: Actor; step?: string | null; subgoal?: string | null; budget?: number | null; run?: string | null; stage?: string | null; job?: string | null }): Promise<RunQueryResult>`
+  - `runPivot(session: CaseSession, deps: RunnerDeps, input: { pivot: string; value: string; window: TimeWindow; why: string; actor: Actor; step?: string | null; subgoal?: string | null; budget?: number | null; run?: string | null; stage?: string | null; job?: string | null }): Promise<RunQueryResult>`
   - `yielded(pivot: PivotManifest, result: RunQueryResult, observables: Observables): Observable[]` — distinct values of the pivot's `to` type found in the result's yielded columns that match that type
   - `interface Hop { pivot: string; title: string; source: string; from: string; to: string; free: boolean; weight: number; needs_window: boolean; empty_means: EmptyMeans; confirmed: boolean; marking: Marking; unit: string }`
   - `interface Route { hops: Hop[]; weight: number }`
@@ -822,7 +835,7 @@ git commit -m "feat(modules): query runner with cost rule, ledger entries and ca
   - `cheapestSeeker(registry: Registry): Seeker`
   - `const SEEKERS: Record<string, (registry: Registry) => Seeker>` with one entry, `cheapest`
   - `interface TrailItem { hop: Hop; value: string; status: RunQueryResult["status"]; outcome: string | null; card: string | null; query: string | null; found: string[] }`
-  - `runRoute(session: CaseSession, deps: RunnerDeps, seeker: Seeker, input: { have: Observable[]; want: string; window: Window; why: string; actor: Actor; limits?: SeekLimits; subgoal?: string | null; max_fanout?: number; run?: string | null; stage?: string | null; job?: string | null }): Promise<{ outcome: "answered" | "blocked"; reached: Observable[]; trail: TrailItem[]; cards: string[]; blocked: string[] }>`
+  - `runRoute(session: CaseSession, deps: RunnerDeps, seeker: Seeker, input: { have: Observable[]; want: string; window: TimeWindow; why: string; actor: Actor; limits?: SeekLimits; subgoal?: string | null; max_fanout?: number; run?: string | null; stage?: string | null; job?: string | null }): Promise<{ outcome: "answered" | "blocked"; reached: Observable[]; trail: TrailItem[]; cards: string[]; blocked: string[] }>`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -997,7 +1010,7 @@ git commit -m "feat(modules): re-validate a card by re-running its query"
   - `makeSampleData(dir: string): void` exported from `scripts/make-sample-data.ts`; run as a script it writes to `sample/data/`
   - `ensureSampleData(sampleRoot: string): void` exported from the same file — generates only when `sample/data/flows.sqlite` is missing
   - `startReputationFixture(dataDir: string, port?: number): { url: string; stop(): void }` exported from `sample/fixture/reputation-server.ts`; default port 4801
-  - `const SAMPLE_WINDOW: Window = { from: "2026-11-17T00:00:00.000Z", to: "2026-11-24T00:00:00.000Z" }` and `const SAMPLE_START: Observable = { type: "address", value: "198.51.100.77" }` exported from `scripts/make-sample-data.ts`
+  - `const SAMPLE_WINDOW: TimeWindow = { from: "2026-11-17T00:00:00.000Z", to: "2026-11-24T00:00:00.000Z" }` and `const SAMPLE_START: Observable = { type: "address", value: "198.51.100.77" }` exported from `scripts/make-sample-data.ts`
 
 **The planted story** (all synthetic). At `2026-11-20T03:12:00Z` account `j.doe` signs in to workstation `ws-17.example.net` (`192.0.2.17`) from `203.0.113.50`, an address it has never used. Four minutes later `ws-17` resolves `cdn-update.example.org`, which answers `198.51.100.77`, and from then until the end of the window it connects to `198.51.100.77:443` every ten minutes with small, even byte counts. No other host talks to that address. The reputation service calls `198.51.100.77` suspicious.
 
