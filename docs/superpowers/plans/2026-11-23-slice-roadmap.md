@@ -1,0 +1,72 @@
+# Investigation Slice: Roadmap
+
+**Spec:** [`docs/superpowers/specs/2026-11-23-investigation-slice-design.md`](../specs/2026-11-23-investigation-slice-design.md)
+**GUI reference:** [`docs/gui-guide.md`](../../gui-guide.md)
+
+The slice is too large for one plan. It is built as five plans, in order. Each plan produces working, tested software on its own, and each later plan is written against the code the earlier ones actually produced. A plan file is added to this directory when its turn comes.
+
+| # | Plan | Produces | Proven by |
+|---|---|---|---|
+| 1 | **Ledger core** | Canonical JSON and hashing; the append-only ledger; blob store; chain verification and its command-line tool; a JSON Schema validator; the state fold shared by server and browser; the data directory and case sessions | Unit tests; a tampered ledger is caught at the right entry; state at entry N is identical live and replayed |
+| 2 | **Modules** | Configuration and module roots; manifest loading and hashing; observable types; the SQL guard; connectors `sql` (SQLite), `files`, `http`, `trino`; the query runner that logs every query and makes cards; pivots and the route finder; re-validation of a card; the synthetic sample module root | Unit tests against stand-in servers; routes re-plan around a roadblock; every guardrail refuses what it should |
+| 3 | **Agents and pipeline** | Model providers `scripted` and `local endpoint`; the context pack and marking rule; the fixed tool list; the agent loop; the pipeline engine with gates, send-backs, pause and resume; stage runners; draft revisions and the publish rule; the form checks; publishing and feedback; a headless command-line run | A full scripted run reaches the publish gate; the custody acceptance test passes |
+| 4 | **Server and interface** | The loopback server, commands, entry stream and roles; the interface from the GUI guide for every part in the slice; the Pipeline and Replay lenses | Server tests; DOM tests; one browser run through the whole slice |
+| 5 | **Real run** | The owner's real module root for the lake (kept outside this repository); configuration for the local model; a README | One investigation against the live lake, driven by the local model, reaches the publish gate with custody checks passing |
+
+## Task lists
+
+### Plan 1: Ledger core (`2026-11-23-slice-1-ledger-core.md`)
+
+1. Scaffold, canonical JSON, hashing
+2. Shared types and the ledger
+3. Blob store, chain verification, `verify` command
+4. JSON Schema validator
+5. State fold: case, cards, lanes, undo
+6. State fold: run, plan, queries, jobs, proposals
+7. State fold: drafts, reviews, challenges, publishing, feedback, conversation
+8. Data directory, case sessions, id allocation
+
+### Plan 2: Modules
+
+1. Configuration, module roots, manifest loading and hashing
+2. Observable types and recognisers
+3. SQL guard: single read statement, and the per-table guardrails
+4. Connector interface; `sql` (SQLite) and `files`
+5. `http` connector
+6. `trino` connector, with a stand-in engine for tests
+7. Query runner: cost rule, ledger entries, blobs, cards, quality notes
+8. Pivots and the route finder
+9. Re-validating a card
+10. Sample module root: synthetic data, manifests, API fixture
+
+### Plan 3: Agents and pipeline
+
+1. Provider interface and the `scripted` provider
+2. `local endpoint` provider, with a stand-in server for tests
+3. Context pack, context budget, marking rule
+4. The fixed tool list
+5. The agent loop
+6. Pipeline engine: stages, gates, send-back cap, pause, resume, interrupted
+7. Stage runners: Frame, Plan, Research
+8. Stage runners: Assemble, Evaluate, Challenge; draft revisions
+9. Checks runner and the eleven form checks
+10. Publishing and feedback
+11. Sample context, scripted run, headless run command, custody acceptance test
+
+### Plan 4: Server and interface
+
+1. Server: loopback, origin check, roles, cases, entry stream, blobs
+2. Commands
+3. Interface shell: build, theme, DOM helper, store, home, "which one?", trail, top bar, command bar
+4. Work area: Incoming, brief with phase strip and custody chip, lanes, cards, toasts and undo
+5. Keyboard map, "?" card, drag and drop
+6. Shelf and lenses: Steps, Timeline, Worklog, Discarded, Jobs
+7. Lenses: Narrative and Agent
+8. Lenses: Pipeline and Replay
+9. Pivot panel, Verify, New investigation
+10. Interface safety tests and the browser run
+
+### Plan 5: Real run
+
+1. The owner's module root for the lake, and local model configuration
+2. The real investigation, and the README
