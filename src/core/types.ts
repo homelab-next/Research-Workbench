@@ -12,7 +12,7 @@ export type Actor =
   | { kind: "agent"; id: string; stage: string; profile: string; model: string; effort: string | null; where: Where };
 
 export interface BlobRef { blob: string; bytes: number; media?: string }
-export interface Window { from: string | null; to: string | null }
+export interface TimeWindow { from: string | null; to: string | null }
 export interface Observable { type: string; value: string }
 export type Coverage =
   | { kind: "full" }
@@ -49,11 +49,11 @@ export interface Card {
 export type StepOutcome = "answered" | "empty" | "partial" | "blocked" | "failed";
 export interface PlanStep {
   id: string; subgoal: string; pivot: string; source: string;
-  from: Observable; to: string; window: Window; needs_window: boolean;
+  from: Observable; to: string; window: TimeWindow; needs_window: boolean;
   free: boolean; weight: number; estimate: Cost | null; empty_means: EmptyMeans; warnings: string[];
 }
 export interface SubGoal { id: string; title: string; question: string; steps: string[] }
-export interface Plan { id: string; goal: string; window: Window; subgoals: SubGoal[]; steps: PlanStep[] }
+export interface Plan { id: string; goal: string; window: TimeWindow; subgoals: SubGoal[]; steps: PlanStep[] }
 
 // ---------- pipeline ----------
 export interface StageDef {
@@ -89,7 +89,7 @@ export type Proposal =
 // ---------- entries ----------
 export interface Payloads {
   // case and run
-  "case.created": { id: string; title: string; asked: string; why: string; starting: Observable[]; window: Window; objective: string | null; marking: Marking };
+  "case.created": { id: string; title: string; asked: string; why: string; starting: Observable[]; window: TimeWindow; objective: string | null; marking: Marking };
   "case.phase_changed": { phase: string };
   "run.started": { run: string; pipeline: string; pipeline_hash: string; stages: StageDef[] };
   "run.paused": { reason: string };
@@ -113,7 +113,7 @@ export interface Payloads {
   "step.started": { step: string };
   "step.finished": { step: string; outcome: StepOutcome; cards: string[]; note: string };
   // queries
-  "query.issued": { query: string; source: string; source_hash: string; pivot: string | null; pivot_hash: string | null; connector: string; text: string; bound: Record<string, Json>; window: Window; why: string; estimate: Cost | null; step: string | null; verifies: string | null };
+  "query.issued": { query: string; source: string; source_hash: string; pivot: string | null; pivot_hash: string | null; connector: string; text: string; bound: Record<string, Json>; window: TimeWindow; why: string; estimate: Cost | null; step: string | null; verifies: string | null };
   "query.result": { query: string; result: BlobRef; rows: number; rows_hash: string; coverage: Coverage; duration_ms: number; cost: Cost | null };
   "query.failed": { query: string; error: string };
   "verify.run": { original: string; rerun: string; card: string; outcome: "matches" | "differs" | "could_not_run"; detail: string };

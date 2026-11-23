@@ -4,7 +4,7 @@ import { BlobStore } from "./blobs";
 import { Ledger } from "./ledger";
 import { CaseSession } from "./session";
 import type { RunState } from "./state";
-import type { Actor, Entry, Marking, Observable, Window } from "./types";
+import type { Actor, Entry, Marking, Observable, TimeWindow } from "./types";
 
 export class CaseNotFoundError extends Error {
   constructor(id: string) {
@@ -22,7 +22,7 @@ export class WorkbenchLockedError extends Error {
   }
 }
 
-export interface NewCase { title: string; asked: string; why: string; starting: Observable[]; window: Window; objective: string | null; marking: Marking }
+export interface NewCase { title: string; asked: string; why: string; starting: Observable[]; window: TimeWindow; objective: string | null; marking: Marking }
 export interface CaseSummary { id: string; title: string; marking: Marking; created_ts: string; run_status: RunState["status"]; phase: string | null; incoming: number; kept: number }
 export type ErrorHandler = (error: unknown, entry?: Entry) => void;
 

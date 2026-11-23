@@ -1,4 +1,4 @@
-import type { Entry, ModelChoice, Plan, PlanStep, Proposal, StageDef, Window } from "../types";
+import type { Entry, ModelChoice, Plan, PlanStep, Proposal, StageDef, TimeWindow } from "../types";
 import type { CaseState, JobState, PlanState, ProposalState, QueryState, RunState, StageState } from "./types";
 
 const isStr = (x: unknown): x is string => typeof x === "string";
@@ -9,7 +9,7 @@ const isOneOf = <T extends string>(x: unknown, set: readonly T[]): x is T => isS
 const has = <T>(rec: Record<string, T>, id: unknown): id is string => isStr(id) && Object.hasOwn(rec, id);
 
 const isModel = (x: unknown): x is ModelChoice => isObj(x) && isStr(x.provider) && isStr(x.model) && (x.effort === null || isStr(x.effort));
-const isWindow = (x: unknown): x is Window => isObj(x) && (x.from === null || isStr(x.from)) && (x.to === null || isStr(x.to));
+const isWindow = (x: unknown): x is TimeWindow => isObj(x) && (x.from === null || isStr(x.from)) && (x.to === null || isStr(x.to));
 const isStageDef = (x: unknown): x is StageDef =>
   isObj(x) && isStr(x.id) && isStr(x.title) && (x.phase === null || isStr(x.phase)) && isOneOf(x.runs, ["agent", "script", "human"])
   && (x.gate === null || isOneOf(x.gate, ["plan", "publish"])) && typeof x.reviews === "boolean" && (x.model === null || isModel(x.model));
