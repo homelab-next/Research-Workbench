@@ -155,13 +155,21 @@ export function blockers(state: CaseState, draftHash: string): string[] {
   for (const st of reviewing) {
     if (!review || !review.passed_stages.includes(st.id)) out.push(`${st.title} has not passed this revision`);
   }
+  // The latest recorded result of each check, and the latest evaluation, are verdicts too.
+  for (const c of review?.checks ?? []) {
+    if (!c.pass) out.push(`${c.check} failed on this revision`);
+  }
+  if (review?.evaluation?.pass === false) out.push("Evaluation failed on this revision");
   for (const c of Object.values(state.challenges)) {
     if (c.draft_hash === draftHash && c.severity === "must_address" && c.status === "open") out.push(`Challenge ${c.id} must be addressed`);
   }
   return out;
 }
 
-/** True only when `draftHash` is the latest draft and every review stage passed that exact hash. */
+/**
+ * True only when `draftHash` is the latest draft, every review stage passed that exact hash, no recorded
+ * check or evaluation of it failed, and no must-address challenge against it is open.
+ */
 export function publishable(state: CaseState, draftHash: string): boolean {
   return blockers(state, draftHash).length === 0;
 }

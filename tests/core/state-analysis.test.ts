@@ -406,3 +406,39 @@ test("a new review record has no rejection", () => {
   revise(b, 1, "h1");
   expect(fold(b.entries).reviews.h1!.rejected).toBeNull();
 });
+
+// ---------- final review, finding 20: failing results on record block publishing ----------
+const checkRun = (b: EntryBuilder, check: string, hash: string, pass: boolean) =>
+  b.add("check.run", { check, script_hash: "x", input: { blob: "b", bytes: 1 }, draft_hash: hash, pass, findings: [] });
+
+test("a failing check or evaluation on record for the hash blocks publishing even with every stage passed", () => {
+  const b = run();
+  revise(b, 1, "h1");
+  passAll(b, "h1");
+  checkRun(b, "citations", "h1", false);
+  b.add("evaluation.made", { draft_hash: "h1", pass: false, findings: [] });
+  const s = fold(b.entries);
+  expect(publishable(s, "h1")).toBe(false);
+  expect(blockers(s, "h1")).toEqual(["citations failed on this revision", "Evaluation failed on this revision"]);
+});
+
+test("the latest result of each check counts: a later pass clears the blocker", () => {
+  const b = run();
+  revise(b, 1, "h1");
+  passAll(b, "h1");
+  checkRun(b, "citations", "h1", false);
+  checkRun(b, "markings", "h1", true);
+  b.add("evaluation.made", { draft_hash: "h1", pass: false, findings: [] });
+  checkRun(b, "citations", "h1", true);
+  b.add("evaluation.made", { draft_hash: "h1", pass: true, findings: [] });
+  expect(blockers(fold(b.entries), "h1")).toEqual([]);
+});
+
+test("a failing check on another hash does not block this one", () => {
+  const b = run();
+  revise(b, 1, "h0");
+  checkRun(b, "citations", "h0", false);
+  revise(b, 2, "h1");
+  passAll(b, "h1");
+  expect(publishable(fold(b.entries), "h1")).toBe(true);
+});
