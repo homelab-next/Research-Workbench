@@ -71,6 +71,8 @@ export type ChallengeState = Challenge & { status: "open" | "answered"; answer: 
 export interface CaseState {
   seq: number;
   head_ts: string | null;
+  /** Entries the fold could not apply (malformed or failing), most recent 100. */
+  skipped: { seq: number; type: string; reason: string }[];
   meta: Payloads["case.created"] | null;
   phase: string | null;
   counters: Record<IdKind, number>;

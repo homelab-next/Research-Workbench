@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { apply, cardLocation, fold, initial } from "../../src/core/state";
+import { applyWith } from "../../src/core/state/apply";
 import type { CaseState } from "../../src/core/state";
-import type { Payloads } from "../../src/core/types";
+import type { Entry, Payloads } from "../../src/core/types";
 import { EntryBuilder, card } from "../helpers/entries";
 
 const CASE: Payloads["case.created"] = {
@@ -334,4 +335,133 @@ test("folding 5000 entries over 500 cards takes under one second", () => {
   const ms = performance.now() - t0;
   expect(s.seq).toBe(5000);
   expect(ms).toBeLessThan(1000);
+});
+
+// ---------- robustness ----------
+const HANDLED = [
+  "case.created", "case.phase_changed", "card.created", "card.kept", "card.moved", "card.discarded", "card.restored",
+  "card.sent_back", "card.pinned", "lane.created", "lane.renamed", "lane.removed", "lane.target_set", "undo",
+] as const;
+
+function raw(type: string, payload: unknown): Entry {
+  return { ...new EntryBuilder().add("run.resumed", {}), type, payload } as unknown as Entry;
+}
+
+/** A state with cards, lanes and an undo item, so reducers have something to damage. */
+function populated(): CaseState {
+  const b = setup();
+  b.add("card.kept", { card: "c1", lane: "l1", index: null });
+  return fold(b.entries);
+}
+
+test("malformed payloads never throw and change nothing but seq, head_ts and skipped", () => {
+  const base = populated();
+  const wrong = { card: 5, lane: {}, index: "x", title: 1, subgoal: 3, pinned: "yes", place: "nowhere", target: "t", phase: 7, id: [], starting: 1 };
+  const wrongCard = { card: { id: 5 } };
+  const payloads: [string, unknown][] = [["null", null], ["undefined", undefined], ["empty", {}], ["wrong types", wrong], ["wrong card", wrongCard], ["array", []]];
+  for (const type of HANDLED) {
+    for (const [label, payload] of payloads) {
+      const e = raw(type, payload);
+      let out: CaseState | undefined;
+      expect(() => { out = apply(base, e); }).not.toThrow();
+      const { skipped, ...rest } = out!;
+      const { skipped: _s, ...was } = base;
+      // counters count entries by kind, so a well-formed-object payload still bumps them
+      expect({ ...rest, seq: was.seq, head_ts: was.head_ts, counters: was.counters }, `${type} ${label}`).toEqual(was);
+      if (payload === null || payload === undefined || Array.isArray(payload)) {
+        expect(skipped.at(-1), `${type} ${label}`).toEqual({ seq: e.seq, type, reason: "malformed payload" });
+      }
+    }
+  }
+});
+
+test("a malformed payload does not bump counters", () => {
+  const s = apply(initial(), raw("card.created", null));
+  expect(s.counters.card).toBe(0);
+  expect(s.skipped).toHaveLength(1);
+});
+
+test("a throwing reducer is contained: only seq, head_ts and skipped change", () => {
+  const base = populated();
+  const e = raw("card.created", { card: card("c9") });
+  const boom = () => { throw new Error("boom"); };
+  const out = applyWith(base, e, [(s) => ({ ...s, phase: "changed" }), boom]);
+  expect(out).toEqual({ ...base, seq: e.seq, head_ts: e.ts, skipped: [{ seq: e.seq, type: "card.created", reason: "could not be applied: boom" }] });
+  expect(out.counters).toEqual(base.counters);
+});
+
+test("skipped keeps only the 100 most recent items", () => {
+  let s = initial();
+  for (let i = 1; i <= 120; i++) s = apply(s, { ...raw("card.kept", null), seq: i });
+  expect(s.skipped).toHaveLength(100);
+  expect(s.skipped[0]!.seq).toBe(21);
+  expect(s.skipped[99]!.seq).toBe(120);
+});
+
+// ---------- prototype-key ids ----------
+test("a card with id 'constructor' behaves like any other card", () => {
+  const b = new EntryBuilder();
+  b.add("lane.created", { lane: "toString", title: "L", subgoal: null });
+  b.add("card.created", { card: card("constructor") });
+  b.add("card.created", { card: card("__proto__") });
+  let s = fold(b.entries);
+  expect(s.incoming).toEqual(["constructor", "__proto__"]);
+  expect(Object.hasOwn(s.cards, "constructor")).toBe(true);
+  expect(Object.hasOwn(s.cards, "__proto__")).toBe(true);
+  b.add("card.kept", { card: "constructor", lane: "toString", index: null });
+  s = fold(b.entries);
+  expect(s.lanes[0]!.cards).toEqual(["constructor"]);
+  expect(cardLocation(s, "constructor")).toEqual({ place: "lane", lane: "toString", index: 0 });
+  b.add("card.discarded", { card: "constructor" });
+  b.add("lane.removed", { lane: "toString" });
+  s = fold(b.entries);
+  expect(s.discarded).toEqual(["constructor"]);
+});
+
+test("ids that only exist on the prototype are unknown", () => {
+  const b = setup();
+  b.add("card.kept", { card: "constructor", lane: "l1", index: null });
+  b.add("card.pinned", { card: "toString", pinned: true });
+  const before = fold(setup().entries);
+  const s = fold(b.entries);
+  expect({ ...s, seq: before.seq, head_ts: before.head_ts } as CaseState).toEqual(before);
+  expect(cardLocation(s, "constructor")).toBeNull();
+});
+
+test("an entry of type 'toString' leaves counters unchanged", () => {
+  const before = initial();
+  const s = apply(before, raw("toString", {}));
+  expect(s.counters).toEqual(before.counters);
+  expect(s.seq).toBe(1);
+});
+
+// ---------- previously untested behaviours ----------
+test("keep and move work on a card that is in Discarded", () => {
+  const b = setup();
+  b.add("card.discarded", { card: "c1" });
+  b.add("card.kept", { card: "c1", lane: "l1", index: null });
+  let s = fold(b.entries);
+  expect(s.discarded).toEqual([]);
+  expect(s.lanes[0]!.cards).toEqual(["c1"]);
+  expect(s.cards.c1).toMatchObject({ place: "lane", lane: "l1" });
+  b.add("card.discarded", { card: "c1" });
+  b.add("card.moved", { card: "c1", lane: "l2", index: 0 });
+  s = fold(b.entries);
+  expect(s.discarded).toEqual([]);
+  expect(s.lanes[1]!.cards).toEqual(["c1"]);
+  expect(s.cards.c1).toMatchObject({ place: "lane", lane: "l2" });
+  expect(s.undoable.at(-1)).toMatchObject({ card: "c1", place: "discarded", lane: null, index: 0 });
+});
+
+test("a duplicate card.created or lane.created is a no-op for cards and lanes", () => {
+  const b = setup();
+  b.add("card.kept", { card: "c1", lane: "l1", index: null });
+  const before = fold(b.entries);
+  b.add("card.created", { card: card("c1", { title: "Other" }) });
+  b.add("lane.created", { lane: "l1", title: "Other", subgoal: "x" });
+  const s = fold(b.entries);
+  expect(s.cards).toEqual(before.cards);
+  expect(s.incoming).toEqual(before.incoming);
+  expect(s.lanes).toEqual(before.lanes);
+  expect(s.target).toBe("l1");
 });

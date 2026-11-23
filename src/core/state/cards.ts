@@ -2,11 +2,20 @@ import type { Entry, Place } from "../types";
 import type { CardState, CaseState, LaneState, UndoItem } from "./types";
 
 const UNDO_LIMIT = 50;
+const PLACES: readonly string[] = ["incoming", "lane", "discarded"];
+
+const isStr = (x: unknown): x is string => typeof x === "string";
+const isObj = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
+const idx = (x: unknown): number | null => (typeof x === "number" && Number.isFinite(x) ? x : null);
+/** Own-property lookup, so ids like "constructor" are ordinary keys. */
+function cardOf(s: CaseState, id: unknown): CardState | undefined {
+  return isStr(id) && Object.hasOwn(s.cards, id) ? s.cards[id] : undefined;
+}
 
 interface Dest { place: Place; lane: string | null; index: number | null }
 
 export function cardLocation(state: CaseState, card: string): { place: Place; lane: string | null; index: number } | null {
-  const c = state.cards[card];
+  const c = cardOf(state, card);
   if (!c) return null;
   const list =
     c.place === "incoming" ? state.incoming
@@ -24,7 +33,7 @@ function insertAt(list: string[], id: string, index: number | null): string[] {
 
 /** Moves an existing card to `dest`, copying only the lists it touches. A lane that is gone sends the card to Incoming. */
 function relocate(s: CaseState, id: string, dest: Dest): CaseState {
-  const c = s.cards[id];
+  const c = cardOf(s, id);
   if (!c) return s;
   let { incoming, discarded, lanes } = s;
   if (c.place === "incoming") incoming = incoming.filter((x) => x !== id);
@@ -53,13 +62,13 @@ function undoable(s: CaseState, seq: number, id: string, change: (s: CaseState) 
   return { ...moved, undoable: [...s.undoable, item].slice(-UNDO_LIMIT) };
 }
 
-const hasLane = (s: CaseState, lane: string) => s.lanes.some((l) => l.id === lane);
+const hasLane = (s: CaseState, lane: unknown) => isStr(lane) && s.lanes.some((l) => l.id === lane);
 
 export function applyCards(s: CaseState, entry: Entry): CaseState {
   switch (entry.type) {
     case "card.created": {
       const c = entry.payload.card;
-      if (s.cards[c.id]) return s;
+      if (!isObj(c) || !isStr(c.id) || Object.hasOwn(s.cards, c.id)) return s;
       const state: CardState = {
         ...c, place: "incoming", lane: null, pinned: false,
         created_seq: entry.seq, created_ts: entry.ts, validated: null,
@@ -67,46 +76,48 @@ export function applyCards(s: CaseState, entry: Entry): CaseState {
       return { ...s, cards: { ...s.cards, [c.id]: state }, incoming: [...s.incoming, c.id] };
     }
     case "card.kept": {
-      const { card, lane, index } = entry.payload;
-      if (!s.cards[card] || !hasLane(s, lane)) return s;
+      const { card, lane } = entry.payload;
+      if (!cardOf(s, card) || !hasLane(s, lane)) return s;
+      const index = idx(entry.payload.index);
       return undoable(s, entry.seq, card, (x) => relocate(x, card, { place: "lane", lane, index }));
     }
     case "card.moved": {
-      const { card, lane, index } = entry.payload;
-      if (!s.cards[card] || !hasLane(s, lane)) return s;
+      const { card, lane } = entry.payload;
+      if (!cardOf(s, card) || !hasLane(s, lane)) return s;
+      const index = idx(entry.payload.index);
       return undoable(s, entry.seq, card, (x) => relocate(x, card, { place: "lane", lane, index }));
     }
     case "card.discarded": {
       const { card } = entry.payload;
-      const place = s.cards[card]?.place;
+      const place = cardOf(s, card)?.place;
       if (!place || place === "discarded") return s;
       return undoable(s, entry.seq, card, (x) => relocate(x, card, { place: "discarded", lane: null, index: null }));
     }
     case "card.restored": {
       const { card } = entry.payload;
-      if (s.cards[card]?.place !== "discarded") return s;
+      if (cardOf(s, card)?.place !== "discarded") return s;
       return relocate(s, card, { place: "incoming", lane: null, index: null });
     }
     case "card.sent_back": {
       const { card } = entry.payload;
-      if (s.cards[card]?.place !== "lane") return s;
+      if (cardOf(s, card)?.place !== "lane") return s;
       return undoable(s, entry.seq, card, (x) => relocate(x, card, { place: "incoming", lane: null, index: null }));
     }
     case "card.pinned": {
       const { card, pinned } = entry.payload;
-      const c = s.cards[card];
-      if (!c) return s;
+      const c = cardOf(s, card);
+      if (!c || typeof pinned !== "boolean") return s;
       return { ...s, cards: { ...s.cards, [card]: { ...c, pinned } } };
     }
     case "lane.created": {
       const { lane, title, subgoal } = entry.payload;
-      if (hasLane(s, lane)) return s;
+      if (!isStr(lane) || !isStr(title) || !(subgoal === null || isStr(subgoal)) || hasLane(s, lane)) return s;
       const l: LaneState = { id: lane, title, subgoal, cards: [] };
       return { ...s, lanes: [...s.lanes, l], target: s.target ?? lane };
     }
     case "lane.renamed": {
       const { lane, title } = entry.payload;
-      if (!hasLane(s, lane)) return s;
+      if (!hasLane(s, lane) || !isStr(title)) return s;
       return { ...s, lanes: s.lanes.map((l) => (l.id === lane ? { ...l, title } : l)) };
     }
     case "lane.removed": {
@@ -114,11 +125,11 @@ export function applyCards(s: CaseState, entry: Entry): CaseState {
       const gone = s.lanes.find((l) => l.id === lane);
       if (!gone) return s;
       const lanes = s.lanes.filter((l) => l.id !== lane);
-      const cards = { ...s.cards };
-      for (const id of gone.cards) {
-        const c = cards[id];
-        if (c) cards[id] = { ...c, place: "incoming", lane: null };
-      }
+      const back = gone.cards.flatMap((id): [string, CardState][] => {
+        const c = cardOf(s, id);
+        return c ? [[id, { ...c, place: "incoming", lane: null }]] : [];
+      });
+      const cards = { ...s.cards, ...Object.fromEntries(back) };
       return {
         ...s, lanes, cards, incoming: [...s.incoming, ...gone.cards],
         target: s.target === lane ? (lanes[0]?.id ?? null) : s.target,
@@ -130,9 +141,9 @@ export function applyCards(s: CaseState, entry: Entry): CaseState {
       return { ...s, target: lane };
     }
     case "undo": {
-      const { target, card, place, lane, index } = entry.payload;
-      if (!s.cards[card]) return s;
-      const moved = relocate(s, card, { place, lane, index });
+      const { target, card, place, lane } = entry.payload;
+      if (!cardOf(s, card) || !isStr(place) || !PLACES.includes(place) || !(lane === null || isStr(lane))) return s;
+      const moved = relocate(s, card, { place, lane, index: idx(entry.payload.index) });
       return { ...moved, undoable: moved.undoable.filter((u) => u.seq !== target) };
     }
     default:

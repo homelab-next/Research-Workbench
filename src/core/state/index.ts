@@ -12,6 +12,7 @@ export function initial(): CaseState {
   return {
     seq: 0,
     head_ts: null,
+    skipped: [],
     meta: null,
     phase: null,
     counters,
