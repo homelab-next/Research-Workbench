@@ -71,12 +71,15 @@ export function verifyLedger(ledgerPath: string, blobDir: string): VerifyReport 
   }
   try {
     let caseId: string;
-    let rows: LedgerRow[];
+    let rows: Iterable<LedgerRow>;
     try {
+      // Wait for a writer holding the file instead of reporting it unreadable (SQLite's default wait is zero).
+      db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
       const meta = db.query("SELECT value FROM meta WHERE key = 'case_id'").get() as { value: string } | null;
       if (meta === null) throw new UnreadableLedgerError("no case id in the ledger");
       caseId = meta.value;
-      rows = db.query("SELECT * FROM entries ORDER BY seq ASC").all() as LedgerRow[];
+      // One row at a time, so a long chain is never held in memory at once.
+      rows = db.query("SELECT * FROM entries ORDER BY seq ASC").iterate() as Iterable<LedgerRow>;
     } catch (err) {
       if (err instanceof UnreadableLedgerError) throw err;
       throw new UnreadableLedgerError(reasonOf(err));
@@ -92,7 +95,9 @@ export function verifyLedger(ledgerPath: string, blobDir: string): VerifyReport 
     /** Each referenced blob and the first entry that references it, in order of first reference. */
     const firstRef = new Map<string, number>();
     let lookalikes = 0;
-    for (const row of rows) {
+    let entries = 0;
+    for (const row of readRows(rows)) {
+      entries += 1;
       const payload = parse(row.payload);
       if (payload !== null) {
         const scan = scanPayload(row.type, payload.value);
@@ -120,13 +125,30 @@ export function verifyLedger(ledgerPath: string, blobDir: string): VerifyReport 
     return {
       ok: firstBad === null && bad.length === 0,
       case: caseId,
-      entries: rows.length,
-      head: rows.length === 0 ? GENESIS : rows[rows.length - 1]!.hash,
+      entries,
+      head: entries === 0 ? GENESIS : prevHash,
       firstBad,
       blobs: { referenced: firstRef.size, bad, lookalikes },
     };
   } finally {
     db.close();
+  }
+}
+
+const BUSY_TIMEOUT_MS = 10000;
+
+/** Rows from SQLite; a failure while reading them means the file cannot be read as a ledger. */
+function* readRows(rows: Iterable<LedgerRow>): Generator<LedgerRow> {
+  const it = rows[Symbol.iterator]();
+  for (;;) {
+    let next: IteratorResult<LedgerRow>;
+    try {
+      next = it.next();
+    } catch (err) {
+      throw new UnreadableLedgerError(reasonOf(err));
+    }
+    if (next.done) return;
+    yield next.value;
   }
 }
 

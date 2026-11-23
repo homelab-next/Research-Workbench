@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { Database, Statement } from "bun:sqlite";
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -307,4 +307,64 @@ test("every reference position the types define is checked, and a null one is sk
   expect(verifyCase(dir).blobs).toEqual({ referenced: 4, bad: [], lookalikes: 0 });
   rmSync(join(dir, "blobs", c.blob));
   expect(verifyCase(dir).blobs.bad).toEqual([{ blob: c.blob, state: "missing", seq: 7 }]);
+});
+
+// ---------- final review, finding 22: the verifier under load, and what the command can reach ----------
+test("a check that coincides with a write waits for it instead of reporting the ledger unreadable", async () => {
+  const script = join(import.meta.dir, "..", "helpers", "ledger-locker.ts");
+  const child = Bun.spawn([process.execPath, script, join(dir, "ledger.sqlite"), "400"], { stdout: "pipe", stderr: "pipe" });
+  const reader = child.stdout.getReader();
+  let said = "";
+  while (!said.includes("locked")) {
+    const { value, done } = await reader.read();
+    if (done) throw new Error(`locker exited early: ${await new Response(child.stderr).text()}`);
+    said += new TextDecoder().decode(value);
+  }
+  const r = verifyCase(dir); // blocks until the lock is released
+  expect(r.ok).toBe(true);
+  expect(r.entries).toBe(5);
+  reader.releaseLock();
+  expect(await child.exited).toBe(0);
+});
+
+test("rows are iterated, not loaded all at once", () => {
+  // bun:sqlite puts all() and iterate() on each statement, so wrap the statements query() returns.
+  const calls: string[] = [];
+  const query = Database.prototype.query;
+  const spy = spyOn(Database.prototype, "query").mockImplementation(function (this: Database, sql: string) {
+    const st = query.call(this, sql) as Statement;
+    for (const method of ["all", "iterate"] as const) {
+      const real = st[method].bind(st) as (...args: unknown[]) => unknown;
+      (st as unknown as Record<string, unknown>)[method] = (...args: unknown[]) => {
+        calls.push(`${method} ${sql}`);
+        return real(...args);
+      };
+    }
+    return st;
+  } as typeof Database.prototype.query);
+  try {
+    expect(verifyCase(dir).ok).toBe(true);
+  } finally {
+    spy.mockRestore();
+  }
+  expect(calls.filter((c) => c.includes("FROM entries"))).toEqual(["iterate SELECT * FROM entries ORDER BY seq ASC"]);
+});
+
+test("the command verifies any ledger file and blob folder with --ledger and --blobs", () => {
+  ledger.close();
+  ledger = Ledger.open(join(root, "workbench.sqlite"), "workbench");
+  ledger.append({ type: "setting.changed", payload: { key: "k", value: 1 }, actor: human });
+  const ok = run("--ledger", join(root, "workbench.sqlite"), "--blobs", join(root, "blobs"));
+  expect(ok.exitCode).toBe(0);
+  expect(ok.stdout.toString()).toStartWith("case workbench: chain intact · 1 entries · head ");
+  expect(run("--blobs", join(dir, "blobs"), "--ledger", join(dir, "ledger.sqlite")).exitCode).toBe(0);
+  for (const args of [["--ledger", join(root, "workbench.sqlite")], ["--ledger", join(root, "nowhere.sqlite"), "--blobs", root], ["--ledger"], ["--bogus", "x"], [dir, "extra"]]) {
+    const r = run(...args);
+    expect(r.exitCode, args.join(" ")).toBe(2);
+    expect(r.stderr.toString(), args.join(" ")).toContain("usage:");
+  }
+  writeFileSync(join(root, "junk.sqlite"), "this is not a database, just text padding".repeat(20));
+  const unreadable = run("--ledger", join(root, "junk.sqlite"), "--blobs", root);
+  expect(unreadable.exitCode).toBe(1);
+  expect(unreadable.stdout.toString()).toContain("UNREADABLE (");
 });
