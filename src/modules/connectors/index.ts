@@ -2,6 +2,7 @@ import type { SourceManifest } from "../manifests";
 import { FilesConnector } from "./files";
 import { HttpConnector } from "./http";
 import { SqliteConnector } from "./sqlite";
+import { TrinoConnector } from "./trino";
 import { ConnectorError } from "./types";
 import type { Connector, ConnectorContext } from "./types";
 
@@ -9,6 +10,7 @@ const FACTORIES: Partial<Record<SourceManifest["connector"], (s: SourceManifest,
   sql: (s, c) => new SqliteConnector(s, c),
   files: (s, c) => new FilesConnector(s, c),
   http: (s, c) => new HttpConnector(s, c),
+  trino: (s, c) => new TrinoConnector(s, c),
 };
 
 export function makeConnector(source: SourceManifest, ctx: ConnectorContext): Connector {
