@@ -1100,3 +1100,80 @@ Expected: all pass.
 git add scripts sample tests/sample .gitignore package.json
 git commit -m "feat(sample): synthetic module root with a planted story"
 ```
+
+---
+
+### Task 10: Close out plan 1: the lock, blob references, shared helpers
+
+**Run this task first.** Plan 1's final re-review left one defect in the single-writer lock and three small gaps. They are fixed here, before anything in this plan builds on them.
+
+**Files:**
+- Modify: `src/core/workbench.ts`, `src/core/ledger.ts`, `src/core/verify.ts`, and whichever files hold the duplicated helpers
+- Test: `tests/core/workbench.test.ts`, `tests/core/ledger.test.ts`, `tests/core/verify.test.ts`
+
+**Interfaces:**
+- Consumes: `Workbench`, `WorkbenchLockedError`, `Ledger`, `verifyLedger`, `VerifyReport`, `BLOB_FIELDS`, `isBlobRef`, `entryHash` (plan 1).
+- Produces: no new names. `VerifyReport.blobs.bad[].state` gains the value `"malformed"`.
+
+**The four changes:**
+
+1. **The lock is released by its own holder.** Today, when the process that holds the lock calls `Workbench.open` on the same data directory again, the refusal reads the lock file with `readFileSync`. Closing that file handle drops every POSIX lock the process holds on the file, including the one SQLite holds for it, so another process can then take the lock while the first still has its `Workbench`. Fix: keep a module-level set of the lock paths this process holds. `Workbench.open` checks that set first and throws `WorkbenchLockedError(dataDir, process.pid)` without opening or reading the lock file. Add the path when the lock is taken; remove it in `close()` and when `open` fails after taking it.
+2. **A malformed blob reference slips through.** A value at a typed blob position (`BLOB_FIELDS`) that is neither `null` nor a well-formed reference is not checked at append and not counted by `verify`, so the case verifies although its bytes cannot be traced. Fix: `Ledger.appendMany` refuses it before the transaction with a `TypeError` naming the entry type and field; `verifyLedger` reports it in `blobs.bad` as `{ blob: <the value as compact JSON, at most 80 characters>, state: "malformed", seq }`, and the report is not ok. The command prints it like any other bad blob.
+3. **Duplicated helpers.** `isPlainObject` and the JSON parse helper are each written twice. Keep one definition of each and import it. Anything used under `src/core/state/` must live in a browser-safe file.
+4. **A damaged row is reported on every read.** Report it through `onError` once per `Ledger` object per `seq`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+// tests/core/workbench.test.ts
+test("a refused second open in the same process does not release the lock", async () => {
+  const wb = Workbench.open(dir);
+  expect(() => Workbench.open(dir)).toThrow(WorkbenchLockedError);
+  // a child process must still be refused
+  const child = Bun.spawnSync(["bun", "run", "tests/helpers/open-workbench.ts", dir]);
+  expect(child.exitCode).toBe(3);                       // the helper exits 3 on WorkbenchLockedError, 0 when it opened and closed
+  wb.close();
+  expect(Bun.spawnSync(["bun", "run", "tests/helpers/open-workbench.ts", dir]).exitCode).toBe(0);
+});
+test("the in-process refusal names this process", ...);          // error.pid === process.pid
+test("a failed open does not leave the path marked as held", ...); // make open fail after the lock is taken; a later open succeeds
+
+// tests/core/ledger.test.ts
+test("a malformed blob reference at a typed position is refused", () => {
+  expect(() => l.append({ type: "query.result", actor, payload: { ...validResult, result: { blob: "zz", bytes: 1 } as never } })).toThrow(TypeError);
+  expect(l.head().seq).toBe(before);
+});
+test("null is allowed where the type allows it", ...);            // stage.finished with output: null appends
+test("a damaged row is reported once however often it is read", ...);  // read() three times -> onError called once for that seq
+
+// tests/core/verify.test.ts
+test("a malformed reference at a typed position is reported as bad", () => {
+  // insert a row by raw SQL whose hash is computed with entryHash, with payload.result = { blob: "zz", bytes: 1 }
+  const r = verifyCase(dir);
+  expect(r.ok).toBe(false);
+  expect(r.firstBad).toBeNull();
+  expect(r.blobs.bad).toEqual([{ blob: '{"blob":"zz","bytes":1}', state: "malformed", seq: 6 }]);
+});
+test("the command prints a malformed reference with its entry", ...);
+```
+
+Create `tests/helpers/open-workbench.ts`: it opens the workbench at `process.argv[2]`, closes it and exits 0; on `WorkbenchLockedError` it exits 3; on anything else it exits 1.
+
+- [ ] **Step 2: Run the tests to see them fail**
+
+Run: `bun test tests/core/workbench.test.ts tests/core/ledger.test.ts tests/core/verify.test.ts`
+Expected: the new tests fail; the existing ones pass.
+
+- [ ] **Step 3: Make the four changes**
+
+- [ ] **Step 4: Run the whole suite and the type check, and the lock tests ten times**
+
+Run: `bun test && bun run typecheck && for i in $(seq 10); do bun test tests/core/workbench.test.ts || break; done`
+Expected: all pass, every round.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/core tests/core tests/helpers/open-workbench.ts
+git commit -m "fix(core): lock survives an in-process refusal; malformed blob references are refused and reported"
+```
