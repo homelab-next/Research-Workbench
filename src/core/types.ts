@@ -1,0 +1,183 @@
+import type { Json } from "./canonical";
+
+// ---------- primitives ----------
+export type Marking = "TLP:CLEAR" | "TLP:GREEN" | "TLP:AMBER" | "TLP:AMBER+STRICT" | "TLP:RED";
+/** Least to most restrictive. */
+export const MARKINGS: readonly Marking[] = ["TLP:CLEAR", "TLP:GREEN", "TLP:AMBER", "TLP:AMBER+STRICT", "TLP:RED"];
+export type Where = "machine" | "network" | "hosted";
+
+export type Actor =
+  | { kind: "human"; id: string }
+  | { kind: "system"; id: string }
+  | { kind: "agent"; id: string; stage: string; profile: string; model: string; effort: string | null; where: Where };
+
+export interface BlobRef { blob: string; bytes: number; media?: string }
+export interface Window { from: string | null; to: string | null }
+export interface Observable { type: string; value: string }
+export type Coverage =
+  | { kind: "full" }
+  | { kind: "partial"; reason: "row_limit" | "timeout" | "window_clipped" | "source_error" | "budget"; detail?: string };
+export interface Cost { amount: number; unit: string }
+export type EmptyMeans = "proven-negative" | "not-seen";
+export type Place = "incoming" | "lane" | "discarded";
+export interface ModelChoice { provider: string; model: string; effort: string | null }
+
+// ---------- cards ----------
+export interface Card {
+  id: string;
+  title: string;
+  body: string;
+  kind: "result" | "assessment" | "note";
+  made_by: "agent" | "human" | "system";
+  query: string | null;
+  columns: string[];
+  column_types: (string | null)[];
+  rows: Json[][];
+  row_count: number;
+  coverage: Coverage | null;
+  empty: EmptyMeans | null;
+  marking: Marking;
+  source: string | null;
+  step: string | null;
+  subgoal: string | null;
+  why: string;
+  event_time: string | null;
+  quality_notes: string[];
+}
+
+// ---------- plans ----------
+export type StepOutcome = "answered" | "empty" | "partial" | "blocked" | "failed";
+export interface PlanStep {
+  id: string; subgoal: string; pivot: string; source: string;
+  from: Observable; to: string; window: Window; needs_window: boolean;
+  free: boolean; weight: number; estimate: Cost | null; empty_means: EmptyMeans; warnings: string[];
+}
+export interface SubGoal { id: string; title: string; question: string; steps: string[] }
+export interface Plan { id: string; goal: string; window: Window; subgoals: SubGoal[]; steps: PlanStep[] }
+
+// ---------- pipeline ----------
+export interface StageDef {
+  id: string; title: string; phase: string | null;
+  runs: "agent" | "script" | "human";
+  gate: "plan" | "publish" | null;
+  /** True when this stage reviews the draft and must pass before publishing. */
+  reviews: boolean;
+  model: ModelChoice | null;
+}
+export interface PackItem { kind: string; id: string; title: string; hash: string; chars: number; fixed: boolean }
+
+// ---------- analysis ----------
+export type Section = "summary" | "key_findings" | "gaps_and_limits" | "alternatives" | "assessment";
+export interface Finding {
+  id: string; statement: string; likelihood: string;
+  confidence: "low" | "moderate" | "high"; confidence_basis: string;
+  cites: string[]; assumptions: string[]; reasoning: string;
+}
+export interface Product {
+  objective: string; question: string; marking: Marking;
+  summary: string; key_findings: Finding[]; gaps_and_limits: string; alternatives: string; assessment: string;
+  sources: { source: string; quality: string }[]; assumptions: string[]; change: string;
+}
+/** `hash` is sha256Hex(canonical(product)). */
+export interface Draft { n: number; hash: string; author: Actor; product: Product; reason: string }
+export interface CheckFinding { check: string; where: string; message: string }
+export interface Challenge { id: string; draft_hash: string; severity: "must_address" | "consider"; text: string; cites: string[] }
+export type Proposal =
+  | { id: string; kind: "costly_query"; title: string; by: string; step: string | null; source: string; text: string; estimate: Cost; why: string }
+  | { id: string; kind: "narrative"; title: string; by: string; section: Section; text: string; cites: string[] };
+
+// ---------- entries ----------
+export interface Payloads {
+  // case and run
+  "case.created": { id: string; title: string; asked: string; why: string; starting: Observable[]; window: Window; objective: string | null; marking: Marking };
+  "case.phase_changed": { phase: string };
+  "run.started": { run: string; pipeline: string; pipeline_hash: string; stages: StageDef[] };
+  "run.paused": { reason: string };
+  "run.resumed": Record<string, never>;
+  "run.interrupted": Record<string, never>;
+  "run.finished": { outcome: "published" | "stopped" };
+  "stage.model_set": { stage: string; choice: ModelChoice };
+  "stage.started": { stage: string; attempt: number };
+  "stage.finished": { stage: string; attempt: number; outcome: "pass" | "fail" | "declined"; draft_hash: string | null; output: BlobRef | null; reason: string | null };
+  "stage.sent_back": { from: string; to: string; reason: string; count: number };
+  "gate.waiting": { gate: "plan" | "publish" };
+  "gate.passed": { gate: "plan" | "publish" };
+  "budget.set": { tokens: number | null };
+  "job.started": { job: string; title: string; kind: "research" | "query" | "model" | "check"; source: string | null };
+  "job.finished": { job: string; outcome: "done" | "failed" };
+  // plans
+  "plan.proposed": { plan: Plan };
+  "plan.accepted": { plan: string; steps: string[]; budgets: Record<string, number> };
+  "plan.denied": { plan: string; reason: string };
+  "plan.replan_requested": { plan: string; note: string };
+  "step.started": { step: string };
+  "step.finished": { step: string; outcome: StepOutcome; cards: string[]; note: string };
+  // queries
+  "query.issued": { query: string; source: string; source_hash: string; pivot: string | null; pivot_hash: string | null; connector: string; text: string; bound: Record<string, Json>; window: Window; why: string; estimate: Cost | null; step: string | null; verifies: string | null };
+  "query.result": { query: string; result: BlobRef; rows: number; rows_hash: string; coverage: Coverage; duration_ms: number; cost: Cost | null };
+  "query.failed": { query: string; error: string };
+  "verify.run": { original: string; rerun: string; card: string; outcome: "matches" | "differs" | "could_not_run"; detail: string };
+  // models
+  "model.request": { request: string; provider: string; model: string; effort: string | null; where: Where; marking: Marking; pack: PackItem[]; left_out: PackItem[]; messages: BlobRef; tools: string[] };
+  "model.response": { request: string; response: BlobRef; stop: "end" | "tool_calls" | "length" | "error"; usage: { input: number; output: number; reasoning: number }; served_by: string; reasoning: BlobRef | null };
+  "model.declined": { request: string; reason: string };
+  "model.blocked": { stage: string; marking: Marking; model: string; where: Where };
+  "tool.called": { request: string; call: string; tool: string; args: Json; why: string };
+  "tool.returned": { call: string; ok: boolean; summary: string; result: BlobRef | null };
+  // cards and lanes
+  "card.created": { card: Card };
+  "card.kept": { card: string; lane: string; index: number | null };
+  "card.moved": { card: string; lane: string; index: number };
+  "card.discarded": { card: string };
+  "card.restored": { card: string };
+  "card.sent_back": { card: string };
+  "card.pinned": { card: string; pinned: boolean };
+  "lane.created": { lane: string; title: string; subgoal: string | null };
+  "lane.renamed": { lane: string; title: string };
+  "lane.removed": { lane: string };
+  "lane.target_set": { lane: string };
+  "undo": { target: number; card: string; place: Place; lane: string | null; index: number | null };
+  // proposals
+  "proposal.created": { proposal: Proposal };
+  "proposal.accepted": { proposal: string; budget: number | null };
+  "proposal.rejected": { proposal: string; reason: string };
+  // analysis
+  "assessment.made": { finding: Finding; draft_hash: string };
+  "research.requested": { question: string; why: string };
+  "draft.revised": { draft: Draft };
+  "check.run": { check: string; script_hash: string; input: BlobRef; draft_hash: string; pass: boolean; findings: CheckFinding[] };
+  "evaluation.made": { draft_hash: string; pass: boolean; findings: CheckFinding[] };
+  "challenge.raised": { challenge: Challenge };
+  "challenge.answered": { challenge: string; answer: string; action: "revised" | "rebutted" };
+  // product and feedback
+  "publish.rejected": { draft_hash: string; reason: string; stop: boolean };
+  "product.published": { n: number; draft_hash: string; head_hash: string; dir: string; bundle: BlobRef };
+  "feedback.recorded": { measure: string; kind: "mop" | "moe"; value: number | string; note: string };
+  // your agent (the Agent lens)
+  "agent.asked": { turn: string; text: string; left_out: string[]; added: string[] };
+  "agent.answered": { turn: string; request: string; text: string; cites: string[] };
+  // workbench chain
+  "module.loaded": { kind: string; id: string; hash: string; root: string; path: string };
+  "module.rejected": { root: string; path: string; error: string };
+  "setting.changed": { key: string; value: Json };
+}
+export type EntryType = keyof Payloads;
+
+export type EntryInput = {
+  [T in EntryType]: { type: T; payload: Payloads[T]; actor: Actor; cause?: number | null; run?: string | null; stage?: string | null; job?: string | null };
+}[EntryType];
+
+export type Entry = {
+  [T in EntryType]: {
+    seq: number; ts: string; case: string; actor: Actor; type: T; payload: Payloads[T];
+    cause: number | null; run: string | null; stage: string | null; job: string | null;
+    prev_hash: string; hash: string;
+  };
+}[EntryType];
+
+/** The most restrictive of the given markings; "TLP:CLEAR" when none are given. */
+export function strictest(...markings: Marking[]): Marking {
+  let best = 0;
+  for (const m of markings) best = Math.max(best, MARKINGS.indexOf(m));
+  return MARKINGS[best]!;
+}
