@@ -281,6 +281,10 @@ function applyPipeline(s: CaseState, entry: Entry): CaseState {
         model_calls: s.run.model_calls + 1,
       });
     }
+    case "tool.skipped": {
+      const { request, count, note } = entry.payload;
+      return isStr(request) && isNum(count) && isStr(note) ? s : malformed(s, entry);
+    }
     case "model.blocked": {
       if (!isStr(entry.payload.stage)) return malformed(s, entry);
       if (finished) return s;

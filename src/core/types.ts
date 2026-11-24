@@ -140,6 +140,8 @@ export interface Payloads {
   "model.blocked": { stage: string; marking: Marking; model: string; where: Where };
   "tool.called": { request: string; call: string; tool: string; args: Json; why: string };
   "tool.returned": { call: string; ok: boolean; summary: string; result: BlobRef | null };
+  /** Tool calls in one reply past the most a reply may have run: one entry for all of them, none of which ran. */
+  "tool.skipped": { request: string; count: number; note: string };
   // cards and lanes
   "card.created": { card: Card };
   "card.kept": { card: string; lane: string; index: number | null };
@@ -275,7 +277,7 @@ export const ENTRY_TYPES = listOf<EntryType>({
   "job.started": true, "job.finished": true, "plan.proposed": true, "plan.accepted": true, "plan.denied": true,
   "plan.replan_requested": true, "step.started": true, "step.finished": true, "query.issued": true,
   "query.result": true, "query.failed": true, "verify.run": true, "model.request": true, "model.response": true,
-  "model.declined": true, "model.blocked": true, "tool.called": true, "tool.returned": true, "card.created": true,
+  "model.declined": true, "model.blocked": true, "tool.called": true, "tool.returned": true, "tool.skipped": true, "card.created": true,
   "card.kept": true, "card.moved": true, "card.discarded": true, "card.restored": true, "card.sent_back": true,
   "card.pinned": true, "lane.created": true, "lane.renamed": true, "lane.removed": true, "lane.target_set": true,
   "undo": true, "proposal.created": true, "proposal.accepted": true, "proposal.rejected": true,

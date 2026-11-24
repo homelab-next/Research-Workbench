@@ -8,6 +8,8 @@ import type { ModelInfo, Provider, ToolCall, TurnRequest, TurnResult } from "./t
 
 export const DEFAULT_CONTEXT = 8192;
 export const MODEL_MAX_BYTES = 16 * 1024 * 1024;
+/** The most tool calls one reply may hold; a reply with more is a failure, not a list to work through. */
+export const MAX_REPLY_CALLS = 64;
 
 export interface LocalOptions {
   id: string;
@@ -170,6 +172,7 @@ export class LocalProvider implements Provider {
     const tool_calls: ToolCall[] = [];
     if (msg.tool_calls !== undefined && msg.tool_calls !== null) {
       if (!Array.isArray(msg.tool_calls)) throw new Failure("the reply's tool calls are not a list", raw);
+      if (msg.tool_calls.length > MAX_REPLY_CALLS) throw new Failure(`the reply holds ${msg.tool_calls.length} tool calls; at most ${MAX_REPLY_CALLS} are accepted`, raw);
       for (const c of msg.tool_calls as unknown[]) {
         const f = isPlainObject(c) ? c.function : undefined;
         if (!isPlainObject(c) || typeof c.id !== "string" || !isPlainObject(f) || typeof f.name !== "string" || typeof f.arguments !== "string") {

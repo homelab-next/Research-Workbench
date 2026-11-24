@@ -430,7 +430,7 @@ const HANDLED = [
   "run.started", "run.paused", "run.resumed", "run.interrupted", "run.finished", "stage.model_set", "stage.started", "stage.finished",
   "stage.sent_back", "gate.waiting", "gate.passed", "budget.set", "job.started", "job.finished", "plan.proposed", "plan.accepted",
   "plan.denied", "plan.replan_requested", "step.started", "step.finished", "query.issued", "query.result", "query.failed", "verify.run",
-  "model.response", "model.blocked", "card.created", "proposal.created", "proposal.accepted", "proposal.rejected",
+  "model.response", "model.blocked", "tool.skipped", "card.created", "proposal.created", "proposal.accepted", "proposal.rejected",
 ] as const;
 
 function raw(type: string, payload: unknown): Entry {

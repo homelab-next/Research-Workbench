@@ -165,16 +165,23 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     const reasoning = result.reasoning === null ? null : put(result.reasoning);
     const usage = { input: count(result.usage?.input), output: count(result.usage?.output), reasoning: count(result.usage?.reasoning) };
     const stop = result.stop === "tool_calls" || result.stop === "length" ? result.stop : "end";
-    if (!guarded(() => [{
-      type: "model.response", actor, ...link, cause: requested!.seq,
-      payload: { request: requestId, response, stop, usage, served_by: clip(String(result.served_by), NAME_CHARS), reasoning },
-    }])) return failed("the ledger refused the model response");
+    // at most MAX_CALLS of a reply's tool calls run; the rest are one entry beside the response, not an entry each
+    const toRun = result.tool_calls.slice(0, MAX_CALLS);
+    const extra = result.tool_calls.length - toRun.length;
+    const skippedNote = `${extra} further tool calls were not run`;
+    if (!guarded(() => [
+      {
+        type: "model.response", actor, ...link, cause: requested!.seq,
+        payload: { request: requestId, response, stop, usage, served_by: clip(String(result.served_by), NAME_CHARS), reasoning },
+      },
+      ...(extra > 0 ? [{ type: "tool.skipped" as const, actor, ...link, cause: requested!.seq, payload: { request: requestId, count: extra, note: skippedNote } }] : []),
+    ])) return failed("the ledger refused the model response");
     responded = true;
 
     // 6. the tool calls that are present decide, not the finish label
-    if (result.tool_calls.length > 0) {
+    if (toRun.length > 0) {
       const results: ChatMessage[] = [];
-      for (const [i, tc] of result.tool_calls.entries()) {
+      for (const [i, tc] of toRun.entries()) {
         if (i > 0 && (session.state.run.status === "paused" || session.state.run.status === "finished")) return { kind: "stopped", why: "paused" };
         const name = clip(String(tc.name), NAME_CHARS);
         const parsed = parseCall(spec.tools, name, tc.arguments);
@@ -194,25 +201,17 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
         let okOut: boolean;
         let summary: string;
         let forModel: string;
-        let resultBlob: BlobRef | null = null;
-        if (i >= MAX_CALLS) {
-          okOut = false;
-          summary = "too many tool calls in one reply";
-          forModel = JSON.stringify({ ok: false, summary });
-        } else {
-          const out = await execTool(ctx, parsed);
-          const full = viewText(out);
-          forModel = full;
-          if (tooStrict(out.marking, spec.max_marking)) {
-            forModel = JSON.stringify({ ok: false, summary: `withheld: marked ${out.marking}, which this model may not receive` });
-          } else if (out.marking !== null) {
-            marking = strictest(marking, out.marking);
-          }
-          okOut = out.ok;
-          summary = clip(out.summary, SUMMARY_CHARS);
-          resultBlob = put(full);
+        const out = await execTool(ctx, parsed);
+        const full = viewText(out);
+        forModel = full;
+        if (tooStrict(out.marking, spec.max_marking)) {
+          forModel = JSON.stringify({ ok: false, summary: `withheld: marked ${out.marking}, which this model may not receive` });
+        } else if (out.marking !== null) {
+          marking = strictest(marking, out.marking);
         }
-        const blob = resultBlob;
+        okOut = out.ok;
+        summary = clip(out.summary, SUMMARY_CHARS);
+        const blob: BlobRef = put(full);
         const sealed = guarded(() => [{ type: "tool.returned", actor, ...link, cause: called!.seq, payload: { call: callId, ok: okOut, summary, result: blob } }]);
         if (!sealed) {
           guarded(() => [{ type: "tool.returned", actor, ...link, cause: called!.seq, payload: { call: callId, ok: false, summary: "the ledger refused this result", result: null } }]);
@@ -221,7 +220,9 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
         calls.push({ call: callId, tool: name, args: parsed.args, ok: okOut });
         results.push({ role: "tool", content: forModel, tool_call_id: tc.id });
       }
-      messages.push({ role: "assistant", content: result.content, tool_calls: result.tool_calls }, ...results);
+      // the next request carries only the calls that ran, so it does not grow with a reply's excess
+      messages.push({ role: "assistant", content: result.content, tool_calls: toRun }, ...results);
+      if (extra > 0) messages.push({ role: "user", content: `${skippedNote}: at most ${MAX_CALLS} tool calls of a reply are run. Call again for what you still need.` });
       continue;
     }
 

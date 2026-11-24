@@ -215,3 +215,11 @@ test("a model list that echoes the credential rejects without it", async () => {
   const err = await provider(m.url, { credential: "LM_KEY" }).models().then(() => null, (e: Error) => e);
   expect(err!.message).toBe("the endpoint echoed the credential; response refused");
 });
+
+test("a reply with more than 64 tool calls is a failure", async () => {
+  const calls = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `c${i}`, type: "function", function: { name: "look", arguments: "{}" } }));
+  const m = standin([ok({ content: null, tool_calls: calls(65) }, "tool_calls"), ok({ content: null, tool_calls: calls(64) }, "tool_calls")]);
+  const p = provider(m.url);
+  expect(asError(await p.turn(req()))).toContain("the reply holds 65 tool calls; at most 64 are accepted");
+  expect(await p.turn(req())).toMatchObject({ kind: "answer", stop: "tool_calls" });
+});

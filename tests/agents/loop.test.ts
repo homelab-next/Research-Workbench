@@ -372,16 +372,24 @@ test("negative, fractional and non-finite usage is clamped to non-negative integ
   expect(ofType("model.response")[0]!.payload.usage).toEqual({ input: 0, output: 0, reasoning: 2 });
 });
 
-test("at most 16 tool calls run per reply; the rest are returned as failed without running", async () => {
+test("at most 16 tool calls run per reply; the rest are one entry, run nothing and do not reach the next request", async () => {
   const many = Array.from({ length: 40 }, (_, i) => ({ tool: "list_cards", args: { why: `w${i}` } }));
   const p = spy([{ tool_calls: many }, { content: "ok" }]);
   const end = await runAgent(f.s, spec(p));
   expect(end.kind).toBe("done");
+  expect(ofType("tool.called").length).toBe(16);
   const returns = ofType("tool.returned");
-  expect(returns.length).toBe(40);
-  expect(returns.slice(16).every((e) => !e.payload.ok && e.payload.summary === "too many tool calls in one reply")).toBe(true);
-  expect(returns.slice(0, 16).every((e) => e.payload.ok)).toBe(true);
-  expect(p.seen[1]!.messages.filter((m) => m.role === "tool").length).toBe(40);
+  expect(returns.length).toBe(16);
+  expect(returns.every((e) => e.payload.ok)).toBe(true);
+  const skipped = ofType("tool.skipped");
+  expect(skipped.map((e) => e.payload)).toEqual([{ request: ofType("model.request")[0]!.payload.request, count: 24, note: "24 further tool calls were not run" }]);
+  expect(skipped[0]!.cause).toBe(ofType("model.request")[0]!.seq);
+  // the next request answers the sixteen that ran and says the rest did not
+  const next = p.seen[1]!.messages;
+  expect(next.filter((m) => m.role === "tool").length).toBe(16);
+  expect(next.find((m) => m.role === "assistant")!.tool_calls).toHaveLength(16);
+  expect(next.at(-1)).toMatchObject({ role: "user", content: expect.stringContaining("24 further tool calls were not run") });
+  expect(f.s.state.skipped).toEqual([]);
 });
 
 test("a pause between calls stops the remaining calls of the turn", async () => {
