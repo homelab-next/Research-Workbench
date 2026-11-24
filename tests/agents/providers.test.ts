@@ -128,3 +128,17 @@ test("loadProviders itself refuses a scripted model that is not on this machine,
   expect(providers.all()).toEqual([]);
   expect(problems.map((p) => p.error)).toEqual([expect.stringMatching(/where must be machine/), expect.stringMatching(/provider/)]);
 });
+
+test("a timeout above ten minutes is a problem", () => {
+  expect(loadLocal(local({ timeout_ms: "600000" })).problems).toEqual([]);
+  expect(loadLocal(local({ timeout_ms: "600001" })).providers.get("lm")).toBeNull();
+  expect(loadLocal(local({ timeout_ms: "3000000000" })).providers.get("lm")).toBeNull();
+});
+
+test("lookalike hosts may not say they are on this machine", () => {
+  for (const host of ["127.0.0.1.example.org", "localhost.", "localhost.example.org"]) {
+    const { providers, problems } = loadLocal(local({ base_url: `https://${host}/v1` }));
+    expect(providers.get("lm")).toBeNull();
+    expect(problems.map((p) => p.error).join()).toMatch(/machine/);
+  }
+});

@@ -164,8 +164,8 @@ export class LocalProvider implements Provider {
     if (finish === "content_filter" || refusal !== null) {
       return { kind: "declined", reason: refusal ?? "the endpoint's content filter stopped the reply", served_by, raw };
     }
-    const stop = finish === "stop" ? "end" : finish === "tool_calls" ? "tool_calls" : finish === "length" ? "length" : null;
-    if (stop === null) throw new Failure(`the reply stopped for an unknown reason: ${this.#redact(String(finish))}`, raw);
+    const base = finish === "stop" ? "end" : finish === "tool_calls" ? "tool_calls" : finish === "length" ? "length" : null;
+    if (base === null) throw new Failure(`the reply stopped for an unknown reason: ${this.#redact(String(finish))}`, raw);
     if (msg.content !== null && msg.content !== undefined && typeof msg.content !== "string") throw new Failure("the reply's content is not text", raw);
     const tool_calls: ToolCall[] = [];
     if (msg.tool_calls !== undefined && msg.tool_calls !== null) {
@@ -175,9 +175,14 @@ export class LocalProvider implements Provider {
         if (!isPlainObject(c) || typeof c.id !== "string" || !isPlainObject(f) || typeof f.name !== "string" || typeof f.arguments !== "string") {
           throw new Failure("a tool call in the reply is malformed", raw);
         }
+        if (c.id === "" || f.name === "") throw new Failure("a tool call in the reply has an empty id or name", raw);
+        if (tool_calls.some((t) => t.id === c.id)) throw new Failure("two tool calls in the reply share an id", raw);
         tool_calls.push({ id: c.id, name: f.name, arguments: f.arguments });
       }
     }
+    // LM Studio sometimes says "stop" while calling tools: the calls decide.
+    if (base === "tool_calls" && tool_calls.length === 0) throw new Failure("the reply says it stopped to call tools but holds no tool calls", raw);
+    const stop = tool_calls.length > 0 ? "tool_calls" : base;
     const u = isPlainObject(parsed) && isPlainObject(parsed.usage) ? parsed.usage : {};
     const details = isPlainObject(u.completion_tokens_details) ? u.completion_tokens_details : {};
     const usage: Usage = { input: num(u.prompt_tokens), output: num(u.completion_tokens), reasoning: num(details.reasoning_tokens) };

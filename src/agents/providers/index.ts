@@ -47,7 +47,7 @@ const LOCAL_SCHEMA: Schema = {
     credential: { type: "string", minLength: 1 },
     context: { type: "integer", minimum: 1 },
     efforts: { type: "array", items: { type: "string", minLength: 1 } },
-    timeout_ms: { type: "integer", minimum: 1 },
+    timeout_ms: { type: "integer", minimum: 1, maximum: 600000 },
   },
   additionalProperties: true,
 };

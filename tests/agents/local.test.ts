@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { LocalProvider, DEFAULT_CONTEXT } from "../../src/agents/providers/local";
 import type { TurnRequest, TurnResult } from "../../src/agents/providers";
 import { Secrets } from "../../src/modules/secrets";
+import { startStandin } from "../helpers/http-standin";
 import { startModelStandin } from "../helpers/model-standin";
 import type { StandinReply } from "../helpers/model-standin";
 
@@ -142,7 +143,7 @@ test("a refused connection is an error", async () => {
 test("a redirect is refused", async () => {
   const other = standin([ok({ content: "elsewhere" })]);
   const m = standin([{ redirect: `${other.url}/chat/completions` }]);
-  asError(await provider(m.url, { credential: "LM_KEY" }).turn(req()));
+  expect(asError(await provider(m.url, { credential: "LM_KEY" }).turn(req()))).toMatch(/could not be reached/);
   expect(other.requests.filter((x) => x.method === "POST")).toEqual([]);
 });
 
@@ -167,4 +168,50 @@ test("turn never throws", async () => {
     const r = await p.turn(req());
     expect(["answer", "declined", "error"]).toContain(r.kind);
   }
+});
+
+const calls = (...cs: unknown[]) => ok({ content: null, tool_calls: cs }, "tool_calls");
+const call = (id: string, name = "look") => ({ id, type: "function", function: { name, arguments: "{}" } });
+
+test("empty or repeated tool call identity is an error that keeps the bytes", async () => {
+  const m = standin([calls(call("a"), call("a")), calls(call("")), calls(call("a", ""))]);
+  const p = provider(m.url);
+  for (const re of [/share an id/, /empty id or name/, /empty id or name/]) {
+    const r = await p.turn(req());
+    expect(asError(r)).toMatch(re);
+    expect(r.kind === "error" && r.raw !== null && r.raw.length > 0).toBe(true);
+  }
+});
+
+test("a malformed tool call is an error", async () => {
+  const m = standin([calls({ id: "a", function: { name: "x" } }), calls("nope")]);
+  const p = provider(m.url);
+  expect(asError(await p.turn(req()))).toMatch(/malformed/);
+  expect(asError(await p.turn(req()))).toMatch(/malformed/);
+});
+
+test("tool calls decide the stop, whatever the finish reason", async () => {
+  const m = standin([ok({ content: "", tool_calls: [call("a")] }, "stop"), ok({ content: "" }, "tool_calls")]);
+  const p = provider(m.url);
+  expect(await p.turn(req())).toMatchObject({ kind: "answer", stop: "tool_calls", tool_calls: [{ id: "a" }] });
+  expect(asError(await p.turn(req()))).toMatch(/no tool calls/);
+});
+
+test("a body that trickles in is cut off at the timeout", async () => {
+  const enc = new TextEncoder();
+  const s = startStandin({
+    "POST /v1/chat/completions": () => new Response(new ReadableStream({
+      async start(c) { for (let i = 0; i < 40; i++) { c.enqueue(enc.encode(" ")); await Bun.sleep(50); } c.close(); },
+    })),
+  });
+  stops.push(s.stop);
+  const t0 = Date.now();
+  expect(asError(await provider(`${s.url}/v1`, { timeout_ms: 300 }).turn(req()))).toBe("no answer within 300 ms");
+  expect(Date.now() - t0).toBeLessThan(1500);
+}, 5000);
+
+test("a model list that echoes the credential rejects without it", async () => {
+  const m = standin([], { models: [{ id: KEY }] });
+  const err = await provider(m.url, { credential: "LM_KEY" }).models().then(() => null, (e: Error) => e);
+  expect(err!.message).toBe("the endpoint echoed the credential; response refused");
 });
