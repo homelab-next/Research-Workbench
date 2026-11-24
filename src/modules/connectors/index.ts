@@ -42,3 +42,4 @@ export class ConnectorPool {
 
 export * from "./types";
 export { placeholders, effectiveBound } from "./placeholders";
+export { isUtcTimestamp } from "./shared";

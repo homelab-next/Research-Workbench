@@ -64,6 +64,7 @@ adhoc: false
 cost: { weight: 5, unit: lookups }
 endpoints:
   - { name: reputation, method: GET, path: "/v1/reputation/{value}?days={days}", read: true, rows: results, columns: [address, verdict] }
+  - { name: reputation2, method: GET, path: "/v1/reputation/{value}", read: true, rows: results, columns: [address, verdict] }
 `,
   "types.yaml": `kind: types
 types:
@@ -75,6 +76,7 @@ pivots:
   - { id: seen, title: Seen, from: address, to: address, source: flows, query: "select dst from flows where src = {value}", empty_means: not-seen, yields: { dst: address } }
   - { id: paid_rep, title: Paid reputation, from: address, to: address, source: rep, query: reputation, empty_means: not-seen, yields: { address: address } }
   - { id: free_rep, title: Free reputation, from: address, to: address, source: rep, query: reputation, weight: 0, empty_means: not-seen, yields: { address: address } }
+  - { id: windowed, title: Windowed peers, from: address, to: address, source: flows, query: "select dst from flows where src = {value} and ts >= {window.from} and ts < {window.to}", needs_window: true, empty_means: proven-negative, yields: { dst: address } }
 `,
 });
 
@@ -187,7 +189,7 @@ test("the card previews at most 50 rows but counts them all", async () => {
 const none = { ...base, bound: { value: "192.0.2.99" } };
 
 test("zero rows with full coverage on a proven-negative pivot is a proven negative", async () => {
-  const r = await runQuery(s, deps, { ...none, pivot: registry.pivot("peers")! });
+  const r = await runQuery(s, deps, { ...none, text: registry.pivot("peers")!.query, pivot: registry.pivot("peers")! });
   expect(r).toMatchObject({ status: "done", outcome: "empty", rows: 0 });
   expect(s.state.cards.c1).toMatchObject({ empty: "proven-negative", body: "No rows · proven negative", coverage: { kind: "full" } });
 });
@@ -410,4 +412,96 @@ test("an http result that echoes the credential is refused: the secret reaches n
   expect(types()).toEqual(["case.created", "query.issued", "query.failed"]);
   const stored = [readFileSync(join(s.dir, "ledger.sqlite")), ...(existsSync(join(s.dir, "blobs")) ? readdirSync(join(s.dir, "blobs"), { recursive: true }).map(String).filter((f) => statSync(join(s.dir, "blobs", f)).isFile()).map((f) => readFileSync(join(s.dir, "blobs", f))) : [])];
   for (const bytes of stored) expect(bytes.includes("rep-key-value")).toBe(false);
+});
+
+// ---------- final review finding 3: the window is checked before anything is written ----------
+test("a malformed window, or one whose from is after its to, is refused and writes nothing", async () => {
+  const pn = registry.pivot("peers")!;
+  const before = s.head().seq;
+  const bad: unknown[] = [
+    { from: "last tuesday", to: "now" }, { from: "2026-01-01T00:00:00Z", to: null }, { from: "2026-01-01T00:00:00.000+01:00", to: null },
+    { from: "2026-02-30T00:00:00.000Z", to: null }, { from: 1767225600000, to: null }, { from: null }, null,
+    { from: "2026-02-01T00:00:00.000Z", to: "2026-01-01T00:00:00.000Z" },
+  ];
+  for (const window of bad) {
+    const r = await runQuery(s, deps, { ...none, text: pn.query, pivot: pn, window: window as TimeWindow });
+    expect(r.status, JSON.stringify(window)).toBe("refused");
+  }
+  expect(s.head().seq).toBe(before);
+  // an instant window and open ends are fine
+  expect((await runQuery(s, deps, { ...none, text: pn.query, pivot: pn, window: { from: win.from, to: win.from } })).status).toBe("done");
+  expect((await runQuery(s, deps, { ...none, text: pn.query, pivot: pn, window: { from: null, to: null } })).status).toBe("done");
+});
+
+test("a pivot that needs a window is refused with an open end", async () => {
+  const before = s.head().seq;
+  const pivot = registry.pivot("windowed")!;
+  for (const window of [{ from: null, to: win.to }, { from: win.from, to: null }, { from: null, to: null }]) {
+    expect(await runQuery(s, deps, { ...base, text: pivot.query, pivot, window })).toEqual({ status: "refused", reasons: ["pivot windowed needs a window with both ends set"] });
+  }
+  expect(s.head().seq).toBe(before);
+  expect((await runQuery(s, deps, { ...base, text: pivot.query, pivot })).status).toBe("done");
+});
+
+// ---------- final review finding 4: a pivot applies only to its own text ----------
+test("a pivot passed with other text lends neither its weight nor its proven negative", async () => {
+  const free = registry.pivot("free_rep")!;
+  // a person on a non-adhoc source, a free pivot's id, a costly source: the source's weight applies
+  expect(await runQuery(s, deps, { ...repInput, text: "reputation2", pivot: free })).toEqual({ status: "needs_budget", proposal: null, estimate: { amount: 1, unit: "lookups" } });
+  expect(standin.requests).toHaveLength(0);
+  const peers = registry.pivot("peers")!;
+  const r = await runQuery(s, deps, { ...none, text: "select dst as peer from flows where src = {value} and 1 = 0", pivot: peers });
+  expect(r).toMatchObject({ status: "done", outcome: "empty" });
+  expect(s.state.cards.c1).toMatchObject({ empty: "not-seen", title: "Query on Flows" });
+  expect(s.entries().find((e) => e.type === "query.issued")!.payload).toMatchObject({ pivot: null, pivot_hash: null });
+});
+
+test("an agent on an adhoc source with other text gets the source's weight, not the free pivot's", async () => {
+  const adhoc = Registry.load([{ path: join(dir, "modules"), trusted: true, credentials: ["REP_KEY"] }]);
+  const src = adhoc.source("rep")!;
+  const d: RunnerDeps = { ...deps, registry: { ...adhoc, source: (id: string) => (id === "rep" ? { ...src, adhoc: true } : adhoc.source(id)), pivot: (id: string) => adhoc.pivot(id) } as unknown as Registry };
+  const r = await runQuery(s, d, { ...repInput, actor: agent, pivot: adhoc.pivot("free_rep")!, text: "reputation" });
+  expect(r.status).toBe("done"); // the pivot's own text: free
+  const other = await runQuery(s, d, { ...repInput, actor: agent, pivot: adhoc.pivot("free_rep")!, text: "reputation2" });
+  expect(other).toMatchObject({ status: "needs_budget", proposal: "p1" });
+  expect(standin.requests).toHaveLength(1);
+});
+
+// ---------- final review minors 13 and 14 ----------
+test("bound values that are not strings, finite numbers or null are refused before anything is written", async () => {
+  const before = s.head().seq;
+  for (const value of [true, { a: 1 }, [1], NaN, Infinity, undefined]) {
+    const r = await runQuery(s, deps, { ...base, bound: { value } as unknown as RunQueryInput["bound"] });
+    expect(r.status, String(value)).toBe("refused");
+  }
+  expect((await runQuery(s, deps, { ...base, bound: null as unknown as RunQueryInput["bound"] })).status).toBe("refused");
+  expect(s.head().seq).toBe(before);
+});
+
+test("bound values are copied at entry: a change by the caller during the run does not reach the source", async () => {
+  const seen: QueryRequest[] = [];
+  const bound: Record<string, string> = { value: "192.0.2.17" };
+  const d = stubDeps(async () => {
+    bound.value = "changed";
+    return { columns: ["dst"], rows: [], raw: new Uint8Array(), media: "", coverage: { kind: "full" }, cost: null };
+  }, seen);
+  await runQuery(s, d, { ...base, bound });
+  expect(seen[0]!.bound).toEqual({ value: "192.0.2.17" });
+  expect(s.entries().find((e) => e.type === "query.issued")!.payload).toMatchObject({ bound: { value: "192.0.2.17" } });
+});
+
+test("any error while rendering or estimating is a refusal, not a throw", async () => {
+  const throwing = (where: "render" | "estimate"): RunnerDeps => {
+    const stub = {
+      kind: "sql", close: () => {},
+      render: (r: QueryRequest) => { if (where === "render") throw new TypeError("render broke"); return r.text; },
+      estimate: async () => { throw new RangeError("estimate broke"); },
+      estimateRequest: () => null, readEstimate: () => null,
+      run: async () => { throw new Error("not reached"); },
+    } as unknown as Connector;
+    return { registry, observables, pool: { for: () => stub, closeAll: () => {} } as unknown as ConnectorPool };
+  };
+  expect(await runQuery(s, throwing("render"), base)).toEqual({ status: "refused", reasons: ["render broke"] });
+  expect(await runQuery(s, throwing("estimate"), { ...repInput, budget: 3 })).toEqual({ status: "refused", reasons: ["estimate broke"] });
+  expect(types()).toEqual(["case.created"]);
 });

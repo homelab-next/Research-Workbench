@@ -4,14 +4,13 @@ import type { SourceManifest } from "../manifests";
 import { assertReadOnly, checkGuardrails, GuardError, stripForAnalysis, tablePattern } from "../sqlguard";
 import type { TableGuard } from "../sqlguard";
 import { effectiveBound, PLACEHOLDER } from "./placeholders";
-import { assertNoEcho, CONTROL, loadCredential, parseBase, readCapped, scrub, TimedOut, TooBig } from "./shared";
+import { assertNoEcho, CONTROL, isUtcTimestamp, loadCredential, parseBase, readCapped, scrub, TimedOut, TooBig, UTC_MS } from "./shared";
 import { ConnectorError } from "./types";
 import type { Connector, ConnectorContext, QueryOutcome, QueryRequest } from "./types";
 
 export const MAX_PAGE_BYTES = 16_777_216;
 export const MAX_TOTAL_BYTES = 67_108_864;
 const CANCEL_TIMEOUT_MS = 2000;
-const ISO_MS = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2}\.\d{3})Z$/;
 
 /** The engine reported the query failed: it has already ended, so there is nothing to cancel. */
 class EngineError extends ConnectorError {}
@@ -22,7 +21,7 @@ export function renderLiteral(name: string, value: string | number | null): stri
     throw new ConnectorError(`the value for {${name}} is a ${Array.isArray(value) ? "array" : typeof value}; only strings, numbers and null can be bound`);
   }
   if (name === "window.from" || name === "window.to") {
-    const m = typeof value === "string" ? ISO_MS.exec(value) : null;
+    const m = isUtcTimestamp(value) ? UTC_MS.exec(value) : null;
     if (m === null) throw new ConnectorError(`the value for {${name}} is not a UTC timestamp like 2026-11-20T00:00:00.000Z`);
     return `TIMESTAMP '${m[1]} ${m[2]} UTC'`;
   }

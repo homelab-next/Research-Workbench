@@ -2,6 +2,16 @@ import { SecretError } from "../secrets";
 import type { Secrets } from "../secrets";
 import { ConnectorError } from "./types";
 
+/** A UTC timestamp with milliseconds, the one format a window end may take: 2026-11-20T00:00:00.000Z. */
+export const UTC_MS = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2}\.\d{3})Z$/;
+
+/** True for a string in UTC_MS form that names a real instant (no 31 February, no hour 25). */
+export function isUtcTimestamp(value: unknown): value is string {
+  if (typeof value !== "string" || !UTC_MS.test(value)) return false;
+  const t = Date.parse(value);
+  return Number.isFinite(t) && new Date(t).toISOString() === value;
+}
+
 /** Hosts where plain http is allowed: this machine only. */
 export const LOOPBACK: ReadonlySet<string> = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
