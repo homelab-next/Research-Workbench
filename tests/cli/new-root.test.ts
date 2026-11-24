@@ -133,14 +133,26 @@ test("a sample holding a symbolic link or lacking a folder is refused before any
   expect(existsSync(root)).toBe(false);
 });
 
-test("the model manifest caps the model's output at 8192 tokens", () => {
+test("the model manifest caps the model's output at 65536 tokens", () => {
   const root = fresh();
   newRoot(root, { base_url: "http://127.0.0.1:1234/v1", model: "example/model-a" });
-  expect(readFileSync(join(root, "models", "local.yaml"), "utf8").split("\n")).toContain("max_output_tokens: 8192");
+  expect(readFileSync(join(root, "models", "local.yaml"), "utf8").split("\n")).toContain("max_output_tokens: 65536");
 });
 
 test("the model manifest asks for structured output", () => {
   const root = fresh();
   newRoot(root, { base_url: "http://127.0.0.1:1234/v1", model: "example/model-a" });
   expect(readFileSync(join(root, "models", "local.yaml"), "utf8").split("\n")).toContain("structured_output: true");
+});
+
+test("the model manifest carries the Qwen-recommended sampling and a 65536-token output limit, and loads", () => {
+  const root = fresh();
+  newRoot(root, { base_url: "http://127.0.0.1:1234/v1", model: "example/model-a" });
+  const body = Bun.YAML.parse(readFileSync(join(root, "models", "local.yaml"), "utf8")) as Record<string, unknown>;
+  expect(body.max_output_tokens).toBe(65536);
+  expect(body.sampling).toEqual({ temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0, presence_penalty: 1.5 });
+  const registry = Registry.load([{ path: root, trusted: true, credentials: [] }]);
+  const { providers, problems } = loadProviders(registry, new Secrets({}, null));
+  expect([...registry.problems, ...problems]).toEqual([]);
+  expect(providers.get("local")!.max_output_tokens).toBe(65536);
 });

@@ -10,6 +10,7 @@ import { loadProfile } from "../agents/context";
 import { mayGo, packBudget } from "../agents/pack";
 import { loadProviders } from "../agents/providers";
 import type { ModelInfo, Provider } from "../agents/providers";
+import { describeSampling } from "../agents/providers/sampling";
 import { ConfigError, loadConfig } from "../modules/config";
 import { ConnectorPool } from "../modules/connectors";
 import { GuardError } from "../modules/sqlguard";
@@ -238,7 +239,7 @@ export async function preflight(
     try { list = await listings.get(provider.id)!; } catch (err) { add("model listed", "fail", `${pair.provider}: ${reason(err)}`); continue; }
     const info = list.find((m) => m.id === pair.model);
     if (info === undefined) { add("model listed", "fail", `${pair.provider} does not list the model ${pair.model}`); continue; }
-    add("model listed", "ok", `${pair.model} at ${pair.provider}`);
+    add("model listed", "ok", `${pair.model} at ${pair.provider}` + (provider.kind === "local" ? `; sampling ${describeSampling(provider.sampling)}; up to ${provider.max_output_tokens ?? "an unknown number of"} output tokens` : ""));
     if (info.loaded === false) {
       add("model loaded", "fail", `${pair.model} is not loaded at ${pair.provider}; load it with a context of at least ${p.min_context} tokens and run this again`);
       continue;

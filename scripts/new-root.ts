@@ -97,7 +97,9 @@ export function newRoot(dir: string, opts: NewRootOptions): string[] {
     mkdirSync(join(dir, "models"));
     writeFileSync(join(dir, "models", `${provider}.yaml`), [
       "kind: model", `id: ${provider}`, "title: Local model", "provider: local", `where: ${where}`,
-      `base_url: ${JSON.stringify(opts.base_url)}`, "efforts: []", "timeout_ms: 300000", "max_output_tokens: 8192", "structured_output: true", "",
+      `base_url: ${JSON.stringify(opts.base_url)}`, "efforts: []", "timeout_ms: 300000", "max_output_tokens: 65536", "structured_output: true",
+      // Qwen's own guidance for thinking mode; the presence penalty stops a reply looping on itself
+      "sampling: { temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0, presence_penalty: 1.5 }", "",
     ].join("\n"));
     writeFileSync(join(dir, "types.yaml"), ["kind: types", "types:", ...keep.map((t) => `  - { id: ${t.id}, title: ${t.title}, pattern: '${t.pattern.replace(/'/g, "''")}' }`), ""].join("\n"));
     writeFileSync(join(dir, "pivots.yaml"), "kind: pivots\npivots: []\n");

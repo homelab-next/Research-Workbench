@@ -357,3 +357,10 @@ test("the usage text documents the exit codes", async () => {
   await p.exited;
   expect(err).toContain("exit 0 ready, 1 not ready, 2 bad command line or configuration, 3 unexpected error");
 });
+
+test("the model line prints the sampling and output limit the model manifest gives", async () => {
+  const m = standin([GOOD()]);
+  const e = env(m.url);
+  const r = await run(e);
+  expect(by(r, "model listed")[0]!.detail).toBe("example/model-a at local; sampling temperature 0.6, top_p 0.95, top_k 20, min_p 0, presence_penalty 1.5; up to 65536 output tokens");
+});
