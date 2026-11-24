@@ -21,7 +21,7 @@ import type { StageManifest } from "../pipeline/manifests";
 
 export interface Check { name: string; level: "ok" | "fail" | "note"; detail: string }
 
-const USAGE = "usage: bun run preflight [--config <file>] [--min-context <tokens>] [--no-question]";
+const USAGE = "usage: bun run preflight [--config <file>] [--min-context <tokens>] [--no-question]\nexit 0 ready, 1 not ready, 2 bad command line or configuration, 3 unexpected error";
 const DEFAULT_MIN_CONTEXT = 32768;
 const NAMES = ["configuration", "outside the repository", "secrets", "manifests", "pipeline", "checks", "lake sources", "pivots", "model listed", "model loaded", "context", "marking policy", "model answers"] as const;
 type Name = (typeof NAMES)[number];
@@ -67,6 +67,23 @@ const inside = (child: string, parent: string): boolean => child === parent || c
 const reason = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 /** Nothing that looks like userinfo in a URL is ever printed. */
 const noUserinfo = (s: string): string => s.replace(/\/\/[^/\s@]*@/g, "//");
+const CONTROLS = new RegExp("[\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]", "g");
+const MAX_DETAIL = 300;
+/** One line of at most 300 characters, with no control character and no userinfo: text from a model or an endpoint is never printed raw. */
+export function oneLine(s: string): string {
+  const t = noUserinfo(s).replace(CONTROLS, " ");
+  return t.length > MAX_DETAIL ? `${t.slice(0, MAX_DETAIL - 1)}\u2026` : t;
+}
+const MODEL_CALL_MS = 30000;
+/** Rejects if `work` takes longer than `ms`. */
+async function within<T>(ms: number, work: Promise<T>, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([work, new Promise<never>((_, no) => { timer = setTimeout(() => no(new Error(`${what} gave no answer within ${ms} ms`)), ms); })]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 const QUESTION_TOOL = {
   name: "record", description: "Record one line.",
@@ -98,7 +115,7 @@ export async function preflight(
   const by = new Map<Name, Check[]>();
   const add = (name: Name, level: Check["level"], detail: string): void => {
     const list = by.get(name) ?? [];
-    list.push({ name, level, detail: noUserinfo(detail) });
+    list.push({ name, level, detail: oneLine(detail) });
     by.set(name, list);
   };
   add("configuration", "ok", config.path ?? "defaults (the bundled sample)");
@@ -106,13 +123,15 @@ export async function preflight(
   // where things live
   const repo = realpathSync(repoRoot);
   const sample = realish(join(repo, "sample"));
+  const showFrom = config.path === null ? process.cwd() : dirname(config.path);
+  const show = (path: string): string => (path === "" ? "(empty path)" : relative(showFrom, path) || ".");
   const placed: { what: string; path: string }[] = [];
   if (config.path !== null) placed.push({ what: "the configuration file", path: config.path });
   if (config.secrets_file !== null) placed.push({ what: "the secrets file", path: config.secrets_file });
-  for (const r of config.roots) if (realish(r.path) !== sample) placed.push({ what: "a root", path: r.path });
+  for (const r of config.roots) if (r.path === "" || realish(r.path) !== sample) placed.push({ what: "a root", path: r.path });
   let bad = 0;
   for (const x of placed) {
-    if (inside(realish(x.path), repo)) { bad++; add("outside the repository", "fail", `${x.what} ${x.path} lies inside the repository; keep it outside`); }
+    if (x.path === "" || inside(realish(x.path), repo)) { bad++; add("outside the repository", "fail", `${x.what} ${x.what === "the configuration file" ? x.path : show(x.path)} lies inside the repository; keep it outside`); }
   }
   if (bad === 0) add("outside the repository", "ok", "the configuration, the secrets file and every root are outside it");
 
@@ -213,7 +232,8 @@ export async function preflight(
     const who = many ? `${pair.model}: ` : "";
     const provider = loaded.providers.get(pair.provider);
     if (provider === null) { add("model listed", "fail", `${pair.model}: the provider "${pair.provider}" is not loaded (stages ${pair.stages.join(", ")})`); continue; }
-    if (!listings.has(provider.id)) listings.set(provider.id, provider.models());
+    const cap = Math.min(typeof registry.get("model", provider.id)?.body.timeout_ms === "number" ? (registry.get("model", provider.id)!.body.timeout_ms as number) : 120000, MODEL_CALL_MS);
+    if (!listings.has(provider.id)) listings.set(provider.id, within(cap, provider.models(), provider.id));
     let list: ModelInfo[];
     try { list = await listings.get(provider.id)!; } catch (err) { add("model listed", "fail", `${pair.provider}: ${reason(err)}`); continue; }
     const info = list.find((m) => m.id === pair.model);
@@ -255,14 +275,15 @@ export async function preflight(
   if (p.question) {
     for (const { pair, provider } of asked) {
       if (provider.kind === "scripted") { add("model answers", "note", `${pair.model} is scripted; nothing was asked`); continue; }
-      const r = await provider.turn({
+      const cap = Math.min(typeof registry.get("model", pair.provider)?.body.timeout_ms === "number" ? (registry.get("model", pair.provider)!.body.timeout_ms as number) : 120000, MODEL_CALL_MS);
+      const r = await within(cap, provider.turn({
         model: pair.model, effort: null, key: "preflight", ordinal: 0,
         messages: [
           { role: "system", content: "You are checking that a tool can be called." },
           { role: "user", content: "Call the tool record once, with why set to a short reason. Then stop." },
         ],
         tools: [QUESTION_TOOL as never],
-      });
+      }), pair.model).catch((err): { kind: "error"; message: string; raw: null } => ({ kind: "error", message: reason(err), raw: null }));
       if (r.kind === "error") { add("model answers", "fail", r.message); continue; }
       if (r.kind === "declined") { add("model answers", "fail", `declined: ${r.reason}`); continue; }
       const wrong = judge(r.tool_calls);
@@ -291,8 +312,8 @@ if (import.meta.main) {
       console.error(err.message);
       process.exitCode = 2;
     } else {
-      console.error(`unexpected error: ${reason(err)}`);
-      process.exitCode = 1;
+      console.error(`unexpected error: ${oneLine(reason(err))}`);
+      process.exitCode = 3;
     }
   }
 }

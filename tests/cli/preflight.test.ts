@@ -41,6 +41,7 @@ function standin(replies: StandinReply[], models: { id: string; loaded_context_l
   stops.push(m.stop);
   return m;
 }
+const BAD = new RegExp("[\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]");
 const by = (r: { checks: Check[] }, name: string): Check[] => r.checks.filter((c) => c.name === name);
 
 interface Env { tmp: string; root: string; config: string }
@@ -320,4 +321,39 @@ test("the command exits 0 when ready, 1 when not, 2 on a bad line", async () => 
   expect((await go(["--bogus"])).code).toBe(2);
   expect((await go(["--config", join(e.tmp, "missing.yaml")])).code).toBe(2);
   expect((await go(["--min-context", "lots"])).code).toBe(2);
+});
+
+test("text from the model is one bounded line with no control characters", async () => {
+  const m = standin([
+    { json: { choices: [{ finish_reason: "stop", message: { content: null, refusal: `no\u001b[31m ${"x".repeat(200_000)}` } }] } as never },
+    call(`{"id":"c1","type":"function","function":{"name":"rec\\u001b[2Jord\\u0085\\u2028","arguments":"{}"}}`),
+  ]);
+  const e = env(m.url);
+  for (let i = 0; i < 2; i++) {
+    const r = await run(e);
+    const d = by(r, "model answers")[0]!.detail;
+    expect(d.length).toBeLessThanOrEqual(300);
+    expect(d).not.toMatch(BAD);
+    if (i === 0) expect(d.endsWith("\u2026")).toBe(true);
+    expect(r.checks.every((c) => c.detail.length <= 300 && !BAD.test(c.detail))).toBe(true);
+  }
+});
+
+test("a path other than the configuration's prints relative to the configuration's folder", async () => {
+  const m = standin([GOOD()]);
+  const e = env(m.url);
+  const inRepo = join(REPO, "tests");
+  writeFileSync(e.config, `roots: [{ path: ${JSON.stringify(inRepo)}, trusted: false }]\ndata_dir: ./data\n`);
+  const r = await run(e);
+  const d = by(r, "outside the repository")[0]!.detail;
+  expect(d).toContain("a root ..");
+  expect(d.startsWith(REPO)).toBe(false);
+});
+
+test("the usage text documents the exit codes", async () => {
+  const e = env(standin([]).url);
+  const p = Bun.spawn(["bun", "run", CLI, "--bogus"], { cwd: REPO, env: cleanEnv(e.tmp), stdout: "pipe", stderr: "pipe" });
+  const err = await new Response(p.stderr).text();
+  await p.exited;
+  expect(err).toContain("exit 0 ready, 1 not ready, 2 bad command line or configuration, 3 unexpected error");
 });
