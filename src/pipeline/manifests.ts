@@ -1,5 +1,7 @@
 import type { Json } from "../core/canonical";
 import { canonical } from "../core/canonical";
+import { basename, dirname, isAbsolute, join } from "node:path";
+import { existsSync, statSync } from "node:fs";
 import { sha256Hex } from "../core/hash";
 import type { Schema } from "../core/schema";
 import { validate } from "../core/schema";
@@ -8,6 +10,7 @@ import type { StageDef } from "../core/types";
 import { describeErrors } from "../modules/manifests";
 import type { LoadedManifest } from "../modules/manifests";
 import type { Registry } from "../modules/registry";
+import { staysInside } from "../modules/registry";
 import { TOOL_NAMES } from "../agents/tools";
 import type { ToolName } from "../agents/tools";
 
@@ -116,4 +119,43 @@ export function loadPipeline(registry: Registry): { pipeline: Pipeline | null; p
 
   const hash = sha256Hex(canonical(stages.map((s): Json => [s.id, s.hash])));
   return { pipeline: { id: "default", hash, stages }, problems };
+}
+
+export interface CheckManifest { id: string; title: string; order: number; hash: string; path: string; script: string; runner: "bun" | "exec"; timeout_ms: number }
+
+const CHECK_SCHEMA: Schema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["kind", "id", "order", "script", "runner", "timeout_ms"],
+  properties: {
+    kind: { type: "string", enum: ["check"] },
+    id: { type: "string", minLength: 1 },
+    title: { type: "string", minLength: 1 },
+    order: { type: "number" },
+    script: { type: "string", minLength: 1 },
+    runner: { type: "string", enum: ["bun", "exec"] },
+    timeout_ms: { type: "number" },
+  },
+};
+
+/** The checks a registry holds that may run: from trusted roots only, each with a script that is a plain file inside its own folder. Others are left out with a problem. */
+export function loadChecks(registry: Registry): { checks: CheckManifest[]; problems: string[] } {
+  const problems: string[] = [];
+  const checks: CheckManifest[] = [];
+  for (const m of registry.all("check")) {
+    const root = registry.rootOf(m.path);
+    if (root?.trusted !== true) { problems.push(`check ${m.id} is in a root that is not trusted for scripts; it will not run`); continue; }
+    const errors = validate(CHECK_SCHEMA, m.body as Json);
+    if (errors.length > 0) { problems.push(`check ${m.id} (${m.path}): ${describeErrors(errors)}`); continue; }
+    const b = m.body as unknown as { script: string; order: number; runner: "bun" | "exec"; timeout_ms: number; title?: string };
+    if (!(b.timeout_ms > 0) || !Number.isFinite(b.timeout_ms)) { problems.push(`check ${m.id}: timeout_ms must be a positive number`); continue; }
+    const plain = b.script === basename(b.script) && b.script !== "." && b.script !== ".." && !isAbsolute(b.script) && !/[\\/]/.test(b.script);
+    if (!plain) { problems.push(`check ${m.id}: script "${b.script}" must be a plain file name in the manifest's folder`); continue; }
+    const file = join(dirname(m.path), b.script);
+    if (!staysInside(root.path, file)) { problems.push(`check ${m.id}: script "${b.script}" is outside the module root`); continue; }
+    if (!existsSync(file) || !statSync(file).isFile()) { problems.push(`check ${m.id}: script "${b.script}" is missing`); continue; }
+    checks.push({ id: m.id, title: b.title ?? m.title, order: b.order, hash: m.hash, path: m.path, script: b.script, runner: b.runner, timeout_ms: b.timeout_ms });
+  }
+  checks.sort((a, b) => a.order - b.order);
+  return { checks, problems };
 }

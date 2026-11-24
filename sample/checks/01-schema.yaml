@@ -1,0 +1,7 @@
+kind: check
+id: schema
+title: The product matches its schema
+order: 1
+script: 01-schema.ts
+runner: bun
+timeout_ms: 10000

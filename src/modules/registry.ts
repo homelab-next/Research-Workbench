@@ -19,7 +19,7 @@ export interface Problem { root: string; path: string; error: string }
 const DEFAULT_ACTOR: Actor = { kind: "system", id: "registry" };
 /** Kinds whose text or schema is put in front of a model or decides what a run does; an untrusted root may not supply them. */
 export const TRUSTED_ONLY_KINDS: readonly string[] = [
-  "model", "script", "stage", "profile", "rules", "persona", "procedure", "skill", "gate", "reference", "objective", "framework", "standard", "schema",
+  "model", "script", "check", "stage", "profile", "rules", "persona", "procedure", "skill", "gate", "reference", "objective", "framework", "standard", "schema",
 ];
 const MANIFEST_FILE = /\.(?:ya?ml|md)$/i;
 const key = (kind: string, id: string): string => `${kind}\0${id}`;

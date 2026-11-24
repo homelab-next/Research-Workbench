@@ -1,0 +1,7 @@
+kind: check
+id: objective-and-question
+title: The objective and question are stated
+order: 9
+script: 09-objective-and-question.ts
+runner: bun
+timeout_ms: 10000

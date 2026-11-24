@@ -1,0 +1,7 @@
+kind: check
+id: likelihood-term
+title: Each finding uses one likelihood term of the standard
+order: 2
+script: 02-likelihood-term.ts
+runner: bun
+timeout_ms: 10000

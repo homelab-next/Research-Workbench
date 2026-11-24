@@ -17,6 +17,7 @@ import { acceptPlan, denyPlan, requestReplan, spendPlanBudget } from "./plans";
 import { reviseDraft } from "./revise";
 import { assembleRunner } from "./stages/assemble";
 import { challengeRunner } from "./stages/challenge";
+import { checksRunner } from "./stages/checks";
 import { evaluateRunner } from "./stages/evaluate";
 import { frameRunner } from "./stages/frame";
 import { planRunner } from "./stages/plan";
@@ -63,7 +64,7 @@ export class Engine {
   private readonly runners: Partial<Record<Role, StageRunner>>;
 
   constructor(private readonly session: CaseSession, private readonly deps: EngineDeps, opts: { runners?: Partial<Record<Role, StageRunner>> } = {}) {
-    this.runners = { frame: frameRunner, plan: planRunner, research: researchRunner, assemble: assembleRunner, evaluate: evaluateRunner, challenge: challengeRunner, ...opts.runners };
+    this.runners = { frame: frameRunner, plan: planRunner, research: researchRunner, assemble: assembleRunner, checks: checksRunner, evaluate: evaluateRunner, challenge: challengeRunner, ...opts.runners };
     // A case opened here that this process did not create may hold work a stopped process left half done.
     if (!recovered.has(session)) {
       recovered.add(session);

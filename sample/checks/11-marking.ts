@@ -1,0 +1,16 @@
+// A form check: JSON on standard input, one JSON object on standard output. It judges form only and calls nothing.
+const input = JSON.parse(await Bun.stdin.text());
+const product = input.draft.product;
+const findings: { where: string; message: string }[] = [];
+const fail = (where: string, message: string): void => { findings.push({ where, message }); };
+
+const order: string[] = input.markings;
+const own = order.indexOf(product.marking);
+if (own < 0) fail("product", `"${product.marking}" is not a marking`);
+else {
+  for (const f of product.key_findings) for (const id of f.cites) {
+    const card = input.cards[id];
+    if (card !== undefined && order.indexOf(card.marking) > own) fail("product", `the product is marked ${product.marking}, which is less restrictive than ${id} (${card.marking})`);
+  }
+}
+console.log(JSON.stringify({ pass: findings.length === 0, findings }));

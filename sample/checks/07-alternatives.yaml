@@ -1,0 +1,7 @@
+kind: check
+id: alternatives
+title: Alternatives are considered
+order: 7
+script: 07-alternatives.ts
+runner: bun
+timeout_ms: 10000

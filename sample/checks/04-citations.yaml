@@ -1,0 +1,7 @@
+kind: check
+id: citations
+title: Every finding cites cards that exist
+order: 4
+script: 04-citations.ts
+runner: bun
+timeout_ms: 10000

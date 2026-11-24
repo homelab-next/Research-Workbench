@@ -1,0 +1,7 @@
+kind: check
+id: confidence-and-likelihood
+title: Confidence and likelihood are kept apart
+order: 3
+script: 03-confidence-and-likelihood.ts
+runner: bun
+timeout_ms: 10000

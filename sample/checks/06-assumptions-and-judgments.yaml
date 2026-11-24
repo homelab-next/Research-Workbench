@@ -1,0 +1,7 @@
+kind: check
+id: assumptions-and-judgments
+title: Assumptions are listed and judgments are marked
+order: 6
+script: 06-assumptions-and-judgments.ts
+runner: bun
+timeout_ms: 10000

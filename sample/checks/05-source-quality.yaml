@@ -1,0 +1,7 @@
+kind: check
+id: source-quality
+title: Source quality is stated
+order: 5
+script: 05-source-quality.ts
+runner: bun
+timeout_ms: 10000

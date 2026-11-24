@@ -1,0 +1,7 @@
+kind: check
+id: marking
+title: The marking covers the cards it draws on
+order: 11
+script: 11-marking.ts
+runner: bun
+timeout_ms: 10000

@@ -1,0 +1,7 @@
+kind: check
+id: change
+title: The change from earlier judgments is stated
+order: 10
+script: 10-change.ts
+runner: bun
+timeout_ms: 10000

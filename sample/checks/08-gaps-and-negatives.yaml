@@ -1,0 +1,7 @@
+kind: check
+id: gaps-and-negatives
+title: Gaps are named and negatives are proven
+order: 8
+script: 08-gaps-and-negatives.ts
+runner: bun
+timeout_ms: 10000
