@@ -168,6 +168,7 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
       type: "model.response", actor, ...link, cause: requested!.seq,
       payload: { request: requestId, response, stop, usage, served_by: clip(String(result.served_by), NAME_CHARS), reasoning },
     }])) return failed("the ledger refused the model response");
+    responded = true;
 
     // 6. the tool calls that are present decide, not the finish label
     if (result.tool_calls.length > 0) {

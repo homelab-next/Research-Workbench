@@ -339,6 +339,9 @@ test("a refused tool.returned is replaced by a small failed return, and the loop
   const end = await runAgent(f.s, spec(spy([{ tool_calls: [{ tool: "list_cards", args: { why: "w" } }] }, { content: "ok" }])));
   expect(end.kind).toBe("error");
   expect(ofType("tool.returned").map((e) => e.payload.ok)).toEqual([false]);
+  const reqs = ofType("model.request");
+  for (const r of reqs) expect(ofType("model.response").filter((e) => e.cause === r.seq).length).toBe(1);
+  for (const c of ofType("tool.called")) expect(ofType("tool.returned").filter((e) => e.cause === c.seq).length).toBe(1);
 });
 
 test("a refused tool.called ends with error and the tool is not run", async () => {
@@ -346,6 +349,9 @@ test("a refused tool.called ends with error and the tool is not run", async () =
   const end = await runAgent(f.s, spec(spy([{ tool_calls: [{ tool: "run_step", args: { step: "s1", why: "w" } }] }, { content: "ok" }])));
   expect(end.kind).toBe("error");
   expect(ofType("step.started").length).toBe(0);
+  const reqs = ofType("model.request");
+  for (const r of reqs) expect(ofType("model.response").filter((e) => e.cause === r.seq).length).toBe(1);
+  for (const c of ofType("tool.called")) expect(ofType("tool.returned").filter((e) => e.cause === c.seq).length).toBe(1);
 });
 
 test("extractJson on 1 MiB of open braces is linear", () => {
