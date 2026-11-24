@@ -7,6 +7,8 @@ import type { Secrets } from "../../modules/secrets";
 import type { ModelInfo, Provider, ToolCall, TurnRequest, TurnResult } from "./types";
 
 export const DEFAULT_CONTEXT = 8192;
+/** The most tokens a reply may hold (reasoning included) when the manifest names no max_output_tokens; sent as max_tokens on every chat request. */
+export const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
 export const MODEL_MAX_BYTES = 16 * 1024 * 1024;
 /** The most tool calls one reply may hold; a reply with more is a failure, not a list to work through. */
 export const MAX_REPLY_CALLS = 64;
@@ -21,6 +23,8 @@ export interface LocalOptions {
   efforts: string[];
   timeout_ms: number;
   max_bytes?: number;
+  /** Sent as max_tokens on every chat request; DEFAULT_MAX_OUTPUT_TOKENS when absent. */
+  max_output_tokens?: number;
   /** `host:port` of this workbench's own server, asked each time: a model endpoint may not point at it. */
   refuse_hosts?: () => readonly string[];
 }
@@ -41,6 +45,7 @@ export class LocalProvider implements Provider {
   readonly kind = "local" as const;
   readonly id: string;
   readonly where: Where;
+  readonly max_output_tokens: number;
   readonly #base: string;
   readonly #origin: string;
   readonly #secret: string | null;
@@ -69,6 +74,7 @@ export class LocalProvider implements Provider {
     this.#efforts = [...opts.efforts];
     this.#timeout = opts.timeout_ms;
     this.#max = opts.max_bytes ?? MODEL_MAX_BYTES;
+    this.max_output_tokens = opts.max_output_tokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
   }
 
   /** Throws a plain Error naming the cause when the endpoint is the workbench's own server. */
@@ -157,6 +163,7 @@ export class LocalProvider implements Provider {
       out.tools = req.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters as Json } }));
     }
     out.stream = false;
+    out.max_tokens = this.max_output_tokens;
     if (req.effort !== null && this.#efforts.includes(req.effort)) out.reasoning_effort = req.effort;
     return enc.encode(JSON.stringify(out));
   }
@@ -207,9 +214,9 @@ export class LocalProvider implements Provider {
         tool_calls.push({ id: c.id, name: f.name, arguments: f.arguments });
       }
     }
-    // LM Studio sometimes says "stop" while calling tools: the calls decide.
+    // LM Studio sometimes says "stop" while calling tools: the calls decide. A reply cut off at the output limit stays cut off, calls or not.
     if (base === "tool_calls" && tool_calls.length === 0) throw new Failure("the reply says it stopped to call tools but holds no tool calls", raw);
-    const stop = tool_calls.length > 0 ? "tool_calls" : base;
+    const stop = base === "length" ? "length" : tool_calls.length > 0 ? "tool_calls" : base;
     const u = isPlainObject(parsed) && isPlainObject(parsed.usage) ? parsed.usage : {};
     const details = isPlainObject(u.completion_tokens_details) ? u.completion_tokens_details : {};
     const usage: Usage = { input: num(u.prompt_tokens), output: num(u.completion_tokens), reasoning: num(details.reasoning_tokens) };

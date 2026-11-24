@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { LocalProvider, DEFAULT_CONTEXT } from "../../src/agents/providers/local";
+import { LocalProvider, DEFAULT_CONTEXT, DEFAULT_MAX_OUTPUT_TOKENS } from "../../src/agents/providers/local";
 import type { TurnRequest, TurnResult } from "../../src/agents/providers";
 import { Secrets } from "../../src/modules/secrets";
 import { startStandin } from "../helpers/http-standin";
@@ -15,10 +15,11 @@ const standin = (replies: (StandinReply | ((b: Record<string, never>) => Standin
   stops.push(m.stop);
   return m;
 };
-const provider = (url: string, o: { credential?: string | null; context?: number | null; efforts?: string[]; timeout_ms?: number; max_bytes?: number } = {}) =>
+const provider = (url: string, o: { credential?: string | null; context?: number | null; efforts?: string[]; timeout_ms?: number; max_bytes?: number; max_output_tokens?: number } = {}) =>
   new LocalProvider({
     id: "lm", base_url: url, where: "machine", credential: o.credential ?? null, secrets: new Secrets({ LM_KEY: KEY }, null),
     context: o.context ?? null, efforts: o.efforts ?? [], timeout_ms: o.timeout_ms ?? 5000, ...(o.max_bytes === undefined ? {} : { max_bytes: o.max_bytes }),
+    ...(o.max_output_tokens === undefined ? {} : { max_output_tokens: o.max_output_tokens }),
   });
 const req = (over: Partial<TurnRequest> = {}): TurnRequest => ({
   model: "qwen/qwen3.6-35b-a3b", effort: null, key: "a", ordinal: 0,
@@ -77,7 +78,7 @@ test("sends exactly the bytes body() returned and no stored header", async () =>
 test("body shape: tools only when present, effort only when the manifest lists it, tool calls mapped", () => {
   const p = provider("http://127.0.0.1:1/v1", { efforts: ["low", "high"] });
   const plain = JSON.parse(new TextDecoder().decode(p.body(req()))) as Record<string, unknown>;
-  expect(plain).toEqual({ model: "qwen/qwen3.6-35b-a3b", messages: [{ role: "system", content: "be brief" }, { role: "user", content: "hi" }], stream: false });
+  expect(plain).toEqual({ model: "qwen/qwen3.6-35b-a3b", messages: [{ role: "system", content: "be brief" }, { role: "user", content: "hi" }], stream: false, max_tokens: 8192 });
   const rich = JSON.parse(new TextDecoder().decode(p.body(req({
     effort: "high",
     tools: [{ name: "t", description: "d", parameters: { type: "object" } }],
@@ -238,4 +239,19 @@ test("a reply with more than 64 tool calls is a failure", async () => {
   const p = provider(m.url);
   expect(asError(await p.turn(req()))).toContain("the reply holds 65 tool calls; at most 64 are accepted");
   expect(await p.turn(req())).toMatchObject({ kind: "answer", stop: "tool_calls" });
+});
+
+test("every chat request carries max_tokens: the manifest's limit, 8192 when it gives none", async () => {
+  expect(DEFAULT_MAX_OUTPUT_TOKENS).toBe(8192);
+  const m = standin([ok({ content: "a" }), ok({ content: "b" })]);
+  await provider(m.url).turn(req());
+  await provider(m.url, { max_output_tokens: 2048 }).turn(req());
+  const sent = m.requests.filter((x) => x.method === "POST").map((x) => (JSON.parse(x.body) as { max_tokens: unknown }).max_tokens);
+  expect(sent).toEqual([8192, 2048]);
+  expect(provider(m.url, { max_output_tokens: 2048 }).max_output_tokens).toBe(2048);
+});
+
+test("a reply cut off at the output limit is a length stop even when it holds tool calls", async () => {
+  const m = standin([ok({ content: "", tool_calls: [call("a")] }, "length")]);
+  expect(await provider(m.url).turn(req())).toMatchObject({ kind: "answer", stop: "length" });
 });

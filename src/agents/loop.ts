@@ -79,6 +79,10 @@ const SUMMARY_CHARS = 500;
 const clip = (s: string, n: number): string => (s.length > n ? s.slice(0, n) : s);
 const count = (n: unknown): number => (typeof n === "number" && Number.isFinite(n) ? Math.max(0, Math.min(Math.floor(n), Number.MAX_SAFE_INTEGER)) : 0);
 
+/** What a reply cut off at the output limit did, in plain words. */
+const ranPast = (provider: Provider): string => (provider.max_output_tokens === undefined
+  ? "the model ran past its output limit" : `the model ran past ${provider.max_output_tokens} output tokens`);
+
 /**
  * One agent's conversation. Every model call and tool call is in the ledger before it happens and its outcome after.
  * Nothing but the ledger decides where a scripted provider is (the request's ordinal), so a replay cannot differ.
@@ -171,10 +175,13 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     const usage = { input: count(result.usage?.input), output: count(result.usage?.output), reasoning: count(result.usage?.reasoning) };
     const stop = result.stop === "tool_calls" || result.stop === "length" ? result.stop : "end";
     // at most MAX_CALLS of a reply's tool calls run; the rest are one entry beside the response, not an entry each
-    // an agent with no tools runs none: every call in its reply is skipped
-    const toRun = spec.outside_run === true && spec.tools.length === 0 ? [] : result.tool_calls.slice(0, MAX_CALLS);
+    // an agent with no tools runs none: every call in its reply is skipped; nor does a reply cut off at the output limit, whose calls may be cut too
+    const cut = result.stop === "length";
+    const noTools = spec.outside_run === true && spec.tools.length === 0;
+    const toRun = noTools || cut ? [] : result.tool_calls.slice(0, MAX_CALLS);
     const extra = result.tool_calls.length - toRun.length;
-    const skippedNote = spec.outside_run === true && spec.tools.length === 0 ? `${extra} tool calls were not run: this agent has no tools` : `${extra} further tool calls were not run`;
+    const skippedNote = cut ? `${extra} tool calls were not run: the reply was cut off at the output limit`
+      : noTools ? `${extra} tool calls were not run: this agent has no tools` : `${extra} further tool calls were not run`;
     if (!guarded(() => [
       {
         type: "model.response", actor, ...link, cause: requested!.seq,
@@ -183,6 +190,9 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
       ...(extra > 0 ? [{ type: "tool.skipped" as const, actor, ...link, cause: requested!.seq, payload: { request: requestId, count: extra, note: skippedNote } }] : []),
     ])) return failed("the ledger refused the model response");
     responded = true;
+
+    // a reply cut off at the output limit is a failed attempt: neither its text nor its calls are used
+    if (cut) return { kind: "error", message: ranPast(provider) };
 
     // 6. the tool calls that are present decide, not the finish label
     if (toRun.length > 0) {
@@ -236,15 +246,11 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     // 7. the answer
     if (spec.schema === null) return { kind: "done", content: result.content, output: null, calls };
     let errors: string[];
-    if (result.stop === "length") {
-      errors = ["the reply was cut off"];
-    } else {
-      const found = extractJson(result.content);
-      if (found === null) errors = ["the reply holds no JSON object"];
-      else {
-        errors = validate(spec.schema, found.value).map((e) => `${e.path.replace(/^\$\.?/, "") || "output"} ${e.message}`);
-        if (errors.length === 0) return { kind: "done", content: result.content, output: found.value, calls };
-      }
+    const found = extractJson(result.content);
+    if (found === null) errors = ["the reply holds no JSON object"];
+    else {
+      errors = validate(spec.schema, found.value).map((e) => `${e.path.replace(/^\$\.?/, "") || "output"} ${e.message}`);
+      if (errors.length === 0) return { kind: "done", content: result.content, output: found.value, calls };
     }
     if (++failures >= 2) return { kind: "invalid", errors, calls };
     messages.push(

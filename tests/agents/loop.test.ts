@@ -196,9 +196,33 @@ test("a reply that is cut off counts as a failure", async () => {
     return n++ === 0 && t.kind === "answer" ? { ...t, stop: "length" } : t;
   } };
   const end = await runAgent(f.s, spec(p, { schema: SCHEMA }));
-  expect(end.kind).toBe("done");
-  expect(n).toBe(2);
-  expect(inner.seen[1]!.messages.at(-1)!.content).toContain("the reply was cut off");
+  // the cut-off reply is never parsed: its valid-looking JSON is not the answer
+  expect(end.kind).toBe("error");
+  expect(n).toBe(1);
+  expect(ofType("model.response").map((e) => e.payload.stop)).toEqual(["length"]);
+});
+
+/** A spy whose answers all stop at the output limit, holding a tool call; `limit` is the provider's max_output_tokens. */
+const cutOff = (limit: number | undefined): Spy => {
+  const inner = spy(Array.from({ length: 4 }, () => ({ content: '{"n":1}', tool_calls: [{ tool: "list_sources", args: { why: "w" } }] })));
+  const turn = inner.turn;
+  inner.turn = async (r) => {
+    const t = await turn(r);
+    return t.kind === "answer" ? { ...t, stop: "length" } : t;
+  };
+  if (limit !== undefined) Object.assign(inner, { max_output_tokens: limit });
+  return inner;
+};
+
+test("a reply cut off at the output limit is recorded as a length stop, and neither its text nor its tool calls are used", async () => {
+  for (const schema of [null, SCHEMA]) {
+    const p = cutOff(8192);
+    const end = await runAgent(f.s, spec(p, { schema }));
+    expect(end.kind).toBe("error");
+    expect(end.kind === "error" && end.message).toContain("ran past 8192 output tokens");
+  }
+  expect(ofType("model.response").every((e) => e.payload.stop === "length")).toBe(true);
+  expect(ofType("tool.called").length).toBe(0);
 });
 
 test("JSON inside a fenced block is read", async () => {

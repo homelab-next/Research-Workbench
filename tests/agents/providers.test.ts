@@ -148,3 +148,18 @@ test("lookalike hosts may not say they are on this machine", () => {
     expect(problems.map((p) => p.error).join()).toMatch(/machine/);
   }
 });
+
+test("max_output_tokens is a positive integer, 8192 when the manifest gives none", () => {
+  const limit = (text: string): unknown => {
+    const p = loadLocal(text).providers.get("lm");
+    return p === null ? null : (JSON.parse(new TextDecoder().decode(p.body({ model: "m", effort: null, messages: [], tools: [], key: "a", ordinal: 0 }))) as { max_tokens: unknown }).max_tokens;
+  };
+  expect(limit(local({}))).toBe(8192);
+  expect(limit(local({ max_output_tokens: "2048" }))).toBe(2048);
+  expect(limit(local({ max_output_tokens: "null" }))).toBe(8192);
+  for (const bad of ["0", "-1", "1.5", "\"many\""]) {
+    const out = loadLocal(local({ max_output_tokens: bad }));
+    expect(out.providers.get("lm")).toBeNull();
+    expect(out.problems.map((p) => p.error).join()).toContain("max_output_tokens");
+  }
+});

@@ -132,3 +132,9 @@ test("a sample holding a symbolic link or lacking a folder is refused before any
   expect(() => newRoot(root, { ...OPTS, sample: gutted })).toThrow("checks");
   expect(existsSync(root)).toBe(false);
 });
+
+test("the model manifest caps the model's output at 8192 tokens", () => {
+  const root = fresh();
+  newRoot(root, { base_url: "http://127.0.0.1:1234/v1", model: "example/model-a" });
+  expect(readFileSync(join(root, "models", "local.yaml"), "utf8").split("\n")).toContain("max_output_tokens: 8192");
+});

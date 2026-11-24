@@ -18,6 +18,8 @@ export interface Provider {
   readonly id: string;
   readonly kind: "scripted" | "local";
   readonly where: Where;
+  /** The most tokens a reply may hold, when the provider sets one (a local model sends it as max_tokens). */
+  readonly max_output_tokens?: number;
   models(): Promise<ModelInfo[]>;
   /** The exact request body `turn` sends for this request. Pure; contacts nothing; never holds a header. */
   body(req: TurnRequest): Uint8Array;
