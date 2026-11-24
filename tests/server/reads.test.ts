@@ -41,14 +41,31 @@ test("/api/me says who, in which role, at which origin, and the policy", async (
   expect(me.problems).toEqual([]);
 });
 
-test("manifest problems are scrubbed before they are sent", async () => {
-  s = await served({ before: (root) => writeFileSync(join(root, "sources", "broken.yaml"), "kind: source\nid: broken\ntitle: Broken\nconnector: files\nlocation: /srv/private-lake/broken\nmarking: TLP:BOGUS\nwhere: machine\n") });
+const broken = (root: string): void => writeFileSync(join(root, "sources", "broken.yaml"), "kind: source\nid: broken\ntitle: Broken\nconnector: files\nlocation: /srv/private-lake/broken\nmarking: TLP:BOGUS\nwhere: machine\n");
+
+test("manifest problems reach the analyst with the path relative to its module root, never absolute", async () => {
+  s = await served({ before: broken });
   expect(s.problems.length).toBeGreaterThan(0);
   expect(s.problems.join("\n")).toContain(s.dir);
   const text = await (await s.get("/api/me")).text();
   expect(text).not.toContain(s.dir);
   expect(text).not.toContain("private-lake");
-  expect((JSON.parse(text) as Me).problems.join("\n")).toContain("[hidden]");
+  const problems = (JSON.parse(text) as Me).problems;
+  expect(problems.length).toBe(s.problems.length);
+  expect(problems.some((p) => p.startsWith("sources/broken.yaml: "))).toBe(true);
+  for (const p of problems) expect(p.startsWith("/")).toBe(false);
+});
+
+test("the requester and leader views get problems with no path at all", async () => {
+  for (const role of ["requester", "leader"] as const) {
+    s = await served({ role, before: broken });
+    const text = await (await s.get("/api/me")).text();
+    const problems = (JSON.parse(text) as Me).problems;
+    expect(problems).toEqual(s.problems.map(() => "a module could not be loaded"));
+    expect(text).not.toContain("broken.yaml");
+    expect(text).not.toContain(s.dir);
+    await s.close();
+  }
 });
 
 test("models are marked allowed or not for the case's marking", async () => {

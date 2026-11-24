@@ -205,3 +205,14 @@ test("a quiet stream over a real socket is not cut and sends what is appended", 
     await l.close();
   }
 });
+
+test("a position ahead of the case's head is 409 with a reason to reload, from after and from Last-Event-ID", async () => {
+  const id = await s.newCase();
+  for (const res of [await s.get(`/api/cases/${id}/entries?after=1000`), await s.get(`/api/cases/${id}/entries`, { "last-event-id": "1000" }), await s.get(`/api/cases/${id}/entries?after=2`)]) {
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ ok: false, refused: ["the stream position is ahead of this case; reload from 0"] });
+  }
+  const at = await s.get(`/api/cases/${id}/entries?after=1`); // the head itself is fine: nothing to replay, then live
+  expect(at.status).toBe(200);
+  await at.body!.cancel();
+});

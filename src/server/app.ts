@@ -109,6 +109,15 @@ export function createApp(opts: AppOptions): App {
   const hub = new CaseHub(wb, deps, onError);
   const open = new Set<() => void>();
   const human = (): Actor => ({ kind: "human", id: config.user });
+  /** A module problem as this role may see it: the analyst's with its path made relative to its module root, the others' with no path. */
+  const roots = config.roots.map((r) => r.path.replace(/[\\/]+$/, "")).sort((a, b) => b.length - a.length);
+  const problemView = (problem: string): string => {
+    if (config.role !== "analyst") return "a module could not be loaded";
+    for (const root of roots) {
+      if (problem.startsWith(`${root}/`) || problem.startsWith(`${root}\\`)) return shown(deps, problem.slice(root.length + 1));
+    }
+    return shown(deps, problem);
+  };
   const text = (body: string, type: string): Response => new Response(body, { headers: { "content-type": type } });
 
   const routes: Route[] = [
@@ -119,7 +128,7 @@ export function createApp(opts: AppOptions): App {
       method: "GET", path: /^\/api\/me$/, needs: { read: "me" }, kind: "api",
       handle: () => json(200, {
         user: config.user, role: config.role, origin, markings: [...MARKINGS], policy: config.marking_policy,
-        problems: opts.problems.map((p) => shown(deps, p)),
+        problems: opts.problems.map(problemView),
       } satisfies Me),
     },
     { method: "GET", path: /^\/api\/cases$/, needs: { read: "cases" }, kind: "api", handle: () => json(200, wb.listCases()) },
@@ -137,7 +146,9 @@ export function createApp(opts: AppOptions): App {
           after = /^\d{1,15}$/.test(given) ? Number(given) : -1;
           if (after < 0) throw new Declined(400, ["after must be a whole number, zero or more"]);
         }
-        return entryStream(hub.read(params[0]!), after, req.signal, (close) => { open.add(close); return () => { open.delete(close); }; });
+        const session = hub.read(params[0]!);
+        if (after > session.head().seq) throw new Declined(409, ["the stream position is ahead of this case; reload from 0"]);
+        return entryStream(session, after, req.signal, (close) => { open.add(close); return () => { open.delete(close); }; });
       },
     },
     {
