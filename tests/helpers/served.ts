@@ -11,10 +11,13 @@ import { loadConfig } from "../../src/modules/config";
 import type { Config } from "../../src/modules/config";
 import { createApp, startServer } from "../../src/server/app";
 import type { App, Assets, Running } from "../../src/server/app";
+import { buildInterface } from "../../src/web/build";
 import { sampleRoot } from "./sample-root";
 
 type Role = Config["role"];
-export const PLACEHOLDER_ASSETS: Assets = { html: "<!doctype html><title>Workbench</title>", js: "", css: "" };
+let built: Promise<Assets> | undefined;
+/** The real interface, built once per process. */
+const interfaceAssets = (): Promise<Assets> => (built ??= buildInterface());
 /** The port an in-process (not listening) server pretends to have. Nothing binds it. */
 const PRETEND_PORT = 47474;
 
@@ -55,7 +58,7 @@ export async function served(opts: { role?: Role; listen?: boolean; credential?:
   let origin = `http://${host}`;
   try {
     composed = compose(config, wb, { refuse_hosts: () => [host] });
-    const base = { config, wb, deps: composed.deps, problems: composed.problems, assets: PLACEHOLDER_ASSETS, onError: () => {} };
+    const base = { config, wb, deps: composed.deps, problems: composed.problems, assets: await interfaceAssets(), onError: () => {} };
     if (opts.listen === true) {
       running = startServer(base, 0);
       app = running.app;

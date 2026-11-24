@@ -5,7 +5,8 @@ import { dirname, join, resolve } from "node:path";
 
 // The browser-shared modules (bundled for the browser in plan 4) and everything they import.
 const CORE = resolve(import.meta.dir, "../../src/core");
-const ENTRY_POINTS = ["state/index.ts", "canonical.ts", "schema.ts", "types.ts"].map((f) => join(CORE, f));
+const WEB = resolve(import.meta.dir, "../../src/web");
+const ENTRY_POINTS = [...["state/index.ts", "canonical.ts", "schema.ts", "types.ts", "wire.ts"].map((f) => join(CORE, f)), join(WEB, "main.ts")];   // build.ts is not reachable from main.ts
 
 const dirs: string[] = [];
 afterEach(() => {

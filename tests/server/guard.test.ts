@@ -105,7 +105,7 @@ test("every response carries nosniff, no-store and no CORS header; the page carr
   const page = await s.get("/");
   expect(page.headers.get("content-type")).toContain("text/html");
   expect(page.headers.get("content-security-policy")).toBe("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types 'none'");
-  expect(await page.text()).toBe("<!doctype html><title>Workbench</title>");
+  expect(await page.text()).toContain(`<div id="app"></div><script type="module" src="/app.js"></script>`);
   expect((await s.get("/app.js")).headers.get("content-type")).toContain("javascript");
   expect((await s.get("/app.css")).headers.get("content-type")).toContain("text/css");
 });
