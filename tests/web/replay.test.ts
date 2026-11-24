@@ -236,7 +236,7 @@ test("the work area is read-only while replaying and commands are not sent", asy
   expect(await q.ui.act("pin", { card: id, pinned: true })).toBe(false);
   expect(q.toasts()).toContain("Return to live to change the case");
   expect(q.s.entries("CASE-1").length).toBe(total);
-  expect(q.q(".replay-banner").textContent).toBe(`Replay · entry ${made.seq} of ${total} · read-only`);
+  expect(q.q(".replay-banner .banner-text").textContent).toBe(`Replay · entry ${made.seq} of ${total} · read-only`);
   // back to live: the live state returns and controls are enabled again
   q.click("[aria-label=Live]"); await q.settle();
   expect(q.root.querySelector(".replay-banner")).toBeNull();
@@ -267,7 +267,12 @@ test("replay 137 in the command bar opens Replay at entry 137", async () => {
   bare.value = "replay";
   bare.dispatchEvent(new q.win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }) as unknown as Event);
   await q.settle();
-  expect(store(q).at).toBe(store(q).live.seq);
+  expect(store(q).at).toBe(137);                       // already replaying: the position is kept
+  q.click(".replay-banner [aria-label='Return to live']"); await q.settle();
+  bare.value = "replay";
+  bare.dispatchEvent(new q.win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }) as unknown as Event);
+  await q.settle();
+  expect(store(q).at).toBe(store(q).live.seq);         // from live: the newest entry
 });
 
 test("stepping through a long case stays fast", async () => {
@@ -293,4 +298,126 @@ test("stepping through a long case stays fast", async () => {
   expect(s.at).toBe(4900);
   area.destroy?.();
   await win.happyDOM.close();
+});
+
+test("while replaying the custody chip does not fetch and says it is the live record's check; live restores it", async () => {
+  const { q } = await open();
+  const real = q.ui.api.custody;
+  let asked = 0;
+  q.ui.api.custody = async (id) => { asked++; return real(id); };
+  await goto(q, 20);
+  const chip = q.q(".custody");
+  expect(chip.textContent).toBe("custody: checked on the live record");
+  expect(chip.getAttribute("title") ?? "").not.toMatch(/head|entries/);
+  q.click(".custody"); await q.settle();
+  expect(asked).toBe(0);
+  q.click("[aria-label=Live]"); await q.settle();
+  await q.settle();
+  expect(asked).toBe(1);
+  expect(q.q(".custody").textContent).toMatch(/chain intact · \d+ entries/);
+});
+
+test("opening another lens while replaying keeps the position; E keeps it too; the banner steps with J and K", async () => {
+  const { q, total } = await open();
+  await goto(q, 40);
+  q.press("t"); await q.settle();
+  expect(q.q(".lens-timeline")).toBeDefined();
+  expect(store(q).at).toBe(40);
+  expect(q.all(".timeline-row").every((r) => Number(r.dataset.seq) <= 40)).toBe(true);
+  q.press("e"); await q.settle();
+  expect(store(q).at).toBe(40);
+  q.press("t"); await q.settle();
+  const banner = q.q(".replay-banner");
+  expect(banner.getAttribute("data-area")).toBe("replay");
+  expect(banner.querySelector("[aria-label='Previous entry']")).not.toBeNull();
+  banner.focus();
+  q.press("k"); await q.settle();
+  expect(store(q).at).toBe(39);
+  q.press("j"); await q.settle();
+  expect(store(q).at).toBe(40);
+  q.click(".replay-banner [aria-label='Return to live']"); await q.settle();
+  expect(store(q).at).toBeNull();
+  expect(total).toBeGreaterThan(40);
+});
+
+test("Go to entry wants a whole number; a manual step stops Play; Previous stage is off at the first boundary", async () => {
+  const { q, entries } = await open();
+  await goto(q, 50);
+  const box = q.q("input[aria-label='Go to entry']") as HTMLInputElement;
+  for (const v of ["abc", "-5", "1.5", "1e3", " "]) {
+    box.value = v;
+    box.dispatchEvent(new q.win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }) as unknown as Event);
+    await q.settle();
+    expect(store(q).at).toBe(50);
+  }
+  expect(q.toasts()).toContain("Type an entry number");
+  q.click("[aria-label=Play]");
+  q.q(".lens-replay").focus();
+  q.press("k"); await q.settle();
+  expect(store(q).at).toBe(49);
+  expect(q.q("[data-action=play]").hasAttribute("hidden")).toBe(false);
+  await new Promise((r) => setTimeout(r, 1300));
+  expect(store(q).at).toBe(49);
+  const first = entries.find((e) => ["stage.started", "stage.finished", "gate.waiting", "gate.passed"].includes(e.type))!.seq;
+  await goto(q, first);
+  expect((q.q("[aria-label='Previous stage or gate']") as HTMLButtonElement).disabled).toBe(true);
+});
+
+/**
+ * The work area as text: tags, classes, data and aria attributes, disabled state and text, in order. Explicit normalisations only:
+ * the `changed` class and the replay banner (replay only), the "new" tag (a view-local mark), the custody chip (live record's check),
+ * `disabled` and the title of an action button (every control is off while replaying, and says why in its title).
+ */
+function serialise(q: Page): string[] {
+  const out: string[] = [];
+  const walk = (n: Element, depth: number): void => {
+    if (n.classList.contains("replay-banner") || n.classList.contains("shelf")) return;
+    if (n.classList.contains("tag") && n.textContent === "new") return;
+    if (n.classList.contains("custody")) return;                                    // replay says the check is of the live record
+    if (n.classList.contains("preview")) return;                                    // the bundle preview is the server's view of the live ledger
+    // The Agent lens shows the context of the live case and its model choices; in replay it says so and offers none.
+    if (n.closest(".lens-agent") !== null && (n.matches(".loaded, .chips, .empty, select, .context") || n.closest("select") !== null)) return;
+    const cls = [...n.classList].filter((c) => c !== "changed" && c !== "active").sort().join(".");
+    const attrs = [...n.attributes].filter((a) => a.name !== "class" && a.name !== "disabled" && a.name !== "style" && !(a.name === "title" && n.hasAttribute("data-action"))).map((a) => `${a.name}=${a.value}`).sort().join(" ");
+    const own = [...n.childNodes].filter((c) => c.nodeType === 3).map((c) => c.textContent).join("");
+    out.push(`${" ".repeat(depth)}${n.tagName.toLowerCase()}.${cls} [${n.classList.contains("custody") ? "custody" : attrs}] ${n.classList.contains("custody") ? "" : own}`);
+    for (const c of n.children) walk(c, depth + 1);
+  };
+  walk(q.q(".workarea"), 0);
+  return out;
+}
+
+test("every lens shows at entry N exactly what a fresh page shows when live is entry N", async () => {
+  const { q, total, cap } = await ran();
+  const all = q.s.entries("CASE-1");
+  const gates = all.filter((e) => e.type === "gate.waiting").map((e) => e.seq);
+  const boundary = all.find((e) => e.type === "stage.finished")!.seq;
+  expect(gates.length).toBeGreaterThanOrEqual(2);
+  const marks = [...new Set([1, boundary, ...gates, Math.floor(total / 2), total])];
+  const lenses = ["agent", "steps", "narrative", "timeline", "worklog", "discarded", "jobs", "pipeline"];
+  const keys: Record<string, string> = { agent: "a", steps: "s", narrative: "r", timeline: "t", worklog: "w", discarded: "d", jobs: "b", pipeline: "q" };
+  const recorded = new Map<string, string[]>();
+  for (const n of marks) {
+    cap.at = n;
+    await reopen(q);
+    for (const lens of lenses) {
+      q.q(".workarea").focus();
+      q.press(keys[lens]!); await q.settle();
+      recorded.set(`${n}/${lens}`, serialise(q));
+    }
+  }
+  cap.at = Infinity;
+  await reopen(q);
+  for (const n of marks) {
+    q.press("e"); store(q).goTo(n); await q.settle();
+    for (const lens of lenses) {
+      q.q(".workarea").focus();
+      q.press(keys[lens]!); await q.settle();
+      expect(store(q).at).toBe(n);
+      expect({ at: `${n}/${lens}`, screen: serialise(q) }).toEqual({ at: `${n}/${lens}`, screen: recorded.get(`${n}/${lens}`)! });
+      const live = q.all(".workarea button, .workarea select, .workarea textarea").filter((b) => b.closest(".replay-banner") === null && b.closest(".shelf") === null);
+      expect(live.length).toBeGreaterThan(0);
+    }
+    store(q).goTo(null); await q.settle();
+  }
 });

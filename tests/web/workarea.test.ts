@@ -296,7 +296,7 @@ test("while replaying, controls are disabled and commands are not sent", async (
   q.click(`[data-card=${c}]`);
   const head = q.s.entries("CASE-1").length;
   q.store()!.goTo(5); await q.settle();
-  expect(q.q(".replay-banner").textContent).toBe(`Replay · entry 5 of ${head} · read-only`);
+  expect(q.q(".replay-banner .banner-text").textContent).toBe(`Replay · entry 5 of ${head} · read-only`);
   expect((q.q(".run-button") as HTMLButtonElement).disabled).toBe(true);
   expect(q.all(".brief button").filter((b) => (b as HTMLButtonElement).disabled).length).toBeGreaterThan(0);
   expect(q.all(".brief .stop, .brief .pause").every((b) => (b as HTMLButtonElement).disabled)).toBe(true);

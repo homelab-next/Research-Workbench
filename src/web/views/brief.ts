@@ -36,6 +36,7 @@ export function makeBrief(ui: Ui, open: Open): View {
   let custody: { report: Custody; at: string } | "failed" | null = null;
   let asked = 0;
   const checkCustody = (): void => {
+    if (store.at !== null) return;                       // a past screen never fetches today's check
     const mine = ++asked;
     ui.api.custody(store.id).then((report) => {
       if (mine !== asked) return;
@@ -48,6 +49,7 @@ export function makeBrief(ui: Ui, open: Open): View {
     });
   };
   const chip = (): HTMLElement => {
+    if (store.at !== null) return h("span", { class: "tag tag-human custody muted", title: "The custody check is of the live record, not of this entry" }, "custody: checked on the live record");
     const onClick = { click: checkCustody };
     if (custody === null) return h("button", { type: "button", class: "tag tag-human custody", name: "Custody check", title: "Checking the record", on: onClick }, "checking custody…");
     if (custody === "failed") return h("button", { type: "button", class: "tag tag-attention custody", name: "Custody check", title: "The check could not be made; activate to try again", on: onClick }, "custody not checked");
@@ -91,7 +93,7 @@ export function makeBrief(ui: Ui, open: Open): View {
     hideButton.textContent = hiding ? "Show" : "Hide";
     hideButton.title = hiding ? "Show the brief" : "Hide the brief";
     line2.hidden = hiding; strip.hidden = hiding || state.run.stages.length === 0; notes.hidden = hiding;
-    const custodyKey = custody === null ? "none" : custody === "failed" ? "failed" : custody.report;
+    const custodyKey = store.at !== null ? "replay" : custody === null ? "none" : custody === "failed" ? "failed" : custody.report;
     into1([meta, store.id, custodyKey, hiding], () => [
       h("span", { class: "heading" }, `Brief: ${store.id} · `, meta === null ? null : markingChip(ui, meta.marking), ` · ${meta?.title ?? ""}`),
       h("span", { class: "right" }, chip(), hideButton),
@@ -169,11 +171,14 @@ export function makeBrief(ui: Ui, open: Open): View {
 
   checkCustody();
   let published = store.live.published.length;
+  let replaying = store.at !== null;
   return {
     el,
     update() {
       const n = store.live.published.length;
-      if (n !== published) { published = n; checkCustody(); }
+      const back = replaying && store.at === null;      // back at the present: the check is asked again
+      replaying = store.at !== null;
+      if (n !== published) { published = n; checkCustody(); } else if (back) checkCustody();
       render();
     },
     destroy() { asked++; },

@@ -53,8 +53,9 @@ export function makeReplay(ui: Ui, open: Open, arg: string | null): ReplayView {
       const k = e as KeyboardEvent;
       if (k.key !== "Enter") return;
       k.stopPropagation();
-      const n = Number((k.target as HTMLInputElement).value.trim());
-      if (Number.isInteger(n) && n >= 0) { stop(); store.goTo(n); }
+      const typed = (k.target as HTMLInputElement).value.trim();
+      if (!/^[0-9]{1,9}$/.test(typed)) { ui.toast("Type an entry number"); return; }
+      stop(); store.goTo(Number(typed));
     } },
   }) as HTMLInputElement;
   const select = (name: string, key: keyof ReplayFilter): HTMLSelectElement => h("select", {
@@ -91,11 +92,14 @@ export function makeReplay(ui: Ui, open: Open, arg: string | null): ReplayView {
   const goLive = (): void => { stop(); store.goTo(null); };
   const move = (to: number | null): void => { if (to !== null) store.goTo(to); };
   const stepBy = (dir: 1 | -1): void => {
+    stop();                                                // a person's own step ends Play
     const here = at();
-    if (here === null) { if (dir < 0) move(step(store.entries, total() + 1, -1, filter)); return; }
-    move(step(store.entries, here, dir, filter));
+    if (here === null) { if (dir < 0) move(step(store.entries, total() + 1, -1, filter)); }
+    else move(step(store.entries, here, dir, filter));
+    el.update();
   };
   const boundary = (dir: 1 | -1): void => {
+    stop();
     const here = at() ?? total() + 1;
     move(seek(store.entries, here, dir, isBoundary));
   };
@@ -192,7 +196,7 @@ export function makeReplay(ui: Ui, open: Open, arg: string | null): ReplayView {
       play.hidden = timer !== null; halt.hidden = timer === null;
       (prev as HTMLButtonElement).disabled = here !== null && step(store.entries, here, -1, filter) === null;
       (next as HTMLButtonElement).disabled = here === null || step(store.entries, here, 1, filter) === null;
-      (prevGate as HTMLButtonElement).disabled = here === 0;
+      (prevGate as HTMLButtonElement).disabled = seek(store.entries, here ?? total() + 1, -1, isBoundary) === null;
       (nextGate as HTMLButtonElement).disabled = here === null || seek(store.entries, here, 1, isBoundary) === null;
       const hadFocus = root.contains(ui.doc.activeElement);
       // The row at the position is a node of its own (aria-current can only be set when a node is made), so the key says which it is.
@@ -201,12 +205,11 @@ export function makeReplay(ui: Ui, open: Open, arg: string | null): ReplayView {
       if (hadFocus && !root.contains(ui.doc.activeElement)) root.focus();
     },
     destroy() {
-      stop();
-      if (store.at !== null) store.goTo(null);
+      stop();                                              // the position stays: another lens may be looked at as of this entry
     },
   };
 
   const n = arg === null || !/^[0-9]+$/.test(arg) ? null : Number(arg);
-  store.goTo(n === null ? total() : n);
+  store.goTo(n === null ? store.at ?? total() : n);
   return el;
 }
