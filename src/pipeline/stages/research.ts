@@ -29,6 +29,8 @@ const describeStep = (s: PlanStep): string =>
  * the run back, one researcher per question asked for instead. A sub-goal is answered by what its steps finished as, not by what the
  * researcher says: its last step answered (partly, or in full), or came back empty with full coverage from a source whose empty result is a
  * proven negative (the answer is "no"). A partial or not-seen empty result is not an answer.
+ * Run again in the same run under the same accepted plan (a resume), a sub-goal whose researcher already finished is not started again:
+ * its recorded outcome is carried into this attempt's output.
  */
 export async function researchRunner(env: StageEnv): Promise<StageEnd> {
   const { session, deps, stage } = env;
@@ -59,6 +61,20 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
   const answeredBefore: { question: string }[] = [];
   const doneJobs = new Set(entries.filter((e) => e.type === "job.finished" && e.payload.outcome === "done").map((e) => (e.type === "job.finished" ? e.payload.job : "")));
   const doneTitles = new Set(entries.filter((e) => e.type === "job.started" && e.seq > lastFinished && doneJobs.has(e.payload.job)).map((e) => (e.type === "job.started" ? e.payload.title : "")));
+  /**
+   * Sub-goals of the accepted plan whose researcher already finished (done) in this run since that plan was accepted, with that job: a resume
+   * continues the stage, it does not start them again. Their outcome and cards are the steps' as recorded. A new plan starts fresh.
+   */
+  const carried = new Map<string, string>();
+  if (!sentBack) {
+    const acceptedAt = entries.reduce((n, e) => (e.type === "plan.accepted" && e.payload.plan === current.id ? e.seq : n), 0);
+    const runId = session.state.run.id;
+    for (const e of entries) {
+      if (e.type !== "job.started" || e.seq <= acceptedAt || e.run !== runId || e.stage !== stage.id || e.payload.kind !== "research" || !doneJobs.has(e.payload.job)) continue;
+      const g = goals.find((x) => `Research: ${x.title}` === e.payload.title);
+      if (g !== undefined && !carried.has(g.id)) carried.set(g.id, e.payload.job);
+    }
+  }
   try {
     if (sentBack) {
       let n = 0;
@@ -73,6 +89,7 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
     } else {
       for (const g of goals) {
         if (accepted(g).every((s) => DONE.has(statusOf(s)))) continue;
+        if (carried.has(g.id)) continue;
         const steps = current.steps.filter((s) => accepted(g).includes(s.id));
         units.push({
           actor_id: actorId(g.id), title: `Research: ${g.title}`, subgoal: g.id, question: null,
@@ -132,7 +149,13 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
     if (hit !== undefined && hit.kind !== "output") return hit;
   }
 
-  const noteFor = (subgoal: string): string => noteOf(results[units.findIndex((u) => u.subgoal === subgoal)]);
+  const noteFor = (subgoal: string): string => {
+    const job = carried.get(subgoal);
+    if (job === undefined) return noteOf(results[units.findIndex((u) => u.subgoal === subgoal)]);
+    const g = goals.find((x) => x.id === subgoal)!;
+    const notes = accepted(g).flatMap((s) => (Object.hasOwn(session.state.plan.steps, s) && session.state.plan.steps[s]!.note !== "" ? [`${s}: ${session.state.plan.steps[s]!.note}`] : []));
+    return [`carried from ${job}, which finished earlier in this run`, ...notes].join("; ");
+  };
   const subgoals: SubResult[] = goals.map((g) => {
     const steps = accepted(g);
     const cards = [...new Set(steps.flatMap((s) => (Object.hasOwn(session.state.plan.steps, s) ? session.state.plan.steps[s]!.cards : [])))];

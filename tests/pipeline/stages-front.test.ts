@@ -268,6 +268,49 @@ test("a declined researcher ends the stage declined after the others finish, and
   expect(finished("research").map((e) => e.payload.outcome)).toEqual(["declined", "pass"]);
 });
 
+test("a resumed Research does not start again a sub-goal whose researcher finished; its recorded outcome is carried", async () => {
+  // Reputation first: its costly step has no budget, so it finishes blocked and its researcher finishes done
+  const reputationFirst = { ...planOut(), subgoals: [...planOut().subgoals].reverse() };
+  const r = rig({
+    orchestrator: [say(FRAME)], planner: [say(reputationFirst)],
+    "researcher-g1": [calls(call("run_step", { step: "s1" })), answered("verdict asked for")],
+    "researcher-g2": [calls(call("run_step", { step: "s2" })), calls(call("run_step", { step: "s3", value: ASSET })), answered("accounts found")],
+  }, { parallel: 1 });
+  await toGate(r);
+  r.engine.acceptPlan({ actor: person });
+  let paused = false;
+  afterTurn = (actor) => { if (actor === "researcher-g2" && !paused) { paused = true; r.engine.pause(person); } };
+  await r.engine.advance();
+  expect(f.s.state.run.status).toBe("paused");
+  expect(f.s.state.plan.steps.s1!.status).toBe("blocked");
+  const [first] = ofType("job.started");
+  expect(jobs()).toEqual(["Research: Reputation", "Research: Who uses it"]);
+  await r.engine.resume(person);
+  // only the sub-goal with no finished job runs again
+  expect(jobs()).toEqual(["Research: Reputation", "Research: Who uses it", "Research: Who uses it"]);
+  expect(ofType("model.request").filter((e) => e.actor.id === "researcher-g1")).toHaveLength(2);
+  expect(finished("research").at(-1)!.payload.outcome).toBe("pass");
+  const sg = output("research").subgoals as { id: string; outcome: string; cards: string[]; note: string }[];
+  expect(sg.map((g) => [g.id, g.outcome])).toEqual([["g1", "blocked"], ["g2", "answered"]]);
+  expect(sg[0]!.note).toStartWith(`carried from ${first!.payload.job}, which finished earlier in this run`);
+  expect(sg[1]!.note).toBe("accounts found");
+});
+
+test("a new plan starts its sub-goals fresh, even where a researcher finished under the plan before", async () => {
+  const r = rig({
+    orchestrator: [say(FRAME)], planner: [say(planOut()), say(planOut())],
+    "researcher-g2": [...G2, calls(call("run_step", { step: "s3" })), answered("verdict asked for again")],
+  });
+  await toGate(r);
+  r.engine.acceptPlan({ actor: person, steps: ["s3"] });
+  await r.engine.advance();
+  // nothing was answered: Research failed back to Plan, which proposed again
+  expect(f.s.state.run.waiting).toBe("plan");
+  r.engine.acceptPlan({ actor: person, steps: ["s3"] });
+  await r.engine.advance();
+  expect(jobs()).toEqual(["Research: Reputation", "Research: Reputation"]);
+});
+
 test("research asked for by the analyst runs one researcher per question", async () => {
   let assembled = 0;
   const assemble: StageRunner = async (env): Promise<StageEnd> => {
