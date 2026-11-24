@@ -15,7 +15,12 @@ export class ConfigError extends Error {
   }
 }
 
-export interface RootConfig { path: string; trusted_scripts: boolean }
+/**
+ * A module root and what the owner grants it. Only a trusted root may define observable types, network sources
+ * (http, trino) and sources that name a credential, and a trusted root's source may name only the credentials
+ * listed here. An untrusted root may supply sql and files sources, pivots, and kinds this plan does not validate.
+ */
+export interface RootConfig { path: string; trusted: boolean; credentials: string[] }
 
 export interface Config {
   /** The file the settings came from, or null when the defaults were used. */
@@ -45,7 +50,10 @@ const CONFIG_SCHEMA: Schema = {
         type: "object",
         additionalProperties: false,
         required: ["path"],
-        properties: { path: { type: "string", minLength: 1 }, trusted_scripts: { type: "boolean" } },
+        properties: {
+          path: { type: "string", minLength: 1 }, trusted: { type: "boolean" },
+          credentials: { type: "array", items: { type: "string", minLength: 1 } },
+        },
       },
     },
     secrets_file: { type: "string", minLength: 1 },
@@ -96,7 +104,7 @@ export function loadConfig(opts: { path?: string; env?: Record<string, string | 
   const errors = validate(CONFIG_SCHEMA, raw);
   if (errors.length > 0) throw new ConfigError(`${path}: ${errors.map(e => `${e.path} ${e.message}`).join("; ")}`);
   const given = raw as {
-    data_dir?: string; user?: string; role?: Config["role"]; roots?: { path: string; trusted_scripts?: boolean }[];
+    data_dir?: string; user?: string; role?: Config["role"]; roots?: { path: string; trusted?: boolean; credentials?: string[] }[];
     secrets_file?: string; seeker?: string; marking_policy?: Partial<Record<Marking, Where[]>>;
     server?: { port?: number }; research?: { parallel?: number };
   };
@@ -112,8 +120,8 @@ export function loadConfig(opts: { path?: string; env?: Record<string, string | 
     user: given.user ?? (env.USER || "analyst"),
     role: given.role ?? "analyst",
     roots: given.roots !== undefined
-      ? given.roots.map(r => ({ path: place(r.path), trusted_scripts: r.trusted_scripts ?? false }))
-      : [{ path: join(repoRoot, "sample"), trusted_scripts: true }],
+      ? given.roots.map(r => ({ path: place(r.path), trusted: r.trusted ?? false, credentials: [...(r.credentials ?? [])] }))
+      : [{ path: join(repoRoot, "sample"), trusted: true, credentials: [] }],
     secrets_file: given.secrets_file !== undefined ? place(given.secrets_file) : existsSync(defaultSecrets) ? defaultSecrets : null,
     seeker: given.seeker ?? "cheapest",
     marking_policy: { ...DEFAULT_POLICY, ...given.marking_policy },

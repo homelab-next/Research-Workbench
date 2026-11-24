@@ -19,14 +19,14 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-function root(files: Record<string, string>, trusted = false): RootConfig {
+function root(files: Record<string, string>, grant: { trusted?: boolean; credentials?: string[] } = {}): RootConfig {
   const dir = tmp();
   for (const [name, text] of Object.entries(files)) {
     const p = join(dir, name);
     mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, text);
   }
-  return { path: dir, trusted_scripts: trusted };
+  return { path: dir, trusted: grant.trusted ?? true, credentials: grant.credentials ?? [] };
 }
 function chain(): Ledger {
   const l = Ledger.open(join(tmp(), "ledger.sqlite"), "CASE-1");
@@ -259,7 +259,7 @@ test("rootOf finds the root a path belongs to", () => {
 });
 
 test("a missing root is a problem and the other roots still load", () => {
-  const gone = { path: join(tmp(), "gone"), trusted_scripts: false };
+  const gone = { path: join(tmp(), "gone"), trusted: false, credentials: [] };
   const r = Registry.load([gone, root(GOOD)]);
   expect(r.problems).toHaveLength(1);
   expect(r.problems[0]!.root).toBe(gone.path);
@@ -358,4 +358,52 @@ test("a pivot whose yields map no column to its target type is a problem naming 
     expect(r.pivot("address_to_domains")).toBeNull();
     expect(r.problems.map(p => p.error)).toEqual([`pivot "address_to_domains": yields maps no column to its target type "domain"`]);
   }
+});
+
+// ---------- final review finding 1: what a root may cause ----------
+const httpSource = (id: string, extra = ""): string =>
+  `kind: source\nid: ${id}\ntitle: T\nconnector: http\nlocation: https://rep.example.com\nmarking: "TLP:GREEN"\nwhere: network\n${extra}endpoints:\n  - { name: x, method: GET, path: /x, columns: [a] }\n`;
+const trinoSource = (id: string, extra = ""): string =>
+  `kind: source\nid: ${id}\ntitle: T\nconnector: trino\nlocation: https://lake.example.com\nuser: u\nmarking: "TLP:GREEN"\nwhere: network\ncost: { weight: 1, unit: rows }\n${extra}`;
+
+test("an untrusted root may not define types, network sources or sources that name a credential", () => {
+  const r = Registry.load([root({
+    "types.yaml": TYPES,
+    "sources/web.yaml": httpSource("web"),
+    "sources/lake.yaml": trinoSource("lake"),
+    "sources/home.yaml": sourceWith("home", "credential: HOME\n"),
+    "sources/ok.yaml": sourceWith("ok"),
+    "p.yaml": "kind: pipeline\nid: deep\n",
+  }, { trusted: false, credentials: ["HOME"] })]);
+  expect(r.types()).toEqual([]);
+  expect(r.sources().map(x => x.id)).toEqual(["ok"]);
+  expect(r.get("pipeline", "deep")).not.toBeNull();
+  const why = Object.fromEntries(r.problems.map(p => [p.path.split("/").pop(), p.error]));
+  expect(why["types.yaml"]).toMatch(/types are accepted only from a trusted root/);
+  expect(why["web.yaml"]).toMatch(/http source is accepted only from a trusted root/);
+  expect(why["lake.yaml"]).toMatch(/trino source is accepted only from a trusted root/);
+  expect(why["home.yaml"]).toMatch(/names credential "HOME"; only a trusted root may name a credential/);
+});
+
+test("an untrusted root may still supply sql and files sources and pivots", () => {
+  const types = root({ "types.yaml": TYPES });
+  const share = root({ "sources/dns-logs.yaml": SOURCE, "pivots.yaml": PIVOTS }, { trusted: false });
+  const r = Registry.load([types, share]);
+  expect(r.problems).toEqual([]);
+  expect(r.source("dns-logs")).not.toBeNull();
+  expect(r.pivot("address_to_domains")).not.toBeNull();
+});
+
+test("a trusted root's source may name only a credential granted to that root", () => {
+  const r = Registry.load([root({
+    "sources/web.yaml": httpSource("web", "credential: REP_KEY\n"),
+    "sources/other.yaml": httpSource("other", "credential: MODEL_API_KEY\n"),
+    "sources/none.yaml": httpSource("none"),
+  }, { trusted: true, credentials: ["REP_KEY"] })]);
+  expect(r.sources().map(x => x.id).sort()).toEqual(["none", "web"]);
+  expect(r.problems).toHaveLength(1);
+  expect(r.problems[0]!.error).toMatch(/names credential "MODEL_API_KEY", which the configuration does not grant to this root/);
+  // a grant on another root does not carry over
+  const two = Registry.load([root({}, { trusted: true, credentials: ["MODEL_API_KEY"] }), root({ "s.yaml": httpSource("s", "credential: MODEL_API_KEY\n") }, { trusted: true })]);
+  expect(two.source("s")).toBeNull();
 });

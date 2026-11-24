@@ -2,6 +2,7 @@ import type { Json } from "../../core/canonical";
 import type { Cost } from "../../core/types";
 import type { EndpointManifest, SourceManifest } from "../manifests";
 import { effectiveBound } from "./placeholders";
+import { loadCredential } from "./shared";
 import { ConnectorError } from "./types";
 import type { Bound, Connector, ConnectorContext, QueryOutcome, QueryRequest } from "./types";
 
@@ -91,9 +92,7 @@ export class HttpConnector implements Connector {
     const headers: Record<string, string> = { accept: "application/json" };
     let secret: string | null = null;
     if (this.source.credential !== null) {
-      secret = this.ctx.secrets.get(this.source.credential);
-      if (secret === null) throw new ConnectorError(`credential ${this.source.credential} has no value in the environment or secrets file`);
-      if (/[\x00-\x1f\x7f]/.test(secret)) throw new ConnectorError(`credential ${this.source.credential} cannot be sent as a header value`);
+      secret = loadCredential(this.ctx.secrets, this.source.credential);
       headers.authorization = `Bearer ${secret}`;
     }
     if (body !== null) headers["content-type"] = "application/json";

@@ -45,7 +45,7 @@ beforeEach(() => {
   fixture = startReputationFixture(join(root, "data"), 0);
   const rep = join(root, "sources", "reputation.yaml");
   writeFileSync(rep, readFileSync(rep, "utf8").replace("http://127.0.0.1:4801", fixture.url));
-  registry = Registry.load([{ path: root, trusted_scripts: false }]);
+  registry = Registry.load([{ path: root, trusted: true, credentials: [] }]);
   expect(registry.problems).toEqual([]);
   const observables = new Observables(registry.types());
   pool = new ConnectorPool({ secrets: new Secrets({}, null), observables });
@@ -86,7 +86,7 @@ test("the generator is deterministic", () => {
 });
 
 test("the sample root loads with no problems", () => {
-  expect(Registry.load([{ path: root, trusted_scripts: false }]).problems).toEqual([]);
+  expect(Registry.load([{ path: root, trusted: true, credentials: [] }]).problems).toEqual([]);
   expect(registry.sources().map((x) => x.id).sort()).toEqual(["assets", "dns-logs", "flows", "leases", "reputation", "signins"]);
   expect(registry.pivots()).toHaveLength(8);
   expect(registry.types().map((t) => t.id).sort()).toEqual(["account", "address", "asset", "domain", "host", "verdict"]);

@@ -7,7 +7,7 @@ import type { QueryRequest } from "../../src/modules/connectors";
 import { startStandin } from "../helpers/http-standin";
 import type { Standin } from "../helpers/http-standin";
 
-const SECRET = "s3cr3t";
+const SECRET = "s3cr3t-value";
 const body = JSON.stringify({ results: [{ address: "198.51.100.77", verdict: "suspicious", first_seen: "2026-11-19", extra: 1 }] });
 const json = (text: string, init: ResponseInit = {}): Response =>
   new Response(text, { ...init, headers: { "content-type": "application/json", ...(init.headers as Record<string, string> | undefined) } });

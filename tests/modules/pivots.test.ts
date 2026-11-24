@@ -51,7 +51,7 @@ types:
 pivots:
   - { id: ad, title: Domains of an address, from: address, to: domain, source: dns, query: "select domain from dns where address = {value}", weight: 0, yields: { domain: domain } }
 `);
-  const registry = Registry.load([{ path: root, trusted_scripts: false }]);
+  const registry = Registry.load([{ path: root, trusted: true, credentials: [] }]);
   p = registry.pivot("ad")!;
   pool = new ConnectorPool({ secrets: new Secrets({}, null), observables });
   deps = { registry, pool, observables };

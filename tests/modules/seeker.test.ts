@@ -33,7 +33,7 @@ beforeAll(() => {
     pivot("ab", "a", "b", "s1", ", weight: 0"), pivot("bc", "b", "c", "s1", ", weight: 0"), pivot("ac", "a", "c", "s2", ""),
     pivot("bd", "b", "d", "s3", ", weight: 0"), pivot("cd", "c", "d", "s1", ", weight: 0"),
   ].join("\n")}\n`);
-  registry = Registry.load([{ path: dir, trusted_scripts: false }]);
+  registry = Registry.load([{ path: dir, trusted: true, credentials: [] }]);
   expect(registry.problems).toEqual([]);
   seeker = cheapestSeeker(registry);
 });
@@ -104,7 +104,7 @@ test("at most five routes are returned", () => {
     const mids = [1, 2, 3, 4, 5, 6, 7];
     writeFileSync(join(dir2, "types.yaml"), `kind: types\ntypes:\n${["x", "y", ...mids.map((m) => `m${m}`)].map((t) => `  - { id: ${t}, title: ${t}, pattern: '${t}' }`).join("\n")}\n`);
     writeFileSync(join(dir2, "pivots.yaml"), `kind: pivots\npivots:\n${mids.flatMap((m) => [pivot(`xm${m}`, "x", `m${m}`, "s", ", weight: 0"), pivot(`m${m}y`, `m${m}`, "y", "s", ", weight: 0")]).join("\n")}\n`);
-    const r = Registry.load([{ path: dir2, trusted_scripts: false }]);
+    const r = Registry.load([{ path: dir2, trusted: true, credentials: [] }]);
     expect(r.problems).toEqual([]);
     const rs = cheapestSeeker(r).routes(["x"], "y", DEFAULT_LIMITS);
     expect(rs).toHaveLength(5);
@@ -134,7 +134,7 @@ test("routes of equal weight and length are ordered by their pivot ids", () => {
     writeFileSync(join(dir2, "types.yaml"), `kind: types\ntypes:\n${["a", "b", "c"].map((t) => `  - { id: ${t}, title: ${t}, pattern: '${t}' }`).join("\n")}\n`);
     // declared in the opposite order to the expected result
     writeFileSync(join(dir2, "pivots.yaml"), `kind: pivots\npivots:\n${[pivot("zz", "a", "c", "s", ", weight: 1"), pivot("mm", "a", "c", "s", ", weight: 1"), pivot("aa", "a", "c", "s", ", weight: 1")].join("\n")}\n`);
-    const r = Registry.load([{ path: dir2, trusted_scripts: false }]);
+    const r = Registry.load([{ path: dir2, trusted: true, credentials: [] }]);
     expect(r.problems).toEqual([]);
     expect(ids(cheapestSeeker(r).routes(["a"], "c", DEFAULT_LIMITS))).toEqual([["aa"], ["mm"], ["zz"]]);
   } finally {

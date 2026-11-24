@@ -23,7 +23,7 @@ const file = (dir: string, name: string, text: string): string => {
 test("with no file, defaults point at the bundled sample root", () => {
   const c = loadConfig({ env: { USER: "pat" }, home: "/h", repoRoot: "/repo" });
   expect(c).toMatchObject({ path: null, user: "pat", role: "analyst", seeker: "cheapest", data_dir: "/h/.local/share/research-workbench",
-    roots: [{ path: "/repo/sample", trusted_scripts: true }], server: { port: 4747 }, research: { parallel: 3 }, secrets_file: null });
+    roots: [{ path: "/repo/sample", trusted: true, credentials: [] }], server: { port: 4747 }, research: { parallel: 3 }, secrets_file: null });
   expect(c.marking_policy["TLP:RED"]).toEqual(["machine"]);
   expect(c.marking_policy["TLP:CLEAR"]).toEqual(["machine", "network", "hosted"]);
 });
@@ -64,10 +64,17 @@ test("relative root paths resolve against the config file's folder, and ~ expand
   expect(c.secrets_file).toBe(join(dir, "conf/s.yaml"));
 });
 
-test("roots given without trusted_scripts are not trusted", () => {
-  const p = file(tmp(), "c.yaml", "roots:\n  - path: /a\n  - { path: /b, trusted_scripts: true }\n");
+test("roots given without a grant are not trusted and are given no credentials", () => {
+  const p = file(tmp(), "c.yaml", "roots:\n  - path: /a\n  - { path: /b, trusted: true, credentials: [LAKE_PASSWORD] }\n");
   const c = loadConfig({ path: p, env: {}, home: "/h", repoRoot: "/repo" });
-  expect(c.roots).toEqual([{ path: "/a", trusted_scripts: false }, { path: "/b", trusted_scripts: true }]);
+  expect(c.roots).toEqual([{ path: "/a", trusted: false, credentials: [] }, { path: "/b", trusted: true, credentials: ["LAKE_PASSWORD"] }]);
+});
+
+test("the old trusted_scripts setting and a malformed credentials list are configuration errors", () => {
+  const dir = tmp();
+  expect(() => loadConfig({ path: file(dir, "a.yaml", "roots:\n  - { path: /a, trusted_scripts: true }\n"), env: {}, home: "/h", repoRoot: "/repo" })).toThrow(ConfigError);
+  expect(() => loadConfig({ path: file(dir, "b.yaml", "roots:\n  - { path: /a, credentials: LAKE }\n"), env: {}, home: "/h", repoRoot: "/repo" })).toThrow(ConfigError);
+  expect(() => loadConfig({ path: file(dir, "c.yaml", "roots:\n  - { path: /a, credentials: [''] }\n"), env: {}, home: "/h", repoRoot: "/repo" })).toThrow(ConfigError);
 });
 
 test("secrets_file defaults to the home path only when it exists", () => {

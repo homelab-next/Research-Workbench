@@ -4,6 +4,7 @@ import type { SourceManifest } from "../manifests";
 import { assertReadOnly, checkGuardrails, GuardError, stripForAnalysis } from "../sqlguard";
 import type { TableGuard } from "../sqlguard";
 import { effectiveBound } from "./placeholders";
+import { CONTROL, loadCredential } from "./shared";
 import { ConnectorError } from "./types";
 import type { Connector, ConnectorContext, QueryOutcome, QueryRequest } from "./types";
 
@@ -13,8 +14,6 @@ const CANCEL_TIMEOUT_MS = 2000;
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
 const NAME = /\{([A-Za-z_][A-Za-z0-9_.]*)\}/g;
 const ISO_MS = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2}\.\d{3})Z$/;
-// Below 0x20, DEL, the C1 controls and the Unicode line and paragraph separators.
-const CONTROL = /[\x00-\x1f\x7f-\x9f\u2028\u2029]/;
 
 class TimedOut extends Error {}
 /** The engine reported the query failed: it has already ended, so there is nothing to cancel. */
@@ -127,9 +126,7 @@ export class TrinoConnector implements Connector {
     const redact: string[] = [];
     if (this.source.credential !== null) {
       if (user.includes(":")) throw new ConnectorError("the source user cannot contain a colon when a credential is used");
-      const secret = this.ctx.secrets.get(this.source.credential);
-      if (secret === null) throw new ConnectorError(`credential ${this.source.credential} has no value in the environment or secrets file`);
-      if (CONTROL.test(secret)) throw new ConnectorError(`credential ${this.source.credential} cannot be sent as a header value`);
+      const secret = loadCredential(this.ctx.secrets, this.source.credential);
       const token = Buffer.from(`${user}:${secret}`, "utf8").toString("base64");
       headers.authorization = `Basic ${token}`;
       redact.push(token, secret);

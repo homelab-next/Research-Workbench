@@ -206,7 +206,7 @@ test("a secret in an engine error is scrubbed from the ConnectorError", async ()
 
 test("a source without a user, or a secret that cannot be sent, is refused", async () => {
   await expect(make(t.url, { user: null }).run(okReq)).rejects.toBeInstanceOf(ConnectorError);
-  await expect(make(t.url, { credential: "K" }, { K: "a\nb" }).run(okReq)).rejects.toBeInstanceOf(ConnectorError);
+  await expect(make(t.url, { credential: "K" }, { K: "abcd\nefgh" }).run(okReq)).rejects.toBeInstanceOf(ConnectorError);
   expect(t.statements).toHaveLength(0);
 });
 

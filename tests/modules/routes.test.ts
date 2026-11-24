@@ -79,7 +79,7 @@ tables:
     pv("at", "address", "tag", "small", "tag", "address"),
     pv("au", "address", "label", "unconf", "label", "address"),
   ].join("\n")}\n`);
-  const registry = Registry.load([{ path: root, trusted_scripts: false }]);
+  const registry = Registry.load([{ path: root, trusted: true, credentials: [] }]);
   expect(registry.problems).toEqual([]);
   pool = new ConnectorPool({ secrets: new Secrets({}, null), observables });
   deps = { registry, pool, observables };

@@ -93,7 +93,7 @@ export class Registry {
 
   static load(roots: RootConfig[], opts: { chain?: Ledger; actor?: Actor } = {}): Registry {
     const r = new Registry();
-    r.roots = roots.map(x => ({ ...x }));
+    r.roots = roots.map(x => ({ ...x, credentials: [...x.credentials] }));
     for (const root of roots) r.readRoot(root);
     r.crossCheck();
     if (opts.chain !== undefined) r.record(opts.chain, opts.actor ?? DEFAULT_ACTOR);
@@ -129,7 +129,7 @@ export class Registry {
       const base = resolve(root.path);
       if (inside(base, target) && (best === null || base.length > resolve(best.path).length)) best = root;
     }
-    return best === null ? null : { ...best };
+    return best === null ? null : { ...best, credentials: [...best.credentials] };
   }
 
   private reject(root: string, path: string, error: string): void {
@@ -174,6 +174,9 @@ export class Registry {
     const body = validateBody(parsed.kind, parsed.body);
     const base = { hash, root: root.path, path, dir, text: parsed.text };
 
+    if (parsed.kind === "types" && !root.trusted) {
+      throw new ManifestError("observable types are accepted only from a trusted root (a type's pattern runs on every result)");
+    }
     if (parsed.kind === "types" || parsed.kind === "pivots") {
       const single = parsed.kind === "types" ? "type" : "pivot";
       for (const item of body[parsed.kind] as Record<string, Json>[]) {
@@ -197,6 +200,13 @@ export class Registry {
     const title = typeof body.title === "string" && body.title !== "" ? body.title : id;
     if (parsed.kind === "source") {
       const connector = body.connector as string;
+      const credential = typeof body.credential === "string" ? body.credential : null;
+      if (!root.trusted) {
+        if (connector === "http" || connector === "trino") throw new ManifestError(`a ${connector} source is accepted only from a trusted root`);
+        if (credential !== null) throw new ManifestError(`source names credential "${credential}"; only a trusted root may name a credential`);
+      } else if (credential !== null && !root.credentials.includes(credential)) {
+        throw new ManifestError(`source names credential "${credential}", which the configuration does not grant to this root`);
+      }
       if (connector === "sql" || connector === "files") {
         if (!pathStaysInside(root.path, dir, body.location as string)) throw new ManifestError(`location "${body.location}" is outside the module root`);
         const where = resolve(dir, body.location as string);
