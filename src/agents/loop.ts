@@ -13,6 +13,8 @@ import { execTool, parseCall, toolSpecs, viewText } from "./tools";
 import type { ToolContext, ToolName } from "./tools";
 
 export const MAX_TURNS = 16;
+/** The re-ask for a reply that came back empty while the model wrote its answer into its reasoning. */
+export const EMPTY_REASK = "Your reply was empty; your answer went into your reasoning. Put the JSON answer in the reply itself.";
 const DECLINE_CHARS = 2000;
 
 export interface AgentSpec {
@@ -291,8 +293,11 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     // 7. the answer
     if (spec.schema === null) return { kind: "done", content: result.content, output: null, calls };
     let errors: string[];
-    const found = extractJson(result.content);
-    if (found === null) errors = ["the reply holds no JSON object"];
+    // an empty reply (a thinking model may write its whole answer into its reasoning) is re-asked as such; it uses the one re-ask
+    const empty = result.content.trim() === "";
+    const found = empty ? null : extractJson(result.content);
+    if (empty) errors = ["the reply is empty"];
+    else if (found === null) errors = ["the reply holds no JSON object"];
     else {
       errors = validate(spec.schema, found.value).map((e) => `${e.path.replace(/^\$\.?/, "") || "output"} ${e.message}`);
       if (errors.length === 0) return { kind: "done", content: result.content, output: found.value, calls };
@@ -301,7 +306,7 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     reasked = true;
     messages.push(
       { role: "assistant", content: result.content },
-      { role: "user", content: `Your reply did not match the required output: ${errors.join("; ")}. Reply again with the corrected JSON only.` },
+      { role: "user", content: empty ? EMPTY_REASK : `Your reply did not match the required output: ${errors.join("; ")}. Reply again with the corrected JSON only.` },
     );
   }
   return { kind: "stopped", why: "turns" };

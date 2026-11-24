@@ -4,7 +4,7 @@ import type { Entry, EntryType, Marking, Where } from "../../src/core/types";
 import { MARKINGS } from "../../src/core/types";
 import type { Schema } from "../../src/core/schema";
 import { IdAllocator } from "../../src/core/ids";
-import { extractJson, MAX_TURNS, runAgent } from "../../src/agents/loop";
+import { EMPTY_REASK, extractJson, MAX_TURNS, runAgent } from "../../src/agents/loop";
 import type { AgentEnd, AgentSpec } from "../../src/agents/loop";
 import type { Pack } from "../../src/agents/pack";
 import { assemblePack } from "../../src/agents/pack";
@@ -620,5 +620,30 @@ test("a model whose manifest turns structured output off is re-asked without it"
   try {
     expect(await runAgent(f.s, spec(sa.p, { schema: SCHEMA }))).toMatchObject({ kind: "done" });
     expect(sa.bodies().map((b) => "response_format" in b)).toEqual([false, false]);
+  } finally { sa.stop(); }
+});
+
+test("an empty reply with the answer in its reasoning is re-asked once, as the stage's one corrective re-ask", async () => {
+  expect(EMPTY_REASK).toBe("Your reply was empty; your answer went into your reasoning. Put the JSON answer in the reply itself.");
+  const p = spy([{ content: "  \n", reasoning: '{"n":1}' }, { content: '{"n":1}' }]);
+  expect(await runAgent(f.s, spec(p, { schema: SCHEMA }))).toMatchObject({ kind: "done", output: { n: 1 } });
+  expect(p.seen[1]!.messages.slice(-2)).toEqual([{ role: "assistant", content: "  \n" }, { role: "user", content: EMPTY_REASK }]);
+});
+
+test("after the empty-reply re-ask, a reply that fails its schema ends the agent: there is no second re-ask", async () => {
+  // one script: the scripted provider's ordinal continues across the two runs
+  const p = spy([{ content: "", reasoning: "thinking" }, { content: "" }, { content: "", reasoning: "thinking" }, { content: '{"n":"x"}' }]);
+  for (const turns of [2, 4]) {
+    const end = await runAgent(f.s, spec(p, { schema: SCHEMA }));
+    expect(end.kind).toBe("invalid");
+    expect(p.turns).toBe(turns);
+  }
+});
+
+test("the empty-reply re-ask asks a local model for structured output", async () => {
+  const sa = onStandin(["", '{"n":2}']);
+  try {
+    expect(await runAgent(f.s, spec(sa.p, { schema: SCHEMA }))).toMatchObject({ kind: "done", output: { n: 2 } });
+    expect(sa.bodies().map((b) => "response_format" in b)).toEqual([false, true]);
   } finally { sa.stop(); }
 });
