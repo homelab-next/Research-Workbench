@@ -313,3 +313,27 @@ test("a budget below the fixed cost of one request is refused before anything is
   expect(s.requests).toHaveLength(0);
   expect((await c.run(req("reputation", { value: "198.51.100.77", days: 7 }, { budget: 1 }))).rows).toHaveLength(1);
 });
+
+test("the http connector refuses a source that points at the server", async () => {
+  const own = new URL(s.url).host;
+  const ctxWith = (hosts: () => readonly string[]) => ({ ...ctx(), refuse_hosts: hosts });
+  // at construction
+  expect(() => makeConnector(source(s.url), ctxWith(() => [own]))).toThrow(ConnectorError);
+  expect(() => makeConnector(source(s.url), ctxWith(() => [own]))).toThrow("this source points at the workbench's own server");
+  // another name for the same loopback port is the same server
+  const port = new URL(s.url).port;
+  expect(() => makeConnector(source(`http://localhost:${port}`), ctxWith(() => [own]))).toThrow("this source points at the workbench's own server");
+  // a different port is not
+  expect(() => makeConnector(source(s.url), ctxWith(() => ["127.0.0.1:1"]))).not.toThrow();
+  expect(() => makeConnector(source(s.url), ctx())).not.toThrow();
+  // and again before each request, when the server's host became known after construction
+  let hosts: string[] = [];
+  const c = makeConnector(source(s.url), ctxWith(() => hosts));
+  expect((await c.run(req("reputation", { value: "198.51.100.77", days: 7 }))).rows.length).toBe(1);
+  hosts = [own];
+  const before = s.requests.length;
+  const err = await c.run(req("reputation", { value: "198.51.100.77", days: 7 })).catch((e: unknown) => e);
+  expect(err).toBeInstanceOf(ConnectorError);
+  expect((err as Error).message).toBe("this source points at the workbench's own server");
+  expect(s.requests.length).toBe(before);
+});

@@ -43,6 +43,8 @@ export interface Connector {
 export interface ConnectorContext {
   secrets: Secrets;
   observables: Observables;
+  /** `host:port` of this workbench's own server, asked each time: a source may not point at it. */
+  refuse_hosts?: () => readonly string[];
 }
 
 export class ConnectorError extends Error {

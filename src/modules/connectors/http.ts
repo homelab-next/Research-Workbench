@@ -2,7 +2,7 @@ import type { Json } from "../../core/canonical";
 import type { Cost } from "../../core/types";
 import type { EndpointManifest, SourceManifest } from "../manifests";
 import { effectiveBound, PLACEHOLDER } from "./placeholders";
-import { assertNoEcho, loadCredential, parseBase, readCapped, scrub, TimedOut, TooBig } from "./shared";
+import { assertNoEcho, LOOPBACK, loadCredential, parseBase, readCapped, scrub, TimedOut, TooBig } from "./shared";
 import { ConnectorError } from "./types";
 import type { Bound, Connector, ConnectorContext, QueryOutcome, QueryRequest } from "./types";
 
@@ -11,7 +11,37 @@ export const MAX_BODY_BYTES = 16_777_216;
 export class HttpConnector implements Connector {
   readonly kind = "http" as const;
 
-  constructor(private readonly source: SourceManifest, private readonly ctx: ConnectorContext) {}
+  constructor(private readonly source: SourceManifest, private readonly ctx: ConnectorContext) {
+    this.refuseOwnServer();
+  }
+
+  /** A source that points at the workbench's own server would let a manifest talk to the server as if it were a source. */
+  private refuseOwnServer(): void {
+    const own = this.ctx.refuse_hosts?.() ?? [];
+    if (own.length === 0) return;
+    const { location } = this.source;
+    let target: URL;
+    try {
+      target = new URL(location);
+    } catch {
+      return; // parseBase refuses it with its own reason
+    }
+    const loopbackPort = (host: string): string | null => {
+      try {
+        const u = new URL(`http://${host}`);
+        return LOOPBACK.has(u.hostname) ? (u.port || "80") : null;
+      } catch {
+        return null;
+      }
+    };
+    const port = LOOPBACK.has(target.hostname) ? (target.port || (target.protocol === "https:" ? "443" : "80")) : null;
+    for (const host of own) {
+      // the server's own address under any loopback name is the server
+      if (target.host === host.toLowerCase() || (port !== null && port === loopbackPort(host))) {
+        throw new ConnectorError("this source points at the workbench's own server");
+      }
+    }
+  }
 
   private endpoint(name: string): EndpointManifest {
     const e = this.source.endpoints.find(x => x.name === name);
@@ -71,6 +101,7 @@ export class HttpConnector implements Connector {
   }
 
   async run(req: QueryRequest): Promise<QueryOutcome> {
+    this.refuseOwnServer();
     const e = this.endpoint(req.text);
     const price = this.cost();
     if (req.budget !== null && price !== null && req.budget < price.amount) {

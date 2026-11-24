@@ -20,17 +20,17 @@ export class ComposeError extends Error {
 /**
  * Everything the pipeline needs, built from the configuration: the registry (its loading recorded on the workbench chain), the
  * observable types, the secrets, the connector pool, the seeker the configuration names, the providers, the pipeline and the
- * `investigation` profile. `deps.anchor` appends `case.anchored` to the workbench chain. Throws ComposeError when there is no
+ * `investigation` profile. `opts.refuse_hosts` names the hosts (the server's own) no source may point at. `deps.anchor` appends `case.anchored` to the workbench chain. Throws ComposeError when there is no
  * usable pipeline, profile or seeker; every manifest problem short of that is returned in `problems`.
  */
-export function compose(config: Config, wb: Workbench): { deps: EngineDeps; problems: string[]; close(): void } {
+export function compose(config: Config, wb: Workbench, opts: { refuse_hosts?: () => readonly string[] } = {}): { deps: EngineDeps; problems: string[]; close(): void } {
   const registry = Registry.load(config.roots, { chain: wb.chain });
   const problems = registry.problems.map((p) => `${p.path}: ${p.error}`);
   const makeSeeker = Object.hasOwn(SEEKERS, config.seeker) ? SEEKERS[config.seeker] : undefined;
   if (makeSeeker === undefined) throw new ComposeError(`the seeker "${config.seeker}" is not one this build has`);
   const secrets = new Secrets(process.env, config.secrets_file);
   const observables = new Observables(registry.types());
-  const pool = new ConnectorPool({ secrets, observables });
+  const pool = new ConnectorPool({ secrets, observables, ...(opts.refuse_hosts ? { refuse_hosts: opts.refuse_hosts } : {}) });
   try {
     const loaded = loadProviders(registry, secrets);
     problems.push(...loaded.problems.map((p) => `${p.path}: ${p.error}`));
