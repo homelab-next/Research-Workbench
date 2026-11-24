@@ -16,6 +16,8 @@ import type { EngineDeps, StageEnd, StageRunner } from "../../src/pipeline/engin
 import { loadPipeline } from "../../src/pipeline/manifests";
 import type { Role } from "../../src/pipeline/manifests";
 import { ReviseRefused } from "../../src/pipeline/revise";
+import { markingProblem } from "../../src/pipeline/publish";
+import { card } from "../helpers/entries";
 import { fixture, PLAN } from "../helpers/tools-fixture";
 import type { Fixture } from "../helpers/tools-fixture";
 
@@ -191,4 +193,42 @@ test("a product with unknown keys, and an edit with an empty reason, are refused
   expect(() => r.engine.revise({ product: { ...cur, summary: "x" }, reason: "", actor: person })).toThrow(ReviseRefused);
   expect(() => r.engine.revise({ product: { ...cur, summary: "x" }, reason: "   ", actor: person })).toThrow(ReviseRefused);
   expect(f.s.state.drafts).toHaveLength(1);
+});
+
+/** A run at the publish gate whose draft cites an AMBER card c1 for its summary by tool only, so the product holds no `[c1]`. */
+async function gateWithNarrativeCite(): Promise<{ engine: Engine }> {
+  const researcher = { ...planner, id: "researcher-g1", stage: "research" };
+  f.s.commit((_st, ids) => [{ type: "card.created", actor: researcher, payload: { card: card(ids.next("card"), { title: "Proxy flows", marking: "TLP:AMBER" }) } }]);
+  const r = rig({
+    assemble: async () => {
+      const product: Product = { ...base, marking: "TLP:AMBER", summary: "The proxy talks to the address every hour." };
+      const hash = sha256Hex(canonical(product as unknown as Json));
+      f.s.commit((st) => [{ type: "draft.revised", actor: planner, payload: { draft: { n: st.drafts.length + 1, hash, author: planner, product, reason: "r", cited: ["c1"] } } }]);
+      return { ...PASS, draft_hash: hash };
+    },
+  });
+  await toGate(r);
+  return r;
+}
+
+test("an edit that leaves the summary as it was keeps the card the summary cited, so its marking cannot be lowered below that card", async () => {
+  const r = await gateWithNarrativeCite();
+  const d = r.engine.revise({ product: { ...latestDraft(f.s.state)!.product, marking: "TLP:GREEN" }, reason: "lower it", actor: person });
+  expect(d.cited).toContain("c1");
+  expect(markingProblem(f.s, d)).toContain("c1 (TLP:AMBER)");
+  // review of the edit passes in this rig; approval still refuses the lowered marking
+  await r.engine.advance();
+  expect(() => r.engine.approve({ actor: person })).toThrow(/less restrictive than c1/);
+});
+
+test("an edit that rewrites every section carries no tool-only cite over, but keeps every card its text names", async () => {
+  const r = await gateWithNarrativeCite();
+  const prev = latestDraft(f.s.state)!.product;
+  const d = r.engine.revise({ product: { ...prev, summary: "All new.", gaps_and_limits: "x", alternatives: "y", assessment: "z" }, reason: "rewrite", actor: person });
+  expect(d.cited).toEqual([]);
+  for (const text of ["See [c1].", "See [c1, c2].", "See [Card c1].", "See c1 for the flows."]) {
+    const e = r.engine.revise({ product: { ...prev, summary: text, gaps_and_limits: text, alternatives: "y", assessment: "z" }, reason: `cite as ${text}`, actor: person });
+    expect(e.cited).toContain("c1");
+  }
+  expect(latestDraft(f.s.state)!.cited).toEqual(["c1"]);
 });

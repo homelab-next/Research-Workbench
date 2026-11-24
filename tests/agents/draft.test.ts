@@ -4,7 +4,9 @@ import { canonical } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
 import type { CardState } from "../../src/core/state/types";
 import type { Actor, Finding, Product } from "../../src/core/types";
-import { buildProduct, DraftWork, draftOf } from "../../src/agents/draft";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { buildProduct, CARD_REF, cardRefs, citedBy, DraftWork, draftOf } from "../../src/agents/draft";
 import { ToolError } from "../../src/agents/tools";
 import type { SourceManifest } from "../../src/modules/manifests";
 
@@ -151,4 +153,18 @@ test("the refusal for a discarded card is a ToolError", () => {
   w.setFinding(f("a", ["c1"]), null);
   const gone = { ...card("c1", "dns", "TLP:GREEN"), place: "discarded" } as unknown as CardState;
   expect(() => buildProduct(w, facts({ c1: gone }))).toThrow(ToolError);
+});
+
+test("a card is named in text as [c1], [c1, c2], [Card c1] or a bare c1, the same pattern check 6 uses", () => {
+  expect(cardRefs("see [c1]")).toEqual(["c1"]);
+  expect(cardRefs("see [c1, c2]")).toEqual(["c1", "c2"]);
+  expect(cardRefs("see [Card c3]")).toEqual(["c3"]);
+  expect(cardRefs("c4 shows it")).toEqual(["c4"]);
+  expect(cardRefs("(see C2)")).toEqual(["c2"]);
+  expect(cardRefs("abc1, c1x, 0c1 and c12345abc are not cards")).toEqual([]);
+  const product = { summary: "[c1, c2]", gaps_and_limits: "[Card c3]", alternatives: "c4", assessment: "none", key_findings: [] } as unknown as Product;
+  expect(citedBy(product)).toEqual(["c1", "c2", "c3", "c4"]);
+  // check 6 runs alone and cannot import the helper: its source spells the same pattern
+  const check6 = readFileSync(join(import.meta.dir, "../../sample/checks/06-assumptions-and-judgments.ts"), "utf8");
+  expect(check6).toContain(`/${CARD_REF.source}/i`);
 });

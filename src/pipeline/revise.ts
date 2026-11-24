@@ -5,7 +5,7 @@ import { CONFIDENCES, isMarking } from "../core/types";
 import type { Actor, Draft, EntryInput, Product } from "../core/types";
 import { canonical } from "../core/canonical";
 import type { Json } from "../core/canonical";
-import { draftOf } from "../agents/draft";
+import { carriedCites, draftOf } from "../agents/draft";
 import type { Pipeline } from "./manifests";
 
 export class ReviseRefused extends Error {
@@ -60,7 +60,8 @@ export function reviseDraft(session: CaseSession, pipeline: Pipeline, input: { p
     const { run } = state;
     if (run.status === "none" || run.status === "finished") throw new ReviseRefused("there is no run in progress to edit a draft in");
     const latest = latestDraft(state);
-    const draft = draftOf(product, state.drafts.length + 1, actor, reason);
+    // what the person left unchanged keeps the cards it cited, so a lowered marking is still checked against them
+    const draft = draftOf(product, state.drafts.length + 1, actor, reason, carriedCites(latest, product, state.cards));
     if (latest !== null && latest.hash === draft.hash) throw new ReviseRefused("the edit changes nothing in the latest draft");
     made = draft;
     const out: EntryInput[] = [{ type: "draft.revised", actor, run: run.id, payload: { draft } }];

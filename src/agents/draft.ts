@@ -3,7 +3,7 @@ import { canonical } from "../core/canonical";
 import { sha256Hex } from "../core/hash";
 import type { CardState } from "../core/state/types";
 import type { Actor, Draft, Finding, Marking, Product, Section } from "../core/types";
-import { strictest } from "../core/types";
+import { SECTIONS, strictest } from "../core/types";
 import type { SourceManifest } from "../modules/manifests";
 import { ToolError } from "./tools/kit";
 
@@ -96,11 +96,33 @@ export function citedOf(draft: Draft): string[] {
 /** What a product built by buildProduct got its narrative to cite: a product does not store these, and the draft that records the product needs them. */
 const builtCites = new WeakMap<Product, string[]>();
 
-/** Every card id the findings cite, the given narrative cites, and any `[cN]` in the product's narrative text, sorted. */
+/**
+ * A card named in text: `[c3]`, `[c3, c2]`, `[Card c3]` or a bare `c3`, in any case. Check 6 (sample/checks/06-assumptions-and-judgments.ts)
+ * runs alone as a program and cannot import this, so it spells the same pattern; a test holds the two together.
+ */
+export const CARD_REF = /(?<![\w])c\d+(?![\w])/gi;
+
+/** The card ids a text names, lower-cased, in the order they appear. */
+export function cardRefs(text: string): string[] {
+  return [...text.matchAll(CARD_REF)].map((m) => m[0].toLowerCase());
+}
+
+const TEXT_SECTIONS = SECTIONS.filter((k): k is TextSection => k !== "key_findings");
+
+/**
+ * The cards a new revision keeps from the one before because a section it carries over unchanged cited them by tool only (a product does not
+ * store those). Those that cited the old findings are not carried, nor are cards discarded since; when every section changed there is nothing
+ * carried over. Assemble and a person's edit share this rule.
+ */
+export function carriedCites(latest: Draft | null, product: Product, cards: Readonly<Record<string, CardState>>): string[] {
+  if (latest === null || !TEXT_SECTIONS.some((k) => product[k] === latest.product[k])) return [];
+  const byFindings = new Set(latest.product.key_findings.flatMap((x) => x.cites));
+  return (latest.cited ?? []).filter((id) => !byFindings.has(id) && Object.hasOwn(cards, id) && cards[id]!.place !== "discarded");
+}
+
+/** Every card id the findings cite, the given narrative cites, and every card the product's narrative text names (see CARD_REF), sorted. */
 export function citedBy(product: Product, narrativeCites: readonly string[] = []): string[] {
   const ids = new Set<string>([...product.key_findings.flatMap((f) => f.cites), ...narrativeCites]);
-  for (const text of [product.summary, product.gaps_and_limits, product.alternatives, product.assessment]) {
-    for (const m of text.matchAll(/\[(c\d+)\]/g)) ids.add(m[1]!);
-  }
+  for (const k of TEXT_SECTIONS) for (const id of cardRefs(product[k])) ids.add(id);
   return [...ids].sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
 }
