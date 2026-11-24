@@ -1,0 +1,67 @@
+import { cardRefs, latestDraft } from "../core/state";
+import type { CaseState } from "../core/state";
+import { SECTIONS } from "../core/types";
+import type { Draft, Product } from "../core/types";
+import type { Reference } from "../core/wire";
+
+export type TextSection = "summary" | "gaps_and_limits" | "alternatives" | "assessment";
+/** The five sections in order, with the words the screen and the Markdown give them. */
+export const SECTION_TITLES: { id: "summary" | "key_findings" | "gaps_and_limits" | "alternatives" | "assessment"; title: string }[] = [
+  { id: "summary", title: "Summary" }, { id: "key_findings", title: "Key findings" }, { id: "gaps_and_limits", title: "Gaps and limits" },
+  { id: "alternatives", title: "Alternatives" }, { id: "assessment", title: "Assessment" },
+];
+export const TEXT_SECTIONS: TextSection[] = SECTIONS.filter((k): k is TextSection => k !== "key_findings");
+
+/** Every card id a draft cites (its findings, its recorded narrative cites and every card its text names), in id order. */
+export function citedIds(draft: Draft): string[] {
+  const p: Product = draft.product;
+  const ids = new Set<string>([...p.key_findings.flatMap((f) => f.cites), ...(draft.cited ?? [])]);
+  for (const k of TEXT_SECTIONS) for (const id of cardRefs(p[k])) ids.add(id);
+  return [...ids].sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+}
+
+/** A fence longer than any run of backticks in `text`, so the text cannot close it. */
+function fenced(text: string): string {
+  let longest = 0;
+  for (const run of text.match(/`+/g) ?? []) longest = Math.max(longest, run.length);
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return `${fence}\n${text}\n${fence}`;
+}
+
+/** The recorded product as Markdown: the marking first and last, the five sections, and the provenance of every card the draft cites. Plain text; it is never drawn as HTML. */
+export function narrativeMarkdown(state: CaseState, ref: Reference): string {
+  const d = latestDraft(state);
+  if (d === null) return "";
+  const p = d.product;
+  const out: string[] = [p.marking, "", `# ${state.meta?.title ?? "Case"}`, ""];
+  for (const { id, title } of SECTION_TITLES) {
+    out.push(`## ${title}`, "");
+    if (id !== "key_findings") { out.push(p[id], ""); continue; }
+    p.key_findings.forEach((f, i) => {
+      out.push(`${i + 1}. ${f.statement}`, `   - Likelihood: ${f.likelihood}`, `   - Confidence: ${f.confidence} — ${f.confidence_basis}`);
+      out.push(`   - Cites: ${f.cites.length === 0 ? "none" : f.cites.map((c) => `[${c}]`).join(", ")}`);
+      out.push(`   - Assumptions: ${f.assumptions.length === 0 ? "none" : ""}`);
+      for (const a of f.assumptions) out.push(`     - ${a}`);
+      out.push(`   - Reasoning (judgment): ${f.reasoning}`);
+    });
+    out.push("");
+  }
+  out.push("## Provenance", "");
+  for (const id of citedIds(d)) {
+    const c = Object.hasOwn(state.cards, id) ? state.cards[id]! : null;
+    if (c === null) { out.push(`### ${id}`, "", "This card is not in the record.", ""); continue; }
+    const q = c.query !== null && Object.hasOwn(state.queries, c.query) ? state.queries[c.query]! : null;
+    const coverage = c.coverage === null ? "not recorded" : c.coverage.kind === "full" ? "full" : `partial: ${c.coverage.reason}${c.coverage.detail === undefined ? "" : ` — ${c.coverage.detail}`}`;
+    out.push(`### ${id}: ${c.title}`, "");
+    out.push(`- Source: ${ref.sources.find((s) => s.id === c.source)?.title ?? c.source ?? "none"}`);
+    out.push("- Query:", "", q === null ? "none" : fenced(q.text), "");
+    out.push(`- Why: ${q?.why ?? c.why}`);
+    out.push(`- By: ${q === null ? c.made_by : `${q.by.kind} ${q.by.id}`}`);
+    out.push(`- When (UTC): ${q?.issued_ts ?? c.created_ts}`);
+    out.push(`- Marking: ${c.marking}`);
+    out.push(`- Coverage: ${coverage}`);
+    out.push(`- Rows: ${c.row_count}`, "");
+  }
+  out.push(p.marking);
+  return out.join("\n");
+}

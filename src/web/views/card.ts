@@ -112,7 +112,7 @@ export function makeCardView(env: CardEnv, id: string): CardView {
     const ro = env.readonly();
     const button = (action: string, label: string, onClick: (() => void) | null): HTMLElement =>
       h("button", { type: "button", class: "action", data: { action }, disabled: ro || onClick === null, on: onClick === null ? undefined : { click: onClick } }, label);
-    const row: HTMLElement[] = [button("pivot", "Pivot…", null), button("verify", "Verify", null), button("cite", "Cite", null)];
+    const row: HTMLElement[] = [button("pivot", "Pivot…", null), button("verify", "Verify", null), button("cite", "Cite", () => env.nav.cite(c.id))];
     if (c.place === "incoming") row.push(button("keep", "Keep", () => env.keep(c.id)));
     if (c.place === "lane") {
       const others = state.lanes.filter((l) => l.id !== c.lane);

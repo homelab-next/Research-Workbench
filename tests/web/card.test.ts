@@ -159,7 +159,8 @@ test("the actions offered follow where the card is", async () => {
   q.click(incoming); await q.settle();
   const names = (): string[] => [...q.q(`[data-card=${id}] [role=toolbar]`).querySelectorAll("button, select")].map((e) => e.getAttribute("aria-label") ?? e.textContent!);
   expect(names()).toEqual(["Pivot…", "Verify", "Cite", "Keep", "Discard", "Pin"]);
-  expect([...q.q(`[data-card=${id}] [role=toolbar]`).querySelectorAll("button")].filter((b) => ["Pivot…", "Verify", "Cite"].includes(b.textContent!)).every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
+  expect([...q.q(`[data-card=${id}] [role=toolbar]`).querySelectorAll("button")].filter((b) => ["Pivot…", "Verify"].includes(b.textContent!)).every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
+  expect((q.q(`[data-card=${id}] [data-action=cite]`) as HTMLButtonElement).disabled).toBe(false);   // Cite opens the Narrative edit (Task 10)
   q.click(`[data-card=${id}] [data-action=keep]`); await q.settle();       // the card stays open where it lands
   expect(names()).toEqual(["Pivot…", "Verify", "Cite", "Move", "Back to Incoming", "Discard", "Pin"]);
 });

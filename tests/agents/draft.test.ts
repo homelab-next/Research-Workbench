@@ -173,3 +173,10 @@ test("a card is named in text as [c1], [c1, c2], [Card c1] or a bare c1, the sam
 test("only lower-case card ids are citations", () => {
   expect(cardRefs("C2 traffic to c3, [c1, c2] and [Card c4]; C5.")).toEqual(["c3", "c1", "c2", "c4"]);
 });
+
+test("CARD_REF and cardRefs live in src/core/state/cites.ts (browser-safe) and src/agents/draft.ts re-exports the same ones", async () => {
+  const cites = await import("../../src/core/state/cites");
+  expect(cites.CARD_REF).toBe(CARD_REF);
+  expect(cites.cardRefs).toBe(cardRefs);
+  expect(cites.cardRefs("see [c1, c2] and C3")).toEqual(["c1", "c2"]);
+});

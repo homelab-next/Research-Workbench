@@ -195,3 +195,24 @@ kbd { font-family: var(--mono); font-size: 12px; background: var(--panel-2); bor
 .lens-pipeline .role, .lens-pipeline .label { color: var(--muted); font-size: 12px; }
 .lens-pipeline pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24em; overflow: auto; margin: 2px 0 6px; }
 .lens-pipeline .moe-form { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; }
+
+/* ---------- lens: Narrative ---------- */
+.lens-narrative .draft { border: 1px solid var(--line); border-radius: var(--radius); padding: 8px; }
+.lens-narrative .draft.proposed { border-style: dashed; }
+.lens-narrative .narr-section, .lens-narrative .edit-section { margin-top: 8px; }
+.lens-narrative .section-title { font-size: 13px; margin: 6px 0 4px; color: var(--muted); }
+.lens-narrative .finding, .lens-narrative .edit-finding { border-top: 1px solid var(--line); padding: 4px 0; }
+.lens-narrative .label { color: var(--muted); font-size: 12px; }
+.lens-narrative textarea { width: 100%; min-height: 5em; box-sizing: border-box; }
+.lens-narrative .edit-row { display: block; margin-top: 4px; }
+.lens-narrative .edit-foot, .lens-narrative .gate-buttons, .lens-narrative .tools-box, .lens-narrative .answer-form, .lens-narrative .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.lens-narrative .check-row, .lens-narrative .evaluation-row { padding: 1px 0; }
+.lens-narrative .pass { color: var(--green); }
+.lens-narrative .fail, .lens-narrative .challenge.must { color: var(--amber); }
+.lens-narrative .challenge { border-top: 1px solid var(--line); padding: 4px 0; }
+.lens-narrative .proposal { border: 1px dashed var(--line); border-radius: var(--radius); padding: 6px; margin-top: 6px; }
+.lens-narrative .picker { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); padding: 4px; display: flex; flex-direction: column; gap: 2px; }
+.lens-narrative .tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.lens-narrative .tabs .active { border-color: var(--accent); color: var(--accent); }
+.lens-narrative pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20em; overflow: auto; }
+.lens-narrative [data-drop=cite].drop-hover { outline: 2px dashed var(--accent); }

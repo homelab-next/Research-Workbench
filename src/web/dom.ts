@@ -3,7 +3,7 @@ export type Child = Node | string | number | null | undefined | false | Child[];
 export interface Props {
   class?: string; id?: string; title?: string; name?: string;            // name → aria-label
   role?: string; tabindex?: number; type?: string; value?: string; placeholder?: string; for?: string;
-  disabled?: boolean; checked?: boolean; hidden?: boolean; current?: boolean;   // current → aria-current="true"
+  disabled?: boolean; checked?: boolean; hidden?: boolean; readonly?: boolean; current?: boolean;   // current → aria-current="true"
   data?: Record<string, string>; aria?: Record<string, string>;
   on?: Record<string, (event: Event) => void>;
 }
@@ -13,9 +13,9 @@ export const TAGS: readonly string[] = [
   "div", "span", "p", "h1", "h2", "h3", "header", "footer", "main", "nav", "section", "article", "aside", "button", "input", "textarea", "select", "option", "label",
   "ul", "ol", "li", "table", "thead", "tbody", "tr", "th", "td", "pre", "code", "time", "details", "summary", "form", "fieldset", "legend", "kbd", "dl", "dt", "dd",
 ];
-const PROPS = new Set(["class", "id", "title", "name", "role", "tabindex", "type", "value", "placeholder", "for", "disabled", "checked", "hidden", "current", "data", "aria", "on"]);
+const PROPS = new Set(["class", "id", "title", "name", "role", "tabindex", "type", "value", "placeholder", "for", "disabled", "checked", "hidden", "readonly", "current", "data", "aria", "on"]);
 const TEXT_ATTRS: Record<string, string> = { class: "class", id: "id", title: "title", role: "role", type: "type", placeholder: "placeholder", for: "for" };
-const BOOLEAN_ATTRS = ["disabled", "checked", "hidden"] as const;
+const BOOLEAN_ATTRS = ["disabled", "checked", "hidden", "readonly"] as const;
 const KEY = /^[a-z][a-z0-9-]*$/;
 
 function append(doc: Document, el: Node, child: Child): void {

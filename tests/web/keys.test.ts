@@ -215,12 +215,7 @@ test("C cites through the card's own Cite button when it can be pressed", async 
   const card = first(q);
   card.focus(); q.press("c");
   expect(card.classList.contains("open")).toBe(true);           // a card that is closed is opened, so its action row is there
-  let pressed = 0;
-  const cite = q.q(`[data-card=${card.dataset.card}] [data-action=cite]`);
-  cite.removeAttribute("disabled");
-  cite.addEventListener("click", () => { pressed++; });
-  q.press("c");
-  expect(pressed).toBe(1);
+  expect(q.all(".lens-narrative [data-action=save]").length).toBe(1);   // the Cite button opened the Narrative edit
 });
 
 test("Tab, L and ] move to the next column; Shift+Tab, H and [ move back; 0 goes to Incoming", async () => {

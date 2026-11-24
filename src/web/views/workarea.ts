@@ -25,6 +25,8 @@ export interface WorkArea extends View {
   openLens(id: LensId, arg?: string): void;
   /** True when a lens was open. */
   closeLens(): boolean;
+  /** Opens the Narrative lens (when it is not the one open) and cites `card` there. */
+  cite(card: string, section?: string): void;
   /** The key actions of the work area, by the names KEYMAP gives them. */
   actions(): Record<string, () => void>;
   /** The Escape of the work area: back to live, else close the lens, else close the open cards. True when one did something. */
@@ -39,6 +41,7 @@ export function caseScreenFor(ui: Ui): CaseScreen {
       openLens: (id, arg) => area.openLens(id, arg),
       closeLens: () => area.closeLens(),
       focusCard: (card) => { area.open(card); area.select(card); },
+      cite: (card, section) => area.cite(card, section),
       focusLane: (lane) => area.focusColumn(lane),
       actions: area.actions(),
       escape: () => area.escape(),
@@ -205,6 +208,10 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
       lensBox.appendChild(lensView.el);
       render();
     },
+    cite(card, section) {
+      if (lensId !== "narrative") area.openLens("narrative");
+      (lensView as (View & { cite?(card: string, section?: string): void }) | null)?.cite?.(card, section);
+    },
     actions: () => ({}),
     escape: () => false,
     closeLens() {
@@ -304,6 +311,7 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
   };
 
   const stopDrag = enableDrag(ui, el, open, (card, target) => {
+    if (target.kind === "cite") { area.cite(card, target.section); return; }
     const cmd = dropCommand(store.live, card, target);
     if (cmd === null) return;
     const lane = typeof cmd.args.lane === "string" ? store.live.lanes.find((l) => l.id === cmd.args.lane) : undefined;

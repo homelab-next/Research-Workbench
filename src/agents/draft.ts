@@ -1,6 +1,7 @@
 import type { Json } from "../core/canonical";
 import { canonical } from "../core/canonical";
 import { sha256Hex } from "../core/hash";
+import { CARD_REF, cardRefs } from "../core/state/cites";
 import type { CardState } from "../core/state/types";
 import type { Actor, Draft, Finding, Marking, Product, Section } from "../core/types";
 import { SECTIONS, strictest } from "../core/types";
@@ -96,16 +97,7 @@ export function citedOf(draft: Draft): string[] {
 /** What a product built by buildProduct got its narrative to cite: a product does not store these, and the draft that records the product needs them. */
 const builtCites = new WeakMap<Product, string[]>();
 
-/**
- * A card named in text: `[c3]`, `[c3, c2]`, `[Card c3]` or a bare `c3`; only lower-case ids cite (`C3 traffic` does not). Check 6 (sample/checks/06-assumptions-and-judgments.ts)
- * runs alone as a program and cannot import this, so it spells the same pattern; a test holds the two together.
- */
-export const CARD_REF = /(?<![\w])c\d+(?![\w])/g;
-
-/** The card ids a text names, lower-cased, in the order they appear. */
-export function cardRefs(text: string): string[] {
-  return [...text.matchAll(CARD_REF)].map((m) => m[0].toLowerCase());
-}
+export { CARD_REF, cardRefs };
 
 const TEXT_SECTIONS = SECTIONS.filter((k): k is TextSection => k !== "key_findings");
 

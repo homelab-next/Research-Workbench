@@ -200,3 +200,17 @@ turns:
     reply:
       content: |
         {"title": "Regular connections to 198.51.100.77", "note": "Sample run."}
+
+  # a person's edit is reviewed again: each reviewer passes the new revision with nothing to say
+  - actor: evaluator
+    reply:
+      content: |
+        {"pass": true, "findings": []}
+  - actor: adversary
+    reply:
+      content: |
+        {"done": true, "summary": "Nothing new to raise on this revision."}
+  - actor: publisher
+    reply:
+      content: |
+        {"title": "Regular connections to 198.51.100.77", "note": "Sample run."}

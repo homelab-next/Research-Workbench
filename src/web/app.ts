@@ -41,6 +41,8 @@ export interface Nav {
   go(route: Route): void;
   openLens(id: LensId, arg?: string): void; closeLens(): void;
   focusCard(card: string): void;
+  /** Opens the Narrative lens in edit mode and inserts `[<card>]` at the caret of the section last focused (Summary by default); `section` names another. */
+  cite(card: string, section?: string): void;
   pivot(card: string, values: Observable[]): void;
   ask(text: string): void;
   /** One step up: close what is open, else go up a level (case → which one? → home). */
@@ -51,7 +53,7 @@ export interface Open { store: CaseStore; nav: Nav }
 
 /** What the case screen answers for the app. Anything it leaves out does nothing. `closeLens` says whether it closed something. */
 export interface CaseHandlers {
-  openLens?(id: LensId, arg?: string): void; closeLens?(): boolean; focusCard?(card: string): void;
+  openLens?(id: LensId, arg?: string): void; closeLens?(): boolean; focusCard?(card: string): void; cite?(card: string, section?: string): void;
   pivot?(card: string, values: Observable[]): void; ask?(text: string): void; focusLane?(lane: string): void;
   /** The key actions of the case screen (every action of KEYMAP but the four of "anywhere"). */
   actions?: Record<string, () => void>;
@@ -97,6 +99,7 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
     openLens: (id, arg) => handlers.openLens?.(id, arg),
     closeLens: () => { handlers.closeLens?.(); },
     focusCard: (card) => handlers.focusCard?.(card),
+    cite: (card, section) => handlers.cite?.(card, section),
     pivot: (card, values) => handlers.pivot?.(card, values),
     ask: (text) => handlers.ask?.(text),
     up() {

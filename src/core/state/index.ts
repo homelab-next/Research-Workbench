@@ -7,6 +7,7 @@ export type { Reducer } from "./apply";
 export { applyRun, runUsage, stageFinishedCounts, subgoalAnswered } from "./run";
 export { applyAnalysis, blockers, latestDraft, openMustAddress, publishable } from "./analysis";
 export { applyCards, cardLocation } from "./cards";
+export { CARD_REF, cardRefs } from "./cites";
 export { cardFields, caseFields, isCard, isCaseCreated, isCoverage, isObservable, isTimeWindow } from "./shapes";
 export * from "./types";
 

@@ -64,7 +64,7 @@ export function enableDrag(ui: Ui, root: HTMLElement, open: Open, onDrop: (card:
   let line: HTMLElement | null = null;
 
   const showLine = (hit: { target: DropTarget; el: HTMLElement } | null): void => {
-    const would = hit !== null && press !== null && open.store.at === null && dropCommand(open.store.live, press.card, hit.target) !== null ? hit : null;
+    const would = hit !== null && press !== null && open.store.at === null && (hit.target.kind === "cite" || dropCommand(open.store.live, press.card, hit.target) !== null) ? hit : null;
     if (would === null) { line?.remove(); line = null; return; }
     if (line === null) { line = h("div", { class: "drop-line" }); doc.body.appendChild(line); }
     const r = would.el.getBoundingClientRect();

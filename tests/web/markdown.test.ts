@@ -1,0 +1,61 @@
+import { afterEach, expect, test } from "bun:test";
+import { initial } from "../../src/core/state";
+import type { CaseState } from "../../src/core/state";
+import type { Reference } from "../../src/core/wire";
+import { narrativeMarkdown } from "../../src/web/markdown";
+import { served } from "../helpers/served";
+import type { Served } from "../helpers/served";
+
+let s: Served | null = null;
+afterEach(async () => { await s?.close(); s = null; });
+
+async function sample(): Promise<{ state: CaseState; ref: Reference; id: string }> {
+  s = await served();
+  const id = await s.newCase();
+  await s.toPublishGate(id);
+  const ref = (await (await s.get("/api/reference")).json()) as Reference;
+  return { state: s.app.hub.read(id).state, ref, id };
+}
+
+test("the Markdown has the marking first and last, the five sections, and each cited card's provenance", async () => {
+  const { state, ref } = await sample();
+  const md = narrativeMarkdown(state, ref);
+  const lines = md.split("\n");
+  const d = state.drafts.at(-1)!;
+  expect(lines[0]).toBe(d.product.marking);
+  expect(lines.at(-1)).toBe(d.product.marking);
+  expect(md).toContain(`# ${state.meta!.title}`);
+  const heads = lines.filter((l) => l.startsWith("## "));
+  expect(heads).toEqual(["## Summary", "## Key findings", "## Gaps and limits", "## Alternatives", "## Assessment", "## Provenance"]);
+  expect(md).toContain(d.product.summary);
+  expect(md).toContain(d.product.key_findings[0]!.statement);
+  expect(md).toContain("Likelihood: very likely");
+  expect(md).toContain("Confidence: moderate");
+  // every cited card is expanded
+  const cited = [...new Set([...d.product.key_findings.flatMap((f) => f.cites), ...(d.cited ?? [])])];
+  expect(cited.length).toBeGreaterThan(2);
+  for (const id of cited) {
+    const c = state.cards[id]!;
+    const q = state.queries[c.query!]!;
+    expect(md).toContain(`### ${id}: ${c.title}`);
+    expect(md).toContain(q.text);
+    expect(md).toContain(`Marking: ${c.marking}`);
+    expect(md).toContain(`Rows: ${c.row_count}`);
+    expect(md).toContain(q.issued_ts);
+    expect(md).toContain(`Source: ${ref.sources.find((x) => x.id === c.source)!.title}`);
+  }
+  expect(md).toContain("Coverage: partial");
+});
+
+test("a query holding backticks cannot break out of its fence", async () => {
+  const { state, ref } = await sample();
+  const id = state.drafts.at(-1)!.product.key_findings[0]!.cites[0]!;
+  const q = state.queries[state.cards[id]!.query!]!;
+  const hostile: CaseState = { ...state, queries: { ...state.queries, [q.id]: { ...q, text: "select ```; # heading" } } };
+  const md = narrativeMarkdown(hostile, ref);
+  expect(md).toContain("````\nselect ```; # heading\n````");
+});
+
+test("with no draft there is nothing to copy", () => {
+  expect(narrativeMarkdown(initial(), { types: [], sources: [], pivots: [], objectives: [], phases: [], profile: { id: "p", title: "p" }, send_back_cap: 3 })).toBe("");
+});
