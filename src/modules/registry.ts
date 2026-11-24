@@ -192,6 +192,10 @@ export class Registry {
     if (parsed.kind === "types" && !root.trusted) {
       throw new ManifestError("observable types are accepted only from a trusted root (a type's pattern runs on every result)");
     }
+    // refused before the id table, so an untrusted root cannot take a trusted manifest's id and make it vanish
+    if ((parsed.kind === "model" || parsed.kind === "script") && !root.trusted) {
+      throw new ManifestError(`a ${parsed.kind} manifest is accepted only from a trusted root`);
+    }
     if (parsed.kind === "types" || parsed.kind === "pivots") {
       const single = parsed.kind === "types" ? "type" : "pivot";
       for (const item of body[parsed.kind] as Record<string, Json>[]) {

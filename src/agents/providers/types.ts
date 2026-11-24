@@ -1,0 +1,25 @@
+import type { Schema } from "../../core/schema";
+import type { Usage } from "../../core/state";
+import type { Where } from "../../core/types";
+
+export interface ToolSpec { name: string; description: string; parameters: Schema }
+/** `arguments` is the text the model gave, unparsed. */
+export interface ToolCall { id: string; name: string; arguments: string }
+export interface ChatMessage { role: "system" | "user" | "assistant" | "tool"; content: string; tool_calls?: ToolCall[]; tool_call_id?: string }
+export interface ModelInfo { id: string; context: number | null; efforts: string[] }
+/** `key` is the calling agent's actor id; `ordinal` is how many model requests that actor id has already made in the case. */
+export interface TurnRequest { model: string; effort: string | null; messages: ChatMessage[]; tools: ToolSpec[]; key: string; ordinal: number }
+export type TurnResult =
+  | { kind: "answer"; content: string; reasoning: string | null; tool_calls: ToolCall[]; stop: "end" | "tool_calls" | "length"; usage: Usage; served_by: string; raw: Uint8Array }
+  | { kind: "declined"; reason: string; served_by: string; raw: Uint8Array }
+  | { kind: "error"; message: string; raw: Uint8Array | null };
+export interface Provider {
+  readonly id: string;
+  readonly kind: "scripted" | "local";
+  readonly where: Where;
+  models(): Promise<ModelInfo[]>;
+  /** The exact request body `turn` sends for this request. Pure; contacts nothing; never holds a header. */
+  body(req: TurnRequest): Uint8Array;
+  /** One model turn. Never throws: transport and protocol failures are `kind: "error"`. */
+  turn(req: TurnRequest): Promise<TurnResult>;
+}

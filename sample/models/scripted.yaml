@@ -1,0 +1,5 @@
+kind: model
+id: scripted
+title: Scripted run
+provider: scripted
+where: machine
