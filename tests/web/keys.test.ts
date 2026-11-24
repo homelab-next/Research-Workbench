@@ -302,8 +302,12 @@ test("each lens letter opens its lens and V flips the dock side", async () => {
 test("a lens key for a lens that is not on the shelf does nothing", async () => {
   const q = await open();
   first(q).focus();
-  q.press("e");
-  expect(q.q(".lens-dock").hasAttribute("hidden")).toBe(true);
+  const at = LENSES.findIndex((l) => l.id === "replay");          // every lens is built now: take one off the shelf for the test
+  const [gone] = LENSES.splice(at, 1);
+  try {
+    q.press("e");
+    expect(q.q(".lens-dock").hasAttribute("hidden")).toBe(true);
+  } finally { LENSES.splice(at, 0, gone!); }
 });
 
 test("/ focuses the command bar and Escape leaves it", async () => {

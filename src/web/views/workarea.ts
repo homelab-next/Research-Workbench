@@ -5,6 +5,7 @@ import type { CaseHandlers, CaseScreen, LensId, Open } from "../app";
 import { dropCommand, enableDrag } from "../drag";
 import { LENSES } from "../lenses";
 import { flip } from "../motion";
+import { changedBy } from "../replay";
 import type { Ui, View } from "../ui";
 import { makeBrief } from "./brief";
 import { makeCardPool } from "./card";
@@ -141,6 +142,7 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
       replayText = text;
       if (text === "") banner.remove(); else { banner.textContent = text; stage.insertBefore(banner, stage.firstChild); }
     }
+    markChanged();
     layout();
     // A card that was focused and left its place (kept, sent back, moved) gives the focus to the card that follows it, once the entries have arrived.
     if (follow !== null) {
@@ -148,6 +150,17 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
       const next = byData("card", follow.card);
       if (next !== null && ui.doc.activeElement !== next) next.focus();
     }
+  };
+  /** While replaying, the cards, lanes and stages the entry at the position touched carry the class `changed`. */
+  let marked = false;
+  const markChanged = (): void => {
+    const entry = store.at === null ? null : store.entries[store.at - 1] ?? null;
+    if (entry === null && !marked) return;
+    const c = entry === null ? { cards: [], lanes: [], stages: [] } : changedBy(entry);
+    marked = entry !== null;
+    for (const n of el.querySelectorAll("[data-card]") as Iterable<HTMLElement>) n.classList.toggle("changed", c.cards.includes(n.dataset.card ?? ""));
+    for (const n of el.querySelectorAll(".lane") as Iterable<HTMLElement>) n.classList.toggle("changed", c.lanes.includes(n.dataset.lane ?? ""));
+    for (const n of el.querySelectorAll(".phase-strip [data-stage]") as Iterable<HTMLElement>) n.classList.toggle("changed", c.stages.includes(n.dataset.stage ?? ""));
   };
   let frame: number | null = null;
   const schedule = (): void => {
@@ -210,6 +223,7 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
       lensBox.hidden = false;
       lensBox.appendChild(lensView.el);
       render();
+      (lensView as View & { focus?(): void }).focus?.();
     },
     cite(card, section) {
       if (lensId !== "narrative") area.openLens("narrative");
@@ -285,6 +299,12 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
     if (dir < 0 && at === 0) env.sendBack(card);
     else if (all[at + dir] !== undefined) env.move(card, all[at + dir]!.id);
   });
+  /** J and K in the Replay lens: one entry, by the lens's own filter. */
+  const stepReplay = (dir: 1 | -1): void => {
+    const lens = lensView as (View & { step?(dir: 1 | -1): void }) | null;
+    if (lens?.step !== undefined) lens.step(dir);
+    else if (store.at !== null) store.goTo(store.at + dir);
+  };
   const keys: Record<string, () => void> = {
     next_card: () => step(1), prev_card: () => step(-1),
     keep: withCard((card, c) => { if (c.place === "incoming") { followCard(neighbour(card)); env.keep(card); } }),
@@ -305,8 +325,7 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
     card_left: sideways(-1), card_right: sideways(1),
     rename_lane: () => { const c = column(); if (c !== "incoming") lanes.rename(c); },
     dock_side: () => toggleDock(),
-    replay_next: () => { if (store.at !== null) store.goTo(store.at + 1); },
-    replay_prev: () => { if (store.at !== null) store.goTo(store.at - 1); },
+    replay_next: () => stepReplay(1), replay_prev: () => stepReplay(-1),
     ...targetKeys, ...lensKeys,
   };
   area.actions = () => ({ ...keys });

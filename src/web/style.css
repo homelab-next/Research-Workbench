@@ -238,3 +238,19 @@ kbd { font-family: var(--mono); font-size: 12px; background: var(--panel-2); bor
 .lens-agent .turn-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .lens-agent .status.attention { color: var(--amber); }
 .lens-agent .ask-row textarea { width: 100%; min-height: 3.5em; box-sizing: border-box; margin-top: 8px; }
+
+/* Replay lens (spec §10.2) */
+.lens-replay { display: flex; flex-direction: column; gap: 8px; }
+.lens-replay:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.replay-head { font-weight: 600; margin: 0; }
+.replay-what { margin: 0; color: var(--muted, inherit); }
+.replay-controls, .replay-filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.replay-list { max-height: 14em; overflow: auto; border: 1px solid var(--border, currentColor); border-radius: var(--radius); }
+.replay-row { padding: 2px 8px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.replay-row .mark { display: inline-block; width: 1.2em; color: var(--accent); }
+.replay-row .seq { display: inline-block; min-width: 4ch; }
+.replay-row.current { background: var(--panel-2); font-weight: 600; }
+.replay-detail dt { font-weight: 600; margin-top: 6px; }
+.replay-detail dd { margin: 0; overflow-wrap: anywhere; }
+.replay-detail .hash { display: block; font-family: monospace; }
+.changed { outline: 2px solid var(--accent); outline-offset: 1px; }
