@@ -76,5 +76,10 @@ The slice is too large for one plan. It is built as five plans, in order. Each p
 
 ### Plan 5: Real run
 
-1. The owner's module root for the lake, and local model configuration
-2. The real investigation, and the README
+0. Close out the carried items, and make the lake guard sound
+1. The repository stands apart from the owner's environment
+2. `new-root`: a module root of your own
+3. `preflight`: is this configuration ready to run?
+4. The README
+5. The owner's root and configuration (outside the repository)
+6. The real investigation

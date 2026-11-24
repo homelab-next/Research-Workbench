@@ -1,0 +1,222 @@
+# Research Workbench
+
+## What this is
+
+A workbench for an analyst who investigates on their own network. You ask a question. Agents do the legwork: they frame the run, plan routes over the data you can reach, run the queries, put the findings together, check them and attack them. You stay at the gates. Nothing is published until you press Approve. The aim is speed without losing control.
+
+Every action is written to an append-only ledger, and each entry is chained to the one before by a hash. The exact queries, the sources, the models' answers and your own decisions are all in it. Any finding can be traced to the bytes behind it, re-run, and replayed one action at a time. That chain of custody is the point.
+
+This first slice is one investigation, end to end, on one machine, for one person. What it leaves out is listed in section 2 of [the design spec](docs/superpowers/specs/2026-11-23-investigation-slice-design.md).
+
+## Run the sample
+
+The sample is invented data with one planted story. It uses a scripted model, so it needs no model server and contacts nothing outside this machine.
+
+```bash
+bun install
+bun run serve --sample-fixture
+```
+
+It prints one line, `Workbench: http://127.0.0.1:<port>/`. Open that address in a browser. The sample data is generated on the first run. `--sample-fixture` also starts a small stand-in reputation service on `127.0.0.1:4801`.
+
+To reach the publish gate:
+
+1. On Home, click "+ New investigation".
+2. Give it a title, a question and a reason. Add the starting value `address` = `198.51.100.77`. Set the window from `2026-11-17T00:00:00.000Z` to `2026-11-24T00:00:00.000Z`, the objective `sample-objective` and the marking `TLP:GREEN`.
+3. Click "Create and frame the run". The run stops at the plan gate, in the Steps lens.
+4. Give the one costly step a budget of 1, then click "Accept: run N steps".
+5. The run goes on and stops at the publish gate, in the Narrative lens. Read the draft. "Approve: publish draft N" is your choice. Nothing presses it for you.
+
+The same run works without a browser. Each command stops where a person must decide:
+
+```bash
+bun run investigate start --sample-fixture --title "Sample" --asked "Who is behind the traffic to 198.51.100.77?" --why "demo" \
+  --start address=198.51.100.77 --from 2026-11-17T00:00:00.000Z --to 2026-11-24T00:00:00.000Z --objective sample-objective --marking TLP:GREEN
+bun run investigate accept-plan CASE-1 --budget s3=1 --sample-fixture
+bun run investigate approve CASE-1
+```
+
+The first stops at the plan gate. The second stops at the publish gate. The third publishes `published/1` in the case folder. Then check the chain:
+
+```bash
+bun run verify <data_dir>/cases/CASE-1
+```
+
+It says whether the chain is intact. See [sample/README.md](sample/README.md) for the story behind the data.
+
+## Point it at your own data
+
+Make a module root of your own. It is a copy of the generic half of the sample (stages, checks, context), pointed at your model server:
+
+```bash
+bun run new-root ~/workbench/root --base-url http://127.0.0.1:1234/v1 --model example/model-a
+```
+
+It refuses a folder inside this repository or a folder that is not empty. It prints a configuration. Save it as a file, for example `~/workbench/config.yaml`, and pass it to every command with `--config`.
+
+Keep the configuration, the root and the data outside this repository. Do not put them at `~/.config/research-workbench/`. Every command reads that folder when you give no `--config`, so a file there changes what a bare `bun run serve` does, and the sample would start reading your real settings. Keep your own files where only you choose to point at them.
+
+The configuration holds `data_dir`, `user` (the name recorded against your actions), `roots`, `secrets_file`, `marking_policy`, `server.port` and `research.parallel`. Paths in it are relative to the file.
+
+### Types of value
+
+Observable types are defined in `<root>/types.yaml`. A new root has `address` and `domain`. A column or a pivot may only use a type that is defined there. Add the types your data has, with a pattern for each:
+
+```yaml
+kind: types
+types:
+  - { id: address, title: Address, pattern: '(?:\d{1,3}\.){3}\d{1,3}' }
+  - { id: domain, title: Domain, pattern: '(?=.{1,253}$)(?:[a-z0-9-]{1,63}\.)+[a-z]{2,63}' }
+  - { id: host, title: Host, pattern: '[a-z]{2,6}-\d{1,3}' }
+```
+
+### A source for a lake
+
+A source manifest sits in `<root>/sources/`. This one uses invented names. Put your own in your own file.
+
+```yaml
+kind: source
+id: lake
+title: Security data lake
+connector: trino
+location: https://trino.example.org:8443
+user: workbench
+tls_verify: true
+marking: "TLP:AMBER"
+where: network
+confirmed: true
+adhoc: false
+cost: { weight: 5, unit: rows }
+limits: { max_rows: 500, timeout_ms: 60000 }
+quality: Network flows and sign-ins. About one hour behind.
+quality_notes:
+  - { id: dup-1, text: "Flow rows are doubled in this window; halve the counts.", from: "2026-11-10T00:00:00.000Z", to: "2026-11-11T00:00:00.000Z" }
+tables:
+  - name: lake.example_security.net_flows
+    time_column: event_time
+    guarded: true
+    large_columns: [raw_payload]
+    columns:
+      - { name: src_addr, type: address }
+      - { name: dst_addr, type: address }
+      - { name: host_name, type: host }
+```
+
+What the fields mean:
+
+- `guarded: true` marks a big table that only a narrow query may touch. The workbench checks every statement against a fixed shape before it is sent (the rules below). A guarded table needs a `time_column`. Guard every event table.
+- `adhoc: false` keeps agents from writing their own queries to the source. They may only run the pivots you wrote.
+- `marking` and `where` say how sensitive the data is and where it lives. See "Markings" below.
+- `cost` is what a query on this source costs. With `unit: rows` the cost is the engine's own estimate of rows, so a query that would read too much is stopped before it runs. `weight` is the cost used when a pivot does not set its own.
+- `quality` and `quality_notes` travel with every card from this source. Write down known faults, with the exact UTC window they cover.
+- `tls_verify: false` is allowed for a self-signed certificate. Preflight notes it, because the certificate is then not checked.
+
+### The guarded shape
+
+A statement that names a guarded table must be one plain query. The rules, in plain words:
+
+1. A `describe` of the table, or `show columns from` it, is allowed as it is.
+2. The table's metadata tables (a name ending in `$`, such as `events$files`) are refused.
+3. The statement names the table once, in one `select` with one `from`.
+4. No `join`, `union`, `intersect`, `except`, `with` or `or`. Exact `count(distinct ...)` is refused too; use `approx_distinct`. `select *` is refused; name the columns. Table functions and `explain analyze` are refused.
+5. The `where` clause must begin with the time column `>=` the window's start and the time column `<` the window's end, using the request's own window. Other conditions follow with `and`. A limit, if any, must stay under the source's `max_rows`.
+6. The window must have both ends. An open window is refused.
+
+Control characters in a statement are refused as well.
+
+A good pivot. It asks about one value, bounds the window, names its columns, aggregates and keeps a small limit:
+
+```yaml
+kind: pivots
+pivots:
+  - id: address_to_hosts
+    title: Hosts that talked to the address
+    from: address
+    to: host
+    source: lake
+    query: "select host_name, count(*) as events from lake.example_security.net_flows where event_time >= {window.from} and event_time < {window.to} and dst_addr = {value} group by host_name order by events desc limit 50"
+    needs_window: true
+    weight: 0
+    empty_means: not-seen
+    yields: { host_name: host }
+```
+
+The three refusals you will meet most:
+
+- `the where clause must begin with event_time >= {window.from} and event_time < {window.to}`. Put the two window bounds first, before any other condition.
+- `select * is not allowed on lake.example_security.net_flows; name the columns`. List the columns you need.
+- `join, union, intersect, except, with and or are not allowed on a guarded table`. Use `in (...)` instead of `or`, and run two pivots instead of a join.
+
+`bun run preflight` runs every pivot through the guard before you start (see the next section), so you see these in a list instead of mid-run.
+
+### `empty_means`
+
+Every pivot says what an empty answer means. `not-seen` says only that nothing was found in this source and window. `proven-negative` says the source is complete for this question, so nothing found means nothing happened. Use `not-seen` unless you know the source is complete. A wrong `proven-negative` makes a gap look like a clean result.
+
+### Cost
+
+A query costs `weight` in the source's `unit`. A pivot may set its own `weight`. A pivot with `weight: 0` is free: an agent may run it inside an accepted plan. A pivot with no weight takes the source's, so it is costly and waits for the budget you give it at the plan gate. Use `unit: rows` for a lake: the engine's estimate is in rows.
+
+### Credentials
+
+A secret value never goes in a manifest, a ledger or a command line.
+
+1. The source names the credential: `credential: LAKE_PASSWORD`.
+2. The root's entry in the configuration allows that name: `credentials: [LAKE_PASSWORD]`. A root that is not listed for a name cannot use it.
+3. The value is in the environment under that name, or in a secrets file named in the configuration (`secrets_file: ./secrets.yaml`) holding `LAKE_PASSWORD: <value>`. Set the file to mode 600. Do not print it.
+
+A source with no password (a user name only) needs none of this.
+
+### Markings and the policy
+
+Each source has a `marking`: `TLP:CLEAR`, `TLP:GREEN`, `TLP:AMBER`, `TLP:AMBER+STRICT` or `TLP:RED`. Each model has a `where`: `machine`, `network` or `hosted`. `marking_policy` in the configuration says where each marking may go. The default lets the two least restrictive go anywhere, keeps the next two off hosted models, and keeps the most restrictive on this machine. Cards keep their marking into drafts and into the published bundle, and a model is never given text its place may not see. Preflight fails if a source's marking may not go to the model of a stage that reads it.
+
+## Before a run
+
+```bash
+bun run preflight --config ~/workbench/config.yaml
+```
+
+It reads your files and asks your model server what it has. It never contacts a data source, opens no workbench and writes nothing. It prints one line per check, then `ready` or `not ready: N to fix`. It exits 0 when ready, 1 when not, 2 for a wrong command line. A line starts with `ok`, `FAIL` or `note`.
+
+- `configuration`: which file was read.
+- `outside the repository`: the configuration, secrets file and roots are not inside this repository.
+- `secrets`: every credential a root may use has a usable value.
+- `manifests`, `pipeline`, `checks`: they load without a problem.
+- `lake sources`: none is open to agent-written queries. A note says an unguarded table or an unchecked certificate.
+- `pivots`: every pivot renders against the guard. This is where a refusal from the last section shows up.
+- `model listed`, `model loaded`, `context`: the model server lists the model, it is loaded, and its context holds at least 32768 tokens (change this with `--min-context`).
+- `marking policy`: every source's marking may go to every stage's model.
+- `model answers`: one fixed test question, with no case data, answered with a well-formed tool call. It is the only thing preflight sends anywhere, and no ledger records it. `--no-question` leaves it out.
+
+When `model loaded` fails, load the model in the model server's own loader, with a large context (131072 tokens is a good start), and run preflight again. Do not start a run on a model that loaded itself on the first request. An automatic load may use the server's small default context, and a run needs a large one.
+
+When it says `ready`:
+
+```bash
+bun run serve --config ~/workbench/config.yaml
+```
+
+It prints the address and any `problem:` lines. Fix those first.
+
+## Custody
+
+- The chip. The brief at the top of a case shows a custody chip, for example "chain intact · 412 entries", or an amber warning naming the failing entry.
+- `bun run verify <case folder>` recomputes every hash from the first entry and checks every blob, with no server running. It exits 0 when the chain is intact.
+- Verify, on a card, re-runs the card's stored query as a new logged query and compares the result. It says validated, differs (the source may have changed) or could not run. The original is never replaced.
+- Replay, a lens, steps through the case one recorded action at a time.
+
+## Known limits
+
+- A route that is in flight cannot be ended. Stopping the run stops what comes next, not a query already started.
+- A lookup run from the Pivot budget block is recorded, but is not part of the route's trail.
+- The files database is rebuilt for each query, so a large file source is slow.
+- The entry stream has no backpressure limit, and each read opens the case again.
+- There is no sign-in. The server answers on `127.0.0.1` only, for one person on one machine. See [docs/security-notes.md](docs/security-notes.md) for what is and is not guaranteed.
+- Source text is untrusted. Rows, notes and manifest text from a source are shown as text and treated as data, but a source can still say something misleading.
+- A source's own words can reach a model. Text from an untrusted root is withheld from the model's source lists, but a source from a trusted root can still say something misleading.
+- The lake guard is strict, and it is written for one query engine's rules. It has been tested against a stand-in, not against every way an engine can read a statement. Treat it as one safeguard among several (read-only access, `adhoc: false`, the row estimate and the budget), not the only one.
+- A fresh row estimate that is above the budget stops the query and leaves no ledger record of the estimate.
+- A card that a published product cites can be discarded afterwards. The published bundle is unchanged, but the case no longer shows the card as live.
+- A server error from a case ledger that cannot be read shows as a generic 500.
+- Run one researcher at a time against a real lake (`research.parallel: 1`, which `new-root` sets).
