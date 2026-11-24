@@ -2,6 +2,8 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { GENESIS } from "../../src/core/hash";
+import { entryHash } from "../../src/core/ledger";
 import { canonical } from "../../src/core/canonical";
 import type { Json } from "../../src/core/canonical";
 import type { CaseSession } from "../../src/core/session";
@@ -179,15 +181,24 @@ test("goTo shows the state at that entry and null returns to live", () => {
   expect(calls).toBe(3);
 });
 
+/** Real chained hashes: each entry's prev_hash is the one before it, and its hash is computed over the rest. */
+function chained(e: Omit<Entry, "hash" | "prev_hash">, prev: string): Entry {
+  const body = { ...e, prev_hash: prev } as unknown as Omit<Entry, "hash">;
+  return { ...body, hash: entryHash(body) } as Entry;
+}
+
 function longCase(n: number): CaseStore {
   const store = new CaseStore("CASE-9");
   const actor = { kind: "system", id: "t" } as const;
+  let prev = GENESIS;
   for (let seq = 1; seq <= n; seq++) {
     const k = Math.ceil(seq / 3);
     const type = seq % 3 === 1 ? "card.created" : seq % 3 === 2 ? "card.kept" : "card.moved";
     const card = { id: `C-${k}`, title: "t", body: "b", kind: "result", made_by: "agent", query: null, columns: [], column_types: [], rows: [], row_count: 0, coverage: null, empty: null, marking: "TLP:GREEN", source: null, step: null, subgoal: null, why: "w", event_time: null, quality_notes: [] };
     const payload = type === "card.created" ? { card } : type === "card.kept" ? { card: `C-${k}`, lane: "L-1" } : { card: `C-${k}`, lane: "L-1", index: 0 };
-    store.push({ seq, ts: "2026-11-23T20:00:00.000Z", case: "CASE-9", actor, type, payload, cause: null, run: null, stage: null, job: null, prev_hash: "x", hash: "y" } as unknown as Entry);
+    const e = chained({ seq, ts: "2026-11-23T20:00:00.000Z", case: "CASE-9", actor, type, payload, cause: null, run: null, stage: null, job: null } as unknown as Omit<Entry, "hash" | "prev_hash">, prev);
+    prev = e.hash;
+    store.push(e);
   }
   return store;
 }
@@ -201,4 +212,32 @@ test("replay over a long case does not refold from the start", () => {
   expect(store.stateAt(4321).seq).toBe(4321);
   expect(store.live.skipped).toEqual([]);
   expect(Object.keys(store.live.cards).length).toBe(1667);
+});
+
+test("an entry of another case, a fork of the chain, or a repeated seq with another hash is not folded and not called a duplicate", () => {
+  const store = new CaseStore(run.session.id);
+  for (const e of run.entries.slice(0, 5)) store.push(e);
+  const next = run.entries[5]!;
+  expect(store.push({ ...next, case: "CASE-999" } as Entry)).toBe("gap");
+  expect(store.push({ ...next, prev_hash: "0".repeat(64) } as Entry)).toBe("gap");
+  expect(store.push({ ...run.entries[2]!, hash: "f".repeat(64) } as Entry)).toBe("gap");
+  expect(store.push({ ...run.entries[2]!, case: "CASE-999" } as Entry)).toBe("gap");
+  expect(store.live.seq).toBe(5);
+  expect(store.entries.length).toBe(5);
+  expect(store.push(run.entries[2]!)).toBe("duplicate");
+  expect(store.push(next)).toBe("applied");
+});
+
+test("follow treats a fork as a reason to reopen", () => {
+  let feed: ((e: Entry) => void) | null = null;
+  const opened: number[] = [];
+  const source: EntrySource = { open(_id, after, onEntry) { opened.push(after); feed = onEntry; return () => {}; } };
+  const { win, run: tick } = fakeWin();
+  const store = new CaseStore(run.session.id);
+  follow(store, source, win);
+  for (const e of run.entries.slice(0, 3)) feed!(e);
+  feed!({ ...run.entries[3]!, prev_hash: "0".repeat(64) } as Entry);
+  expect(store.connection).toBe("reconnecting");
+  tick();
+  expect(opened).toEqual([0, 3]);
 });

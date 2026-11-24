@@ -56,6 +56,14 @@ test("a link is made only for https", () => {
   }
 });
 
+test("a link is built from the parsed URL: no credentials, no whitespace or control characters, and the href is the parsed one", () => {
+  for (const bad of ["https://user@example.net/", "https://user:pw@example.net/", "https://:pw@example.net/", "https://example.net/a b", "https://example.net/\n", "https://example.net/\t", "https://exa\u0000mple.net", "https://example.net/\u007f", "https://example.net/\u0085"]) {
+    expect([bad, link(h, bad, "x").tagName]).toEqual([bad, "SPAN"]);
+  }
+  expect(link(h, "https://EXAMPLE.net:443/a/../b", "x").getAttribute("href")).toBe(new URL("https://EXAMPLE.net:443/a/../b").href);
+  expect(link(h, "https://EXAMPLE.net", "x").getAttribute("href")).toBe("https://example.net/");
+});
+
 test("a file link is made only for this server's blobs and bundles", () => {
   expect(fileLink(h, `/api/cases/CASE-1/blobs/${"a".repeat(64)}`, "raw").tagName).toBe("A");
   expect(fileLink(h, "/api/cases/CASE-1/published/1/product.md", "product").tagName).toBe("A");
@@ -130,6 +138,15 @@ test("prefs keep choices under rw: and survive a storage that throws", () => {
   const storage = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); } } as unknown as Storage;
   const p = makePrefs(storage);
   expect(p.get("lens", "timeline")).toBe("timeline");
+  const isStr = (v: unknown): v is string => typeof v === "string";
+  const isNums = (v: unknown): v is number[] => Array.isArray(v) && v.every((x) => typeof x === "number");
+  mem.set("rw:shape", JSON.stringify({ a: 1 }));
+  expect(p.get("shape", "none", isStr)).toBe("none");
+  mem.set("rw:shape", JSON.stringify("ok"));
+  expect(makePrefs(storage).get("shape", "none", isStr)).toBe("ok");
+  const memoryOnly = makePrefs(null);
+  memoryOnly.set("n", ["x"]);
+  expect(memoryOnly.get("n", [0], isNums)).toEqual([0]);
   p.set("lens", "graph");
   expect(mem.get("rw:lens")).toBe(JSON.stringify("graph"));
   expect(makePrefs(storage).get("lens", "x")).toBe("graph");

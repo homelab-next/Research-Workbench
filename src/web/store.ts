@@ -28,8 +28,12 @@ export class CaseStore {
   }
 
   push(entry: Entry): "applied" | "duplicate" | "gap" {
-    if (entry.seq <= this.head.seq) return "duplicate";
+    // Anything that is not this case's own next entry on this chain is a reason to reload, never a silent fold.
+    if (entry.case !== this.id) return "gap";
+    if (entry.seq <= this.head.seq) return this.entries[entry.seq - 1]?.hash === entry.hash ? "duplicate" : "gap";
     if (!isNext(this.head, entry)) return "gap";
+    const last = this.entries[this.entries.length - 1];
+    if (last !== undefined && entry.prev_hash !== last.hash) return "gap";
     this.head = apply(this.head, entry);
     this.entries.push(entry);
     if (entry.seq % SNAPSHOT_EVERY === 0) this.snapshots[entry.seq / SNAPSHOT_EVERY] = this.head;

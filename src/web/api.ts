@@ -68,10 +68,10 @@ export function eventSourceEntries(win: Window, origin: string): EntrySource {
       const Source = (win as Window & typeof globalThis).EventSource;
       const es = new Source(`${origin}/api/cases/${seg(caseId)}/entries?after=${after}`);
       let done = false;
-      es.onmessage = (event: MessageEvent) => {
-        try { onEntry(JSON.parse(String(event.data)) as Entry); } catch { es.close(); if (!done) { done = true; onDrop(); } }
-      };
-      es.onerror = () => { es.close(); if (!done) { done = true; onDrop(); } };
+      es.addEventListener("message", (event) => {
+        try { onEntry(JSON.parse(String((event as MessageEvent).data)) as Entry); } catch { es.close(); if (!done) { done = true; onDrop(); } }
+      });
+      es.addEventListener("error", () => { es.close(); if (!done) { done = true; onDrop(); } });
       return () => { done = true; es.close(); };
     },
   };

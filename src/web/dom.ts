@@ -59,9 +59,13 @@ export function makeH(doc: Document): H {
 
 /** An anchor only for a URL that parses with protocol "https:"; rel="noopener noreferrer", target="_blank". Anything else is a span holding the label. */
 export function link(h: H, url: string, label: string): HTMLElement {
-  let ok = false;
-  try { ok = url.startsWith("https://") && new URL(url).protocol === "https:"; } catch { ok = false; }
-  return ok ? anchor(h, url, label) : h("span", null, label);
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u0020\u007f-\u009f\u2028\u2029]/.test(url)) return h("span", null, label);
+  try {
+    const u = new URL(url);
+    if (u.protocol === "https:" && url.startsWith("https://") && u.username === "" && u.password === "") return anchor(h, u.href, label);
+  } catch { /* not a URL */ }
+  return h("span", null, label);
 }
 
 const FILE_PATH = /^\/api\/cases\/CASE-[0-9]+\/(blobs|published)\/[a-z0-9./]+$/;
