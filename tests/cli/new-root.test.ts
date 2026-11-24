@@ -9,6 +9,7 @@ import { Registry } from "../../src/modules/registry";
 import { Secrets } from "../../src/modules/secrets";
 import { loadChecks, loadPipeline } from "../../src/pipeline/manifests";
 import { configFor, newRoot } from "../../scripts/new-root";
+import { cleanEnv } from "../helpers/clean-env";
 
 const REPO = join(import.meta.dir, "..", "..");
 const SCRIPT = join(REPO, "scripts", "new-root.ts");
@@ -19,8 +20,6 @@ const fresh = (): string => join(tmp, `root-${++n}`);
 beforeAll(() => { tmp = mkdtempSync(join(tmpdir(), "new-root-")); });
 afterAll(() => { rmSync(tmp, { recursive: true, force: true }); });
 
-/** The parent's environment with every place a configuration could be found pointed into `home`. */
-const cleanEnv = (home: string): Record<string, string> => ({ PATH: process.env.PATH ?? "", HOME: home, XDG_DATA_HOME: join(home, "xdg"), RESEARCH_WORKBENCH_CONFIG: "" });
 
 test("the new root loads whole, with every agent stage on the local model and nothing scripted", () => {
   const root = fresh();

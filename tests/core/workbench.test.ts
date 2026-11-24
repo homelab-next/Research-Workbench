@@ -7,6 +7,7 @@ import { verifyLedger } from "../../src/core/verify";
 import { CaseNotFoundError, Workbench, WorkbenchClosedError, WorkbenchLockedError } from "../../src/core/workbench";
 import type { NewCase } from "../../src/core/workbench";
 import type { Actor } from "../../src/core/types";
+import { cleanEnv } from "../helpers/clean-env";
 import { card as cardStub } from "../helpers/entries";
 
 const human: Actor = { kind: "human", id: "analyst" };
@@ -93,7 +94,7 @@ test("the workbench chain is its own verifiable ledger", () => {
 
 test("a created case verifies from the command line", () => {
   wb.createCase(newCase, human);
-  const p = Bun.spawnSync(["bun", "run", "src/cli/verify.ts", join(dir, "cases", "CASE-1")], { cwd: join(import.meta.dir, "../..") });
+  const p = Bun.spawnSync(["bun", "run", "src/cli/verify.ts", join(dir, "cases", "CASE-1")], { cwd: join(import.meta.dir, "../.."), env: cleanEnv(dir) });
   expect(p.exitCode).toBe(0);
 });
 

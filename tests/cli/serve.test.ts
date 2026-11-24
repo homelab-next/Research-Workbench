@@ -2,10 +2,11 @@ import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { SAMPLE_START, SAMPLE_WINDOW } from "../../scripts/make-sample-data";
 import { afterSignal, serve } from "../../src/cli/serve";
 import { Workbench, WorkbenchLockedError } from "../../src/core/workbench";
+import { cleanEnv } from "../helpers/clean-env";
 import { copySample } from "../helpers/sample-root";
 
 const REPO = join(import.meta.dir, "..", "..");
@@ -98,7 +99,7 @@ test("a repeated serve --sample-fixture on the same data directory is refused by
   const err = await serve(["--config", e.config, "--port", "0", "--sample-fixture", String(e.fixturePort)], quiet).catch((x: unknown) => x);
   expect(err).toBeInstanceOf(WorkbenchLockedError);
   const r = Bun.spawnSync(["bun", "run", join(REPO, "src", "cli", "serve.ts"), "--config", e.config, "--port", "0", "--sample-fixture", String(e.fixturePort)], {
-    cwd: REPO, timeout: 60_000, stdout: "pipe", stderr: "pipe", env: { ...process.env, RESEARCH_WORKBENCH_CONFIG: "" },
+    cwd: REPO, timeout: 60_000, stdout: "pipe", stderr: "pipe", env: cleanEnv(dirname(e.config)),
   });
   expect(r.exitCode).toBe(1);
   const out = r.stderr.toString();
@@ -114,7 +115,7 @@ test("the process exits 1 on a locked data directory and 2 on a configuration er
   const first = await serve(["--config", e.config, "--port", "0", "--sample-fixture", String(e.fixturePort)], quiet);
   stops.push(() => first.stop());
   const run = (args: string[]) => {
-    const r = Bun.spawnSync(["bun", "run", join(REPO, "src", "cli", "serve.ts"), ...args], { cwd: REPO, timeout: 60_000, stdout: "pipe", stderr: "pipe", env: { ...process.env, RESEARCH_WORKBENCH_CONFIG: "" } });
+    const r = Bun.spawnSync(["bun", "run", join(REPO, "src", "cli", "serve.ts"), ...args], { cwd: REPO, timeout: 60_000, stdout: "pipe", stderr: "pipe", env: cleanEnv(dirname(e.config)) });
     return { code: r.exitCode, err: r.stderr.toString() };
   };
   const locked = run(["--config", e.config, "--port", "0"]);
@@ -167,7 +168,7 @@ test("on a signal, a clean shutdown exits 0 and a failed one prints every closer
 test("SIGTERM stops a spawned serve cleanly: exit 0 and the lock released", async () => {
   const e = setup();
   const child = Bun.spawn(["bun", "run", join(REPO, "src", "cli", "serve.ts"), "--config", e.config, "--port", "0", "--sample-fixture", String(e.fixturePort)], {
-    cwd: REPO, stdout: "pipe", stderr: "pipe", env: { ...process.env, RESEARCH_WORKBENCH_CONFIG: "" },
+    cwd: REPO, stdout: "pipe", stderr: "pipe", env: cleanEnv(dirname(e.config)),
   });
   stops.push(async () => { child.kill("SIGKILL"); await child.exited; });
   const reader = child.stdout.getReader();

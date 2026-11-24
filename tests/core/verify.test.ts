@@ -10,6 +10,7 @@ import { sha256Hex } from "../../src/core/hash";
 import { entryHash, InvalidEntryError, Ledger } from "../../src/core/ledger";
 import { formatReport, UnreadableLedgerError, verifyCase, verifyLedger, verifyPublished } from "../../src/core/verify";
 import type { BlobRef, Product } from "../../src/core/types";
+import { cleanEnv } from "../helpers/clean-env";
 import { card } from "../helpers/entries";
 
 const human = { kind: "human", id: "analyst" } as const;
@@ -192,7 +193,7 @@ test("the command reports an unreadable ledger on stdout and exits 1", () => {
 });
 
 function run(...args: string[]) {
-  return Bun.spawnSync(["bun", "run", "src/cli/verify.ts", ...args], { cwd: join(import.meta.dir, "../..") });
+  return Bun.spawnSync(["bun", "run", "src/cli/verify.ts", ...args], { cwd: join(import.meta.dir, "../.."), env: cleanEnv(root) });
 }
 
 test("the command exits 0 for intact, 1 for broken, 2 with no argument", () => {

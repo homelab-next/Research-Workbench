@@ -3,6 +3,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { cleanEnv } from "../helpers/clean-env";
 import { copySample } from "../helpers/sample-root";
 
 const REPO = join(import.meta.dir, "..", "..");
@@ -38,7 +39,7 @@ function setup(): Env {
 
 function cli(e: Env, args: string[], fixture = true): { code: number; out: string; err: string } {
   const full = [...args, "--config", e.config, ...(fixture ? ["--sample-fixture", String(e.port)] : [])];
-  const r = Bun.spawnSync(["bun", "run", RUN, ...full], { cwd: REPO, timeout: 60_000, env: { ...process.env, RESEARCH_WORKBENCH_CONFIG: "" }, stdout: "pipe", stderr: "pipe" });
+  const r = Bun.spawnSync(["bun", "run", RUN, ...full], { cwd: REPO, timeout: 60_000, env: cleanEnv(e.dir), stdout: "pipe", stderr: "pipe" });
   return { code: r.exitCode ?? -1, out: r.stdout.toString(), err: r.stderr.toString() };
 }
 
@@ -108,7 +109,7 @@ test("approve publishes and finishes", () => {
 });
 
 test("the verify command passes on the finished case", () => {
-  const r = Bun.spawnSync(["bun", "run", VERIFY, join(env.data, "cases", "CASE-1")], { cwd: REPO, timeout: 60_000, stdout: "pipe", stderr: "pipe" });
+  const r = Bun.spawnSync(["bun", "run", VERIFY, join(env.data, "cases", "CASE-1")], { cwd: REPO, timeout: 60_000, stdout: "pipe", stderr: "pipe", env: cleanEnv(env.dir) });
   expect(r.exitCode).toBe(0);
   expect(r.stdout.toString()).toContain("chain intact");
 });
@@ -116,7 +117,7 @@ test("the verify command passes on the finished case", () => {
 test("the lock is released after every command", () => {
   expect(cli(env, ["status", "CASE-1"], false).code).toBe(0);
   expect(cli(env, ["status", "CASE-1"], false).code).toBe(0);
-  const r = Bun.spawnSync(["bun", OPENER, env.data], { cwd: REPO, timeout: 60_000 });
+  const r = Bun.spawnSync(["bun", OPENER, env.data], { cwd: REPO, timeout: 60_000, env: cleanEnv(env.dir) });
   expect(r.exitCode).toBe(0);
 });
 

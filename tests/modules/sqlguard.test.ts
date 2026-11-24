@@ -60,26 +60,26 @@ test.each([
   try { assertReadOnly(sql); } catch (e) { expect((e as GuardError).violations.join(" ")).toContain(why); }
 });
 
-const guards: TableGuard[] = [{ table: "iceberg.wazuh_archive.events", time_column: "event_timestamp", large_columns: ["full_log"] }];
-const ok = "select rule_id, count(*) c from iceberg.wazuh_archive.events where event_timestamp >= timestamp '2026-11-20 00:00:00 UTC' group by rule_id order by c desc limit 50";
+const guards: TableGuard[] = [{ table: "lake.archive.events", time_column: "event_time", large_columns: ["raw_line"] }];
+const ok = "select rule_id, count(*) c from lake.archive.events where event_time >= timestamp '2026-11-20 00:00:00 UTC' group by rule_id order by c desc limit 50";
 test("a bounded, projected, limited query passes", () => { expect(checkGuardrails(ok, guards)).toEqual([]); });
 test("a query on an unguarded table is not checked", () => { expect(checkGuardrails("select * from other", guards)).toEqual([]); });
 test.each([
-  ["select rule_id from iceberg.wazuh_archive.events", "time filter"],
-  ["select * from iceberg.wazuh_archive.events where event_timestamp > now() - interval '1' day", "select *"],
-  ["select e.* from iceberg.wazuh_archive.events e where event_timestamp > now() - interval '1' day", "select *"],
-  ["select count(distinct agent_id) from iceberg.wazuh_archive.events where event_timestamp > now() - interval '1' day", "approx_distinct"],
-  ["select rule_id from iceberg.wazuh_archive.events where event_timestamp > now() - interval '1' day order by rule_id", "limit"],
-  ["select rule_id from iceberg.wazuh_archive.events where event_timestamp >= timestamp '2026-11-20 00:00:00'", "time zone"],
-  ["select rule_id from iceberg.wazuh_archive.events where 'event_timestamp > 1' = 'x'", "time filter"],
-  ["select a, * from iceberg.wazuh_archive.events where event_timestamp > now() - interval '1' day", "select *"],
+  ["select rule_id from lake.archive.events", "time filter"],
+  ["select * from lake.archive.events where event_time > now() - interval '1' day", "select *"],
+  ["select e.* from lake.archive.events e where event_time > now() - interval '1' day", "select *"],
+  ["select count(distinct host_id) from lake.archive.events where event_time > now() - interval '1' day", "approx_distinct"],
+  ["select rule_id from lake.archive.events where event_time > now() - interval '1' day order by rule_id", "limit"],
+  ["select rule_id from lake.archive.events where event_time >= timestamp '2026-11-20 00:00:00'", "time zone"],
+  ["select rule_id from lake.archive.events where 'event_time > 1' = 'x'", "time filter"],
+  ["select a, * from lake.archive.events where event_time > now() - interval '1' day", "select *"],
 ])("violation: %s", (sql, why) => { expect(checkGuardrails(sql, guards).join(" ")).toContain(why); });
 
-const W = "iceberg.wazuh_archive.events";
-const tf = "event_timestamp > now() - interval '1' day";
+const W = "lake.archive.events";
+const tf = "event_time > now() - interval '1' day";
 test("whitespace or comments between the dots do not hide a guarded table", () => {
-  expect(checkGuardrails("select a from iceberg . wazuh_archive . events", guards).join(" ")).toContain("time filter");
-  expect(checkGuardrails("select a from iceberg /* x */ . wazuh_archive\n.events", guards).join(" ")).toContain("time filter");
+  expect(checkGuardrails("select a from lake . archive . events", guards).join(" ")).toContain("time filter");
+  expect(checkGuardrails("select a from lake /* x */ . archive\n.events", guards).join(" ")).toContain("time filter");
 });
 test("a window order by needs no limit, a top-level one still does", () => {
   expect(checkGuardrails(`select row_number() over (partition by a order by ts) from ${W} where ${tf}`, guards)).toEqual([]);
@@ -87,25 +87,25 @@ test("a window order by needs no limit, a top-level one still does", () => {
 });
 test("named zones and +hhmm offsets pass; comments are not read", () => {
   for (const z of ["2026-01-01 00:00:00 America/New_York", "2026-01-01 00:00:00 +0200", "2026-01-01 00:00:00 utc"]) {
-    expect(checkGuardrails(`select a from ${W} where event_timestamp >= timestamp '${z}' limit 1`, guards)).toEqual([]);
+    expect(checkGuardrails(`select a from ${W} where event_time >= timestamp '${z}' limit 1`, guards)).toEqual([]);
   }
   expect(checkGuardrails(`select a from ${W} where ${tf} limit 1 -- timestamp '2026-01-01 00:00:00'`, guards)).toEqual([]);
-  expect(checkGuardrails(`select a from ${W} where event_timestamp >= timestamp '2026-01-01 00:00:00' limit 1`, guards).join(" ")).toContain("time zone");
+  expect(checkGuardrails(`select a from ${W} where event_time >= timestamp '2026-01-01 00:00:00' limit 1`, guards).join(" ")).toContain("time zone");
 });
 test("count(*) is not select *", () => {
-  expect(checkGuardrails("select count(*) from iceberg.wazuh_archive.events where event_timestamp > now() - interval '1' day", guards)).toEqual([]);
+  expect(checkGuardrails("select count(*) from lake.archive.events where event_time > now() - interval '1' day", guards)).toEqual([]);
 });
 test("zone offsets and Z are accepted", () => {
   for (const z of ["2026-11-20T00:00:00Z", "2026-11-20 00:00:00 +02:00", "2026-11-20 00:00:00 -05:30"]) {
-    expect(checkGuardrails(`select a from iceberg.wazuh_archive.events where event_timestamp >= timestamp '${z}' limit 1`, guards)).toEqual([]);
+    expect(checkGuardrails(`select a from lake.archive.events where event_time >= timestamp '${z}' limit 1`, guards)).toEqual([]);
   }
 });
 test("several violations are all reported", () => {
-  const v = checkGuardrails("select * from iceberg.wazuh_archive.events", guards);
+  const v = checkGuardrails("select * from lake.archive.events", guards);
   expect(v.length).toBe(2);
 });
 test("the table name matches case-insensitively and when quoted", () => {
-  const v = checkGuardrails('select a from "ICEBERG"."wazuh_archive"."events"', guards);
+  const v = checkGuardrails('select a from "LAKE"."archive"."events"', guards);
   expect(v.join(" ")).toContain("time filter");
 });
 test("stripForAnalysis removes comments and empties literals", () => {

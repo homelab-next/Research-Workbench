@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { SAMPLE_START, SAMPLE_WINDOW } from "../../scripts/make-sample-data";
 import { serve } from "../../src/cli/serve";
 import { verifyCase } from "../../src/core/verify";
+import { cleanEnv } from "../helpers/clean-env";
 import { findChrome, launch } from "../helpers/chrome";
 import type { Browser } from "../helpers/chrome";
 import { copySample } from "../helpers/sample-root";
@@ -199,7 +200,7 @@ async function theRun(path: string): Promise<void> {
   const verified = verifyCase(join(data, "cases", "CASE-1"));
   expect(verified.ok).toBe(true);
   expect(verified.published.bundles.map((b) => b.state)).toEqual(["ok"]);
-  const cli = Bun.spawnSync(["bun", "run", join(REPO, "src", "cli", "verify.ts"), join(data, "cases", "CASE-1")], { cwd: REPO, stdout: "pipe", stderr: "pipe", timeout: 60_000 });
+  const cli = Bun.spawnSync(["bun", "run", join(REPO, "src", "cli", "verify.ts"), join(data, "cases", "CASE-1")], { cwd: REPO, env: cleanEnv(dir), stdout: "pipe", stderr: "pipe", timeout: 60_000 });
   expect(cli.exitCode).toBe(0);
 }
 
