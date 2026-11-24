@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compose } from "../../src/cli/compose";
@@ -28,8 +28,11 @@ interface Run {
 const dirs: string[] = [];
 const open: Run[] = [];
 
+/** The credential the reputation source names: its value is SECRET, set in the environment for the whole file. */
+const CREDENTIAL = "SAMPLE_PLANTED_SECRET";
+
 function configFor(dir: string, sample: ReturnType<typeof sampleRoot>, parallel = 3): Config {
-  return { ...loadConfig({ env: {}, home: dir, repoRoot: dir }), data_dir: join(dir, "wb"), roots: [{ path: sample.root, trusted: true, credentials: [] }], research: { parallel } };
+  return { ...loadConfig({ env: {}, home: dir, repoRoot: dir }), data_dir: join(dir, "wb"), roots: [{ path: sample.root, trusted: true, credentials: [CREDENTIAL] }], research: { parallel } };
 }
 
 /** The sample as a workbench, a case, and an engine built the way the command builds one. */
@@ -37,6 +40,8 @@ function begin(parallel = 3, keep = false): Run {
   const dir = mkdtempSync(join(tmpdir(), "full-run-"));
   dirs.push(dir);
   const sample = sampleRoot(dir);
+  // the trusted root's reputation source signs in with a credential, so a secret is in play for the whole run
+  appendFileSync(join(sample.root, "sources", "reputation.yaml"), `credential: ${CREDENTIAL}\n`);
   const config = configFor(dir, sample, parallel);
   const wb = Workbench.open(config.data_dir, { onError: () => {} });
   const composed = compose(config, wb);
@@ -44,7 +49,7 @@ function begin(parallel = 3, keep = false): Run {
   const seenLive = new Map<number, CaseState>();
   s.subscribe((e, st) => { seenLive.set(e.seq, st as CaseState); });
   const run: Run = {
-    dir, wb, s, engine: new Engine(s, composed.deps), sample, config, seenLive, problems: composed.problems,
+    dir, wb, s, engine: Engine.open(s, composed.deps), sample, config, seenLive, problems: composed.problems,
     close(): void { try { wb.close(); } finally { composed.close(); } },
     stop(): void { this.close(); sample.close(); },
   };
@@ -52,7 +57,7 @@ function begin(parallel = 3, keep = false): Run {
   return run;
 }
 
-/** Closes the workbench and opens it again, as a second process would; the case's session is fresh, so its engine recovers it. */
+/** Closes the workbench and opens it again, as a second process would; the case's session is fresh, so Engine.open recovers it. */
 function reopen(r: Run): Run {
   r.close();
   const wb = Workbench.open(r.config.data_dir, { onError: () => {} });
@@ -60,7 +65,7 @@ function reopen(r: Run): Run {
   const s = wb.session(r.s.id);
   const seenLive = new Map<number, CaseState>();
   s.subscribe((e, st) => { seenLive.set(e.seq, st as CaseState); });
-  const again: Run = { ...r, wb, s, engine: new Engine(s, composed.deps), seenLive, close(): void { try { wb.close(); } finally { composed.close(); } } };
+  const again: Run = { ...r, wb, s, engine: Engine.open(s, composed.deps), seenLive, close(): void { try { wb.close(); } finally { composed.close(); } } };
   open.push(again);
   return again;
 }
@@ -150,7 +155,9 @@ test("custody: every card traces to a query issued, a query result and a blob", 
   for (const card of Object.values(s.state.cards)) {
     expect(card.query).not.toBeNull();
     const q = s.state.queries[card.query!]!;
-    expect(entries.find((e) => e.seq === q.issued_seq)?.type).toBe("query.issued");
+    const issued = entries.find((e) => e.seq === q.issued_seq);
+    expect(issued?.type).toBe("query.issued");
+    expect(issued!.type === "query.issued" && issued!.payload.query).toBe(card.query!);
     expect(entries.some((e) => e.type === "query.result" && e.payload.query === q.id)).toBe(true);
     expect(s.blobs.check(q.result!.blob)).toBe("ok");
   }
@@ -228,6 +235,12 @@ test("no secret is in any entry or blob, and no source location is in anything a
   for (const b of sent) for (const w of where) expect(s.blobs.text(b).includes(w)).toBe(false);
 });
 
+/** Every file under a folder, recursively. */
+const filesUnder = (dir: string): string[] => readdirSync(dir).flatMap((n) => {
+  const p = join(dir, n);
+  return statSync(p).isDirectory() ? filesUnder(p) : [p];
+});
+
 test("approving publishes exactly the reviewed revision and finishes the run", async () => {
   const s = shared.s;
   approved = shared.engine.approve({ actor: human });
@@ -303,4 +316,27 @@ test("with three researchers at once the script still resolves every card", asyn
   expect(await r.engine.advance()).toMatchObject({ status: "waiting", waiting: "publish" });
   expect(r.s.state.drafts[1]!.hash).toBe(approved.draft_hash);
   expect(r.s.state.reviews[r.s.state.drafts[1]!.hash]!.checks.every((c) => c.pass)).toBe(true);
+});
+
+test("the planted credential's value is in no entry, blob, bundle file or prompt of the finished run, nor anywhere in the data folder", () => {
+  const s = shared.s;
+  // the secret was in play: the reputation source named the credential, the root allowed it, the environment held it, and the paid
+  // lookup answered (the http connector refuses to run when a named credential cannot be loaded, and sends it as a bearer token)
+  expect(shared.problems).toEqual([]);
+  expect(readFileSync(join(shared.sample.root, "sources", "reputation.yaml"), "utf8")).toContain(`credential: ${CREDENTIAL}`);
+  expect(process.env[CREDENTIAL]).toBe(SECRET);
+  expect(s.state.plan.steps.s3!.status).toBe("answered");
+  const all = s.entries();
+  expect(all.some((e) => JSON.stringify(e).includes(SECRET))).toBe(false);
+  for (const e of all.filter((x) => x.type === "model.request")) {
+    if (e.type === "model.request") expect(s.blobs.text(e.payload.messages.blob).includes(SECRET)).toBe(false);
+  }
+  const bundle = join(s.dir, approved.dir);
+  const bundleFiles = filesUnder(bundle);
+  expect(bundleFiles.map((p) => p.slice(bundle.length + 1)).sort()).toEqual(["manifest.json", "product.json", "product.md", "provenance.json", "provenance.md"]);
+  // every file the run left: both ledgers, every blob, every bundle file
+  const files = filesUnder(shared.config.data_dir);
+  expect(files.some((p) => p.endsWith("workbench.sqlite"))).toBe(true);
+  expect(files.filter((p) => p.includes(`${s.id}/blobs/`)).length).toBeGreaterThan(50);
+  for (const p of files) expect(readFileSync(p).includes(Buffer.from(SECRET)), p).toBe(false);
 });
