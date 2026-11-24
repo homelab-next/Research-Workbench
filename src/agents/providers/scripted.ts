@@ -144,7 +144,7 @@ export class ScriptedProvider implements Provider {
 
   body(req: TurnRequest): Uint8Array {
     const { model, effort, key, ordinal, messages, tools } = req;
-    return enc.encode(canonical({ model, effort, key, ordinal, messages, tools } as unknown as Json));
+    return enc.encode(canonical({ model, effort, key, ordinal, messages, tools, ...(req.tool_choice === undefined ? {} : { tool_choice: req.tool_choice }) } as unknown as Json));
   }
 
   async turn(req: TurnRequest): Promise<TurnResult> {

@@ -17,6 +17,14 @@ export const MAX_TURNS = 16;
 export const EMPTY_REASK = "Your reply was empty; your answer went into your reasoning. Put the JSON answer in the reply itself.";
 const DECLINE_CHARS = 2000;
 
+/** The line each request's task text ends with: which turn this is, and near the end what is left to do. */
+export function turnLine(turn: number, of: number): string {
+  const said = `Turn ${turn} of ${of}.`;
+  if (turn >= of) return `${said} This is the last turn: give your final answer now; no tool will be run.`;
+  if (turn === of - 1) return `${said} Two turns left: finish your proposals and give your final answer next turn.`;
+  return said;
+}
+
 export interface AgentSpec {
   actor: Extract<Actor, { kind: "agent" }>; provider: Provider; model: string; effort: string | null;
   pack: Pack; task: string; tools: readonly ToolName[]; ctx: ToolContext; schema: Schema | null;
@@ -156,10 +164,14 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     }
     // 3. request, written before the provider is contacted
     const ordinal = session.entries().filter((e) => e.type === "model.request" && e.actor.kind === "agent" && e.actor.id === actor.id).length;
-    const req: TurnRequest = { model: spec.model, effort: spec.effort, messages: [...messages], tools: toolSpecs(spec.tools, ctx), key: actor.id, ordinal };
+    // the task text says which turn this is; on the last the reply can only be the answer: no tool is offered to run, and output is structured
+    const last = turn === maxTurns - 1;
+    const sent = messages.map((m, i) => (i === 1 ? { ...m, content: `${spec.task}\n\n${turnLine(turn + 1, maxTurns)}` } : m));
+    const req: TurnRequest = { model: spec.model, effort: spec.effort, messages: sent, tools: toolSpecs(spec.tools, ctx), key: actor.id, ordinal };
     if (spec.sampling !== undefined) req.sampling = spec.sampling;
     if (spec.max_output_tokens !== undefined) req.max_output_tokens = spec.max_output_tokens;
-    if (reasked && spec.schema !== null && provider.structured_output === true) req.response_format = { name: spec.schema_id ?? "output", schema: spec.schema };
+    if (last) req.tool_choice = "none";
+    if ((reasked || last) && spec.schema !== null && provider.structured_output === true) req.response_format = { name: spec.schema_id ?? "output", schema: spec.schema };
     const body = provider.body(req);
     const messagesBlob = put(body);
     let requestId = "";
@@ -239,10 +251,11 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     // an agent with no tools runs none: every call in its reply is skipped; nor does a reply cut off at the output limit, whose calls may be cut too
     const cut = result.stop === "length";
     const noTools = spec.outside_run === true && spec.tools.length === 0;
-    const toRun = noTools || cut ? [] : result.tool_calls.slice(0, MAX_CALLS);
+    const toRun = noTools || cut || last ? [] : result.tool_calls.slice(0, MAX_CALLS);
     const extra = result.tool_calls.length - toRun.length;
     const skippedNote = cut ? `${extra} tool calls were not run: the reply was cut off at the output limit`
-      : noTools ? `${extra} tool calls were not run: this agent has no tools` : `${extra} further tool calls were not run`;
+      : noTools ? `${extra} tool calls were not run: this agent has no tools`
+      : last ? `${extra} tool calls were not run: this was the last turn` : `${extra} further tool calls were not run`;
     let responseSeq = -1;
     if (!guarded(() => [
       {
@@ -311,7 +324,8 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
       continue;
     }
 
-    // 7. the answer
+    // 7. the answer. A last reply that only called tools holds none.
+    if (last && result.tool_calls.length > 0 && result.content.trim() === "") return { kind: "stopped", why: "turns" };
     if (spec.schema === null) return { kind: "done", content: result.content, output: null, calls };
     let errors: string[];
     // an empty reply (a thinking model may write its whole answer into its reasoning) is re-asked as such; it uses the one re-ask

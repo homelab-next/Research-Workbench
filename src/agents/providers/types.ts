@@ -14,7 +14,9 @@ export interface ModelInfo { id: string; context: number | null; efforts: string
 /** `response_format`: the reply is to be one JSON object matching `schema`; sent only to a provider whose `structured_output` is true. */
 export interface TurnRequest { model: string; effort: string | null; messages: ChatMessage[]; tools: ToolSpec[]; key: string; ordinal: number; response_format?: { name: string; schema: Schema };
   /** This request's own sampling and output limit (a stage's): each wins over the provider's. */
-  sampling?: Sampling; max_output_tokens?: number }
+  sampling?: Sampling; max_output_tokens?: number;
+  /** "none" on an agent's last turn: the reply may hold no tool call, only the answer. Sent only when the request has tools. */
+  tool_choice?: "none" }
 export type TurnResult =
   | { kind: "answer"; content: string; reasoning: string | null; tool_calls: ToolCall[]; stop: "end" | "tool_calls" | "length"; usage: Usage; served_by: string; raw: Uint8Array }
   | { kind: "declined"; reason: string; served_by: string; raw: Uint8Array }

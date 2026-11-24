@@ -172,6 +172,7 @@ export class LocalProvider implements Provider {
     };
     if (req.tools.length > 0) {
       out.tools = req.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters as Json } }));
+      if (req.tool_choice !== undefined) out.tool_choice = req.tool_choice;
     }
     out.stream = false;
     out.max_tokens = req.max_output_tokens ?? this.max_output_tokens;

@@ -129,7 +129,7 @@ test("the model is given the tool's view and answers from it", async () => {
   const msgs = p.seen[1]!.messages;
   expect(msgs.map((m) => m.role)).toEqual(["system", "user", "assistant", "tool"]);
   expect(msgs[0]!.content).toContain("be careful");
-  expect(msgs[1]!.content).toBe("do it");
+  expect(msgs[1]!.content).toBe("do it\n\nTurn 2 of 16.");
   expect(msgs[2]!.tool_calls![0]!.name).toBe("list_sources");
   expect(msgs[3]!.tool_call_id).toBe(msgs[2]!.tool_calls![0]!.id);
   expect(msgs[3]!.content).toContain("assets");
@@ -691,4 +691,51 @@ test("what a stage's sampling and limit make the local provider send is what mod
     const recorded = ofType("model.request").map((e) => JSON.parse(text(e.payload.messages)) as Record<string, unknown>);
     expect(recorded).toEqual([sent!]);
   } finally { sa.stop(); }
+});
+
+test("each request's task text states the turn; two turns before the end it says to finish; the last turn may not call tools", async () => {
+  const call: ScriptReply = { tool_calls: [{ tool: "list_sources", args: { why: "w" } }] };
+  const p = spy([call, call, call, { content: '{"n":1}', tool_calls: [{ tool: "list_sources", args: { why: "again" } }] }]);
+  const end = await runAgent(f.s, spec(p, { max_turns: 4, schema: SCHEMA }));
+  expect(end).toMatchObject({ kind: "done", output: { n: 1 } });
+  const tasks = p.seen.map((r) => r.messages[1]!);
+  expect(tasks.map((m) => m.role)).toEqual(["user", "user", "user", "user"]);
+  expect(tasks[0]!.content).toBe("do it\n\nTurn 1 of 4.");
+  expect(tasks[1]!.content).toBe("do it\n\nTurn 2 of 4.");
+  expect(tasks[2]!.content).toBe("do it\n\nTurn 3 of 4. Two turns left: finish your proposals and give your final answer next turn.");
+  expect(tasks[3]!.content).toBe("do it\n\nTurn 4 of 4. This is the last turn: give your final answer now; no tool will be run.");
+  expect(p.seen.slice(0, 3).map((r) => r.tool_choice)).toEqual([undefined, undefined, undefined]);
+  expect(p.seen[3]!.tool_choice).toBe("none");
+  // the tool call in the last reply is not run: it is recorded as skipped
+  expect(ofType("tool.called").length).toBe(3);
+  const skipped = ofType("tool.skipped");
+  expect(skipped.length).toBe(1);
+  expect(skipped[0]!.payload).toMatchObject({ count: 1, note: "1 tool calls were not run: this was the last turn" });
+});
+
+test("a last-turn reply that only calls tools is no answer: the agent ran out of turns", async () => {
+  const call: ScriptReply = { tool_calls: [{ tool: "list_sources", args: { why: "w" } }] };
+  const end = await runAgent(f.s, spec(spy([call, call]), { max_turns: 2 }));
+  expect(end).toEqual({ kind: "stopped", why: "turns" });
+  expect(ofType("tool.called").length).toBe(1);
+  expect(ofType("tool.skipped").length).toBe(1);
+});
+
+test("on the last turn a local model is sent tool_choice none and structured output, and model.request records it", async () => {
+  const m = startModelStandin({ replies: [
+    { json: { choices: [{ finish_reason: "tool_calls", message: { content: "", tool_calls: [{ id: "c1", type: "function", function: { name: "list_sources", arguments: '{"why":"w"}' } }] } }] } },
+    { json: { choices: [{ finish_reason: "stop", message: { content: '{"n":3}' } }] } },
+  ] });
+  const p = new LocalProvider({ id: "lm", base_url: m.url, where: "machine", credential: null, secrets: new Secrets({}, null), context: null, efforts: [], timeout_ms: 5000 });
+  try {
+    const end = await runAgent(f.s, spec(p, { max_turns: 2, schema: SCHEMA, schema_id: "assemble-output" }));
+    expect(end).toMatchObject({ kind: "done", output: { n: 3 } });
+    const bodies = m.requests.filter((r) => r.method === "POST").map((r) => JSON.parse(r.body) as Record<string, unknown>);
+    expect(bodies[0]).not.toHaveProperty("tool_choice");
+    expect(bodies[0]).not.toHaveProperty("response_format");
+    expect(bodies[1]!.tool_choice).toBe("none");
+    expect(bodies[1]!.response_format).toEqual({ type: "json_schema", json_schema: { name: "assemble-output", schema: SCHEMA, strict: true } });
+    const recorded = ofType("model.request").map((e) => JSON.parse(text(e.payload.messages)) as Record<string, unknown>);
+    expect(recorded).toEqual(bodies);
+  } finally { m.stop(); }
 });
