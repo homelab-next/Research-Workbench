@@ -80,7 +80,11 @@ export interface Product {
   sources: { source: string; quality: string }[]; assumptions: string[]; change: string;
 }
 /** `hash` is sha256Hex(canonical(product)). */
-export interface Draft { n: number; hash: string; author: Actor; product: Product; reason: string }
+/**
+ * `cited` (not part of the hashed product) is every card id a finding or a narrative section cites, sorted. A product does not store its
+ * narrative's citations, so the draft does; a draft recorded without it is read as citing what its findings cite.
+ */
+export interface Draft { n: number; hash: string; author: Actor; product: Product; reason: string; cited?: string[] }
 export interface CheckFinding { check: string; where: string; message: string }
 export interface Challenge { id: string; draft_hash: string; severity: "must_address" | "consider"; text: string; cites: string[] }
 /** Why a query was issued: for its result, to price another query (an estimate), or to re-run an earlier one (a verify). */

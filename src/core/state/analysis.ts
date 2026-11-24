@@ -19,7 +19,7 @@ const isProduct = (x: unknown): boolean =>
   && Array.isArray(x.sources) && x.sources.every((v) => isObj(v) && isStr(v.source) && isStr(v.quality))
   && isStrList(x.assumptions) && isStr(x.change);
 const isDraft = (x: unknown): x is Draft =>
-  isObj(x) && isNum(x.n) && isStr(x.hash) && isObj(x.author) && isProduct(x.product) && isStr(x.reason);
+  isObj(x) && isNum(x.n) && isStr(x.hash) && isObj(x.author) && isProduct(x.product) && isStr(x.reason) && (x.cited === undefined || isStrList(x.cited));
 
 function withReview(s: CaseState, hash: unknown, change: (r: ReviewState) => ReviewState): CaseState {
   if (!has(s.reviews, hash)) return s;

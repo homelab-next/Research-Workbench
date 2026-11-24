@@ -33,19 +33,22 @@ export function computeMops(entries: readonly Entry[], state: Readonly<CaseState
   ];
 }
 
-/** The ids of the objective's measures of one kind; null when the case has no objective that is loaded. */
+/** The ids of the objective's measures of one kind; null when the case has no objective, or its manifest is not loaded. */
 function measuresOf(state: Readonly<CaseState>, registry: Registry, kind: "mop" | "moe"): string[] | null {
   const id = state.meta?.objective ?? null;
   if (id === null) return null;
   const m = registry.get("objective", id);
-  const list = m === null ? [] : m.body.measures;
+  if (m === null) return null;
+  const list = m.body.measures;
   if (!Array.isArray(list)) return [];
   return list.flatMap((x) => (typeof x === "object" && x !== null && !Array.isArray(x) && x.kind === kind && typeof x.id === "string" ? [x.id] : []));
 }
 
 /** Records this run's measures of performance, once each, as the feedback stage. All of them when the case has no objective. */
-export function recordMops(session: CaseSession, registry: Registry): void {
+export function recordMops(session: CaseSession, registry: Registry, onError: (error: unknown) => void): void {
   session.commit((state) => {
+    const named = state.meta?.objective ?? null;
+    if (named !== null && registry.get("objective", named) === null) onError(new Error(`the objective "${named}" is not loaded, so every measure of performance is recorded`));
     const listed = measuresOf(state, registry, "mop");
     const entries = session.entries();
     let from = 0;

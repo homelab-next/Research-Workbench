@@ -23,13 +23,16 @@ import { frameRunner } from "./stages/frame";
 import { planRunner } from "./stages/plan";
 import { researchRunner } from "./stages/research";
 import { recoverSession } from "./recover";
-import { approve, reject } from "./publish";
+import { logToStderr } from "../core/deliver";
+import { approve, reject, removeTempBundles } from "./publish";
 import { recordFeedback } from "./feedback";
 import { feedbackRunner } from "./stages/feedback";
 import { publishRunner } from "./stages/publish";
 
 export interface EngineDeps {
   config: Config; registry: Registry; runner: RunnerDeps; seeker: Seeker; providers: Providers; pipeline: Pipeline; profile: Profile;
+  /** Where problems that do not stop the work are reported (a failed anchor, a leftover folder, a missing objective); stderr when absent. */
+  onError?: (error: unknown) => void;
   anchor?: (a: { case: string; seq: number; hash: string; why: "published" | "closed" }) => void;
 }
 export interface StageEnv {
@@ -73,6 +76,7 @@ export class Engine {
     if (!recovered.has(session)) {
       recovered.add(session);
       recoverSession(session);
+      removeTempBundles(session, (err) => (deps.onError ?? logToStderr("publish"))(err));
     }
   }
 

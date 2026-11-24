@@ -7,6 +7,7 @@ import { sha256Hex } from "../core/hash";
 import type { CaseState } from "../core/state";
 import { MARKINGS } from "../core/types";
 import type { CheckFinding, Coverage, Draft, EmptyMeans, Marking } from "../core/types";
+import { citedOf } from "../agents/draft";
 import type { Profile } from "../agents/context";
 import { schemaOf } from "../agents/context";
 import type { Registry } from "../modules/registry";
@@ -20,6 +21,8 @@ export interface CheckInput {
   schema: Json; standard: Json; markings: Marking[];
   objective: { id: string; title: string } | null; question: string;
   earlier: { n: number; hash: string }[];
+  /** Every card id the draft cites, in its findings or its narrative. */
+  cited?: string[];
 }
 export interface CheckOutcome { pass: boolean; findings: CheckFinding[]; script_hash: string; input: Uint8Array; output: Uint8Array }
 export const CHECK_MAX_OUTPUT = 1048576;
@@ -28,7 +31,8 @@ export const CHECK_MAX_OUTPUT = 1048576;
 export function checkInput(check: string, state: Readonly<CaseState>, draft: Draft, registry: Registry, profile: Profile): CheckInput {
   const cards: CheckInput["cards"] = {};
   const sources: CheckInput["sources"] = {};
-  for (const id of new Set(draft.product.key_findings.flatMap((f) => f.cites))) {
+  const cited = citedOf(draft);
+  for (const id of cited) {
     if (!Object.hasOwn(state.cards, id)) continue;
     const c = state.cards[id]!;
     cards[id] = { id: c.id, title: c.title, source: c.source, marking: c.marking, coverage: c.coverage, empty: c.empty, row_count: c.row_count, quality_notes: [...c.quality_notes] };
@@ -52,6 +56,7 @@ export function checkInput(check: string, state: Readonly<CaseState>, draft: Dra
     objective: objective === null ? null : { id: objective, title: objectiveManifest?.title ?? objective },
     question: state.meta?.asked ?? "",
     earlier: state.published.map((p) => ({ n: p.n, hash: p.draft_hash })),
+    cited,
   };
 }
 

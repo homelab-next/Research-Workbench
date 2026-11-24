@@ -74,14 +74,33 @@ export function buildProduct(work: DraftWork, facts: {
   const kept = new Map((prev === null ? [] : prev.sources).map((x) => [x.source, x]));
   for (const x of sources) kept.set(x.source, x);
   const allSources = [...kept.values()].sort((a, b) => (a.source < b.source ? -1 : a.source > b.source ? 1 : 0));
-  return {
+  const product: Product = {
     objective: facts.objective, question: facts.question, marking: strictest(facts.case_marking, ...cited.map((c) => c.marking), ...(prev === null ? [] : [prev.marking])),
     summary: work.sections.summary, key_findings: work.findings.map((f) => ({ ...f })), gaps_and_limits: work.sections.gaps_and_limits,
     alternatives: work.sections.alternatives, assessment: work.sections.assessment, sources: allSources, assumptions: [...facts.assumptions], change: facts.change,
   };
+  builtCites.set(product, cited.map((c) => c.id));
+  return product;
 }
 
 /** The hash is always computed here, from the product; a model never supplies it. */
-export function draftOf(product: Product, n: number, author: Actor, reason: string): Draft {
-  return { n, hash: sha256Hex(canonical(product as unknown as Json)), author, product, reason };
+export function draftOf(product: Product, n: number, author: Actor, reason: string, narrativeCites: readonly string[] = []): Draft {
+  return { n, hash: sha256Hex(canonical(product as unknown as Json)), author, product, reason, cited: citedBy(product, [...narrativeCites, ...(builtCites.get(product) ?? [])]) };
+}
+
+/** The card ids a draft cites: those it records, and always what its findings cite (an older draft records none). */
+export function citedOf(draft: Draft): string[] {
+  return citedBy(draft.product, draft.cited ?? []);
+}
+
+/** What a product built by buildProduct got its narrative to cite: a product does not store these, and the draft that records the product needs them. */
+const builtCites = new WeakMap<Product, string[]>();
+
+/** Every card id the findings cite, the given narrative cites, and any `[cN]` in the product's narrative text, sorted. */
+export function citedBy(product: Product, narrativeCites: readonly string[] = []): string[] {
+  const ids = new Set<string>([...product.key_findings.flatMap((f) => f.cites), ...narrativeCites]);
+  for (const text of [product.summary, product.gaps_and_limits, product.alternatives, product.assessment]) {
+    for (const m of text.matchAll(/\[(c\d+)\]/g)) ids.add(m[1]!);
+  }
+  return [...ids].sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
 }

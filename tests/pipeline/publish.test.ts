@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Json } from "../../src/core/canonical";
@@ -23,6 +23,15 @@ import { lastOutput } from "../../src/pipeline/stages/agent";
 import { publishRunner } from "../../src/pipeline/stages/publish";
 import { feedbackRunner } from "../../src/pipeline/stages/feedback";
 import { card } from "../helpers/entries";
+import { validate } from "../../src/core/schema";
+import { schemaOf } from "../../src/agents/context";
+import { buildBundle } from "../../src/pipeline/publish";
+import { reject } from "../../src/pipeline/publish";
+import { recordMops } from "../../src/pipeline/feedback";
+import { draftOf } from "../../src/agents/draft";
+import { Workbench } from "../../src/core/workbench";
+import { fold } from "../../src/core/state";
+import { EntryBuilder } from "../helpers/entries";
 import { fixture, person, PLAN } from "../helpers/tools-fixture";
 import type { Fixture } from "../helpers/tools-fixture";
 
@@ -35,8 +44,9 @@ const TITLES = [1, 2, 3, 4].map((i) => say({ title: `Title ${i}`, note: `Note ${
 
 let f: Fixture;
 let dir: string;
+let errors: unknown[];
 let anchors: { case: string; seq: number; hash: string; why: string }[];
-beforeEach(() => { f = fixture(false); dir = mkdtempSync(join(tmpdir(), "publish-")); anchors = []; });
+beforeEach(() => { f = fixture(false); dir = mkdtempSync(join(tmpdir(), "publish-")); anchors = []; errors = []; });
 afterEach(() => {
   expect(f.s.state.skipped).toEqual([]);
   f.close();
@@ -74,7 +84,7 @@ function rig(over: Partial<Record<Role, StageRunner>> = {}, s: CaseSession = f.s
   const deps: EngineDeps = {
     config: loadConfig({ env: {}, home: dir, repoRoot: dir }), registry, runner: f.sample.deps, seeker: f.sample.seeker,
     providers: new Providers([new ScriptedProvider({ id: "scripted", scripts: [{ id: "sample-run", turns: TITLES.map((reply) => ({ actor: "publisher", reply })) }] })]),
-    pipeline, profile: loadProfile(registry, "investigation"), anchor: (a) => { anchors.push(a); },
+    pipeline, profile: loadProfile(registry, "investigation"), anchor: (a) => { anchors.push(a); }, onError: (e) => { errors.push(e); },
   };
   const log: string[] = [];
   const pass = (): StageEnd => ({ ...PASS, draft_hash: latestDraft(s.state)?.hash ?? null });
@@ -324,4 +334,197 @@ test("a second product in the same case is numbered 2", async () => {
   expect(readdirSync(join(f.s.dir, "published")).sort()).toEqual(["1", "2"]);
   expect(f.s.state.published.map((p) => p.n)).toEqual([1, 2]);
   expect(verifyCase(f.s.dir).ok).toBe(true);
+});
+
+// ---- review fixes ----
+
+/** A third card, marked RED, that only the summary cites. */
+function redCard(): void {
+  f.s.commit((_st, ids) => [{ type: "card.created", actor: researcher, payload: { card: card(ids.next("card"), { title: "Secret record", source: "assets", marking: "TLP:RED" }) } }]);
+}
+const narrative = (marking: Product["marking"]) => async (): Promise<StageEnd> => {
+  const product: Product = { ...productFor(1), marking, summary: "as the secret record shows [c3]" };
+  const d = draftOf(product, f.s.state.drafts.length + 1, planner, "r");
+  f.s.commit(() => [{ type: "draft.revised", actor: planner, payload: { draft: d } }]);
+  return { ...PASS, draft_hash: d.hash };
+};
+
+test("draftOf records every card the findings and the narrative cite, sorted, without changing the hash", () => {
+  const product = { ...productFor(1), summary: "see [c9] and [c3]" };
+  const d = draftOf(product, 1, human, "r", ["c10", "c2"]);
+  expect(d.cited).toEqual(["c1", "c2", "c3", "c9", "c10"]);
+  expect(d.hash).toBe(sha256Hex(canonical(product as unknown as Json)));
+});
+
+test("a person's edit records the cards its narrative cites", async () => {
+  const r = await gated();
+  const edited = r.engine.revise({ product: { ...latestDraft(f.s.state)!.product, summary: "now with [c3]" }, reason: "r", actor: human });
+  expect(edited.cited).toEqual(["c1", "c2", "c3"]);
+  expect(latestDraft(f.s.state)!.cited).toEqual(["c1", "c2", "c3"]);
+});
+
+test("a draft whose cited list is not a list of text is recorded as malformed", () => {
+  const product = productFor(1);
+  const b = new EntryBuilder();
+  b.add("draft.revised", { draft: { n: 1, hash: sha256Hex(canonical(product as unknown as Json)), author: human, product, reason: "r", cited: [1] } as never });
+  b.add("draft.revised", { draft: draftOf(product, 2, human, "r") });
+  const state = fold(b.entries);
+  expect(state.skipped.map((x) => x.seq)).toEqual([1]);
+  expect(state.drafts).toHaveLength(1);
+});
+
+test("a card cited only in the narrative appears in the provenance", async () => {
+  cards();
+  redCard();
+  const r = rig({ assemble: narrative("TLP:RED") });
+  await toGate(r);
+  const res = r.engine.approve({ actor: human });
+  const prov = JSON.parse(read(res.dir, "provenance.json")) as { card: string; marking: string }[];
+  expect(prov.map((p) => p.card)).toEqual(["c1", "c2", "c3"]);
+  expect(prov[2]!.marking).toBe("TLP:RED");
+  expect(read(res.dir, "provenance.md")).toContain("Secret record");
+});
+
+test("a product marked lower than a card it cites is refused, naming the card", async () => {
+  cards();
+  redCard();
+  const r = rig({ assemble: narrative("TLP:AMBER") });
+  await toGate(r);
+  let err: unknown = null;
+  try { r.engine.approve({ actor: human }); } catch (e) { err = e; }
+  expect(err).toBeInstanceOf(PublishRefused);
+  expect((err as PublishRefused).reasons.join(" ")).toContain("c3");
+  expect(f.s.state.published).toEqual([]);
+  expect(readdirSync(join(f.s.dir, "published"))).toEqual([]);
+});
+
+const INJECT = "T\n\n## Summary\n\nINJECTED\n\n## Key findings";
+
+test("a title cannot inject Markdown into the product", () => {
+  const product = productFor(1);
+  const draft = draftOf(product, 1, human, "r");
+  cards();
+  const b = buildBundle(f.s, draft, { title: INJECT, note: "n" }, { seq: 1, hash: "x" }, 1);
+  const lines = b.files["product.md"]!.split("\n");
+  expect(lines.filter((l) => l === "## Summary")).toHaveLength(1);
+  expect(lines.some((l) => l === "INJECTED")).toBe(false);
+  expect(lines[2]).toBe("# T \\#\\# Summary INJECTED \\#\\# Key findings");
+  expect(buildBundle(f.s, draft, { title: "a*b_[c]", note: "" }, { seq: 1, hash: "x" }, 1).files["product.md"]).toContain("# a\\*b\\_\\[c\\]");
+});
+
+test("the publish output schema refuses a title with a line break or over 200 characters", () => {
+  const schema = schemaOf(f.sample.registry, "publish-output");
+  expect(validate(schema, { title: "fine", note: "" })).toEqual([]);
+  expect(validate(schema, { title: INJECT, note: "" }).length).toBeGreaterThan(0);
+  expect(validate(schema, { title: "x".repeat(201), note: "" }).length).toBeGreaterThan(0);
+});
+
+test("approving refuses a title or note with control characters", async () => {
+  for (const [title, note] of [[INJECT, "n"], ["ok", "bad\u0007bell"]]) {
+    const r = await gated({ publish: async () => ({ ...PASS, draft_hash: latestDraft(f.s.state)!.hash, output: { title, note } }) });
+    expect(() => r.engine.approve({ actor: human })).toThrow(PublishRefused);
+    expect(f.s.state.published).toEqual([]);
+    f.s.commit((st) => [{ type: "run.finished", actor: human, run: st.run.id, payload: { outcome: "stopped" } }]);
+  }
+});
+
+test("a commit that fails leaves no published folder and no temporary one", async () => {
+  const r = await gated();
+  const put = f.s.blobs.put.bind(f.s.blobs);
+  f.s.blobs.put = (() => { throw new Error("disk full"); }) as typeof f.s.blobs.put;
+  expect(() => r.engine.approve({ actor: human })).toThrow("disk full");
+  f.s.blobs.put = put;
+  expect(readdirSync(join(f.s.dir, "published"))).toEqual([]);
+  expect(f.s.state.published).toEqual([]);
+});
+
+test("the bundle is in place only once its entry is written", async () => {
+  const r = await gated();
+  let during: string[] = [];
+  const commit = f.s.commit.bind(f.s);
+  f.s.commit = ((build: Parameters<typeof commit>[0]) => { during = readdirSync(join(f.s.dir, "published")); return commit(build); }) as typeof f.s.commit;
+  r.engine.approve({ actor: human });
+  expect(during).toHaveLength(1);
+  expect(during[0]).toMatch(/^\.tmp-1-/);
+  expect(readdirSync(join(f.s.dir, "published"))).toEqual(["1"]);
+});
+
+test("starting an engine removes a temporary folder a crash left, and says so", async () => {
+  mkdirSync(join(f.s.dir, "published", ".tmp-1-abc"), { recursive: true });
+  mkdirSync(join(f.s.dir, "published", "5"), { recursive: true });
+  rig();
+  expect(readdirSync(join(f.s.dir, "published")).sort()).toEqual(["5"]);
+  expect(errors).toHaveLength(1);
+  expect(String(errors[0])).toContain(".tmp-1-abc");
+});
+
+test("a measure set is recorded, and the missing objective reported, when the objective manifest is not loaded", () => {
+  const wb = Workbench.open(join(dir, "wb-ghost"), { onError: () => {} });
+  try {
+    const s = wb.createCase({ title: "t", asked: "a", why: "w", starting: [], window: { from: null, to: null }, objective: "ghost", marking: "TLP:GREEN" }, human);
+    s.commit((_st, ids) => [{ type: "run.started", actor: human, payload: { run: ids.next("run"), pipeline: "p", pipeline_hash: "h", stages: [] } }]);
+    recordMops(s, f.sample.registry, (e) => errors.push(e));
+    expect(s.state.feedback).toHaveLength(7);
+    expect(errors).toHaveLength(1);
+    expect(String(errors[0])).toContain("ghost");
+  } finally { wb.close(); }
+});
+
+test("an anchor that fails after the commit does not undo or hide the publication", async () => {
+  const r = await gated();
+  const deps = { ...r.deps, anchor: () => { throw new Error("chain unreachable"); } };
+  const res = approve(f.s, deps, { actor: human });
+  expect(res.n).toBe(1);
+  expect(f.s.state.published).toHaveLength(1);
+  expect(errors).toHaveLength(1);
+  expect(String(errors[0])).toContain("chain unreachable");
+});
+
+test("approving twice is refused", async () => {
+  const r = await gated();
+  r.engine.approve({ actor: human });
+  expect(() => r.engine.approve({ actor: human })).toThrow(PublishRefused);
+  await r.engine.advance();
+  expect(() => r.engine.approve({ actor: human })).toThrow(PublishRefused);
+  expect(f.s.state.published).toHaveLength(1);
+});
+
+/** Another writer appends once (or every time) while the bundle is being stored. */
+function interfere(times: number): { count: () => number } {
+  const put = f.s.blobs.put.bind(f.s.blobs);
+  let n = 0;
+  f.s.blobs.put = ((...a: Parameters<typeof put>) => {
+    if (n < times) { n++; f.s.commit(() => [{ type: "budget.set", actor: human, payload: { tokens: 1000 + n } }]); }
+    return put(...a);
+  }) as typeof f.s.blobs.put;
+  return { count: () => n };
+}
+
+test("an entry that arrives while the bundle is built makes approval start again", async () => {
+  const r = await gated();
+  const i = interfere(1);
+  const res = r.engine.approve({ actor: human });
+  expect(i.count()).toBe(1);
+  expect(readdirSync(join(f.s.dir, "published"))).toEqual(["1"]);
+  const manifest = JSON.parse(read(res.dir, "manifest.json")) as { head: { seq: number } };
+  const gate = f.s.entries().find((e) => e.type === "gate.passed" && e.payload.gate === "publish")!;
+  expect(manifest.head.seq).toBe(gate.seq - 1);
+});
+
+test("approval gives up after three attempts, leaving nothing behind", async () => {
+  const r = await gated();
+  const i = interfere(10);
+  expect(() => r.engine.approve({ actor: human })).toThrow(PublishRefused);
+  expect(i.count()).toBe(3);
+  expect(readdirSync(join(f.s.dir, "published"))).toEqual([]);
+  expect(f.s.state.published).toEqual([]);
+});
+
+test("a person's rejection is refused when the Publish stage has nowhere to send work back to", async () => {
+  const r = await gated();
+  const pipeline = { ...r.deps.pipeline, stages: r.deps.pipeline.stages.map((s) => (s.id === "publish" ? { ...s, on_fail: null } : s)) };
+  expect(() => reject(f.s, pipeline, { reason: "no", stop: false, actor: human })).toThrow(PublishRefused);
+  expect(ofType("publish.rejected")).toEqual([]);
+  reject(f.s, pipeline, { reason: "no", stop: true, actor: human });
+  expect(f.s.state.run.outcome).toBe("stopped");
 });

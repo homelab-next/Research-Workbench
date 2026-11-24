@@ -1,4 +1,5 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import type { Json } from "../core/canonical";
 import { canonical, parseJson } from "../core/canonical";
@@ -6,6 +7,9 @@ import { sha256Hex } from "../core/hash";
 import type { CaseSession } from "../core/session";
 import { blockers, latestDraft } from "../core/state";
 import type { Actor, Draft, Entry, EntryInput, Marking } from "../core/types";
+import { strictest } from "../core/types";
+import { logToStderr } from "../core/deliver";
+import { citedOf } from "../agents/draft";
 import type { EngineDeps } from "./engine";
 import type { Pipeline } from "./manifests";
 
@@ -27,6 +31,8 @@ export interface Bundle { manifest: BundleManifest; files: Record<string, string
 const HUMAN_ONLY = "only a person may publish or send back a product";
 const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
 const who = (a: Actor): string => `${a.kind}:${a.id}`;
+/** Text shown as plain text in Markdown: nothing in it can start a heading, a list, a link or emphasis. */
+const plain = (text: string): string => text.replace(/\s+/g, " ").trim().replace(/([\\`*_{}[\]()#+\-.!|>~<&])/g, "\\$1");
 const byId = (a: string, b: string): number => a.localeCompare(b, "en", { numeric: true });
 
 /** Why a draft's hash is not the hash of its product; null when it is. */
@@ -45,7 +51,7 @@ interface Provenance {
 }
 
 function provenanceOf(session: CaseSession, draft: Draft): Provenance[] {
-  const ids = [...new Set(draft.product.key_findings.flatMap((f) => f.cites))].sort(byId);
+  const ids = citedOf(draft);
   const issued = new Map<string, Extract<Entry, { type: "query.issued" }>>();
   const result = new Map<string, Extract<Entry, { type: "query.result" }>>();
   for (const e of session.entries()) {
@@ -78,7 +84,7 @@ function productMarkdown(draft: Draft, title: string): string {
     `Assumptions: ${f.assumptions.length === 0 ? "none" : f.assumptions.join("; ")}.`, `Reasoning: ${f.reasoning}`,
   ].join("\n"));
   return [
-    p.marking, "", `# ${title}`, "",
+    p.marking, "", `# ${plain(title)}`, "",
     `Objective: ${p.objective}`, `Question: ${p.question}`, `Draft ${draft.n}, hash ${draft.hash}`, "",
     "## Summary", "", p.summary, "",
     "## Key findings", "", findings.length === 0 ? "None." : findings.join("\n\n"), "",
@@ -119,8 +125,14 @@ export function buildBundle(session: CaseSession, draft: Draft, cover: { title: 
   return { manifest, files };
 }
 
-/** The Publish stage's last output on this exact draft in the current run: the publisher's title and note. */
-function coverOf(session: CaseSession, stage: string, hash: string): { title: string; note: string } | null {
+/** Why the product's marking is lower than a card it cites; null when it covers them all. Markings that are not known count as the most restrictive. */
+export function markingProblem(session: CaseSession, draft: Draft): string | null {
+  const low = citedOf(draft).filter((id) => Object.hasOwn(session.state.cards, id) && strictest(draft.product.marking, session.state.cards[id]!.marking) !== strictest(draft.product.marking));
+  return low.length === 0 ? null : `the product is marked ${draft.product.marking}, which is less restrictive than ${low.map((id) => `${id} (${session.state.cards[id]!.marking})`).join(", ")}`;
+}
+
+/** The Publish stage's last output on this exact draft in the current run: the publisher's title and note, or why they cannot be used; null when there is none. */
+function coverOf(session: CaseSession, stage: string, hash: string): { title: string; note: string } | string | null {
   const entries = session.entries();
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]!;
@@ -129,6 +141,11 @@ function coverOf(session: CaseSession, stage: string, hash: string): { title: st
     const parsed = parseJson(session.blobs.text(e.payload.output.blob));
     const out = parsed === null ? null : parsed.value;
     if (typeof out !== "object" || out === null || Array.isArray(out) || typeof out.title !== "string" || typeof out.note !== "string") return null;
+    // a title is one plain line; neither it nor the note may carry control characters (a note may have line breaks and tabs)
+    // eslint-disable-next-line no-control-regex
+    if (/[\u0000-\u001f\u007f]/.test(out.title) || out.title.trim() === "") return "the title must be one line of text with no control characters";
+    // eslint-disable-next-line no-control-regex
+    if (/[\u0000-\u0008\u000b-\u001f\u007f]/.test(out.note)) return "the note must not contain control characters";
     return { title: out.title, note: out.note };
   }
   return null;
@@ -144,10 +161,23 @@ function atGate(session: CaseSession, actor: Actor): void {
 
 class Stale extends Error {}
 const ATTEMPTS = 3;
+const report = (deps: EngineDeps, error: unknown): void => (deps.onError ?? logToStderr("publish"))(error);
+
+/** Removes every temporary bundle folder a stopped process left in the case's published folder, reporting each. */
+export function removeTempBundles(session: CaseSession, onError: (error: unknown) => void): void {
+  const root = join(session.dir, "published");
+  let names: string[];
+  try { names = readdirSync(root); } catch { return; }
+  for (const name of names.filter((x) => x.startsWith(".tmp-"))) {
+    rmSync(join(root, name), { recursive: true, force: true });
+    onError(new Error(`removed ${name}, a bundle a stopped publish left unfinished`));
+  }
+}
 
 /**
  * A person approves the draft the run waits on. Everything is checked again at this moment, from the ledger: the person, the gate, the hash against
- * the product, and the publish rule. The bundle is written to the case's published folder and stored as a blob, and one commit records it.
+ * the product, the product's marking against the cards it cites, and the publish rule. The bundle is written to a temporary folder and stored as a blob;
+ * one commit records it, and only then is the folder moved to `published/<n>`, so a folder there always has its entry.
  */
 export function approve(session: CaseSession, deps: EngineDeps, input: { actor: Actor }): { n: number; dir: string; draft_hash: string } {
   const { actor } = input;
@@ -160,26 +190,27 @@ export function approve(session: CaseSession, deps: EngineDeps, input: { actor: 
     if (problem !== null) throw new PublishRefused([problem]);
     const why = blockers(state, d.hash);
     if (why.length > 0) throw new PublishRefused(why);
+    const low = markingProblem(session, d);
+    if (low !== null) throw new PublishRefused([low]);
     const stage = publishStage(deps.pipeline);
     const cover = stage === null ? null : coverOf(session, stage, d.hash);
     if (cover === null) throw new PublishRefused(["the Publish stage has not named this draft"]);
+    if (typeof cover === "string") throw new PublishRefused([cover]);
     const n = state.published.length + 1;
     const head = session.head();
     const bundle = buildBundle(session, d, cover, head, n);
     const rel = `published/${n}`;
-    const out = join(session.dir, rel);
-    rmSync(out, { recursive: true, force: true });
-    mkdirSync(out, { recursive: true });
+    const tmp = join(session.dir, "published", `.tmp-${n}-${randomBytes(6).toString("hex")}`);
     try {
-      for (const [name, text] of Object.entries(bundle.files)) writeFileSync(join(out, name), text);
-      writeFileSync(join(out, "manifest.json"), canonical(bundle.manifest as unknown as Json));
+      mkdirSync(tmp, { recursive: true });
+      for (const [name, text] of Object.entries(bundle.files)) writeFileSync(join(tmp, name), text);
+      writeFileSync(join(tmp, "manifest.json"), canonical(bundle.manifest as unknown as Json));
       const blob = session.blobs.put(canonical({ manifest: bundle.manifest, files: bundle.files } as unknown as Json));
       session.commit((s, ids) => {
         if (s.seq !== head.seq) throw new Stale();
         const link = { run: s.run.id };
         const entries: EntryInput[] = [{ type: "gate.passed", actor, ...link, payload: { gate: "publish" } }];
-        const loose = [...new Set(d.product.key_findings.flatMap((f) => f.cites))].sort(byId)
-          .filter((id) => Object.hasOwn(s.cards, id) && s.cards[id]!.place === "incoming");
+        const loose = citedOf(d).filter((id) => Object.hasOwn(s.cards, id) && s.cards[id]!.place === "incoming");
         let lanes = s.lanes.map((l) => ({ id: l.id, subgoal: l.subgoal }));
         if (loose.length > 0 && lanes.length === 0) {
           const lane = ids.next("lane");
@@ -195,12 +226,23 @@ export function approve(session: CaseSession, deps: EngineDeps, input: { actor: 
         return entries;
       });
     } catch (err) {
-      rmSync(out, { recursive: true, force: true });
+      rmSync(tmp, { recursive: true, force: true });
       if (err instanceof Stale) continue;
       throw err;
     }
-    const now = session.head();
-    deps.anchor?.({ case: session.id, seq: now.seq, hash: now.hash, why: "published" });
+    // recorded: the folder takes its place. A folder under this number with no entry is a leftover.
+    try {
+      rmSync(join(session.dir, rel), { recursive: true, force: true });
+      renameSync(tmp, join(session.dir, rel));
+    } catch (err) {
+      report(deps, new Error(`the product was published, but its folder could not be put in place (${err instanceof Error ? err.message : String(err)}); the bundle is in the ledger's blob`));
+    }
+    try {
+      const now = session.head();
+      deps.anchor?.({ case: session.id, seq: now.seq, hash: now.hash, why: "published" });
+    } catch (err) {
+      report(deps, new Error(`the product was published, but anchoring it failed: ${err instanceof Error ? err.message : String(err)}`));
+    }
     return { n, dir: rel, draft_hash: d.hash };
   }
   throw new PublishRefused(["the case kept changing while the product was being published; try again"]);

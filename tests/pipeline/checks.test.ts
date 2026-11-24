@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { canonical } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
 import { latestDraft } from "../../src/core/state";
-import type { Product } from "../../src/core/types";
+import type { Marking, Product } from "../../src/core/types";
 import { loadProfile } from "../../src/agents/context";
 import { Registry, TRUSTED_ONLY_KINDS } from "../../src/modules/registry";
 import type { StageEnv } from "../../src/pipeline/engine";
@@ -26,7 +26,7 @@ const PRODUCT: Product = {
 };
 const INPUT: CheckInput = {
   check: "slow", draft: { n: 1, hash: sha256Hex(canonical(PRODUCT as never)), product: PRODUCT }, cards: {}, sources: {}, schema: {}, standard: {}, markings: [],
-  objective: null, question: "q", earlier: [],
+  objective: null, question: "q", earlier: [], cited: [],
 };
 
 /** Writes a check (manifest and script) into `root` and returns what loadChecks makes of it. */
@@ -313,5 +313,31 @@ test("a Checks stage with nothing to run pauses the run instead of passing", asy
     expect(end.kind).toBe("stalled");
     expect((end as { reason: string }).reason).toMatch(/^Checks has nothing to run: /);
     expect(runs(env)).toEqual([]);
+  } finally { close(); }
+});
+
+test("check 11 fails a product marked lower than a card only its narrative cites", async () => {
+  const { checks, problems } = load(join(import.meta.dir, "..", "..", "sample", "checks"));
+  expect(problems).toEqual([]);
+  const c11 = checks.find((c) => c.id === "marking")!;
+  const cardOf = (id: string, marking: Marking) => ({ id, title: id, source: null, marking, coverage: null, empty: null, row_count: 0, quality_notes: [] });
+  const input: CheckInput = {
+    ...INPUT, check: "marking", markings: ["TLP:CLEAR", "TLP:GREEN", "TLP:AMBER", "TLP:AMBER+STRICT", "TLP:RED"],
+    draft: { n: 1, hash: "h", product: { ...PRODUCT, marking: "TLP:GREEN", summary: "see [c2]" } },
+    cards: { c1: cardOf("c1", "TLP:GREEN"), c2: cardOf("c2", "TLP:RED") }, cited: ["c1", "c2"],
+  };
+  const o = await runCheck(c11, input);
+  expect(o.pass).toBe(false);
+  expect(o.findings.map((x) => x.message).join(" ")).toContain("c2");
+  expect((await runCheck(c11, { ...input, draft: { ...input.draft, product: { ...input.draft.product, marking: "TLP:RED" } } })).pass).toBe(true);
+});
+
+test("checkInput carries the cards the narrative cites too", () => {
+  const { env, close } = stageRig({});
+  try {
+    const d = latestDraft(env.session.state)!;
+    const i = checkInput("x", env.session.state, { ...d, cited: ["c1"] }, env.deps.registry, env.deps.profile);
+    expect(i.cited).toEqual(["c1"]);
+    expect(Object.keys(i.cards)).toEqual(["c1"]);
   } finally { close(); }
 });

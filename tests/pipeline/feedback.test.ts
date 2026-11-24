@@ -158,9 +158,9 @@ test("only the measures of performance the objective lists are recorded", () => 
   const c = objectiveCase(LISTED);
   try {
     c.s.commit((_st, ids) => [{ type: "run.started", actor: person, payload: { ...START, run: ids.next("run") } }]);
-    recordMops(c.s, c.registry);
+    recordMops(c.s, c.registry, () => {});
     expect(c.s.state.feedback.map((x) => [x.measure, x.kind])).toEqual([["queries_run", "mop"], ["send_backs", "mop"]]);
-    recordMops(c.s, c.registry);
+    recordMops(c.s, c.registry, () => {});
     expect(c.s.state.feedback).toHaveLength(2);
     expect(c.s.state.skipped).toEqual([]);
   } finally { c.close(); }
