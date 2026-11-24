@@ -6,7 +6,7 @@ import { CONFIDENCES, isMarking, strictest } from "../core/types";
 import type { Actor, Draft, EntryInput, Product } from "../core/types";
 import { canonical } from "../core/canonical";
 import type { Json } from "../core/canonical";
-import { carriedCites, draftOf } from "../agents/draft";
+import { carriedCites, citedBy, draftOf } from "../agents/draft";
 import type { Pipeline } from "./manifests";
 
 export class ReviseRefused extends Refused {
@@ -62,10 +62,18 @@ export function reviseDraft(session: CaseSession, pipeline: Pipeline, input: { p
     if (run.status === "none" || run.status === "finished") throw new ReviseRefused("there is no run in progress to edit a draft in");
     const latest = latestDraft(state);
     // a person's edit cannot lower the marking below the previous draft's
-    const floor = latest === null ? product : { ...product, marking: strictest(product.marking, latest.product.marking) };
+    // ...nor below the case's, nor below any card the edited draft cites
+    const carried = carriedCites(latest, product, state.cards);
+    const cited = citedBy(product, carried).filter((id) => Object.hasOwn(state.cards, id));
+    const lowest = strictest("TLP:CLEAR", ...(latest === null ? [] : [latest.product.marking]), ...(state.meta === null ? [] : [state.meta.marking]), ...cited.map((id) => state.cards[id]!.marking));
+    const marking = strictest(product.marking, lowest);
+    const lowered = marking !== product.marking;
+    const floor = lowered ? { ...product, marking } : product;
     // what the person left unchanged keeps the cards it cited, so a lowered marking is still checked against them
-    const draft = draftOf(floor, state.drafts.length + 1, actor, reason, carriedCites(latest, floor, state.cards));
-    if (latest !== null && latest.hash === draft.hash) throw new ReviseRefused("the edit changes nothing in the latest draft");
+    const draft = draftOf(floor, state.drafts.length + 1, actor, reason, carried);
+    if (latest !== null && latest.hash === draft.hash) {
+      throw new ReviseRefused(lowered ? `the marking cannot be lowered below ${marking}` : "the edit changes nothing in the latest draft");
+    }
     made = draft;
     const out: EntryInput[] = [{ type: "draft.revised", actor, run: run.id, payload: { draft } }];
     const current = run.stages.find((s) => s.id === run.current) ?? null;

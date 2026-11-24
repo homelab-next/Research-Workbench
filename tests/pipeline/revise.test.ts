@@ -214,7 +214,7 @@ async function gateWithNarrativeCite(): Promise<{ engine: Engine }> {
 test("an edit that leaves the summary as it was keeps the card the summary cited, and the previous marking is its floor", async () => {
   const r = await gateWithNarrativeCite();
   // an edit that only lowers the marking changes nothing once the floor is applied
-  expect(() => r.engine.revise({ product: { ...latestDraft(f.s.state)!.product, marking: "TLP:GREEN" }, reason: "lower it", actor: person })).toThrow(/changes nothing/);
+  expect(() => r.engine.revise({ product: { ...latestDraft(f.s.state)!.product, marking: "TLP:GREEN" }, reason: "lower it", actor: person })).toThrow("the marking cannot be lowered below TLP:AMBER");
   const d = r.engine.revise({ product: { ...latestDraft(f.s.state)!.product, marking: "TLP:GREEN", gaps_and_limits: "more" }, reason: "lower it", actor: person });
   expect(d.product.marking).toBe("TLP:AMBER");
   expect(d.cited).toContain("c1");
@@ -249,4 +249,27 @@ test("a person's edit cannot lower the marking below the previous draft's", asyn
   expect(d.product.marking).toBe("TLP:AMBER");
   expect(d.hash).toBe(sha256Hex(canonical(d.product as unknown as Json)));
   expect(latestDraft(f.s.state)).toEqual(d);
+});
+
+test("an edit cannot lower the marking below the case's, nor below a card the edited draft cites", async () => {
+  // the case is GREEN; the latest draft is CLEAR (as a stand-in assemble may leave it); a card the edit cites is AMBER
+  const clear: Product = { ...base, marking: "TLP:CLEAR", summary: "clear" };
+  const researcher = { ...planner, id: "researcher-g1", stage: "research" };
+  f.s.commit((_st, ids) => [{ type: "card.created", actor: researcher, payload: { card: card(ids.next("card"), { title: "Proxy flows", marking: "TLP:AMBER" }) } }]);
+  const r = rig({
+    assemble: async () => {
+      const hash = sha256Hex(canonical(clear as unknown as Json));
+      f.s.commit((st) => [{ type: "draft.revised", actor: planner, payload: { draft: { n: st.drafts.length + 1, hash, author: planner, product: clear, reason: "r" } } }]);
+      return { ...PASS, draft_hash: hash };
+    },
+  });
+  await toGate(r);
+  const latest = latestDraft(f.s.state)!;
+  // case marking GREEN is the floor for an edit that cites nothing
+  const a = r.engine.revise({ product: { ...latest.product, marking: "TLP:CLEAR", summary: "edited" }, reason: "tidy", actor: person });
+  expect(a.product.marking).toBe("TLP:GREEN");
+  // and a card it cites sets it higher
+  const b = r.engine.revise({ product: { ...a.product, marking: "TLP:GREEN", summary: "see [c1]" }, reason: "cite", actor: person });
+  expect(b.product.marking).toBe("TLP:AMBER");
+  expect(() => r.engine.revise({ product: { ...b.product, marking: "TLP:CLEAR" }, reason: "lower", actor: person })).toThrow("the marking cannot be lowered below TLP:AMBER");
 });
