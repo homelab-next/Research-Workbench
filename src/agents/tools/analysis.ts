@@ -53,6 +53,16 @@ async function proposeAssessment(ctx: ToolContext, a: Record<string, Json>): Pro
   return done(`finding ${id}`, { finding: id });
 }
 
+/** What the draft being assembled holds, in a line: "the draft now has findings f1, f3 and gaps_and_limits set". */
+export function draftState(work: DraftWork): string {
+  const ids = work.findings.map((x) => x.id);
+  const findings = ids.length === 0 ? "no findings" : `${ids.length === 1 ? "finding" : "findings"} ${ids.join(", ")}`;
+  const set = (Object.keys(work.sections) as TextSection[]).filter((k) => work.sections[k].trim() !== "");
+  return `the draft now has ${findings} and ${set.length === 0 ? "no section set" : `${set.join(", ")} set`}`;
+}
+/** A refused proposal says why and what the draft now holds, so the model does not propose again blindly. Outside a drafting stage, the reason alone. */
+const refusedProposal = (ctx: ToolContext, reason: string): string => (ctx.draft === null ? reason : `refused: ${reason}; ${draftState(ctx.draft)}`);
+
 async function proposeNarrative(ctx: ToolContext, a: Record<string, Json>): Promise<ToolResult> {
   const work = drafting(ctx);
   const cites = strings(a.cites);
@@ -132,12 +142,12 @@ export const ANALYSIS_TOOLS: ToolDef[] = [
     description: "Propose a finding in the draft, citing the cards that support it. Write the claim plainly, give how likely it is as one of the standard's likelihood terms, and say how confident you are and why; the statement is worded from them. A card with no rows may be cited only when it is a proven negative with full coverage; any other empty card is a gap. Name `replaces` to change one you already proposed.",
     parameters: assessmentParameters(null),
     parametersFor: (ctx) => assessmentParameters(ctx.draft?.terms?.likelihood ?? null),
-    call: proposeAssessment,
+    call: proposeAssessment, refused: refusedProposal,
   },
   {
     name: "propose_narrative", description: "Write one section of the draft: summary, gaps_and_limits, alternatives or assessment.",
     parameters: params({ section: { type: "string", enum: SECTIONS.filter((s) => s !== "key_findings") }, text, cites }, ["section", "text", "cites"]),
-    call: proposeNarrative,
+    call: proposeNarrative, refused: refusedProposal,
   },
   { name: "request_research", description: "Ask for more research on a question the draft cannot answer yet.", parameters: params({ question: text }, ["question"]), call: requestResearch },
   {

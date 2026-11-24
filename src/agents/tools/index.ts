@@ -36,6 +36,8 @@ export interface ToolDef {
   /** The parameters in this context, when they depend on it (an enum read from the profile's standard); `parameters` otherwise. */
   parametersFor?(ctx: ToolContext): Schema;
   call(ctx: ToolContext, args: Record<string, Json>): Promise<ToolResult>;
+  /** The text a refusal of this tool gives the model, from the reason (scrubbed): a drafting tool adds the draft's state. The reason alone when absent. */
+  refused?(ctx: ToolContext, reason: string): string;
 }
 const parametersOf = (tool: ToolDef, ctx: ToolContext | undefined): Schema => (ctx !== undefined && tool.parametersFor !== undefined ? tool.parametersFor(ctx) : tool.parameters);
 
@@ -76,15 +78,16 @@ const firstLine = (err: unknown): string => (err instanceof Error ? err.message 
 
 /** Runs a parsed call. Never throws: an error, from the parse or from the tool, is a result the model can read. */
 export async function execTool(ctx: ToolContext, parsed: ParsedCall): Promise<ToolResult> {
-  if (parsed.error !== null || parsed.tool === null) {
-    const error = scrub(ctx.deps.registry, parsed.error ?? `unknown tool: ${parsed.name}`);
+  const refuse = (reason: string): ToolResult => {
+    const scrubbed = scrub(ctx.deps.registry, reason);
+    const error = parsed.tool?.refused === undefined ? scrubbed : parsed.tool.refused(ctx, scrubbed);
     return { ok: false, summary: error, view: { error }, marking: null };
-  }
+  };
+  if (parsed.error !== null || parsed.tool === null) return refuse(parsed.error ?? `unknown tool: ${parsed.name}`);
   try {
     return await parsed.tool.call(ctx, parsed.args as Record<string, Json>);
   } catch (err) {
-    const error = scrub(ctx.deps.registry, firstLine(err));
-    return { ok: false, summary: error, view: { error }, marking: null };
+    return refuse(firstLine(err));
   }
 }
 

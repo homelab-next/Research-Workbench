@@ -33,7 +33,7 @@ test("propose_assessment adds a finding and refuses a card that does not exist",
   expect(f.ctx.draft.findings[0]).toMatchObject({ id: "f1", statement: "We assess it is likely that it is internal.", likelihood: "likely", cites: ["c1"] });
   const bad = await f.call("propose_assessment", assess({ cites: ["c1", "c99"] }));
   expect(bad.ok).toBe(false);
-  expect(view(bad).error).toBe("unknown card: c99");
+  expect(view(bad).error).toBe("refused: unknown card: c99; the draft now has finding f1 and no section set");
   expect(f.ctx.draft.findings).toHaveLength(1);
   const again = await f.call("propose_assessment", assess({ claim: "it is revised", replaces: "f1" }));
   expect(view(again)).toEqual({ finding: "f1" });
@@ -62,7 +62,7 @@ test("propose_narrative sets a section and refuses key_findings", async () => {
   expect(kf.ok).toBe(false);
   expect(view(kf).error).toContain("invalid arguments");
   const missing = await f.call("propose_narrative", { why: "w", section: "alternatives", text: "x", cites: ["c42"] });
-  expect(view(missing).error).toBe("unknown card: c42");
+  expect(view(missing).error).toBe("refused: unknown card: c42; the draft now has no findings and summary set");
   expect(f.ctx.draft.sections.alternatives).toBe("");
 });
 
@@ -129,9 +129,9 @@ test("a discarded card cannot be cited", async () => {
   f.ctx.draft = drafting();
   f.s.commit(() => [{ type: "card.discarded", actor: person, payload: { card: "c1" } }]);
   const a = await f.call("propose_assessment", assess());
-  expect(view(a).error).toBe("card c1 was discarded");
+  expect(view(a).error).toBe("refused: card c1 was discarded; the draft now has no findings and no section set");
   const n = await f.call("propose_narrative", { why: "w", section: "summary", text: "t", cites: ["c1"] });
-  expect(view(n).error).toBe("card c1 was discarded");
+  expect(view(n).error).toBe("refused: card c1 was discarded; the draft now has no findings and no section set");
   expect(f.ctx.draft.findings).toEqual([]);
 });
 
@@ -187,7 +187,7 @@ test("a likelihood that is not one of the standard's terms is refused, naming th
   f.ctx.draft = drafting();
   const r = await f.call("propose_assessment", assess({ likelihood: "probable" }));
   expect(r.ok).toBe(false);
-  expect(view(r).error).toBe('"probable" is not a likelihood term of the standard: give one of almost no chance, very unlikely, unlikely, roughly even chance, likely, very likely, almost certain');
+  expect(view(r).error).toBe('refused: "probable" is not a likelihood term of the standard: give one of almost no chance, very unlikely, unlikely, roughly even chance, likely, very likely, almost certain; the draft now has no findings and no section set');
   expect(f.ctx.draft.findings).toEqual([]);
 });
 
@@ -195,14 +195,14 @@ test("a claim that holds a likelihood term of its own is refused: the likelihood
   f.ctx.draft = drafting();
   const r = await f.call("propose_assessment", assess({ claim: "the host was probably compromised" }));
   expect(r.ok).toBe(false);
-  expect(view(r).error).toBe('the claim holds the likelihood term "likely" (as "probably"): state the claim plainly and give how likely it is only in likelihood');
+  expect(view(r).error).toBe('refused: the claim holds the likelihood term "likely" (as "probably"): state the claim plainly and give how likely it is only in likelihood; the draft now has no findings and no section set');
   expect(f.ctx.draft.findings).toEqual([]);
 });
 
 test("with no standard's terms the drafting tool refuses a finding rather than guess its wording", async () => {
   f.ctx.draft = new DraftWork(null);
   const r = await f.call("propose_assessment", assess());
-  expect(view(r).error).toBe("the profile names no standard with likelihood terms, so a finding cannot be worded");
+  expect(view(r).error).toBe("refused: the profile names no standard with likelihood terms, so a finding cannot be worded; the draft now has no findings and no section set");
 });
 
 test("while a draft is assembled, the tool's likelihood parameter is the standard's terms as an enum, read from the standard", () => {
@@ -236,7 +236,7 @@ test("a finding may not cite an empty card that is not a proven negative with fu
     const id = emptyCard(empty, coverage);
     const r = await f.call("propose_assessment", assess({ cites: ["c1", id] }));
     expect(r.ok).toBe(false);
-    expect(view(r).error).toBe(`${id} is not seen (not proof of absence): put it in gaps_and_limits, not in a finding`);
+    expect(view(r).error).toBe(`refused: ${id} is not seen (not proof of absence): put it in gaps_and_limits, not in a finding; the draft now has no findings and no section set`);
   }
   expect(f.ctx.draft.findings).toEqual([]);
 });
@@ -251,10 +251,10 @@ test("a finding may cite an empty card that is a proven negative with full cover
 
 test("a finding that cites an unknown or a discarded card is refused, and nothing is added", async () => {
   f.ctx.draft = drafting();
-  expect(view(await f.call("propose_assessment", assess({ cites: ["c404"] }))).error).toBe("unknown card: c404");
+  expect(view(await f.call("propose_assessment", assess({ cites: ["c404"] }))).error).toBe("refused: unknown card: c404; the draft now has no findings and no section set");
   const id = emptyCard("proven-negative", { kind: "full" });
   f.s.commit(() => [{ type: "card.discarded", actor: person, payload: { card: id } }]);
-  expect(view(await f.call("propose_assessment", assess({ cites: [id] }))).error).toBe(`card ${id} was discarded`);
+  expect(view(await f.call("propose_assessment", assess({ cites: [id] }))).error).toBe(`refused: card ${id} was discarded; the draft now has no findings and no section set`);
   expect(f.ctx.draft.findings).toEqual([]);
 });
 
@@ -287,4 +287,32 @@ test("answer_challenge's challenge parameter takes text as long as a challenge's
   const p = (spec.parameters.properties as Record<string, { maxLength?: number; description?: string }>).challenge!;
   expect(p.maxLength).toBe(4000);
   expect(p.description).toContain("exact text");
+});
+
+// ---- the turn budget (task 12 item 4) ----
+
+test("a refused propose call gives the reason and the draft's state in one line", async () => {
+  f.ctx.draft = drafting();
+  const empty = await f.call("propose_narrative", { why: "w", section: "summary", text: "t", cites: ["c404"] });
+  expect(empty.ok).toBe(false);
+  expect(view(empty).error).toBe("refused: unknown card: c404; the draft now has no findings and no section set");
+  expect(empty.summary).toBe(view(empty).error as string);
+  await f.call("propose_assessment", assess());
+  await f.call("propose_assessment", assess({ claim: "it is old" }));
+  await f.call("propose_assessment", assess({ claim: "it is new" }));
+  f.ctx.draft.findings.splice(1, 1);
+  await f.call("propose_narrative", { why: "w", section: "gaps_and_limits", text: "the window is short", cites: [] });
+  const id = emptyCard("not-seen", { kind: "full" });
+  const r = await f.call("propose_assessment", assess({ cites: [id] }));
+  expect(view(r).error).toBe(`refused: ${id} is not seen (not proof of absence): put it in gaps_and_limits, not in a finding; the draft now has findings f1, f3 and gaps_and_limits set`);
+  // a call refused for its arguments says the same
+  const bad = await f.call("propose_assessment", assess({ confidence: "certain" }));
+  expect(view(bad).error).toStartWith("refused: invalid arguments: confidence ");
+  expect(view(bad).error).toEndWith("; the draft now has findings f1, f3 and gaps_and_limits set");
+  await f.call("propose_narrative", { why: "w", section: "summary", text: "s", cites: [] });
+  f.ctx.draft.findings.splice(0, 2);
+  await f.call("propose_assessment", assess());
+  const one = await f.call("propose_narrative", { why: "w", section: "summary", text: "t", cites: ["c404"] });
+  expect(view(one).error).toBe("refused: unknown card: c404; the draft now has finding f1 and summary, gaps_and_limits set");
+  expect(view(one).error).not.toContain("\n");
 });
