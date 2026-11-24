@@ -120,7 +120,7 @@ test.each(["sql", "files", "http", "trino"])("a stored %s result reads back to t
   expect(r.status).toBe("done");
   const { issued, result } = recorded("q1");
   const source = registry.source(issued.source)!;
-  const back = rowsOfBlob(source, issued, s.blobs.get(result.result.blob))!;
+  const back = rowsOfBlob(source, issued, s.blobs.get(result.result.blob), null)!;
   expect(back).not.toBeNull();
   expect(back.rows.length).toBe(result.rows);
   expect(rowsHash(back.columns, back.rows)).toBe(result.rows_hash);
@@ -129,7 +129,7 @@ test.each(["sql", "files", "http", "trino"])("a stored %s result reads back to t
 test("the http reader finds the endpoint the text was rendered from, and reads only its columns", async () => {
   await runQuery(s, deps, { ...REQUESTS.http!, window: win, why: "x", actor: human });
   const { issued, result } = recorded("q1");
-  const back = rowsOfBlob(registry.source("rep")!, issued, s.blobs.get(result.result.blob))!;
+  const back = rowsOfBlob(registry.source("rep")!, issued, s.blobs.get(result.result.blob), null)!;
   expect(back.columns).toEqual(["address", "verdict"]);
   expect(back.rows).toEqual([["198.51.100.77", "suspicious"], ["198.51.100.78", "clean"]]);
 });
@@ -143,8 +143,8 @@ test("bytes that are not a result read back as null", async () => {
     const { issued } = recorded(`q${n + 1}`);
     const source = registry.source(issued.source)!;
     const junk = new TextEncoder().encode("not a result at all");
-    expect([kind, rowsOfBlob(source, issued, junk)]).toEqual([kind, null]);
-    expect([kind, rowsOfBlob(source, issued, new TextEncoder().encode('{"x":1}'))]).toEqual([kind, null]);
+    expect([kind, rowsOfBlob(source, issued, junk, null)]).toEqual([kind, null]);
+    expect([kind, rowsOfBlob(source, issued, new TextEncoder().encode('{"x":1}'), null)]).toEqual([kind, null]);
   }
 });
 
@@ -152,5 +152,21 @@ test("an http result whose endpoint is gone from the source reads back as null",
   await runQuery(s, deps, { ...REQUESTS.http!, window: win, why: "x", actor: human });
   const { issued, result } = recorded("q1");
   const source = { ...registry.source("rep")!, endpoints: [] };
-  expect(rowsOfBlob(source, issued, s.blobs.get(result.result.blob))).toBeNull();
+  expect(rowsOfBlob(source, issued, s.blobs.get(result.result.blob), null)).toBeNull();
+});
+
+test("a budget-stopped trino result reads back to the rows that were recorded, not all that arrived", async () => {
+  await runQuery(s, deps, { ...REQUESTS.trino!, window: win, why: "x", actor: human });
+  const { issued } = recorded("q1");
+  const source = { ...registry.source("lake")!, limits: { ...registry.source("lake")!.limits, max_rows: 5 } };
+  const row = (i: number) => [`192.0.2.${i}`, i];
+  const bytes = new TextEncoder().encode(JSON.stringify([
+    { columns: [{ name: "a" }, { name: "n" }], data: [row(1), row(2), row(3), row(4)] },
+    { data: [row(5), row(6)] },
+  ]));
+  const three = rowsOfBlob(source, issued, bytes, 3)!;
+  expect(three.rows.length).toBe(3);
+  expect(rowsHash(three.columns, three.rows)).toBe(rowsHash(["a", "n"], [row(1), row(2), row(3)]));
+  expect(rowsOfBlob(source, issued, bytes, null)!.rows.length).toBe(5);
+  expect(rowsOfBlob(source, issued, bytes, 9)!.rows.length).toBe(5);
 });

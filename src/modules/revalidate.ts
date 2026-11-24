@@ -148,7 +148,7 @@ export function difference(session: CaseSession, deps: RunnerDeps, card: string)
     } catch {
       return null;
     }
-    const back = rowsOfBlob(source, was, bytes);
+    const back = rowsOfBlob(source, was, bytes, q.rows);
     return back !== null && rowsHash(back.columns, back.rows) === q.rows_hash ? back : null;
   };
   let a: ReturnType<typeof side>, b: ReturnType<typeof side>;

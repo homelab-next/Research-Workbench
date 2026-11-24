@@ -8,10 +8,11 @@ import { rowsOfTrino } from "./trino";
 /**
  * The columns and rows a stored result's raw bytes hold, by the connector that made them: the same reading that connector's own `run` uses
  * to make its rows, so what is read back is what was read first. Pure: it touches no source, only the manifest and the bytes.
+ * `recorded` is the row count the result was recorded with (a result a budget stopped holds more rows in its bytes than it kept); null reads up to the source's limit.
  * Null when the bytes cannot be read back (not what that connector keeps, or its endpoint is no longer in the source).
  */
-export function rowsOfBlob(source: SourceManifest, issued: Payloads["query.issued"], bytes: Uint8Array): { columns: string[]; rows: Json[][] } | null {
-  const max = source.limits.max_rows;
+export function rowsOfBlob(source: SourceManifest, issued: Payloads["query.issued"], bytes: Uint8Array, recorded: number | null): { columns: string[]; rows: Json[][] } | null {
+  const max = Math.min(source.limits.max_rows, recorded ?? source.limits.max_rows);
   switch (issued.connector) {
     case "sql":
     case "files": {
