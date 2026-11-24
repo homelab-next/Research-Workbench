@@ -274,3 +274,22 @@ test("a plan output that is not in the required shape is an error, not a throw",
     expect("errors" in r && r.errors.length > 0).toBe(true);
   }
 });
+
+test("a costly step paid under one plan is paid again under the next plan that budgets it", async () => {
+  await costly({ s3: 1 });
+  expect((await spendPlanBudget(f.s, f.sample.deps, "p1", "s3"))?.status).toBe("done");
+  // Research sent the work back to Plan; the planner proposes again and the person budgets s3 once more
+  f.s.commit((st) => [{ type: "gate.waiting", actor: system, run: st.run.id, payload: { gate: "plan" } }]);
+  f.s.commit((_st, ids) => [{ type: "plan.proposed", actor: agent, payload: { plan: PLAN(ids.next("plan")) } }]);
+  acceptPlan(f.s, { actor: person, budgets: { s3: 2 } });
+  const second = f.s.entries().findLast((e) => e.type === "plan.accepted")!;
+  const r = await f.call("run_step", { step: "s3", why: "reputation again" });
+  expect(r.view).toMatchObject({ status: "needs_budget", proposal: "p2" });
+  expect((await spendPlanBudget(f.s, f.sample.deps, "p2", "s3"))?.status).toBe("done");
+  const paid = f.s.entries().filter((e) => e.type === "proposal.accepted");
+  expect(paid.map((e) => [e.payload.proposal, e.cause])).toEqual([["p1", f.s.entries().find((e) => e.type === "plan.accepted")!.seq], ["p2", second.seq]]);
+  // and still only once under that plan
+  const p2 = f.s.state.proposals.p2!;
+  f.s.commit((_st, ids) => [{ type: "proposal.created", actor: agent, payload: { proposal: { ...p2, id: ids.next("proposal"), status: "open" } as never } }]);
+  expect(await spendPlanBudget(f.s, f.sample.deps, "p3", "s3")).toBeNull();
+});

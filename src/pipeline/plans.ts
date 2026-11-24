@@ -148,8 +148,8 @@ export function requestReplan(session: CaseSession, input: { note: string; actor
 }
 
 /**
- * Runs the proposal a costly step raised, once per step (checked from the ledger), with the budget the person gave that step when accepting the plan and in
- * that person's name. Null when the step has no budget, the proposal is not open or not for that step, or the step's budget was used.
+ * Runs the proposal a costly step raised, once per step under this plan's acceptance (checked from the ledger: a proposal.accepted it caused),
+ * with the budget the person gave that step when accepting the plan and in that person's name. Null when the step has no budget, the proposal is not open or not for that step, or the step's budget was used.
  */
 export async function spendPlanBudget(session: CaseSession, deps: RunnerDeps, proposal: string, step: string | null): Promise<RunQueryResult | null> {
   const { plan } = session.state;
@@ -160,8 +160,9 @@ export async function spendPlanBudget(session: CaseSession, deps: RunnerDeps, pr
   if (!accepted.payload.steps.includes(step) || !Object.hasOwn(accepted.payload.budgets, step)) return null;
   const p = Object.hasOwn(session.state.proposals, proposal) ? session.state.proposals[proposal]! : null;
   if (p === null || p.kind !== "costly_query" || p.status !== "open" || p.step !== step) return null;
+  // paid once per step under this acceptance: an earlier plan, or an earlier run, used its own budget, not this one
   const spent = session.entries().some((e) => {
-    if (e.type !== "proposal.accepted") return false;
+    if (e.type !== "proposal.accepted" || e.cause !== accepted.seq) return false;
     const earlier = Object.hasOwn(session.state.proposals, e.payload.proposal) ? session.state.proposals[e.payload.proposal]! : null;
     return earlier !== null && earlier.kind === "costly_query" && earlier.step === step;
   });

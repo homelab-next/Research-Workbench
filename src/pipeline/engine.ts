@@ -8,7 +8,6 @@ import type { Providers, } from "../agents/providers";
 import type { Profile } from "../agents/context";
 import type { Config } from "../modules/config";
 import type { Registry } from "../modules/registry";
-import { runProposal } from "../modules/proposals";
 import type { RunnerDeps, RunQueryResult } from "../modules/runner";
 import type { Seeker } from "../modules/seeker";
 import type { Pipeline, Role, StageManifest } from "./manifests";
