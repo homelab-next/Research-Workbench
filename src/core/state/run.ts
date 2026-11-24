@@ -207,7 +207,7 @@ function applyPipeline(s: CaseState, entry: Entry): CaseState {
     case "run.interrupted":
       return !finished && hasRun(s) ? withRun(s, { status: "interrupted" }) : s;
     case "run.finished": {
-      if (!isOneOf(entry.payload.outcome, RUN_OUTCOMES)) return malformed(s, entry);
+      if (!isOneOf(entry.payload.outcome, RUN_OUTCOMES) || (entry.payload.reason !== undefined && !isStr(entry.payload.reason))) return malformed(s, entry);
       if (finished || !hasRun(s)) return s;
       return withRun(s, { status: "finished", outcome: entry.payload.outcome });
     }

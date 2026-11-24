@@ -25,6 +25,7 @@ const USAGE = [
   "  bun run src/cli/run.ts approve     <case>",
   "  bun run src/cli/run.ts reject      <case> --reason R [--stop]",
   "  bun run src/cli/run.ts resume      <case>",
+  "  bun run src/cli/run.ts stop        <case> --reason R",
   "  bun run src/cli/run.ts feedback    <case> --measure ID --value V [--note N]",
   "  bun run src/cli/run.ts status      <case>",
   "options for every form: --config <file>   --sample-fixture [port]",
@@ -36,7 +37,7 @@ const CASE_ID = /^CASE-[1-9][0-9]{0,8}$/;
 const UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const DEFAULT_PORT = 4801;
 
-type Command = "start" | "accept-plan" | "replan" | "approve" | "reject" | "resume" | "feedback" | "status";
+type Command = "start" | "accept-plan" | "replan" | "approve" | "reject" | "resume" | "stop" | "feedback" | "status";
 interface Spec { values: string[]; repeated: string[]; flags: string[]; required: string[]; case: boolean }
 const SPECS: Record<Command, Spec> = {
   start: { values: ["title", "asked", "why", "from", "to", "objective", "marking"], repeated: ["start"], flags: [], required: ["title", "asked", "why", "start", "from", "to"], case: false },
@@ -45,6 +46,7 @@ const SPECS: Record<Command, Spec> = {
   approve: { values: [], repeated: [], flags: [], required: [], case: true },
   reject: { values: ["reason"], repeated: [], flags: ["stop"], required: ["reason"], case: true },
   resume: { values: [], repeated: [], flags: [], required: [], case: true },
+  stop: { values: ["reason"], repeated: [], flags: [], required: ["reason"], case: true },
   feedback: { values: ["measure", "value", "note"], repeated: [], flags: [], required: ["measure", "value"], case: true },
   status: { values: [], repeated: [], flags: [], required: [], case: true },
 };
@@ -242,6 +244,9 @@ async function main(argv: string[]): Promise<number> {
         break;
       case "resume":
         await engine.resume(human);
+        break;
+      case "stop":
+        engine.stop(human, p.one.reason!);
         break;
       case "feedback": {
         const raw = p.one.value!;

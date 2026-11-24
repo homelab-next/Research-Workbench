@@ -97,7 +97,7 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
   let next = 0;
   const worker = async (): Promise<void> => {
     for (;;) {
-      if (session.state.run.status === "paused") return;
+      if (session.state.run.status === "paused" || session.state.run.status === "finished") return;
       const i = next++;
       if (i >= units.length) return;
       results[i] = await runUnit(units[i]!);

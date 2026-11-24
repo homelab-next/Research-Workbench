@@ -169,3 +169,24 @@ test("a usage error exits 2", () => {
   expect(cli(env, [...START.slice(0, -2), "--marking", "TLP:PURPLE"], false).code).toBe(2);
   expect(cli(env, ["status", "CASE-1", "--config", join(env.dir, "missing.yaml")], false).code).toBe(2);
 });
+
+test("a run a changed pipeline strands can be stopped, and stays stopped", () => {
+  const e = setup();
+  expect(cli(e, START).code).toBe(0);
+  expect(cli(e, ["replan", "CASE-1", "--note", "look at the leases too"]).code).toBe(1);
+  // the owner edits a stage manifest: the paused run can no longer go on
+  const stage = join(e.dir, "sample", "stages", "assemble.yaml");
+  writeFileSync(stage, readFileSync(stage, "utf8").replace("title: Assemble", "title: Assemble the draft"));
+  const stuck = cli(e, ["resume", "CASE-1"]);
+  expect(stuck.code).toBe(1);
+  expect(lines(stuck.out)[0]).toBe(`CASE-1 paused stage=plan reason="the pipeline has changed since this run started"`);
+  expect(cli(e, ["stop", "CASE-1"], false).code).toBe(2);
+  const stop = cli(e, ["stop", "CASE-1", "--reason", "the pipeline was changed"], false);
+  expect(stop.err).toBe("");
+  expect(stop.code).toBe(0);
+  expect(lines(stop.out)[0]).toBe("CASE-1 finished");
+  const again = cli(e, ["stop", "CASE-1", "--reason", "twice"], false);
+  expect(again.code).toBe(1);
+  expect(again.err).toContain("no run in progress");
+  expect(lines(cli(e, ["resume", "CASE-1"]).out)[0]).toBe("CASE-1 finished");
+});

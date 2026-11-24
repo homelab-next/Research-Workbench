@@ -492,3 +492,51 @@ test("denying the plan anchors the case as closed", async () => {
   expect(f.s.state.run.status).toBe("finished");
   expect(anchors).toEqual(["closed"]);
 });
+
+test("a person stops a run a changed pipeline has stranded; the case is anchored closed and a new run may start", async () => {
+  const stall = rig({ frame: async () => ({ kind: "stalled", reason: "wait" }) });
+  stall.engine.start(person);
+  await stall.engine.advance();
+  const changed = { ...depsOf(f.sample), pipeline: { ...depsOf(f.sample).pipeline, hash: "somethingelse" } };
+  const r2 = rig({}, f.s, changed);
+  expect(await r2.engine.resume(person)).toMatchObject({ status: "paused", pause_reason: "the pipeline has changed since this run started" });
+  expect(() => r2.engine.start(person)).toThrow(RunRefused);
+  anchors = [];
+  r2.engine.stop(person, "the stage manifests were edited");
+  expect(f.s.entries().at(-1)).toMatchObject({ type: "run.finished", actor: person, payload: { outcome: "stopped", reason: "the stage manifests were edited" } });
+  expect(r2.engine.summary()).toMatchObject({ status: "finished", outcome: "stopped" });
+  expect(anchors).toEqual(["closed"]);
+  // the new pipeline can now run on the case
+  r2.engine.start(person);
+  expect(await r2.engine.advance()).toMatchObject({ status: "waiting", waiting: "plan" });
+});
+
+test("only a person stops a run, with a reason, and only one in progress; waiting at a gate counts", async () => {
+  const r = rig();
+  expect(() => r.engine.stop(person, "nothing to stop")).toThrow(RunRefused);
+  r.engine.start(person);
+  await r.engine.advance();
+  expect(r.engine.summary().waiting).toBe("plan");
+  const before = types(f.s).length;
+  expect(() => r.engine.stop(planner, "an agent")).toThrow(RunRefused);
+  expect(() => r.engine.stop(person, "  ")).toThrow(RunRefused);
+  expect(types(f.s).length).toBe(before);
+  r.engine.stop(person, "wrong question");
+  expect(f.s.state.run).toMatchObject({ status: "finished", outcome: "stopped" });
+  expect(() => r.engine.stop(person, "again")).toThrow(RunRefused);
+});
+
+test("a run stopped while a stage works goes no further", async () => {
+  const hold = waitFor();
+  const r = rig({ research: async () => { r.log.push("research"); await hold.gate; return PASS; } });
+  r.engine.start(person);
+  await r.engine.advance();
+  acceptPlan(f.s);
+  const driving = r.engine.advance();
+  await Bun.sleep(5);
+  r.engine.stop(person, "enough");
+  hold.release();
+  const sum = await driving;
+  expect(sum).toMatchObject({ status: "finished", outcome: "stopped" });
+  expect(r.log).not.toContain("assemble");
+});

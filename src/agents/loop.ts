@@ -93,7 +93,7 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
   for (let turn = 0; turn < maxTurns; turn++) {
     // 1. stop checks
     const run = session.state.run;
-    if (run.status === "paused") return { kind: "stopped", why: "paused" };
+    if (run.status === "paused" || run.status === "finished") return { kind: "stopped", why: "paused" };
     if (run.budget_tokens !== null) {
       const { usage } = runUsage(session.state);
       if (usage.input + usage.output >= run.budget_tokens) return { kind: "stopped", why: "budget" };
@@ -175,7 +175,7 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     if (result.tool_calls.length > 0) {
       const results: ChatMessage[] = [];
       for (const [i, tc] of result.tool_calls.entries()) {
-        if (i > 0 && session.state.run.status === "paused") return { kind: "stopped", why: "paused" };
+        if (i > 0 && (session.state.run.status === "paused" || session.state.run.status === "finished")) return { kind: "stopped", why: "paused" };
         const name = clip(String(tc.name), NAME_CHARS);
         const parsed = parseCall(spec.tools, name, tc.arguments);
         const why = clip(parsed.why, WHY_CHARS);

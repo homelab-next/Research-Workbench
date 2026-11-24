@@ -109,7 +109,8 @@ export interface Payloads {
   "run.paused": { reason: string };
   "run.resumed": Record<string, never>;
   "run.interrupted": Record<string, never>;
-  "run.finished": { outcome: "published" | "stopped" };
+  /** `reason` is a person's, when they stopped the run with Engine.stop. */
+  "run.finished": { outcome: "published" | "stopped"; reason?: string };
   "stage.model_set": { stage: string; choice: ModelChoice };
   "stage.pack_limit_set": { stage: string; max_marking: Marking | null };
   "stage.started": { stage: string; attempt: number };

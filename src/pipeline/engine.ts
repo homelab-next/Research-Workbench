@@ -110,6 +110,21 @@ export class Engine {
     return running === null ? this.advance({ allow_capped: true }) : running.then(() => this.advance({ allow_capped: true }));
   }
 
+  /**
+   * A person ends the run, whatever it is doing or waiting for: the one way out of a pause nothing else can clear (a pipeline changed since
+   * the run started, say). A stage in flight stops at its next step. The case is anchored as closed.
+   */
+  stop(actor: Actor, reason: string): void {
+    if (actor.kind !== "human") throw new RunRefused("only a person may stop a run");
+    if (typeof reason !== "string" || reason.trim() === "") throw new RunRefused("stopping a run needs a reason");
+    this.session.commit((state) => {
+      const { status } = state.run;
+      if (status === "none" || status === "finished") throw new RunRefused("there is no run in progress to stop");
+      return [{ type: "run.finished", actor, run: state.run.id, payload: { outcome: "stopped", reason } }];
+    });
+    this.anchorCase("closed");
+  }
+
   /** A person accepts the proposed plan, whole or in part, with budgets for its costly steps. Throws PlanRefused; advances nothing. */
   acceptPlan(input: { steps?: string[]; budgets?: Record<string, number>; actor: Actor }): void {
     acceptPlan(this.session, input);
