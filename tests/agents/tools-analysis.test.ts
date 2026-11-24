@@ -121,3 +121,47 @@ test("answer_challenge closes an open challenge and refuses a closed one", async
   const nope = await f.call("answer_challenge", { why: "w", challenge: "x99", answer: "x", action: "rebutted" });
   expect(view(nope).error).toBe("challenge x99 is not open");
 });
+
+test("a discarded card cannot be cited", async () => {
+  f.ctx.draft = new DraftWork(null);
+  f.s.commit(() => [{ type: "card.discarded", actor: person, payload: { card: "c1" } }]);
+  const a = await f.call("propose_assessment", assess());
+  expect(view(a).error).toBe("card c1 was discarded");
+  const n = await f.call("propose_narrative", { why: "w", section: "summary", text: "t", cites: ["c1"] });
+  expect(view(n).error).toBe("card c1 was discarded");
+  expect(f.ctx.draft.findings).toEqual([]);
+});
+
+test("narrative citations are kept in the work", async () => {
+  f.ctx.draft = new DraftWork(null);
+  await f.call("propose_narrative", { why: "w", section: "summary", text: "t", cites: ["c1"] });
+  expect(f.ctx.draft.narrativeCites.summary).toEqual(["c1"]);
+});
+
+test("raise_challenge refuses a hash with no review, and the state holds what was committed", async () => {
+  f.ctx.draft_hash = "0".repeat(64);
+  const r = await f.call("raise_challenge", { why: "w", severity: "consider", text: "t", cites: [] });
+  expect(view(r).error).toBe("no draft is under review in this stage");
+  expect(Object.keys(f.s.state.challenges)).toEqual([]);
+});
+
+test("answer_challenge answers only a challenge against the draft under review", async () => {
+  const hash = reviewable();
+  f.ctx.draft_hash = hash;
+  const id = view(await f.call("raise_challenge", { why: "w", severity: "consider", text: "t", cites: [] })).challenge as string;
+  f.ctx.draft_hash = "1".repeat(64);
+  const r = await f.call("answer_challenge", { why: "w", challenge: id, answer: "a", action: "revised" });
+  expect(view(r).error).toBe(`challenge ${id} is not open`);
+  expect(f.s.state.challenges[id]!.status).toBe("open");
+});
+
+test("text fields need a non-blank character", async () => {
+  f.ctx.draft = new DraftWork(null);
+  expect((await f.call("propose_assessment", assess({ statement: "   " }))).ok).toBe(false);
+  expect((await f.call("propose_assessment", assess({ reasoning: "\n\t" }))).ok).toBe(false);
+  expect((await f.call("propose_narrative", { why: "w", section: "summary", text: " ", cites: [] })).ok).toBe(false);
+  expect((await f.call("request_research", { why: "w", question: "  " })).ok).toBe(false);
+  expect((await f.call("raise_challenge", { why: "w", severity: "consider", text: " ", cites: [] })).ok).toBe(false);
+  expect((await f.call("answer_challenge", { why: "w", challenge: "x1", answer: " ", action: "revised" })).ok).toBe(false);
+  expect(f.ctx.draft.findings).toEqual([]);
+});

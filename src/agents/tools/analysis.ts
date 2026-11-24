@@ -2,7 +2,7 @@ import type { Json } from "../../core/canonical";
 import { ANSWER_ACTIONS, CONFIDENCES, SECTIONS, SEVERITIES } from "../../core/types";
 import type { DraftWork, TextSection } from "../draft";
 import type { ToolContext, ToolDef, ToolResult } from "./index";
-import { params, str, ToolError } from "./kit";
+import { idArg, MAX_TEXT, params, str, ToolError } from "./kit";
 
 const done = (summary: string, view: Json): ToolResult => ({ ok: true, summary, view, marking: null });
 const strings = (v: Json | undefined): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
@@ -16,7 +16,10 @@ function reviewing(ctx: ToolContext): string {
   return ctx.draft_hash;
 }
 function cardsExist(ctx: ToolContext, ids: string[]): void {
-  for (const id of ids) if (!Object.hasOwn(ctx.session.state.cards, id)) throw new ToolError(`unknown card: ${id}`);
+  for (const id of ids) {
+    if (!Object.hasOwn(ctx.session.state.cards, id)) throw new ToolError(`unknown card: ${id}`);
+    if (ctx.session.state.cards[id]!.place === "discarded") throw new ToolError(`card ${id} was discarded`);
+  }
 }
 
 async function proposeAssessment(ctx: ToolContext, a: Record<string, Json>): Promise<ToolResult> {
@@ -32,9 +35,10 @@ async function proposeAssessment(ctx: ToolContext, a: Record<string, Json>): Pro
 
 async function proposeNarrative(ctx: ToolContext, a: Record<string, Json>): Promise<ToolResult> {
   const work = drafting(ctx);
-  cardsExist(ctx, strings(a.cites));
+  const cites = strings(a.cites);
+  cardsExist(ctx, cites);
   const section = str(a.section) as TextSection;
-  work.setSection(section, str(a.text));
+  work.setSection(section, str(a.text), cites);
   return done(`section ${section}`, { section });
 }
 
@@ -49,6 +53,7 @@ async function requestResearch(ctx: ToolContext, a: Record<string, Json>): Promi
 
 async function raiseChallenge(ctx: ToolContext, a: Record<string, Json>): Promise<ToolResult> {
   const hash = reviewing(ctx);
+  if (!Object.hasOwn(ctx.session.state.reviews, hash)) throw new ToolError("no draft is under review in this stage");
   const cites = strings(a.cites);
   cardsExist(ctx, cites);
   let id = "";
@@ -56,26 +61,29 @@ async function raiseChallenge(ctx: ToolContext, a: Record<string, Json>): Promis
     id = ids.next("challenge");
     return [{ type: "challenge.raised", actor: ctx.actor, payload: { challenge: { id, draft_hash: hash, severity: str(a.severity) as "must_address" | "consider", text: str(a.text), cites } } }];
   });
+  if (!Object.hasOwn(ctx.session.state.challenges, id)) throw new ToolError("the challenge was not recorded");
   return done(`challenge ${id}`, { challenge: id });
 }
 
 async function answerChallenge(ctx: ToolContext, a: Record<string, Json>): Promise<ToolResult> {
+  const hash = reviewing(ctx);
   const id = str(a.challenge);
   const c = Object.hasOwn(ctx.session.state.challenges, id) ? ctx.session.state.challenges[id]! : null;
-  if (c === null || c.status !== "open") throw new ToolError(`challenge ${id} is not open`);
+  if (c === null || c.status !== "open" || c.draft_hash !== hash) throw new ToolError(`challenge ${id} is not open`);
   ctx.session.commit(() => [{ type: "challenge.answered", actor: ctx.actor, payload: { challenge: id, answer: str(a.answer), action: str(a.action) as "revised" | "rebutted" } }]);
   return done(`answered ${id}`, { answered: id });
 }
 
-const text = { type: "string", minLength: 1 } as const;
-const cites = { type: "array", items: text, description: "ids of cards" } as const;
+const text = { type: "string", minLength: 1, maxLength: MAX_TEXT, pattern: "\\S" } as const;
+const card = idArg;
+const cites = { type: "array", items: card, description: "ids of cards" } as const;
 const citesOne = { ...cites, minItems: 1 } as const;
 export const ANALYSIS_TOOLS: ToolDef[] = [
   {
     name: "propose_assessment", description: "Propose a finding in the draft, citing the cards that support it. Say how likely it is and how confident you are, and why. Name `replaces` to change one you already proposed.",
     parameters: params({
       statement: text, likelihood: text, confidence: { type: "string", enum: [...CONFIDENCES] }, confidence_basis: text, cites: citesOne,
-      assumptions: { type: "array", items: text }, reasoning: text, replaces: text,
+      assumptions: { type: "array", items: text }, reasoning: text, replaces: card,
     }, ["statement", "likelihood", "confidence", "confidence_basis", "cites", "assumptions", "reasoning"]),
     call: proposeAssessment,
   },
@@ -91,6 +99,6 @@ export const ANALYSIS_TOOLS: ToolDef[] = [
   },
   {
     name: "answer_challenge", description: "Answer an open challenge: say it was revised in the draft or rebut it.",
-    parameters: params({ challenge: text, answer: text, action: { type: "string", enum: [...ANSWER_ACTIONS] } }, ["challenge", "answer", "action"]), call: answerChallenge,
+    parameters: params({ challenge: card, answer: text, action: { type: "string", enum: [...ANSWER_ACTIONS] } }, ["challenge", "answer", "action"]), call: answerChallenge,
   },
 ];

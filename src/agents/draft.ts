@@ -13,6 +13,8 @@ export type TextSection = Exclude<Section, "key_findings">;
 export class DraftWork {
   readonly findings: Finding[];
   readonly sections: Record<TextSection, string>;
+  /** What each section's text cited. Not part of the product: it shows through the product's marking and sources. */
+  readonly narrativeCites: Record<TextSection, string[]> = { summary: [], gaps_and_limits: [], alternatives: [], assessment: [] };
   readonly research: { question: string; why: string }[] = [];
 
   constructor(previous: Product | null) {
@@ -36,8 +38,9 @@ export class DraftWork {
     return id;
   }
 
-  setSection(section: TextSection, text: string): void {
+  setSection(section: TextSection, text: string, cites: string[] = []): void {
     this.sections[section] = text;
+    this.narrativeCites[section] = [...cites];
   }
 }
 
@@ -45,14 +48,22 @@ export function buildProduct(work: DraftWork, facts: {
   objective: string; question: string; case_marking: Marking; cards: Readonly<Record<string, CardState>>;
   source: (id: string) => SourceManifest | null; assumptions: string[]; change: string;
 }): Product {
-  const cited = [...new Set(work.findings.flatMap((f) => f.cites))]
-    .filter((id) => Object.hasOwn(facts.cards, id)).map((id) => facts.cards[id]!);
+  const live = (id: string, what: string): CardState | null => {
+    if (!Object.hasOwn(facts.cards, id)) return null;
+    const c = facts.cards[id]!;
+    if (c.place === "discarded") throw new Error(`${what} cites card ${id}, which was discarded`);
+    return c;
+  };
+  const found = new Map<string, CardState>();
+  for (const f of work.findings) for (const id of f.cites) { const c = live(id, `finding ${f.id}`); if (c !== null) found.set(id, c); }
+  for (const [section, ids] of Object.entries(work.narrativeCites)) for (const id of ids) { const c = live(id, `section ${section}`); if (c !== null) found.set(id, c); }
+  const cited = [...found.values()];
   const sources: Product["sources"] = [];
   for (const id of [...new Set(cited.flatMap((c) => (c.source === null ? [] : [c.source])))].sort()) {
     const m = facts.source(id);
-    if (m === null) continue;
-    const named = new Set(cited.filter((c) => c.source === id).flatMap((c) => c.quality_notes));
-    const notes = m.quality_notes.filter((n) => named.has(n.id)).map((n) => n.text);
+    if (m === null) { sources.push({ source: id, quality: "source manifest not loaded" }); continue; }
+    const named = [...new Set(cited.filter((c) => c.source === id).flatMap((c) => c.quality_notes))];
+    const notes = named.map((nid) => m.quality_notes.find((n) => n.id === nid)?.text ?? `${nid} (note no longer in the source manifest)`);
     sources.push({ source: id, quality: [m.quality, ...notes].join(" ") });
   }
   return {

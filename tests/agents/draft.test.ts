@@ -90,3 +90,34 @@ test("the same work and facts always give the same hash", () => {
   const p: Product = buildProduct(new DraftWork(null), facts({}));
   expect(draftOf(p, 1, analyst, "r").hash).not.toBe(draftOf({ ...p, summary: "changed" }, 1, analyst, "r").hash);
 });
+
+test("a finding carried over that cites a card since discarded refuses the build, naming the finding", () => {
+  const w = new DraftWork(null);
+  w.setFinding(f("a", ["c1"]), null);
+  const prev = buildProduct(w, facts({ c1: card("c1", "dns", "TLP:GREEN") }));
+  const gone = { ...card("c1", "dns", "TLP:GREEN"), place: "discarded" } as unknown as CardState;
+  expect(() => buildProduct(new DraftWork(prev), facts({ c1: gone }))).toThrow(/f1.*c1.*discarded/);
+});
+
+test("a narrative's citations count toward the product's marking and sources", () => {
+  const w = new DraftWork(null);
+  w.setFinding(f("a", ["c1"]), null);
+  w.setSection("summary", "text", ["c2"]);
+  const cards = { c1: card("c1", "assets", "TLP:GREEN"), c2: card("c2", "dns", "TLP:AMBER", ["n1"]) };
+  const p = buildProduct(w, facts(cards));
+  expect(p.marking).toBe("TLP:AMBER");
+  expect(p.sources).toEqual([{ source: "assets", quality: "fair" }, { source: "dns", quality: "good duplicated" }]);
+  expect(Object.keys(p)).not.toContain("cites");
+  const gone = { ...cards.c2, place: "discarded" } as unknown as CardState;
+  expect(() => buildProduct(w, facts({ ...cards, c2: gone }))).toThrow(/summary.*c2.*discarded/);
+});
+
+test("a missing source manifest and a missing quality note are shown, not dropped", () => {
+  const w = new DraftWork(null);
+  w.setFinding(f("a", ["c1", "c2"]), null);
+  const cards = { c1: card("c1", "gone", "TLP:GREEN"), c2: card("c2", "dns", "TLP:GREEN", ["n1", "n9"]) };
+  expect(buildProduct(w, facts(cards)).sources).toEqual([
+    { source: "dns", quality: "good duplicated n9 (note no longer in the source manifest)" },
+    { source: "gone", quality: "source manifest not loaded" },
+  ]);
+});
