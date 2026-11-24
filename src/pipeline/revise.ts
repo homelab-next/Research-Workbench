@@ -65,7 +65,7 @@ export function reviseDraft(session: CaseSession, pipeline: Pipeline, input: { p
     // ...nor below the case's, nor below any card the edited draft cites
     const carried = carriedCites(latest, product, state.cards);
     const cited = citedBy(product, carried).filter((id) => Object.hasOwn(state.cards, id));
-    const lowest = strictest("TLP:CLEAR", ...(latest === null ? [] : [latest.product.marking]), ...(state.meta === null ? [] : [state.meta.marking]), ...cited.map((id) => state.cards[id]!.marking));
+    const lowest = strictest(...(latest === null ? [] : [latest.product.marking]), ...(state.meta === null ? [] : [state.meta.marking]), ...cited.map((id) => state.cards[id]!.marking));
     const marking = strictest(product.marking, lowest);
     const lowered = marking !== product.marking;
     const floor = lowered ? { ...product, marking } : product;
