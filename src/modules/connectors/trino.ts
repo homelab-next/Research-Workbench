@@ -1,7 +1,7 @@
 import type { Json } from "../../core/canonical";
 import type { Cost } from "../../core/types";
 import type { SourceManifest } from "../manifests";
-import { assertReadOnly, checkGuardrails, GuardError, stripForAnalysis, tablePattern } from "../sqlguard";
+import { assertReadOnly, checkGuardedShape, checkGuardrails, GuardError } from "../sqlguard";
 import type { TableGuard } from "../sqlguard";
 import { effectiveBound, PLACEHOLDER } from "./placeholders";
 import { assertNoEcho, CONTROL, isUtcTimestamp, loadCredential, parseBase, readCapped, refuseOwnServer, scrub, TimedOut, TooBig, UTC_MS } from "./shared";
@@ -56,21 +56,16 @@ export class TrinoConnector implements Connector {
 
   render(req: QueryRequest): string {
     const guards = this.guards();
-    if (req.window.from === null) {
-      const s = stripForAnalysis(req.text);
-      for (const g of guards) {
-        if (tablePattern(g.table).test(s)) {
-          throw new GuardError(["a guarded table needs a bounded window"]);
-        }
-      }
-    }
     const bound = effectiveBound(req);
     const sql = req.text.replace(PLACEHOLDER, (_m, n: string) => {
       if (!Object.hasOwn(bound, n)) throw new ConnectorError(`no value is bound for placeholder {${n}}`);
       return renderLiteral(n, bound[n] ?? null);
     });
     assertReadOnly(sql);
-    const violations = checkGuardrails(sql, guards);
+    const window = req.window.from === null || req.window.to === null
+      ? null
+      : { from: renderLiteral("window.from", req.window.from), to: renderLiteral("window.to", req.window.to) };
+    const violations = [...checkGuardedShape(sql, guards, window), ...checkGuardrails(sql, guards)];
     if (violations.length > 0) throw new GuardError(violations);
     return sql;
   }

@@ -319,7 +319,7 @@ test("differing hashes add the partial note", async () => {
 test("a trino text that rendering would change is not re-run", async () => {
   trino.on(/iceberg\.s\.events/, { columns: ["a"], pages: [[["x"]]] });
   const w: TimeWindow = { from: "2026-11-20T00:00:00.000Z", to: "2026-11-23T00:00:00.000Z" };
-  const r1 = await runQuery(s, deps, { source: "lake", text: "select a from iceberg.s.events where ts >= {window.from} and a <> {value}", bound: { value: "{window.to}" }, window: w, why: "w", actor: human });
+  const r1 = await runQuery(s, deps, { source: "lake", text: "select a from iceberg.s.events where ts >= {window.from} and ts < {window.to} and a <> {value}", bound: { value: "{window.to}" }, window: w, why: "w", actor: human });
   expect(r1.status).toBe("done");
   const before = trino.statements.length;
   const r = await v();

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { GuardError, assertReadOnly, checkGuardrails, stripForAnalysis, type TableGuard } from "../../src/modules/sqlguard";
+import { GuardError, assertReadOnly, checkGuardedShape, checkGuardrails, stripForAnalysis, type TableGuard } from "../../src/modules/sqlguard";
 
 test.each([
   "select 1",
@@ -110,4 +110,58 @@ test("the table name matches case-insensitively and when quoted", () => {
 });
 test("stripForAnalysis removes comments and empties literals", () => {
   expect(stripForAnalysis("SELECT 'a;b' -- x\n FROM t /* y */")).toBe("select '' from t");
+});
+
+const gs: TableGuard[] = [{ table: "lake.archive.events", time_column: "event_time", large_columns: ["raw_line"] }];
+const lit = { from: "TIMESTAMP '2026-11-20 00:00:00.000 UTC'", to: "TIMESTAMP '2026-11-23 00:00:00.000 UTC'" };
+const head = `from lake.archive.events where event_time >= ${lit.from} and event_time < ${lit.to}`;
+
+test.each([
+  `select host_id, count(*) c ${head} group by host_id order by c desc limit 50`,
+  `select a ${head}`,
+  `select a ${head} and a = 'x or y join z with w'`,
+  `select e.a from lake.archive.events e where e.event_time >= ${lit.from} and e.event_time < ${lit.to} and e.a in ('x', 'y') limit 5`,
+  `select e.a from lake.archive.events as e where e.event_time >= ${lit.from} and e.event_time < ${lit.to}`,
+  `EXPLAIN (TYPE IO, FORMAT JSON) select a ${head} limit 5`,
+  "describe lake.archive.events",
+  "show columns from lake.archive.events",
+  "select * from other join third on 1 = 1 or 2 = 2",
+])("the guarded shape allows: %s", (sql) => { expect(checkGuardedShape(sql, gs, lit)).toEqual([]); });
+
+test.each([
+  [`select a ${head} and a = 1 or 1 = 1`, "or are not allowed"],
+  [`select a from lake.archive.events e join other o on e.k = o.k where o.event_time >= ${lit.from} and o.event_time < ${lit.to}`, "join"],
+  [`select a ${head} union all select a from other`, "union"],
+  [`with x as (select a ${head}) select a from x`, "with"],
+  [`select a from lake.archive.events where a = 1 and event_time >= ${lit.from} and event_time < ${lit.to}`, "must begin with event_time"],
+  [`select a from lake.archive.events where event_time >= ${lit.from}`, "must begin with event_time"],
+  [`select a from lake.archive.events where event_time >= TIMESTAMP '2020-01-01 00:00:00.000 UTC' and event_time < ${lit.to}`, "must begin with event_time"],
+  [`select a from lake.archive.events where event_time > now() - interval '1' day`, "must begin with event_time"],
+  [`select a from lake.archive.events where not (event_time >= ${lit.from} and event_time < ${lit.to})`, "must begin with event_time"],
+  [`select a from lake.archive.events, other where event_time >= ${lit.from} and event_time < ${lit.to}`, "must begin with event_time"],
+  [`select a as "event_time >= x" from lake.archive.events`, "must begin with event_time"],
+  [`select a ${head} and b in (select b from lake.archive.events)`, "names it once"],
+  [`select extract(hour from event_time) ${head}`, "names it once"],
+  ['select a from "lake"."archive"."events$partitions"', "metadata tables"],
+  ["select a from lake.archive.events$files", "metadata tables"],
+  ["show stats for lake.archive.events", "names it once"],
+  // comments and further statements cannot carry a rule across, and a quoted alias is not the column
+  [`select a from lake.archive.events /* where event_time >= ${lit.from} and event_time < ${lit.to} */`, "must begin with event_time"],
+  [`select a from lake.archive.events -- ${head}\n`, "must begin with event_time"],
+  [`select a from lake.archive.events where "event_time" >= ${lit.from} and event_time < ${lit.to}`, "must begin with event_time"],
+  [`select a from lake.archive.events where event_time >= ${lit.from} and event_time < ${lit.to} + interval '1' year`, "must begin with event_time"],
+  [`select a from lake.archive.events where event_time >= ${lit.from} and event_time < ${lit.to} intersect select a from other`, "intersect"],
+  [`select a from lake.archive.events where event_time >= ${lit.from} and event_time < ${lit.to} except select a from other`, "except"],
+  [`select a from lake.archive.events where event_time >= ${lit.from} and event_time < ${lit.to} and b in (select b from other)`, "names it once"],
+])("the guarded shape refuses: %s", (sql, why) => { expect(checkGuardedShape(sql, gs, lit).join(" ")).toContain(why); });
+
+test("an open window is refused on a guarded table and ignored on any other", () => {
+  expect(checkGuardedShape(`select a ${head}`, gs, null)).toEqual(["a guarded table needs a bounded window"]);
+  expect(checkGuardedShape("select a from other", gs, null)).toEqual([]);
+});
+test("a quoted alias is not a limit", () => {
+  expect(checkGuardrails(`select a as "limit" ${head} order by a`, gs).join(" ")).toContain("a sort needs a limit");
+});
+test("a quoted alias is not a time filter", () => {
+  expect(checkGuardrails('select a as "event_time >= x" from lake.archive.events', gs).join(" ")).toContain("needs a time filter");
 });

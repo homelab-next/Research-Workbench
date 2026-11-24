@@ -23,6 +23,15 @@ interface Scan {
   kept: string;
   /** Things the scanner cannot read safely, found outside literals and comments. */
   violations: string[];
+  /**
+   * Lower-cased, comments removed, whitespace collapsed; each string literal is a numbered marker (\u0003n\u0003) and each quoted
+   * identifier a different one (\u0002n\u0002), so no word inside either can be read as syntax.
+   */
+  marked: string;
+  /** The bodies of the string literals, as written, by marker number. */
+  literals: string[];
+  /** The bodies of the quoted identifiers, lower-cased, by marker number. */
+  quoted: string[];
 }
 
 /**
@@ -33,6 +42,9 @@ interface Scan {
 function scan(sql: string): Scan {
   let out = "";
   let kept = "";
+  let marked = "";
+  const literals: string[] = [];
+  const quoted: string[] = [];
   const violations: string[] = [];
   const flag = (v: string): void => { if (!violations.includes(v)) violations.push(v); };
   let i = 0;
@@ -53,27 +65,32 @@ function scan(sql: string): Scan {
         j++;
       }
       out += c === "'" ? "''" : body;
+      if (c === "'") { marked += `\u0003${literals.length}\u0003`; literals.push(body); }
+      else { marked += `\u0002${quoted.length}\u0002`; quoted.push(body.toLowerCase()); }
       kept += sql.slice(i, j);
       i = j;
     } else if (c === "-" && sql[i + 1] === "-") {
       const e = sql.indexOf("\n", i);
       out += " ";
       kept += " ";
+      marked += " ";
       i = e === -1 ? n : e + 1;
     } else if (c === "/" && sql[i + 1] === "*") {
       const e = sql.indexOf("*/", i + 2);
       out += " ";
       kept += " ";
+      marked += " ";
       i = e === -1 ? n : e + 2;
     } else {
       if (c === "`") flag("backtick identifiers are not allowed");
       else if (c === "[" && !(i > 0 && /[\w$)\]"]/.test(sql[i - 1]!))) flag("bracket identifiers are not allowed");
       out += c;
       kept += c;
+      marked += c;
       i++;
     }
   }
-  return { stripped: out.toLowerCase().replace(/\s+/g, " ").trim(), kept, violations };
+  return { stripped: out.toLowerCase().replace(/\s+/g, " ").trim(), kept, violations, marked: marked.toLowerCase().replace(/\s+/g, " ").trim(), literals, quoted };
 }
 
 /**
@@ -125,8 +142,8 @@ export function assertReadOnly(sql: string): void {
 const escapeRe = (x: string): string => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** Matches a mention of `table` (dotted parts may be spaced) in text from stripForAnalysis. The one pattern for a guarded table. */
-export function tablePattern(table: string): RegExp {
-  return new RegExp(`(?<![\\w$])${table.toLowerCase().split(".").map(escapeRe).join("\\s*\\.\\s*")}(?![\\w$])`);
+export function tablePattern(table: string, metadata = false): RegExp {
+  return new RegExp(`(?<![\\w$])${table.toLowerCase().split(".").map(escapeRe).join("\\s*\\.\\s*")}${metadata ? "\\$" : "(?![\\w$])"}`);
 }
 
 const SELECT_STAR = /(?:\b(?:select|distinct|all)\s+|,\s*)\*(?=\s*(?:,|from\b|$))|[\w$]\.\*/;
@@ -155,8 +172,10 @@ function blankWindows(s: string): string {
 
 /** Plain-language guardrail violations for queries touching guarded tables; empty means allowed. */
 export function checkGuardrails(sql: string, guards: TableGuard[]): string[] {
-  const { stripped: s, kept } = scan(sql);
-  const noWindows = blankWindows(s);
+  const { stripped: s, kept, marked } = scan(sql);
+  // A quoted identifier or a literal is never a keyword or a column: the time-filter and sort tests read text with both blanked.
+  const blanked = marked.replace(/\u0002\d+\u0002/g, '"q"').replace(/\u0003\d+\u0003/g, "''");
+  const noWindows = blankWindows(blanked);
   const violations: string[] = [];
   const add = (v: string): void => { if (!violations.includes(v)) violations.push(v); };
 
@@ -167,15 +186,121 @@ export function checkGuardrails(sql: string, guards: TableGuard[]): string[] {
     if (g.time_column !== null) {
       const col = escapeRe(g.time_column.toLowerCase());
       const cmp = new RegExp(`(?<![\\w$])${col}\\s*(?:>=?|<(?!>)=?|=|between\\b)|[<>=]\\s*(?:[\\w$]+\\.)?${col}(?![\\w$])`);
-      if (!cmp.test(s)) add(`needs a time filter on ${g.time_column}`);
+      if (!cmp.test(blanked)) add(`needs a time filter on ${g.time_column}`);
     }
     if (SELECT_STAR.test(s)) add(`select * is not allowed on ${g.table}; name the columns`);
     if (/\bcount\s*\(\s*distinct\b/.test(s)) add("exact distinct counts are not allowed; use approx_distinct");
-    if (/\border\s+by\b/.test(noWindows) && !/\blimit\b|\bfetch\s+first\b/.test(s)) add("a sort needs a limit");
+    if (/\border\s+by\b/.test(noWindows) && !/\blimit\b|\bfetch\s+first\b/.test(blanked)) add("a sort needs a limit");
     // Literals are emptied in the stripped text, so read the comment-free text with literals kept.
     for (const m of kept.matchAll(TS_LITERAL)) {
       if (!ZONED.test(m[1]!.trim())) { add("time literals need an explicit time zone"); break; }
     }
   }
   return violations;
+}
+
+export interface WindowLiterals { from: string; to: string }
+
+type Tok = { k: "w" | "q" | "s" | "p"; v: string };
+const TOKEN = /\u0002(\d+)\u0002|\u0003(\d+)\u0003|[\w$]+|>=|<=|<>|!=|[^\s]/g;
+const BANNED_WORDS = new Set(["join", "union", "intersect", "except", "with", "or"]);
+const SHAPE_ENDS = new Set(["and", "group", "having", "order", "limit", "offset", "fetch"]);
+const NOT_ALIAS = new Set(["where", "group", "having", "order", "limit", "offset", "fetch", "on", "using", "cross", "inner", "left", "right", "full", "natural", "tablesample"]);
+
+function tokens(marked: string, scanned: Scan): Tok[] {
+  const out: Tok[] = [];
+  for (const m of marked.matchAll(TOKEN)) {
+    if (m[1] !== undefined) out.push({ k: "q", v: scanned.quoted[Number(m[1])]! });
+    else if (m[2] !== undefined) out.push({ k: "s", v: scanned.literals[Number(m[2])]! });
+    else out.push({ k: /^[\w$]/.test(m[0]) ? "w" : "p", v: m[0] });
+  }
+  return out;
+}
+
+/** The body of a rendered window literal, TIMESTAMP '<body>'. */
+function literalBody(l: string): string | null {
+  return /^TIMESTAMP '(.*)'$/s.exec(l)?.[1] ?? null;
+}
+
+/**
+ * The shape a statement that names a guarded table must have: one select over that table alone, whose where clause begins with
+ * the time column compared to exactly the request's two window literals. Anything else is refused. Empty means allowed.
+ */
+export function checkGuardedShape(sql: string, guards: TableGuard[], window: WindowLiterals | null): string[] {
+  const scanned = scan(sql);
+  const stripped = scanned.stripped.replace(EXPLAIN_PREFIX, "");
+  let marked = scanned.marked;
+  if (scanned.marked.startsWith("explain")) marked = scanned.marked.replace(EXPLAIN_PREFIX, "");
+  marked = marked.replace(/[\s;]+$/, "");
+  const violations: string[] = [];
+  const add = (v: string): void => { if (!violations.includes(v)) violations.push(v); };
+  for (const g of guards) {
+    const table = g.table.toLowerCase();
+    const re = tablePattern(table);
+    const meta = tablePattern(table, true);
+    if (!re.test(stripped) && !meta.test(stripped)) continue;
+    if (window === null) { add("a guarded table needs a bounded window"); continue; }
+    const body = stripped.replace(/[\s;]+$/, "");
+    if (new RegExp(`^(?:describe|desc|show\\s+columns\\s+from)\\s+${re.source}$`).test(body)) continue;
+    if (meta.test(stripped)) { add("metadata tables of a guarded table are not queried"); continue; }
+    const toks = tokens(marked, scanned);
+    const words = (w: string): number => toks.filter(t => t.k === "w" && t.v === w).length;
+    const mentions = [...stripped.matchAll(new RegExp(re.source, "g"))].length;
+    if (mentions !== 1 || words("select") !== 1 || words("from") !== 1) add("a query on a guarded table names it once, in one select with one from");
+    if (toks.some(t => t.k === "w" && BANNED_WORDS.has(t.v))) add("join, union, intersect, except, with and or are not allowed on a guarded table");
+    const clause = `the where clause must begin with ${g.time_column} >= {window.from} and ${g.time_column} < {window.to}`;
+    if (!whereShape(toks, table, g.time_column, window)) add(clause);
+  }
+  return violations;
+}
+
+/** After the single from: the table, an optional alias, where, and the two comparisons against the window's own literals. */
+function whereShape(toks: Tok[], table: string, timeColumn: string | null, window: WindowLiterals): boolean {
+  let i = toks.findIndex(t => t.k === "w" && t.v === "from") + 1;
+  if (i === 0) return false;
+  const ident = (): string | null => {
+    const t = toks[i];
+    if (t === undefined || (t.k !== "w" && t.k !== "q")) return null;
+    i++;
+    return t.v;
+  };
+  const parts: string[] = [];
+  for (;;) {
+    const p = ident();
+    if (p === null) return false;
+    parts.push(p);
+    if (toks[i]?.k === "p" && toks[i]!.v === ".") { i++; continue; }
+    break;
+  }
+  if (parts.join(".") !== table) return false;
+  let alias: string | null = null;
+  if (toks[i]?.k === "w" && toks[i]!.v === "as") i++;
+  else if (!(toks[i]?.k === "w" && toks[i]!.v === "where")) {
+    if (toks[i]?.k !== "w" || NOT_ALIAS.has(toks[i]!.v)) return false;
+  }
+  if (toks[i]?.k === "w" && toks[i]!.v !== "where") { alias = toks[i]!.v; i++; }
+  if (!(toks[i]?.k === "w" && toks[i]!.v === "where")) return false;
+  i++;
+  if (timeColumn === null) return true;
+  const col = (): boolean => {
+    if (alias !== null) {
+      if (!(toks[i]?.k === "w" && toks[i]!.v === alias && toks[i + 1]?.k === "p" && toks[i + 1]!.v === ".")) return false;
+      i += 2;
+    }
+    if (!(toks[i]?.k === "w" && toks[i]!.v === timeColumn.toLowerCase())) return false;
+    i++;
+    return true;
+  };
+  const op = (o: string): boolean => (toks[i]?.v === o && toks[i]?.k === "p" ? (i++, true) : false);
+  const lit = (l: string): boolean => {
+    const want = literalBody(l);
+    if (want === null || !(toks[i]?.k === "w" && toks[i]!.v === "timestamp") || toks[i + 1]?.k !== "s" || toks[i + 1]!.v !== want) return false;
+    i += 2;
+    return true;
+  };
+  if (!(col() && op(">=") && lit(window.from) && toks[i]?.k === "w" && toks[i]!.v === "and")) return false;
+  i++;
+  if (!(col() && op("<") && lit(window.to))) return false;
+  const next = toks[i];
+  return next === undefined || (next.k === "w" && SHAPE_ENDS.has(next.v));
 }

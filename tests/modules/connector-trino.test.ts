@@ -76,13 +76,13 @@ test("non-finite numbers and malformed window values are refused", () => {
 });
 
 test("render fills placeholders with literals", () => {
-  expect(c.render(req("select a from iceberg.s.events where host = {value} and ts >= {window.from} and ts < {window.to} limit 5", { value: "ws-17" })))
-    .toBe("select a from iceberg.s.events where host = 'ws-17' and ts >= TIMESTAMP '2026-11-20 00:00:00.000 UTC' and ts < TIMESTAMP '2026-11-23 00:00:00.000 UTC' limit 5");
+  expect(c.render(req("select a from iceberg.s.events where ts >= {window.from} and ts < {window.to} and host = {value} limit 5", { value: "ws-17" })))
+    .toBe("select a from iceberg.s.events where ts >= TIMESTAMP '2026-11-20 00:00:00.000 UTC' and ts < TIMESTAMP '2026-11-23 00:00:00.000 UTC' and host = 'ws-17' limit 5");
 });
 
 test("a value cannot break out of its literal", () => {
-  const out = c.render(req("select a from iceberg.s.events where host = {value} and ts >= {window.from} limit 5", { value: "x' or 1=1 --" }));
-  expect(out).toContain("host = 'x'' or 1=1 --' and");
+  const out = c.render(req("select a from iceberg.s.events where ts >= {window.from} and ts < {window.to} and host = {value} limit 5", { value: "x' or 1=1 --" }));
+  expect(out).toContain("host = 'x'' or 1=1 --' limit");
   expect(() => c.render(req("select a from iceberg.s.events where host = {value} and ts >= {window.from}", {}))).toThrow(ConnectorError);
 });
 
@@ -112,7 +112,7 @@ test("a guardrail violation is refused with every reason", async () => {
     throw new Error("should have thrown");
   } catch (e) {
     expect(e).toBeInstanceOf(GuardError);
-    expect((e as GuardError).violations).toHaveLength(2);
+    expect((e as GuardError).violations).toHaveLength(3);
   }
   await expect(c.run(q)).rejects.toThrow(GuardError);
   expect(t.statements).toHaveLength(0);
@@ -474,4 +474,20 @@ test("an engine error after rows have arrived is partial coverage with reason so
   expect(pages).toHaveLength(3);
   expect(pages[2]!.error!.message).toBe("worker lost");
   expect(deletes(s2.hits)).toEqual([]);
+});
+
+test("render refuses a guarded query whose time filter is not the request's window, and sends nothing", async () => {
+  const fixed = "select a from iceberg.s.events where ts >= TIMESTAMP '2020-01-01 00:00:00.000 UTC' and ts < {window.to} limit 5";
+  expect(() => c.render(req(fixed))).toThrow(GuardError);
+  expect(() => c.render(req("select a from iceberg.s.events where ts >= {window.from} and ts < {window.to} or 1 = 1"))).toThrow(GuardError);
+  expect(() => c.render(req(TEXT, {}, { from: win.from, to: null }))).toThrow(GuardError);
+  expect(t.statements).toEqual([]);
+});
+test("rendered SQL renders to itself under its own window, and is refused under another", () => {
+  const sql = c.render(req(TEXT));
+  expect(c.render(req(sql))).toBe(sql);
+  expect(() => c.render(req(sql, {}, { from: "2026-11-21T00:00:00.000Z", to: win.to }))).toThrow(GuardError);
+});
+test("the estimate request of a conforming query still renders", () => {
+  expect(c.render(c.estimateRequest(req(TEXT))!)).toStartWith("EXPLAIN (TYPE IO, FORMAT JSON) select a from iceberg.s.events where ts >= TIMESTAMP '2026-11-20 00:00:00.000 UTC'");
 });
