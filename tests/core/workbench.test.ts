@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { verifyLedger } from "../../src/core/verify";
@@ -122,6 +122,22 @@ test("the in-process refusal names this process", () => {
   } catch (err) {
     expect(err).toBeInstanceOf(WorkbenchLockedError);
     expect((err as WorkbenchLockedError).pid).toBe(process.pid);
+  }
+});
+
+test("a second open through a symlink to the held directory is refused at once, as the same directory", () => {
+  const link = join(mkdtempSync(join(tmpdir(), "wb-link-")), "data");
+  symlinkSync(dir, link);
+  try {
+    const started = Date.now();
+    let err: unknown;
+    try { Workbench.open(link, { onError }).close(); } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(WorkbenchLockedError);
+    // the in-process check knows the directory without contending for the file lock (which retries for 100 ms)
+    expect(Date.now() - started).toBeLessThan(60);
+    expect(Bun.spawnSync(["bun", "run", "tests/helpers/open-workbench.ts", dir]).exitCode).toBe(3);
+  } finally {
+    rmSync(join(link, ".."), { recursive: true, force: true });
   }
 });
 

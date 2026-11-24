@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { BlobStore } from "./blobs";
 import { ignoreThrow, logToStderr } from "./deliver";
 import { Ledger } from "./ledger";
@@ -57,6 +57,11 @@ const HOLDER = /\[workbench lock holder pid=([1-9][0-9]{0,9})\]/g;
  */
 const heldLocks = new Set<string>();
 
+/** The lock file's path by where the data directory really is, so a symlink to a held directory names the same lock. The directory must exist. */
+function lockKeyOf(dataDir: string): string {
+  return join(realpathSync(dataDir), LOCK_FILE);
+}
+
 /**
  * One writer process per data directory. The operating system holds the lock: `<dataDir>/workbench.lock.sqlite`
  * is opened with locking_mode = EXCLUSIVE and a zero busy timeout, and a write takes the exclusive lock,
@@ -65,9 +70,8 @@ const heldLocks = new Set<string>();
  * resolves openers racing each other). The lock goes when the holder closes it or dies for any reason,
  * so there is no stale state and nothing to take over.
  */
-function acquireLock(dataDir: string): Database {
-  const path = join(dataDir, LOCK_FILE);
-  if (heldLocks.has(resolve(path))) throw new WorkbenchLockedError(dataDir, process.pid);
+function acquireLock(dataDir: string, path: string): Database {
+  if (heldLocks.has(path)) throw new WorkbenchLockedError(dataDir, process.pid);
   const deadline = Date.now() + LOCK_RETRY_MS;
   for (;;) {
     const db = new Database(path, { create: true });
@@ -80,7 +84,7 @@ function acquireLock(dataDir: string): Database {
       db.exec("CREATE TABLE IF NOT EXISTS holder (id INTEGER PRIMARY KEY CHECK (id = 1), pid TEXT NOT NULL)");
       db.query("INSERT OR REPLACE INTO holder (id, pid) VALUES (1, ?)").run(holderText(process.pid));
       db.exec("COMMIT");
-      heldLocks.add(resolve(path));
+      heldLocks.add(path);
       return db;
     } catch (err) {
       db.close();
@@ -146,8 +150,8 @@ export class Workbench {
     if (typeof dataDir !== "string" || dataDir === "") throw new TypeError("dataDir must be a non-empty string");
     const onError: ErrorHandler = opts.onError ?? logToStderr("workbench");
     mkdirSync(dataDir, { recursive: true });
-    const lock = acquireLock(dataDir);
-    const held = resolve(dataDir, LOCK_FILE);
+    const held = lockKeyOf(dataDir);
+    const lock = acquireLock(dataDir, held);
     try {
       mkdirSync(join(dataDir, "cases"), { recursive: true });
       mkdirSync(join(dataDir, "blobs"), { recursive: true });

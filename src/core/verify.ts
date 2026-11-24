@@ -7,7 +7,7 @@ import type { Json } from "./canonical";
 import { GENESIS } from "./hash";
 import { checkRow } from "./ledger";
 import type { LedgerRow, RowFault } from "./ledger";
-import { BLOB_FIELDS } from "./types";
+import { BLOB_FIELDS, blobFieldNullable } from "./types";
 
 export interface VerifyReport {
   ok: boolean;
@@ -18,7 +18,7 @@ export interface VerifyReport {
   blobs: {
     /** Distinct blobs referenced at the positions BLOB_FIELDS defines. */
     referenced: number;
-    /** Each missing or corrupt blob, with the first entry that references it, and each malformed reference (its value as compact JSON, cut to 80 characters) with its entry. In entry order. */
+    /** Each missing or corrupt blob, with the first entry that references it, and each malformed reference (its value as compact JSON, cut to 80 characters, or `<field>: absent` for a required position that is missing) with its entry. In entry order. */
     bad: { blob: string; state: "missing" | "corrupt" | "malformed"; seq: number }[];
     /** Values shaped like a blob reference anywhere else (source rows, tool arguments...). Counted, never checked, never a failure. */
     lookalikes: number;
@@ -37,9 +37,11 @@ function scanPayload(type: string, payload: Json): { refs: string[]; malformed: 
   const malformed: string[] = [];
   let lookalikes = 0;
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return { refs, malformed, lookalikes: collectBlobRefs(payload).length };
+  // A position that may not hold null and is missing is a result with nothing behind it.
+  for (const field of fields) if (!Object.hasOwn(payload, field) && !blobFieldNullable(type, field)) malformed.push(`${field}: absent`);
   for (const [key, value] of Object.entries(payload)) {
     if (fields.includes(key)) {
-      if (value === null) continue;
+      if (value === null && blobFieldNullable(type, key)) continue;
       if (isBlobRef(value)) refs.push(value.blob);
       else malformed.push(JSON.stringify(value).slice(0, 80));
     } else {

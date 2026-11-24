@@ -446,3 +446,15 @@ test("a damaged row is reported once however often it is read", () => {
   expect(errors).toEqual([2]);
   l.close();
 });
+
+// ---------- final review: a required blob position must hold a reference ----------
+test("a required blob position that is absent or null is refused; a nullable one may be absent", () => {
+  const l = open(tmp());
+  const { result: _result, ...noResult } = validResult;
+  expect(() => l.append({ type: "query.result", actor: runner, payload: noResult as never })).toThrow(/query\.result: result is required/);
+  expect(() => l.append({ type: "query.result", actor: runner, payload: { ...validResult, result: null as never } })).toThrow(/query\.result: result must be a blob reference/);
+  expect(l.head().seq).toBe(0);
+  const { output: _output, ...noOutput } = { stage: "plan", attempt: 1, outcome: "pass" as const, draft_hash: "h1", output: null, reason: null };
+  expect(l.append({ type: "stage.finished", actor: human, payload: noOutput as never }).seq).toBe(1);
+  l.close();
+});

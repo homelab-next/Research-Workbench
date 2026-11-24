@@ -117,7 +117,7 @@ function applyQuery(s: CaseState, entry: Entry): CaseState {
     }
     case "verify.run": {
       const { original, rerun, card, outcome, detail } = entry.payload;
-      if (!isStr(original) || !isStr(rerun) || !isStr(card) || !isOneOf(outcome, VERIFY_OUTCOMES) || !isStr(detail)) return malformed(s, entry);
+      if (!isStr(original) || !isStrOrNull(rerun) || !isStr(card) || !isOneOf(outcome, VERIFY_OUTCOMES) || !isStr(detail)) return malformed(s, entry);
       if (!has(s.cards, card)) return s;
       return { ...s, cards: { ...s.cards, [card]: { ...s.cards[card]!, validated: { outcome, detail, seq: entry.seq, ts: entry.ts } } } };
     }

@@ -4,7 +4,7 @@ import { canonical, isPlainObject, parseJson } from "./canonical";
 import type { Json } from "./canonical";
 import { Delivery, ignoreThrow, logToStderr } from "./deliver";
 import { GENESIS, sha256Hex } from "./hash";
-import { BLOB_FIELDS, isActor, isEntryType } from "./types";
+import { BLOB_FIELDS, blobFieldNullable, isActor, isEntryType } from "./types";
 import type { Actor, Entry, EntryInput } from "./types";
 
 export class LedgerCaseMismatchError extends Error {
@@ -152,9 +152,14 @@ function checkInput(input: EntryInput): void {
   // A typed blob position holds null or a well-formed reference, or the bytes behind it could not be traced.
   if (Object.hasOwn(BLOB_FIELDS, input.type)) {
     for (const field of BLOB_FIELDS[input.type as keyof typeof BLOB_FIELDS] as readonly string[]) {
-      if (!Object.hasOwn(input.payload, field)) continue;
+      const nullable = blobFieldNullable(input.type, field);
+      if (!Object.hasOwn(input.payload, field)) {
+        if (nullable) continue;
+        throw new InvalidEntryError(`${input.type}: ${field} is required and must be a blob reference ({ blob: <sha256 hex>, bytes })`);
+      }
       const v = (input.payload as unknown as Record<string, unknown>)[field];
-      if (v !== null && !isBlobRef(v)) throw new InvalidEntryError(`${input.type}: ${field} must be null or a blob reference ({ blob: <sha256 hex>, bytes })`);
+      if (v === null && nullable) continue;
+      if (!isBlobRef(v)) throw new InvalidEntryError(`${input.type}: ${field} must be ${nullable ? "null or " : ""}a blob reference ({ blob: <sha256 hex>, bytes })`);
     }
   }
   if (input.cause != null && !(Number.isSafeInteger(input.cause) && input.cause >= 1)) {

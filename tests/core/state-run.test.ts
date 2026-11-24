@@ -283,6 +283,15 @@ test("verify.run stamps the card as validated", () => {
   expect(fold(b.entries).cards.c1!.validated).toEqual({ outcome: "differs", detail: "3 rows vs 4", seq: e.seq, ts: e.ts });
 });
 
+test("verify.run with no re-run (null) still stamps the card", () => {
+  const b = new EntryBuilder();
+  b.add("card.created", { card: card("c1") });
+  const e = b.add("verify.run", { original: "q1", rerun: null, card: "c1", outcome: "could_not_run", detail: "no budget" });
+  const s = fold(b.entries);
+  expect(s.skipped).toEqual([]);
+  expect(s.cards.c1!.validated).toEqual({ outcome: "could_not_run", detail: "no budget", seq: e.seq, ts: e.ts });
+});
+
 test("proposals open, then are accepted with a budget or rejected with a reason", () => {
   const b = new EntryBuilder();
   const mk = (id: string) => ({ id, kind: "costly_query" as const, title: "T", by: "a1", step: null, source: "src", text: "t", estimate: { amount: 5, unit: "usd" }, why: "w" });

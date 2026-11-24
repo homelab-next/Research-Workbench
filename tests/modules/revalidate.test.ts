@@ -202,6 +202,7 @@ test("a costly source with no budget could not run, and says a budget is needed"
   const r = await v();
   expect(r).toMatchObject({ outcome: "could_not_run", rerun: null });
   expect(r.detail).toContain("budget");
+  expect(s.entries().at(-1)!.payload).toMatchObject({ rerun: null }); // no re-run is recorded as null, not ""
   expect(s.state.cards.c1!.validated).toMatchObject({ outcome: "could_not_run" });
   const withBudget = await v("c1", { budget: 10 });
   expect(withBudget).toMatchObject({ outcome: "matches", rerun: "q2" });

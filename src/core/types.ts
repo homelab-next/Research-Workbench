@@ -117,7 +117,7 @@ export interface Payloads {
   "query.issued": { query: string; source: string; source_hash: string; pivot: string | null; pivot_hash: string | null; connector: string; text: string; bound: Record<string, Json>; window: TimeWindow; why: string; estimate: Cost | null; step: string | null; verifies: string | null };
   "query.result": { query: string; result: BlobRef; rows: number; rows_hash: string; coverage: Coverage; duration_ms: number; cost: Cost | null };
   "query.failed": { query: string; error: string };
-  "verify.run": { original: string; rerun: string; card: string; outcome: "matches" | "differs" | "could_not_run"; detail: string };
+  "verify.run": { original: string; rerun: string | null; card: string; outcome: "matches" | "differs" | "could_not_run"; detail: string };
   // models
   "model.request": { request: string; provider: string; model: string; effort: string | null; where: Where; marking: Marking; pack: PackItem[]; left_out: PackItem[]; messages: BlobRef; tools: string[] };
   "model.response": { request: string; response: BlobRef; stop: "end" | "tool_calls" | "length" | "error"; usage: { input: number; output: number; reasoning: number }; served_by: string; reasoning: BlobRef | null };
@@ -182,6 +182,32 @@ export const BLOB_FIELDS: { readonly [T in EntryType as BlobField<Payloads[T]> e
   "stage.finished": ["output"],
   "product.published": ["bundle"],
 };
+
+/** The blob reference fields of payload P that may hold null. */
+type NullableBlobField<P> = { [K in BlobField<P>]: null extends P[K] ? K : never }[BlobField<P>];
+
+/**
+ * For each typed blob position, whether it may hold null. The type requires every BLOB_FIELDS position and
+ * forces each flag to agree with the payload type, so the two cannot drift. A position that may not hold
+ * null must be present and hold a reference: a result with no bytes behind it is refused by the ledger and
+ * reported by the verifier.
+ */
+export const BLOB_NULLABLE: { readonly [T in keyof typeof BLOB_FIELDS]: { readonly [K in BlobField<Payloads[T]>]: K extends NullableBlobField<Payloads[T]> ? true : false } } = {
+  "query.result": { result: false },
+  "model.request": { messages: false },
+  "model.response": { response: false, reasoning: true },
+  "tool.returned": { result: true },
+  "check.run": { input: false },
+  "stage.finished": { output: true },
+  "product.published": { bundle: false },
+};
+
+/** True when the typed blob position `field` of entry type `type` may hold null (or is not a typed position at all). */
+export function blobFieldNullable(type: string, field: string): boolean {
+  if (!Object.hasOwn(BLOB_NULLABLE, type)) return true;
+  const flags = BLOB_NULLABLE[type as keyof typeof BLOB_NULLABLE] as Readonly<Record<string, boolean>>;
+  return !Object.hasOwn(flags, field) || flags[field] === true;
+}
 
 export type EntryInput = {
   [T in EntryType]: { type: T; payload: Payloads[T]; actor: Actor; cause?: number | null; run?: string | null; stage?: string | null; job?: string | null };

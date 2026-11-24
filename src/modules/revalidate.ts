@@ -33,7 +33,7 @@ export async function revalidateCard(
   const finish = (v: Verdict): Verdict => {
     session.commit(() => [{
       type: "verify.run", actor: input.actor,
-      payload: { original: originalId, rerun: v.rerun ?? "", card: input.card, outcome: v.outcome, detail: v.detail },
+      payload: { original: originalId, rerun: v.rerun, card: input.card, outcome: v.outcome, detail: v.detail },
     }]);
     return v;
   };
