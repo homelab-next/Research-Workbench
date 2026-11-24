@@ -2,6 +2,7 @@ import type { Json } from "../../core/canonical";
 import { realpathSync } from "node:fs";
 import { basename, isAbsolute, resolve } from "node:path";
 import type { Schema } from "../../core/schema";
+import type { Coverage } from "../../core/types";
 import type { Registry } from "../../modules/registry";
 
 /** A tool's own failure. It becomes a result with ok false; it is never thrown past execTool. */
@@ -90,3 +91,8 @@ export function scrub(registry: Registry, text: string, opts: { backstop?: boole
   if (opts.backstop === false) return out;
   return out.replace(URL_RE, HIDDEN).replace(POSIX_PATH_RE, HIDDEN).replace(WINDOWS_PATH_RE, HIDDEN);
 }
+/** A coverage with its free text (an engine's error, which may name a host, a user or a path) scrubbed. */
+export function scrubCoverage(registry: Registry, c: Coverage | null): Coverage | null {
+  return c === null || c.kind === "full" || c.detail === undefined ? c : { ...c, detail: scrub(registry, c.detail) };
+}
+

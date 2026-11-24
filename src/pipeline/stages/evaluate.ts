@@ -18,7 +18,7 @@ export async function evaluateRunner(env: StageEnv): Promise<StageEnd> {
     "Reply with pass, and for each problem the check, where it is and what is wrong.",
   ].join("\n");
   const actorId = deps.profile.stages[stage.id]?.agent ?? "evaluator";
-  const end = await stageAgent(env, { actor_id: actorId, task, extras: [draftPart(d), ...citedCardParts(session, d)] });
+  const end = await stageAgent(env, { actor_id: actorId, task, extras: [draftPart(session, d), ...citedCardParts(session, deps.registry, d)] });
   if (end.kind !== "output") return end;
   const { pass, findings } = end.output as unknown as { pass: boolean; findings: CheckFinding[] };
   const actor = agentActor(session, actorId);

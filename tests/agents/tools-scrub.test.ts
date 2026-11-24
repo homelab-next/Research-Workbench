@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { join } from "node:path";
 import { scrub } from "../../src/agents/tools/kit";
+import { packPart } from "../../src/agents/context";
+import type { CardState } from "../../src/core/state/types";
+import { card } from "../helpers/entries";
 import { fixture } from "../helpers/tools-fixture";
 import type { Fixture } from "../helpers/tools-fixture";
 
@@ -86,4 +89,23 @@ test("a partial result's detail is scrubbed in the result, the card, list_cards 
   } finally {
     srv.stop(true);
   }
+});
+
+test("a card put in a pack has its title, body and coverage detail scrubbed as the tools scrub them", () => {
+  const s = f.sample.registry.source("flows")!;
+  s.user = "Svc-User";
+  const h = f.sample.registry.source("reputation")!;
+  h.location = "http://Example-Host.internal:4801/Base/Path";
+  const abs = join(f.sample.root, "data", "flows.sqlite");
+  const c = {
+    ...card("c9", { title: `as Svc-User on ${abs}`, body: "fetch http://example-host.internal:4801/Base/Path/v1 gave 3 rows", source: "flows", coverage: { kind: "partial", reason: "source_error", detail: "connect ECONNREFUSED example-host.internal:4801 as svc-user" } }),
+    place: "incoming", created_seq: 1, validated: null,
+  } as unknown as CardState;
+  const p = packPart({ card: c, registry: f.sample.registry });
+  for (const text of [p.text, p.title]) {
+    expect(text.toLowerCase()).not.toMatch(/svc.?user|example-host|flows\.sqlite|base.?path/);
+  }
+  expect(p.text).toContain("[hidden]");
+  expect(p.text).toContain("partial (source_error: ");
+  expect(p.marking).toBe(c.marking);
 });

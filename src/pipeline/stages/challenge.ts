@@ -2,7 +2,8 @@ import type { Json } from "../../core/canonical";
 import { latestDraft } from "../../core/state";
 import type { PackPart } from "../../agents/context";
 import type { StageEnd, StageEnv } from "../engine";
-import { citedCardParts, draftPart, noSchema, stageAgent } from "./agent";
+import { ContextError, packPart } from "../../agents/context";
+import { citedCardParts, draftPart, noSchema, stageAgent, titleOf } from "./agent";
 
 /** Challenge: the adversary argues against the draft pinned at the start. A must-address challenge still open against that hash fails the stage. */
 export async function challengeRunner(env: StageEnv): Promise<StageEnd> {
@@ -11,11 +12,20 @@ export async function challengeRunner(env: StageEnv): Promise<StageEnd> {
   if (stalled !== null) return stalled;
   if (d === null) return { kind: "stalled", reason: "Challenge: there is no draft to challenge" };
   const { session, deps, stage } = env;
-  const extras: PackPart[] = [draftPart(d), ...citedCardParts(session, d)];
+  const extras: PackPart[] = [draftPart(session, d), ...citedCardParts(session, deps.registry, d)];
   const earlier = Object.values(session.state.challenges).filter((c) => c.draft_hash === d.hash || c.run === session.state.run.id);
   if (earlier.length > 0) {
     const text = earlier.map((c) => `- ${c.id} (on draft ${session.state.drafts.find((x) => x.hash === c.draft_hash)?.n ?? "?"}, ${c.severity}, ${c.status === "open" ? "open" : `answered: ${c.action}`}): ${c.text}${c.answer === null ? "" : ` Answer: ${c.answer}`}`).join("\n");
-    extras.push({ kind: "challenges", id: "earlier-challenges", title: "Challenges raised in this run", text, marking: null, fixed: true });
+    // each challenge and each answer is as strict as the model request it was written in answer to
+    const entries = session.entries();
+    const ids = new Set(earlier.map((c) => c.id));
+    const by = entries.filter((e) => (e.type === "challenge.raised" && ids.has(e.payload.challenge.id)) || (e.type === "challenge.answered" && ids.has(e.payload.challenge)));
+    try {
+      extras.push(packPart({ kind: "challenges", id: "earlier-challenges", title: "Challenges raised in this run", text, fixed: true, entries, written_by: by, floor: null }));
+    } catch (err) {
+      if (err instanceof ContextError) return { kind: "stalled", reason: `${titleOf(env)}: ${err.message}` };
+      throw err;
+    }
   }
   const task = [
     `Challenge draft ${d.n}.`,

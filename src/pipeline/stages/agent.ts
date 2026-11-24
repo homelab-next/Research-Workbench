@@ -2,8 +2,8 @@ import type { Json } from "../../core/canonical";
 import { parseJson } from "../../core/canonical";
 import type { CaseSession } from "../../core/session";
 import { runUsage } from "../../core/state";
-import type { Actor, Draft, TimeWindow } from "../../core/types";
-import { ContextError, cardPart, casePart, schemaOf, stageParts } from "../../agents/context";
+import type { Actor, Draft, Entry, TimeWindow } from "../../core/types";
+import { ContextError, casePart, packPart, schemaOf, stageParts } from "../../agents/context";
 import type { PackPart } from "../../agents/context";
 import type { CallRecord } from "../../agents/loop";
 import { runAgent } from "../../agents/loop";
@@ -15,6 +15,8 @@ import type { ToolContext, ToolName } from "../../agents/tools";
 import type { SeekLimits } from "../../modules/seeker";
 import { DEFAULT_LIMITS } from "../../modules/seeker";
 import type { StageEnd, StageEnv } from "../engine";
+import type { Role } from "../manifests";
+import type { Registry } from "../../modules/registry";
 
 export type AgentStageEnd = { kind: "output"; output: Json; calls: CallRecord[] } | Exclude<StageEnd, { kind: "finished" }>;
 
@@ -104,17 +106,33 @@ export function windowProblem(w: { from: string; to: string }, within: TimeWindo
   return null;
 }
 
-/** The output blob of the stage's latest stage.finished with outcome pass; null when there is none. */
-export function lastOutput(session: CaseSession, stage: string): Json | null {
+/** The stage's latest stage.finished with outcome pass and an output, with that output; null when there is none. */
+export function lastPass(session: CaseSession, stage: string): { output: Json; entry: Entry } | null {
   const entries = session.entries();
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]!;
     if (e.type !== "stage.finished" || e.payload.stage !== stage || e.payload.outcome !== "pass" || e.payload.output === null) continue;
     const parsed = parseJson(session.blobs.text(e.payload.output.blob));
-    return parsed === null ? null : parsed.value;
+    return parsed === null ? null : { output: parsed.value, entry: e };
   }
   return null;
 }
+
+/** The output blob of the stage's latest stage.finished with outcome pass; null when there is none. */
+export function lastOutput(session: CaseSession, stage: string): Json | null {
+  return lastPass(session, stage)?.output ?? null;
+}
+
+/** The model requests of the stage pass that ended at this stage.finished: those made in the stage since its latest start before the end. */
+export function requestsOfPass(entries: readonly Entry[], finished: Entry): Entry[] {
+  if (finished.type !== "stage.finished") return [];
+  const stage = finished.payload.stage;
+  const started = entries.reduce((n, e) => (e.type === "stage.started" && e.payload.stage === stage && e.seq < finished.seq ? e.seq : n), 0);
+  return entries.filter((e) => e.type === "model.request" && e.stage === stage && e.seq > started && e.seq < finished.seq);
+}
+
+/** The id of the pipeline's stage with this role; null when it has none. */
+export const stageOfRole = (env: StageEnv, role: Role): string | null => env.deps.pipeline.stages.find((s) => s.role === role)?.id ?? null;
 
 /** The window and limits Frame chose, with max_hops from the defaults; the case window and the defaults when there is no Frame output. */
 export function frameOf(session: CaseSession): { window: TimeWindow; limits: SeekLimits } {
@@ -143,12 +161,15 @@ export function agentActor(session: CaseSession, actorId: string): AgentActor {
 }
 
 /** The cards a draft's findings cite, as pack parts (a card that no longer exists is left out). */
-export function citedCardParts(session: CaseSession, draft: Draft): PackPart[] {
+export function citedCardParts(session: CaseSession, registry: Registry, draft: Draft): PackPart[] {
   const ids = [...new Set(draft.product.key_findings.flatMap((f) => f.cites))];
-  return ids.filter((id) => Object.hasOwn(session.state.cards, id)).map((id) => cardPart(session.state.cards[id]!));
+  return ids.filter((id) => Object.hasOwn(session.state.cards, id)).map((id) => packPart({ card: session.state.cards[id]!, registry }));
 }
 
-/** The draft's product as a part the model cannot lose from its context. */
-export function draftPart(draft: Draft): PackPart {
-  return { kind: "draft", id: `draft-${draft.n}`, title: `Draft ${draft.n} (${draft.hash.slice(0, 12)})`, text: JSON.stringify(draft.product, null, 2), marking: draft.product.marking, fixed: true };
+/** The draft's product as a part the model cannot lose from its context. It carries the product's marking. */
+export function draftPart(session: CaseSession, draft: Draft): PackPart {
+  return packPart({
+    kind: "draft", id: `draft-${draft.n}`, title: `Draft ${draft.n} (${draft.hash.slice(0, 12)})`, text: JSON.stringify(draft.product, null, 2), fixed: true,
+    entries: session.entries(), written_by: [], floor: draft.product.marking,
+  });
 }

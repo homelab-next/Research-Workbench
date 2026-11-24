@@ -20,7 +20,7 @@ export async function publishRunner(env: StageEnv): Promise<StageEnd> {
     `Name draft ${d.n} for publishing and add a short note for the reader.`,
     "Reply with a title and a note. You change no part of the product.",
   ].join("\n");
-  const end = await stageAgent(env, { actor_id: deps.profile.stages[stage.id]?.agent ?? "publisher", task, extras: [draftPart(d)], draft_hash: d.hash });
+  const end = await stageAgent(env, { actor_id: deps.profile.stages[stage.id]?.agent ?? "publisher", task, extras: [draftPart(session, d)], draft_hash: d.hash });
   if (end.kind !== "output") return end;
   const { title, note } = end.output as unknown as { title: string; note: string };
   const preview = buildBundle(session, d, { title, note }, session.head(), session.state.published.length + 1).manifest;

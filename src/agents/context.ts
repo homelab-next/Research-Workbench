@@ -2,9 +2,10 @@ import type { Json } from "../core/canonical";
 import { isPlainObject } from "../core/canonical";
 import type { Schema } from "../core/schema";
 import type { CardState, CaseState } from "../core/state/types";
-import type { Marking } from "../core/types";
+import type { Entry, Marking } from "../core/types";
 import { isMarking, strictest } from "../core/types";
 import type { LoadedManifest, Registry } from "../modules/registry";
+import { scrub, scrubCoverage } from "./tools/kit";
 
 export class ContextError extends Error {
   constructor(message: string) {
@@ -101,20 +102,64 @@ export function casePart(state: Readonly<CaseState>): PackPart {
   return { kind: "case", id: m.id, title: "The case", text, marking: m.marking, fixed: true };
 }
 
-export function cardPart(card: CardState): PackPart {
-  const cov = card.coverage === null ? "unknown" : card.coverage.kind === "full" ? "full" : `partial (${card.coverage.reason}${card.coverage.detail ? `: ${card.coverage.detail}` : ""})`;
-  const rows = card.rows.slice(0, PREVIEW_ROWS).map((r) => JSON.stringify(r));
-  const text = [
-    `Card ${card.id}: ${card.title}`,
-    card.body,
-    `Source: ${card.source ?? "none"}`,
-    `Coverage: ${cov}`,
-    `Empty means: ${card.empty ?? "not stated"}`,
-    `Columns: ${card.columns.join(", ")}`,
-    `Rows (${Math.min(PREVIEW_ROWS, card.rows.length)} of ${card.row_count}):`,
-    ...rows,
-  ].join("\n");
-  return { kind: "card", id: card.id, title: `Card ${card.id}: ${card.title}`, text, marking: card.marking, fixed: false };
+/** A card, or text a model (or a person) wrote, that is to become a pack part. */
+export type PartFrom =
+  | { card: CardState; registry: Registry }
+  | {
+    kind: string; id: string; title: string; text: string; fixed: boolean;
+    /** The ledger the text was written into. */
+    entries: readonly Entry[];
+    /**
+     * The entries that hold the text: a model request, or an entry an agent wrote while answering one (whose request is the agent's latest before
+     * it). An entry by a person or the system adds no model's marking.
+     */
+    written_by: readonly Entry[];
+    /** A marking the part has whatever wrote it (the product's own, for text about a draft); null for none. */
+    floor: Marking | null;
+  };
+
+/** The model request an agent was answering when it wrote this entry: the entry itself when it is one, else its latest request before it. */
+function requestBehind(entries: readonly Entry[], e: Entry): Extract<Entry, { type: "model.request" }> | null {
+  if (e.type === "model.request") return e;
+  const a = e.actor;
+  if (a.kind !== "agent") return null;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const x = entries[i]!;
+    if (x.seq < e.seq && x.type === "model.request" && x.actor.kind === "agent" && x.actor.id === a.id && x.actor.stage === a.stage) return x;
+  }
+  throw new ContextError(`what ${a.id} wrote at entry ${e.seq} has no model request before it, so its marking is not known`);
+}
+
+/**
+ * The only way a card or text a model wrote becomes a pack part. A card's title, body and coverage detail are scrubbed as the tools scrub them
+ * (a location, user or credential never reaches a model) and it carries the card's marking. Text a model wrote carries the marking of the model
+ * request it answered, which covers everything that model had seen: text written after reading a stricter card is as strict as that card.
+ */
+export function packPart(from: PartFrom): PackPart {
+  if ("card" in from) {
+    const { card, registry } = from;
+    const coverage = scrubCoverage(registry, card.coverage);
+    const cov = coverage === null ? "unknown" : coverage.kind === "full" ? "full" : `partial (${coverage.reason}${coverage.detail ? `: ${coverage.detail}` : ""})`;
+    const title = scrub(registry, card.title);
+    const rows = card.rows.slice(0, PREVIEW_ROWS).map((r) => JSON.stringify(r));
+    const text = [
+      `Card ${card.id}: ${title}`,
+      scrub(registry, card.body),
+      `Source: ${card.source ?? "none"}`,
+      `Coverage: ${cov}`,
+      `Empty means: ${card.empty ?? "not stated"}`,
+      `Columns: ${card.columns.join(", ")}`,
+      `Rows (${Math.min(PREVIEW_ROWS, card.rows.length)} of ${card.row_count}):`,
+      ...rows,
+    ].join("\n");
+    return { kind: "card", id: card.id, title: `Card ${card.id}: ${title}`, text, marking: card.marking, fixed: false };
+  }
+  const markings: Marking[] = from.floor === null ? [] : [from.floor];
+  for (const e of from.written_by) {
+    const req = requestBehind(from.entries, e);
+    if (req !== null) markings.push(req.payload.marking);
+  }
+  return { kind: from.kind, id: from.id, title: from.title, text: from.text, marking: markings.length === 0 ? null : strictest(...markings), fixed: from.fixed };
 }
 
 export function schemaOf(registry: Registry, id: string): Schema {

@@ -1,17 +1,14 @@
 import type { Json } from "../../core/canonical";
 import type { CardState } from "../../core/state/types";
 import { strictest } from "../../core/types";
-import type { Coverage, Payloads } from "../../core/types";
+import type { Payloads } from "../../core/types";
 import type { Registry } from "../../modules/registry";
 import { revalidateCard } from "../../modules/revalidate";
 import { previewCell } from "../../modules/runner";
 import type { ToolContext, ToolDef, ToolResult } from "./index";
-import { idArg, json, params, scrub, str, ToolError, VIEW_ROWS } from "./kit";
+import { idArg, json, params, scrub, scrubCoverage, str, ToolError, VIEW_ROWS } from "./kit";
 
-/** A coverage with its free text (an engine's error, which may name a host, a user or a path) scrubbed. */
-export function scrubCoverage(registry: Registry, c: Coverage | null): Coverage | null {
-  return c === null || c.kind === "full" || c.detail === undefined ? c : { ...c, detail: scrub(registry, c.detail) };
-}
+export { scrubCoverage };
 
 /** A card as a list entry: what a model needs to choose it, with no rows. */
 export function cardBrief(registry: Registry, c: CardState): Json {

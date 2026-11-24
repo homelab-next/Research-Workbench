@@ -98,8 +98,9 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
       const { usage } = runUsage(session.state);
       if (usage.input + usage.output >= run.budget_tokens) return { kind: "stopped", why: "budget" };
     }
-    // 2. marking: the strictest of the pack and every tool result so far
-    if (!mayGo(marking, provider.where, spec.policy)) {
+    // 2. marking: the strictest of the pack and every tool result so far. A fixed part over the stage's limit (what must be fixed, say) is
+    // never left out, so the call is not made instead.
+    if (!mayGo(marking, provider.where, spec.policy) || tooStrict(marking, spec.max_marking)) {
       session.commit(() => [{ type: "model.blocked", actor, ...link, payload: { stage: actor.stage, marking, model: spec.model, where: provider.where } }]);
       return { kind: "blocked", marking };
     }

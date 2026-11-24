@@ -2,7 +2,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cardPart, casePart, ContextError, loadProfile, partOf, schemaOf, stageParts } from "../../src/agents/context";
+import { casePart, ContextError, loadProfile, packPart, partOf, schemaOf, stageParts } from "../../src/agents/context";
+import { EntryBuilder } from "../helpers/entries";
 import { validate } from "../../src/core/schema";
 import type { CaseState, CardState } from "../../src/core/state/types";
 import type { Product } from "../../src/core/types";
@@ -148,7 +149,7 @@ test("a card part carries the card's marking and at most ten rows", () => {
     rows: Array.from({ length: 25 }, (_, i) => [i]), row_count: 25, coverage: { kind: "partial", reason: "row_limit" }, empty: "not-seen",
     marking: "TLP:AMBER", source: "signins", step: null, subgoal: null, why: "w", event_time: null, quality_notes: [],
   } as unknown as CardState;
-  const p = cardPart(card);
+  const p = packPart({ card, registry });
   expect(p).toMatchObject({ kind: "card", id: "c3", marking: "TLP:AMBER", fixed: false });
   for (const s of ["Sign-ins", "Nine of them", "signins", "row_limit", "not-seen"]) expect(p.text).toContain(s);
   expect(p.text).toContain("[9]");
@@ -207,4 +208,25 @@ test("the sample context names no real system", () => {
   expect(all.length).toBeGreaterThan(20);
   const text = all.map((f) => readFileSync(f, "utf8")).join("\n");
   expect(text).not.toMatch(/\b(?:\d{1,3}\.){3}\d{1,3}\b/);
+});
+
+test("text a model wrote carries the marking of the request it answered; a person's adds none; one with no request is refused", () => {
+  const adversary = { kind: "agent", id: "adversary", stage: "challenge", profile: "investigation", model: "m", effort: null, where: "machine" } as const;
+  const b = new EntryBuilder();
+  const blob = { blob: "0".repeat(64), bytes: 2 };
+  const request = (marking: "TLP:GREEN" | "TLP:RED") => b.add("model.request", {
+    request: "r", provider: "p", model: "m", effort: null, where: "machine", marking, pack: [], left_out: [], messages: blob, tools: [],
+  }, { actor: adversary });
+  request("TLP:GREEN");
+  request("TLP:RED");
+  const raised = b.add("challenge.raised", { challenge: { id: "x1", draft_hash: "h", severity: "must_address", text: "it is in the red card", cites: [] } }, { actor: adversary });
+  const answered = b.add("challenge.answered", { challenge: "x1", answer: "fixed", action: "revised" }, { actor: { kind: "human", id: "analyst" } });
+  const part = (written_by: typeof b.entries, floor: "TLP:AMBER" | null = null) =>
+    packPart({ kind: "challenges", id: "c", title: "t", text: "x", fixed: true, entries: b.entries, written_by, floor });
+  expect(part([raised]).marking).toBe("TLP:RED");
+  expect(part([b.entries[0]!]).marking).toBe("TLP:GREEN");
+  expect(part([answered]).marking).toBeNull();
+  expect(part([answered], "TLP:AMBER").marking).toBe("TLP:AMBER");
+  const stray = { ...raised, seq: 1 };
+  expect(() => part([stray])).toThrow(ContextError);
 });

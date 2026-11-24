@@ -438,3 +438,66 @@ test("a person's edit does not close an open challenge", async () => {
   r.engine.revise({ product: { ...d1.product, summary: "edited" }, reason: "wording", actor: person });
   expect(f.s.state.challenges.x1!.status).toBe("open");
 });
+
+/** A red card c3 that no draft cites, which the adversary reads before it raises x1. */
+const redCard = (): void => {
+  f.s.commit((_st, ids) => [{ type: "card.created", actor: person, payload: { card: card(ids.next("card"), { title: "Secret record", body: "the red detail", source: "assets", marking: "TLP:RED" }) } }]);
+};
+const READ_RED = calls(call("read_card", { card: "c3" }));
+
+test("a challenge raised after reading a red card is as red in the adversary's later pack", async () => {
+  const r = rig({ analyst: [...FIRST, ...SECOND_ANSWERING], evaluator: [EVAL_PASS, EVAL_PASS], adversary: [READ_RED, MUST, CHALLENGE_PASS, CHALLENGE_PASS] });
+  cards();
+  redCard();
+  r.engine.start(person);
+  await r.engine.advance();
+  accept();
+  await r.engine.advance();
+  const requests = ofType("model.request");
+  const adversary = requests.filter((e) => e.actor.id === "adversary");
+  // the reply that raised x1 answered a request made after the red card was read
+  expect(adversary[1]!.payload.marking).toBe("TLP:RED");
+  // the second Challenge run is shown x1, so it is red though the draft it reviews is amber
+  expect(requestText("adversary", 3)).toContain("the asset record may be stale");
+  expect(adversary[3]!.payload.marking).toBe("TLP:RED");
+  expect(adversary[3]!.payload.pack.find((i) => i.id === "earlier-challenges")).toBeDefined();
+});
+
+test("under a pack limit the must-fix note holding a red challenge is not sent: the analyst's call is blocked", async () => {
+  const r = rig({ analyst: [...FIRST, ...SECOND_ANSWERING], evaluator: [EVAL_PASS], adversary: [READ_RED, MUST, CHALLENGE_PASS] });
+  cards();
+  redCard();
+  r.engine.setPackLimit("assemble", "TLP:AMBER", person);
+  r.engine.start(person);
+  await r.engine.advance();
+  accept();
+  const sum = await r.engine.advance();
+  const analyst = ofType("model.request").filter((e) => e.actor.id === "analyst");
+  // the first Assemble ran under the limit with the red card left out; the second would have carried x1's text
+  expect(analyst).toHaveLength(2);
+  expect(analyst[0]!.payload.left_out.map((i) => i.id)).toContain("c3");
+  for (const e of analyst) expect(f.s.blobs.text(e.payload.messages.blob)).not.toContain("the asset record may be stale");
+  expect(ofType("model.blocked").at(-1)!.payload).toMatchObject({ stage: "assemble", marking: "TLP:RED" });
+  expect(sum.status).toBe("paused");
+  expect(sum.pause_reason).toContain("TLP:RED");
+});
+
+test("Research's output is as strict as the requests its researchers made: under a pack limit it is left out", async () => {
+  const researcher = { kind: "agent", id: "researcher-g1", stage: "research", profile: "investigation", model: "m", effort: null, where: "machine" } as const;
+  const output = { subgoals: [{ id: "g1", title: "Is it internal", outcome: "answered", cards: ["c1"], note: "the red detail says so" }], requested: [] };
+  const r = rig({ analyst: FIRST, evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] }, {
+    research: async () => {
+      // what a researcher that had read a red card asked its model
+      f.s.commit((st, ids) => [{
+        type: "model.request", actor: researcher, run: st.run.id, stage: "research",
+        payload: { request: ids.next("request"), provider: "scripted", model: "m", effort: null, where: "machine", marking: "TLP:RED", pack: [], left_out: [], messages: f.s.blobs.put("[]"), tools: [] },
+      }]);
+      return { ...PASS, output: output as unknown as Json };
+    },
+  });
+  r.engine.setPackLimit("assemble", "TLP:AMBER", person);
+  await go(r);
+  const first = ofType("model.request").find((e) => e.actor.id === "analyst")!;
+  expect(first.payload.left_out.map((i) => i.id)).toContain("research-output");
+  expect(f.s.blobs.text(first.payload.messages.blob)).not.toContain("the red detail says so");
+});
