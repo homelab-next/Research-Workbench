@@ -104,8 +104,11 @@ export function makeBrief(ui: Ui, open: Open): View {
     const g = goals(state);
     const draft = latestDraft(state);
     const run = state.run;
-    const next = nextThing(state);
+    const next0 = nextThing(state);
     const rb = runButton(state);
+    // One button per state: at a gate the next-thing button stands for the run button; a resume is the run button's alone.
+    const atGate = run.status === "waiting" && next0 !== null;
+    const next = next0 !== null && "command" in next0 && next0.command === "resume" ? null : next0;
     const status = (name: string, text: string, id: LensId): HTMLElement => h("button", { type: "button", class: "status", data: { status: name }, on: { click: () => lens(id) } }, text);
     into2([meta?.asked, g.done, g.of, state.plan.status, draft?.n, run.status, run.waiting, next?.label, ro, stopping], () => [
       h("span", { class: "asked" }, `Asked for: ${meta?.asked ?? ""}`),
@@ -113,7 +116,7 @@ export function makeBrief(ui: Ui, open: Open): View {
       status("plan", PLAN_WORDS[state.plan.status], "steps"),
       draft === undefined || draft === null ? null : status("draft", `draft ${draft.n}`, "narrative"),
       h("span", { class: "right" },
-        h("button", {
+        atGate ? null : h("button", {
           type: "button", class: "run-button", disabled: ro || rb.disabled,
           on: { click: () => { if (rb.command !== null) void ui.act(rb.command); else if (rb.lens !== null) lens(rb.lens, AT_GATE); } },
         }, rb.label),

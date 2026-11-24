@@ -222,6 +222,27 @@ test("the brief's button at the plan gate writes nothing and takes you to Accept
   expect(q.all(".lens-steps").length).toBe(1);
 });
 
+test("at the plan gate and at the publish gate the brief holds exactly one Review button", async () => {
+  for (const at of ["plan", "publish"] as const) {
+    const q = await open(at);
+    const names = q.all(".brief button").map((b) => b.textContent!).filter((t) => t.startsWith("Review"));
+    expect(names.length).toBe(1);
+    expect(q.all(".brief .next-thing").length).toBe(1);
+    expect(q.all(".brief .run-button").length).toBe(0);
+  }
+});
+
+test("while paused the brief holds exactly one Resume button, the run button", async () => {
+  p = await page();
+  const id = await p.s.newCase();
+  await p.s.toPlanGate(id);
+  await p.s.command(id, "pause");
+  p.win.location.hash = `#/case/${id}`; await p.settle();
+  const resumes = p.all(".brief button").filter((b) => /^Resume/.test(b.textContent!));
+  expect(resumes.length).toBe(1);
+  expect(resumes[0]!.classList.contains("run-button")).toBe(true);
+});
+
 test("lanes can be renamed in place, added, and removed only when empty", async () => {
   const q = await open();
   const lane = q.q(".lane");
