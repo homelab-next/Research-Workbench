@@ -1,5 +1,5 @@
 import type { CaseSession } from "../core/session";
-import type { Actor, Payloads } from "../core/types";
+import type { Actor, Coverage, Payloads } from "../core/types";
 import { PivotError, bindPivot } from "./pivots";
 import type { RunnerDeps, RunQueryInput } from "./runner";
 import { runQuery } from "./runner";
@@ -46,24 +46,34 @@ export async function revalidateCard(
     source: was.source, text: "", bound: {}, window: was.window, why: input.why, actor: input.actor,
     verifies: originalId, make_card: false, budget: input.budget ?? null,
   };
+  if (was.pivot !== null) {
+    const pivot = deps.registry.pivot(was.pivot);
+    if (pivot === null || pivot.hash !== was.pivot_hash) return couldNot("the pivot has changed since the original query");
+    run.pivot = pivot;
+  }
   if (was.connector === "sql" || was.connector === "files") {
     run.text = toTemplate(was.text, was.bound);
     run.bound = was.bound as RunQueryInput["bound"];
   } else if (was.connector === "trino") {
+    // the stored text is rendered SQL; a rendering pass must leave it unchanged or a re-run could execute different SQL
+    const source = deps.registry.source(was.source);
+    if (source === null) return couldNot(`unknown source: ${was.source}`);
+    let again: string | null = null;
+    try {
+      again = deps.pool.for(source).render({ text: was.text, bound: {}, window: was.window, max_rows: source.limits.max_rows, timeout_ms: source.limits.timeout_ms, budget: null });
+    } catch { again = null; }
+    if (again !== was.text) return couldNot("the stored text cannot be re-run unchanged");
     run.text = was.text;
   } else {
-    if (was.pivot === null) return couldNot("only pivot queries can be re-run on this source");
-    const pivot = deps.registry.pivot(was.pivot);
-    if (pivot === null || pivot.hash !== was.pivot_hash) return couldNot("the pivot has changed since the original query");
+    if (run.pivot === undefined || run.pivot === null) return couldNot("only pivot queries can be re-run on this source");
     try {
-      const bound = bindPivot(pivot, String(was.bound.value), deps.observables);
-      run.text = bound.text;
-      run.bound = was.bound as RunQueryInput["bound"]; // the stored values, which may carry more than the pivot's {value}
+      bindPivot(run.pivot, String(was.bound.value), deps.observables);
     } catch (err) {
       if (err instanceof PivotError) return couldNot(err.message);
       throw err;
     }
-    run.pivot = pivot;
+    run.text = run.pivot.query;
+    run.bound = was.bound as RunQueryInput["bound"]; // the stored values, which may carry more than the pivot's {value}
   }
 
   const r = await runQuery(session, deps, run);
@@ -72,10 +82,18 @@ export async function revalidateCard(
     case "needs_budget": return couldNot("a budget is needed to re-run this query on a costly source");
     case "failed": return couldNot(r.error, r.query);
     case "done": {
-      if (r.rows_hash === original.rows_hash) return finish({ outcome: "matches", detail: `same ${r.rows} rows`, rerun: r.query });
-      const detail = r.rows !== original.rows
+      const side = (c: Coverage): string | null => (c.kind === "partial" ? c.reason : null);
+      const o = original.coverage !== null ? side(original.coverage) : null, n = side(r.coverage);
+      const which = o !== null && n !== null ? "original and re-run" : o !== null ? "original" : "re-run";
+      const note = o !== null || n !== null ? `the ${which} result is partial (${[o, n].filter((x) => x !== null).join(", ")})` : null;
+      if (r.rows_hash === original.rows_hash) {
+        if (note !== null) return finish({ outcome: "could_not_run", detail: `same ${r.rows} rows, but ${note}; it cannot be fully verified`, rerun: r.query });
+        return finish({ outcome: "matches", detail: `same ${r.rows} rows`, rerun: r.query });
+      }
+      let detail = r.rows !== original.rows
         ? `was ${original.rows} rows, now ${r.rows} rows; the source may have changed since`
         : `same number of rows (${r.rows}) but different content; the source may have changed since`;
+      if (note !== null) detail += `; ${note}`;
       return finish({ outcome: "differs", detail, rerun: r.query });
     }
   }

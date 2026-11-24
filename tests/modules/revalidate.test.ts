@@ -11,6 +11,7 @@ import { Observables } from "../../src/modules/observables";
 import { Secrets } from "../../src/modules/secrets";
 import { ConnectorPool } from "../../src/modules/connectors";
 import { runQuery } from "../../src/modules/runner";
+import type { Connector, QueryOutcome } from "../../src/modules/connectors";
 import type { RunnerDeps } from "../../src/modules/runner";
 import { revalidateCard } from "../../src/modules/revalidate";
 import { startStandin } from "../helpers/http-standin";
@@ -83,6 +84,7 @@ types:
 `,
   "pivots.yaml": `kind: pivots
 pivots:
+  - { id: peers, title: Peers, from: address, to: address, source: flows, query: "select dst, bytes from flows where src = {value}", empty_means: not-seen, yields: { dst: address } }
   - { id: paid_rep, title: Paid reputation, from: address, to: address, source: rep, query: reputation, empty_means: not-seen, yields: { address: address } }
 `,
 });
@@ -258,4 +260,85 @@ test("a pivot that changed since the original query could not run", async () => 
   const changed = { source: (id: string) => registry.source(id), pivot: (id: string) => ({ ...pivot, id, hash: "changed" }) } as unknown as Registry;
   const r = await revalidateCard(s, { ...deps, registry: changed }, { card: "c1", actor: human, why: "w", budget: 10 });
   expect(r).toMatchObject({ outcome: "could_not_run", detail: "the pivot has changed since the original query", rerun: null });
+});
+
+/** Deps whose sql connector returns the given outcomes in turn (same three rows each time). */
+function stubbed(coverages: QueryOutcome["coverage"][]): RunnerDeps {
+  let i = 0;
+  const stub: Connector = {
+    kind: "sql", render: (r) => r.text, estimate: async () => null, close: () => {},
+    run: async () => ({ columns: ["dst"], rows: [["a"], ["b"], ["c"]], raw: new TextEncoder().encode("[]"), media: "application/json", coverage: coverages[i++]!, cost: null }),
+  };
+  return { ...deps, pool: { for: () => stub, closeAll: () => {} } as unknown as ConnectorPool };
+}
+const partial: QueryOutcome["coverage"] = { kind: "partial", reason: "row_limit", detail: "x" };
+const full: QueryOutcome["coverage"] = { kind: "full" };
+
+test("equal hashes with a partial original cannot be fully verified", async () => {
+  const d = stubbed([partial, full]);
+  await runQuery(s, d, flows);
+  const r = await revalidateCard(s, d, { card: "c1", actor: human, why: "w" });
+  expect(r).toMatchObject({ outcome: "could_not_run", rerun: "q2", detail: "same 3 rows, but the original result is partial (row_limit); it cannot be fully verified" });
+});
+test("equal hashes with a partial re-run cannot be fully verified", async () => {
+  const d = stubbed([full, partial]);
+  await runQuery(s, d, flows);
+  const r = await revalidateCard(s, d, { card: "c1", actor: human, why: "w" });
+  expect(r).toMatchObject({ outcome: "could_not_run", detail: "same 3 rows, but the re-run result is partial (row_limit); it cannot be fully verified" });
+});
+test("both partial, and both full", async () => {
+  const d = stubbed([partial, partial, full, full]);
+  await runQuery(s, d, flows);
+  const r = await revalidateCard(s, d, { card: "c1", actor: human, why: "w" });
+  expect(r.detail).toBe("same 3 rows, but the original and re-run result is partial (row_limit, row_limit); it cannot be fully verified");
+  await runQuery(s, d, flows);
+  expect((await revalidateCard(s, d, { card: "c2", actor: human, why: "w" })).outcome).toBe("matches");
+});
+test("differing hashes add the partial note", async () => {
+  await runQuery(s, deps, flows);
+  edit("insert into flows values (?, ?, ?, ?)", "2026-01-09T00:00:00.000Z", "192.0.2.17", "198.51.100.9", 5);
+  // the stub returns three other rows, partially covered
+  const stubPartial = stubbed([partial]);
+  const r = await revalidateCard(s, stubPartial, { card: "c1", actor: human, why: "w" });
+  expect(r.outcome).toBe("differs");
+  expect(r.detail).toContain("the re-run result is partial (row_limit)");
+});
+
+test("a trino text that rendering would change is not re-run", async () => {
+  trino.on(/iceberg\.s\.events/, { columns: ["a"], pages: [[["x"]]] });
+  const w: TimeWindow = { from: "2026-11-20T00:00:00.000Z", to: "2026-11-23T00:00:00.000Z" };
+  const r1 = await runQuery(s, deps, { source: "lake", text: "select a from iceberg.s.events where ts >= {window.from} and a <> {value}", bound: { value: "{window.to}" }, window: w, why: "w", actor: human });
+  expect(r1.status).toBe("done");
+  const before = trino.statements.length;
+  const r = await v();
+  expect(r).toMatchObject({ outcome: "could_not_run", detail: "the stored text cannot be re-run unchanged", rerun: null });
+  expect(trino.statements.length).toBe(before);
+});
+
+test("a re-run of a pivot query on sql keeps the pivot and its hash", async () => {
+  const pivot = registry.pivot("peers")!;
+  await runQuery(s, deps, { ...flows, pivot });
+  const r = await v();
+  expect(r.outcome).toBe("matches");
+  expect(issued("q2")).toMatchObject({ pivot: "peers", pivot_hash: pivot.hash, text: issued("q1").text });
+});
+test("a changed or missing pivot stops a sql re-run before anything runs", async () => {
+  const pivot = registry.pivot("peers")!;
+  await runQuery(s, deps, { ...flows, pivot });
+  for (const got of [{ ...pivot, hash: "changed" }, null]) {
+    const changed = { source: (id: string) => registry.source(id), pivot: () => got } as unknown as Registry;
+    const r = await revalidateCard(s, { ...deps, registry: changed }, { card: "c1", actor: human, why: "w" });
+    expect(r).toMatchObject({ outcome: "could_not_run", detail: "the pivot has changed since the original query", rerun: null });
+  }
+  expect(s.state.queries.q2).toBeUndefined();
+});
+
+test("a $ inside a string literal and an underscore name re-run unchanged", async () => {
+  const text = "select dst from flows where src = {src_ip} and dst <> '$x' and ts < {window.to}";
+  await runQuery(s, deps, { ...flows, text, bound: { src_ip: "192.0.2.17" } });
+  expect(issued("q1").text).toContain("$src_ip");
+  const r = await v();
+  expect(r).toMatchObject({ outcome: "matches", rerun: "q2" });
+  expect(issued("q2")).toMatchObject({ text: issued("q1").text, bound: { src_ip: "192.0.2.17" } });
+  expect(String(issued("q2").text)).toContain("'$x'");
 });
