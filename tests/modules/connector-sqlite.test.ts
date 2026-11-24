@@ -214,6 +214,17 @@ test("a query the database refuses is a ConnectorError, and a write is still ref
   } finally { c.close(); }
 });
 
+test("a timed-out query leaves no busy process behind: the script exits on its own, the CPU is idle, the file can be written", () => {
+  new Database(join(root, "w.db")).run("create table t(x)");
+  const t0 = Date.now();
+  const r = Bun.spawnSync(["bun", "run", "tests/helpers/local-timeout.ts", join(root, "w.db")], { cwd: join(import.meta.dir, "../.."), timeout: 15000 });
+  expect(r.exitCode).toBe(0);
+  expect(Date.now() - t0).toBeLessThan(10000);
+  const said = JSON.parse(r.stdout.toString()) as { coverage: unknown; idleCpuMs: number };
+  expect(said.coverage).toEqual({ kind: "partial", reason: "timeout", detail: "no complete result within 400 ms" });
+  expect(said.idleCpuMs).toBeLessThan(200);
+});
+
 test("closing the connector ends its worker", async () => {
   const c = make();
   await c.run(req("select 1"));

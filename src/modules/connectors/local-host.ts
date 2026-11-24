@@ -1,3 +1,5 @@
+import type { Coverage, Cost } from "../../core/types";
+import type { Json } from "../../core/canonical";
 import type { TableManifest } from "../manifests";
 import { ConnectorError } from "./types";
 import type { QueryOutcome, QueryRequest } from "./types";
@@ -6,93 +8,74 @@ export type LocalSpec =
   | { kind: "sql"; path: string }                                   // resolved and checked to be inside the root by the connector
   | { kind: "files"; files: { table: TableManifest; path: string; file: string }[] };
 
-/** What the worker posts back for one request. */
-export type WorkerReply =
-  | { id: number; outcome: QueryOutcome; notes: string[] }
-  | { id: number; error: string; connector: boolean };
-
 const EMPTY_RESULT = new TextEncoder().encode('{"columns":[],"rows":[]}');
+const CHILD = new URL("./local-child.ts", import.meta.url).pathname;
 
 /**
- * Runs a local database's queries in a worker, so that a slow query cannot hold the thread the server runs on. One request at a time, in the
- * order asked. A query that has not answered by its `timeout_ms` has its worker ended and dropped (the next query starts a new one) and comes
- * back as partial coverage, as the network connectors report a timeout.
+ * Runs a local database's queries in a child process of their own, so that a slow query can neither hold the thread the server runs on nor
+ * outlive its time limit: a native SQLite step cannot be interrupted in a thread, but a process can be killed. One query at a time, in the
+ * order asked. A query with no answer by its `timeout_ms` has its whole process group killed and comes back as partial coverage, as the network
+ * connectors report a timeout.
  */
 export class LocalQueryHost {
-  private worker: Worker | null = null;
   private tail: Promise<unknown> = Promise.resolve();
-  private nextId = 1;
-  private abandon: ((err: Error) => void) | null = null;
+  private killCurrent: (() => void) | null = null;
+  private closed = false;
 
   constructor(private readonly spec: LocalSpec) {}
 
   query(req: QueryRequest): Promise<QueryOutcome> {
-    const run = this.tail.then(() => this.post(req));
+    const run = this.tail.then(() => this.perform(req));
     this.tail = run.then(() => undefined, () => undefined);
     return run;
   }
 
-  /** Ends the worker. A query still waiting is refused. */
+  /** Kills the query that is running, if any; it is refused. Later queries start a new process. */
   close(): void {
-    this.drop();
-    const abandon = this.abandon;
-    this.abandon = null;
-    abandon?.(new ConnectorError("the connector was closed while a query was running"));
+    this.closed = true;
+    this.killCurrent?.();
   }
 
-  private drop(): void {
-    const w = this.worker;
-    this.worker = null;
-    if (w !== null) { try { w.terminate(); } catch { /* already gone */ } }
-  }
-
-  private start(): Worker {
-    const w = new Worker(new URL("./local-worker.ts", import.meta.url).href);
-    (w as unknown as { unref(): void }).unref();
-    return w;
-  }
-
-  private post(req: QueryRequest): Promise<QueryOutcome> {
-    return new Promise<QueryOutcome>((resolve, reject) => {
-      const worker = this.worker ??= this.start();
-      const id = this.nextId++;
-      let settled = false;
-      const done = (settle: () => void): void => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        this.abandon = null;
-        worker.onmessage = null;
-        worker.onerror = null;
-        settle();
-      };
-      const timer = setTimeout(() => {
-        // the worker is still inside the query: it is ended, and the next query starts a new one
-        if (this.worker === worker) this.drop(); else { try { worker.terminate(); } catch { /* gone */ } }
-        done(() => resolve({
+  private async perform(req: QueryRequest): Promise<QueryOutcome> {
+    this.closed = false;
+    const proc = Bun.spawn([process.execPath, CHILD], {
+      env: { PATH: process.env.PATH ?? "", LANG: "C.UTF-8" }, stdin: "pipe", stdout: "pipe", stderr: "ignore", detached: true,
+    });
+    const kill = (): void => {
+      try { process.kill(-proc.pid, "SIGKILL"); } catch { /* the group is gone */ }
+      try { proc.kill("SIGKILL"); } catch { /* so is the process */ }
+    };
+    this.killCurrent = kill;
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; kill(); }, req.timeout_ms);
+    try {
+      try {
+        proc.stdin.write(JSON.stringify({ spec: this.spec, req }));
+        void Promise.resolve(proc.stdin.end()).catch(() => {});
+      } catch { /* a process that is gone is reported below */ }
+      const text = await new Response(proc.stdout as ReadableStream<Uint8Array>).text();
+      await proc.exited;
+      if (timedOut) {
+        return {
           columns: [], rows: [], raw: EMPTY_RESULT.slice(), media: "application/json", cost: null,
           coverage: { kind: "partial", reason: "timeout", detail: `no complete result within ${req.timeout_ms} ms` },
-        }));
-      }, req.timeout_ms);
-      this.abandon = (err) => done(() => reject(err));
-      worker.onmessage = (ev: MessageEvent<WorkerReply>): void => {
-        const reply = ev.data;
-        if (reply.id !== id) return;
-        done(() => {
-          if ("error" in reply) reject(reply.connector ? new ConnectorError(reply.error) : new Error(reply.error));
-          else resolve(reply.outcome);
-        });
-      };
-      worker.onerror = (ev: ErrorEvent): void => {
-        if (this.worker === worker) this.drop();
-        done(() => reject(new ConnectorError(`the local query worker failed: ${String(ev.message ?? "unknown error").split("\n")[0]}`)));
-      };
-      try {
-        worker.postMessage({ id, spec: this.spec, req });
-      } catch (err) {
-        if (this.worker === worker) this.drop();
-        done(() => reject(new ConnectorError(`the query could not be sent to the worker: ${(err as Error).message}`)));
+        };
       }
-    });
+      if (this.closed) throw new ConnectorError("the connector was closed while a query was running");
+      let reply: { ok: true; coverage: Coverage; media: string; cost: Cost | null; raw: string } | { ok: false; error: string; connector: boolean };
+      try {
+        reply = JSON.parse(text.trim().split("\n").pop() ?? "") as typeof reply;
+      } catch {
+        throw new ConnectorError("the local query process ended without an answer");
+      }
+      if (!reply.ok) throw reply.connector ? new ConnectorError(reply.error) : new Error(reply.error);
+      const raw = new Uint8Array(Buffer.from(reply.raw, "base64"));
+      const body = JSON.parse(new TextDecoder().decode(raw)) as { columns: string[]; rows: Json[][] };
+      return { columns: body.columns, rows: body.rows, raw, media: reply.media, cost: reply.cost, coverage: reply.coverage };
+    } finally {
+      clearTimeout(timer);
+      this.killCurrent = null;
+      kill();
+    }
   }
 }
