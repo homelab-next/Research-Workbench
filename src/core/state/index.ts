@@ -44,6 +44,7 @@ export function initial(): CaseState {
     published: [],
     feedback: [],
     conversation: [],
+    agent_usage: { usage: { input: 0, output: 0, reasoning: 0 }, calls: 0 },
   };
 }
 

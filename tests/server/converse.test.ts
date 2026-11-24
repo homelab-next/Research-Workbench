@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { latestDraft } from "../../src/core/state";
+import { latestDraft, runUsage } from "../../src/core/state";
 import type { Actor, Entry } from "../../src/core/types";
 import type { AgentView } from "../../src/core/wire";
 import { agentParts } from "../../src/server/converse";
@@ -45,6 +45,7 @@ test("a question is recorded, answered by a model with no tools, and the answer 
   expect(s.entries(id).filter((e) => e.seq > req.seq && e.type === "tool.called")).toEqual([]);
   const asked = s.entries(id).findLast((e) => e.type === "agent.asked")!;
   expect(asked.actor).toEqual({ kind: "human", id: s.config.user });
+  expect(req.cause).toBe(asked.seq);
   const answered = s.entries(id).findLast((e) => e.type === "agent.answered")!;
   expect(answered.actor).toMatchObject({ kind: "agent", id: "assistant" });
 });
@@ -217,6 +218,10 @@ test("propose_answer makes a narrative proposal and changes no draft", async () 
   expect(p).toMatchObject({ kind: "narrative", title: "Your agent's answer as Summary", by: "assistant", section: "summary", text: state(id).conversation.at(-1)!.answer, cites: ["c1"], status: "open" });
   expect(state(id).drafts.length).toBe(drafts);
   expect(latestDraft(state(id))!.hash).toBe(before.hash);
+  const made = s.entries(id).findLast((e) => e.type === "proposal.created")!;
+  const answeredAt = s.entries(id).findLast((e) => e.type === "agent.answered")!;
+  expect(made.actor).toEqual({ kind: "human", id: s.config.user });
+  expect(made.cause).toBe(answeredAt.seq);
   expect((await s.command(id, "propose_answer", { turn, section: "key_findings" })).status).toBe(400);
   expect(await s.command(id, "propose_answer", { turn: "t99", section: "summary" })).toEqual({ status: 409, body: { ok: false, refused: ["there is no answered turn t99"] } });
 });
@@ -237,6 +242,9 @@ test("keep_answer makes a note card in Incoming carrying the request's marking",
     kind: "note", made_by: "agent", title: "Note: What do we know about the asset?", body: state(id).conversation.at(-1)!.answer, why: "What do we know about the asset?",
     query: null, rows: [], row_count: 0, marking: req.payload.marking, place: "incoming",
   });
+  const made = s.entries(id).findLast((e) => e.type === "card.created")!;
+  expect(made.actor).toEqual({ kind: "human", id: s.config.user });
+  expect(made.cause).toBe(s.entries(id).findLast((e) => e.type === "agent.answered")!.seq);
 });
 
 test("the agent view lists the parts with the fixed ones marked, and writes nothing", async () => {
@@ -276,4 +284,69 @@ test("ask keeps, moves and discards nothing", async () => {
     expect(after.map((e) => e.type)).not.toContain(t as Entry["type"]);
   }
   expect(state(id).run.waiting).toBe("publish");
+});
+
+test("the conversation's model use is counted apart and does not spend the run's budget", async () => {
+  s = await served();
+  const id = await atGate();
+  const run = runUsage(state(id));
+  expect((await s.command(id, "set_budget", { tokens: 1 })).status).toBe(200);
+  expect((await ask(id)).status).toBe(200);
+  await s.app.hub.idle();
+  expect(state(id).conversation.at(-1)!.answer).not.toBeNull();
+  expect(runUsage(state(id))).toEqual(run);
+  expect(state(id).agent_usage.calls).toBe(1);
+  expect(state(id).agent_usage.usage.output).toBeGreaterThan(0);
+});
+
+test("a turn whose pack cannot be made ends with agent.ended, and the next turn is its own", async () => {
+  s = await served();
+  const id = await atGate();
+  expect((await s.command(id, "keep", { card: "c1" })).status).toBe(200);
+  const provider = s.app.hub.deps.providers.get("scripted")!;
+  const real = provider.turn.bind(provider);
+  let open!: () => void;
+  const gate = new Promise<void>((r) => { open = r; });
+  provider.turn = async (r) => { await gate; return real(r); };
+  try {
+    expect((await ask(id, "First?")).status).toBe(200);
+    expect((await ask(id, "Second?", ["card:c1"])).status).toBe(200);
+    expect((await s.command(id, "discard", { card: "c1" })).status).toBe(200);
+  } finally {
+    open();
+    provider.turn = real;
+  }
+  await s.app.hub.idle();
+  const [one, two] = state(id).conversation.slice(-2);
+  expect(one!.answer).toContain("[c1]");
+  expect(two).toMatchObject({ asked: "Second?", answer: null, ended: "unknown context item card:c1" });
+  const ended = s.entries(id).findLast((e) => e.type === "agent.ended")!;
+  expect(ended.payload).toEqual({ asked: two!.asked_seq, reason: "unknown context item card:c1" });
+  expect(s.entries(id).filter((e) => e.type === "model.request" && e.actor.id === "assistant").map((e) => e.cause)).toEqual([one!.asked_seq]);
+});
+
+test("a question left open by a stopped process is ended as interrupted at the first command after", async () => {
+  s = await served();
+  const id = await s.newCase();
+  cases.push(id);
+  s.app.hub.read(id).commit((_st, ids) => [{ type: "agent.asked", actor: { kind: "human", id: s.config.user }, payload: { turn: ids.next("turn"), text: "Left open", left_out: [], added: [] } }]);
+  expect(state(id).conversation[0]!.ended).toBeNull();
+  expect((await s.command(id, "add_lane", { title: "x" })).status).toBe(200);
+  expect(state(id).conversation[0]!.ended).toBe("interrupted");
+});
+
+test("the view skips an earlier turn whose request cannot be found", async () => {
+  s = await served();
+  const id = await atGate();
+  const session = s.app.hub.read(id);
+  let turn = "";
+  session.commit((_st, ids) => { turn = ids.next("turn"); return [{ type: "agent.asked", actor: { kind: "human", id: "a" }, payload: { turn, text: "Odd", left_out: [], added: [] } }]; });
+  session.commit(() => [{ type: "agent.answered", actor: agentActor, payload: { turn, request: "r404", text: "Hm", cites: [] } }]);
+  const res = await s.get(`/api/cases/${id}/agent`);
+  expect(res.status).toBe(200);
+  expect(((await res.json()) as AgentView).parts.some((p) => p.kind === "turn")).toBe(false);
+  expect((await ask(id)).status).toBe(200);
+  await s.app.hub.idle();
+  expect(state(id).conversation.at(-1)!.answer).not.toBeNull();
+  expect((await s.command(id, "keep_answer", { turn })).status).toBe(409);
 });

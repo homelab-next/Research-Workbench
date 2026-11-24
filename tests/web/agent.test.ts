@@ -204,20 +204,63 @@ test("a declined, blocked or failed turn says so, and one that is pending says t
   expect(p.all(".lens-agent [data-action=propose-summary]")).toEqual([]);
 });
 
-test("a turn whose request was left open is interrupted once a later turn has moved on", async () => {
-  await inLens();
+const human = { kind: "human", id: "analyst" } as const;
+const assistant = { kind: "agent", id: "assistant", stage: "agent", profile: "investigation", model: "sample-run", effort: null, where: "machine" } as const;
+const askedBy = (text: string): number => {
   const session = p.s.app.hub.read("CASE-1");
-  const human = { kind: "human", id: "analyst" } as const;
-  const agent = { kind: "agent", id: "assistant", stage: "agent", profile: "investigation", model: "sample-run", effort: null, where: "machine" } as const;
-  let turn = "";
-  session.commit((_s, ids) => { turn = ids.next("turn"); return [{ type: "agent.asked", actor: human, payload: { turn, text: "Left open", left_out: [], added: [] } }]; });
-  session.commit((_s, ids) => [{ type: "model.request", actor: agent, payload: { request: ids.next("request"), provider: "scripted", model: "sample-run", effort: null, where: "machine", marking: "TLP:GREEN", pack: [], left_out: [], messages: session.blobs.put("{}"), tools: [] } }]);
+  return session.commit((_s, ids) => [{ type: "agent.asked", actor: human, payload: { turn: ids.next("turn"), text, left_out: [], added: [] } }])[0]!.seq;
+};
+const requestFor = (cause: number): void => {
+  const session = p.s.app.hub.read("CASE-1");
+  session.commit((_s, ids) => [{ type: "model.request", actor: assistant, cause, payload: { request: ids.next("request"), provider: "scripted", model: "sample-run", effort: null, where: "machine", marking: "TLP:GREEN", pack: [], left_out: [], messages: session.blobs.put("{}"), tools: [] } }]);
+};
+const ended = (asked: number, reason: string): void => { p.s.app.hub.read("CASE-1").commit(() => [{ type: "agent.ended", actor: { kind: "system", id: "recovery" }, payload: { asked, reason } }]); };
+const statusOf = (n: number): string => turns()[n]!.querySelector(".status")!.textContent!;
+
+test("an ended turn reads interrupted, or failed with its reason; a request is linked to its turn by cause, not by position", async () => {
+  await inLens();
+  const one = askedBy("Never started");
+  ended(one, "unknown context item card:c9");
+  const two = askedBy("Left open");
+  requestFor(two);
   await settled();
-  expect(last(".status").textContent).toBe("thinking…");
-  session.commit((_s, ids) => [{ type: "agent.asked", actor: human, payload: { turn: ids.next("turn"), text: "Later", left_out: [], added: [] } }]);
-  session.commit(() => [{ type: "model.blocked", actor: agent, payload: { stage: "agent", marking: "TLP:GREEN", model: "sample-run", where: "machine" } }]);
+  expect(statusOf(0)).toBe("failed: unknown context item card:c9");
+  expect(statusOf(1)).toBe("thinking…");
+  const three = askedBy("Restarted");
+  ended(three, "interrupted");
   await settled();
-  expect(turns().at(-2)!.querySelector(".status")!.textContent).toBe("interrupted");
+  expect(statusOf(2)).toBe("interrupted");
+  ended(two, "interrupted");
+  await settled();
+  expect(statusOf(1)).toBe("interrupted");
+});
+
+test("a blocked turn is linked by cause too", async () => {
+  await inLens();
+  askedBy("First");
+  const two = askedBy("Second");
+  p.s.app.hub.read("CASE-1").commit(() => [{ type: "model.blocked", actor: assistant, cause: two, payload: { stage: "agent", marking: "TLP:AMBER", model: "sample-run", where: "machine" } }]);
+  await settled();
+  expect(statusOf(0)).toBe("thinking…");
+  expect(statusOf(1)).toBe("blocked: the model may not receive TLP:AMBER");
+});
+
+test("the conversation's own model use is shown", async () => {
+  await inLens();
+  expect(p.q(".lens-agent .agent-use").textContent).toBe("conversation use: 0 in · 0 out · 0 reasoning · 0 calls");
+  p.click("[data-quick=synopsis]");
+  await settled();
+  const u = state().agent_usage;
+  expect(u.calls).toBe(1);
+  expect(p.q(".lens-agent .agent-use").textContent).toBe(`conversation use: ${u.usage.input} in · ${u.usage.output} out · ${u.usage.reasoning} reasoning · 1 calls`);
+});
+
+test("an answered turn whose request is not in the ledger says its record is incomplete", async () => {
+  await inLens();
+  const at = askedBy("Odd");
+  p.s.app.hub.read("CASE-1").commit(() => [{ type: "agent.answered", actor: assistant, cause: at, payload: { turn: "u1", request: "r404", text: "Hm", cites: [] } }]);
+  await settled();
+  expect(last(".incomplete").textContent).toBe("this turn's record is incomplete");
 });
 
 test("in replay asking is disabled", async () => {

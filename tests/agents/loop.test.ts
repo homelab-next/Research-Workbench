@@ -289,6 +289,25 @@ test("an agent with no tools has any tool call in a reply recorded as skipped an
   expect(p.seen[0]!.tools).toEqual([]);
 });
 
+test("only an outside_run agent with no tools has its tool calls skipped; a pipeline stage with no tools keeps its old behaviour", async () => {
+  const p = spy([{ tool_calls: [{ tool: "list_sources", args: { why: "w" } }] }, { content: "done" }]);
+  const end = await runAgent(f.s, spec(p, { tools: [] }));
+  expect(end.kind).toBe("done");
+  expect(ofType("tool.skipped")).toEqual([]);
+  expect(ofType("tool.called").length).toBe(1);
+  expect(ofType("tool.returned")[0]!.payload.ok).toBe(false);
+});
+
+test("a cause given to the loop is on its request and its block", async () => {
+  const cause = f.s.head().seq;
+  const a = spy([{ content: "x" }]);
+  await runAgent(f.s, spec(a, { cause }));
+  expect(ofType("model.request")[0]!.cause).toBe(cause);
+  const b = spy([{ content: "y" }], "hosted");
+  await runAgent(f.s, spec(b, { cause, pack: pack("TLP:AMBER") }));
+  expect(ofType("model.blocked")[0]!.cause).toBe(cause);
+});
+
 test("the loop gives up after max_turns", async () => {
   const call: ScriptReply = { tool_calls: [{ tool: "list_sources", args: { why: "w" } }] };
   const p = spy([call, call, call]);

@@ -108,5 +108,8 @@ export interface CaseState {
   challenges: Record<string, ChallengeState>;
   published: { n: number; draft_hash: string; head_hash: string; dir: string; seq: number; ts: string }[];
   feedback: Payloads["feedback.recorded"][];
-  conversation: { turn: string; asked: string; answer: string | null; cites: string[]; request: string | null }[];
+  /** `asked_seq` is the seq of the turn's agent.asked entry; `ended` is why it will not be answered (agent.ended), else null. */
+  conversation: { turn: string; asked: string; answer: string | null; cites: string[]; request: string | null; asked_seq: number; ended: string | null }[];
+  /** Model use by your agent (the conversation), kept apart from the run's: a question does not spend the run's budget. */
+  agent_usage: { usage: Usage; calls: number };
 }

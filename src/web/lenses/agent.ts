@@ -33,39 +33,29 @@ const picks = new WeakMap<CaseStore, Picks>();
 /** Where a turn stands, from the entries after its question. */
 export type TurnStatus =
   | { kind: "answered" } | { kind: "thinking" } | { kind: "interrupted" }
-  | { kind: "declined"; reason: string } | { kind: "blocked"; marking: string } | { kind: "failed" };
-interface Attempt { seq: number; request: string | null; blocked: string | null }
+  | { kind: "declined"; reason: string } | { kind: "blocked"; marking: string } | { kind: "failed"; reason: string };
 
 const isAgent = (e: Entry): boolean => e.actor.kind === "agent" && e.actor.stage === "agent";
 
 /**
- * Each question's status. Questions are answered one at a time, so an agent request or block belongs to the first question that has none yet.
- * A question whose request never ended is `thinking…` until a later question has moved on, and `interrupted` after.
+ * Each question's status. A request or block is linked to its question by cause (the seq of the agent.asked entry the work answered), never by position,
+ * and a decline or failed response by the request it names. A question the fold says was ended reads interrupted, or failed with the reason.
  */
 export function turnStatuses(entries: readonly Entry[], state: CaseState): Map<string, TurnStatus> {
-  const order: string[] = [];
-  const attempt = new Map<string, Attempt>();
+  const turnOfSeq = new Map(state.conversation.map((t) => [t.asked_seq, t.turn] as const));
   const byRequest = new Map<string, string>();
   const outcome = new Map<string, TurnStatus>();
-  const next = (): string | undefined => order.find((t) => !attempt.has(t));
   for (const e of entries) {
     if (e.seq > state.seq) break;
     switch (e.type) {
-      case "agent.asked": order.push(e.payload.turn); break;
       case "model.request": {
-        if (!isAgent(e)) break;
-        const turn = next();
-        if (turn === undefined) break;
-        attempt.set(turn, { seq: e.seq, request: e.payload.request, blocked: null });
-        byRequest.set(e.payload.request, turn);
+        const turn = e.cause === null ? undefined : turnOfSeq.get(e.cause);
+        if (isAgent(e) && turn !== undefined) byRequest.set(e.payload.request, turn);
         break;
       }
       case "model.blocked": {
-        if (!isAgent(e)) break;
-        const turn = next();
-        if (turn === undefined) break;
-        attempt.set(turn, { seq: e.seq, request: null, blocked: e.payload.marking });
-        outcome.set(turn, { kind: "blocked", marking: e.payload.marking });
+        const turn = e.cause === null ? undefined : turnOfSeq.get(e.cause);
+        if (isAgent(e) && turn !== undefined) outcome.set(turn, { kind: "blocked", marking: e.payload.marking });
         break;
       }
       case "model.declined": {
@@ -75,21 +65,18 @@ export function turnStatuses(entries: readonly Entry[], state: CaseState): Map<s
       }
       case "model.response": {
         const turn = byRequest.get(e.payload.request);
-        if (turn !== undefined && e.payload.stop === "error") outcome.set(turn, { kind: "failed" });
+        if (turn !== undefined && e.payload.stop === "error") outcome.set(turn, { kind: "failed", reason: "the model call failed" });
         break;
       }
       default:
     }
   }
   const out = new Map<string, TurnStatus>();
-  for (const [i, turn] of order.entries()) {
-    const t = state.conversation.find((x) => x.turn === turn);
-    if (t !== undefined && t.answer !== null) { out.set(turn, { kind: "answered" }); continue; }
-    const ended = outcome.get(turn);
-    if (ended !== undefined) { out.set(turn, ended); continue; }
-    const at = attempt.get(turn)?.seq ?? 0;
-    const movedOn = order.slice(i + 1).some((later) => (attempt.get(later)?.seq ?? 0) > at);
-    out.set(turn, { kind: movedOn ? "interrupted" : "thinking" });
+  for (const t of state.conversation) {
+    if (t.answer !== null) out.set(t.turn, { kind: "answered" });
+    else if (outcome.has(t.turn)) out.set(t.turn, outcome.get(t.turn)!);
+    else if (t.ended !== null) out.set(t.turn, t.ended === "interrupted" ? { kind: "interrupted" } : { kind: "failed", reason: t.ended });
+    else out.set(t.turn, { kind: "thinking" });
   }
   return out;
 }
@@ -100,7 +87,7 @@ const STATUS_WORDS = (s: TurnStatus): string => {
     case "interrupted": return "interrupted";
     case "declined": return `declined: ${s.reason}`;
     case "blocked": return `blocked: the model may not receive ${s.marking}`;
-    case "failed": return "failed: the model call failed";
+    case "failed": return `failed: ${s.reason}`;
     case "answered": return "";
   }
 };
@@ -135,6 +122,7 @@ export function makeAgent(ui: Ui, open: Open): AgentLens {
   const head = h("p", { class: "agent-head" });
   const controls = h("div", { class: "model-controls" });
   const noModel = h("p", { class: "models-note attention" }, NO_MODEL);
+  const use = h("p", { class: "agent-use" });
   const loaded = h("p", { class: "loaded" });
   const chips = h("div", { class: "chips" });
   const addBox = h("div", { class: "add-box" });
@@ -243,6 +231,8 @@ export function makeAgent(ui: Ui, open: Open): AgentLens {
       controls.append(h("label", null, "Model ", modelSelect(v?.model ?? null)), " ", h("label", null, "Effort ", effortSelect(v?.model ?? null)));
     }
     noModel.hidden = v === null || v.model !== null;
+    const u = s.agent_usage;
+    use.textContent = `conversation use: ${u.usage.input} in · ${u.usage.output} out · ${u.usage.reasoning} reasoning · ${u.calls} calls`;
   };
 
   // ---------- loading ----------
@@ -309,7 +299,8 @@ export function makeAgent(ui: Ui, open: Open): AgentLens {
     } else {
       kids.push(answerBody(t.answer, t.cites, s));
       kids.push(h("p", { class: "byline" }, `your agent · ${ui.ref.profile.title} profile · `, ts === null ? null : timeEl(ui, ts, "local")));
-      if (req !== null) {
+      if (req === null) kids.push(h("p", { class: "incomplete attention" }, "this turn's record is incomplete"));
+      else {
         kids.push(h("details", { class: "turn-context" }, h("summary", null, "context"),
           h("ul", null, req.payload.pack.map((i) => h("li", null, `${i.kind} ${i.title} · ${i.chars} chars${i.fixed ? " · fixed" : ""}`)),
             req.payload.left_out.map((i) => h("li", { class: "left-out" }, `left out: ${i.kind} ${i.id}`)))));
@@ -344,7 +335,7 @@ export function makeAgent(ui: Ui, open: Open): AgentLens {
   }
 
   const el = h("div", { class: "lens lens-agent", name: "Agent" },
-    head, controls, noModel, note, loaded, chips, addBox, excerpt, quick, conversation, empty,
+    head, controls, noModel, use, note, loaded, chips, addBox, excerpt, quick, conversation, empty,
     h("div", { class: "ask-row" }, box));
   viewSig = store.at === null ? signature(store.live) : "";
   if (store.at === null) loadView();

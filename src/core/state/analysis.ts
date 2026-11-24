@@ -132,7 +132,7 @@ function applyOutputs(s: CaseState, entry: Entry): CaseState {
       const { turn, text, left_out, added } = entry.payload;
       if (!isStr(turn) || !isStr(text) || !isStrList(left_out) || !isStrList(added)) return malformed(s, entry);
       if (s.conversation.some((t) => t.turn === turn)) return s;
-      return { ...s, conversation: [...s.conversation, { turn, asked: text, answer: null, cites: [], request: null }] };
+      return { ...s, conversation: [...s.conversation, { turn, asked: text, answer: null, cites: [], request: null, asked_seq: entry.seq, ended: null }] };
     }
     case "agent.answered": {
       const { turn, request, text, cites } = entry.payload;
@@ -140,6 +140,13 @@ function applyOutputs(s: CaseState, entry: Entry): CaseState {
       const i = s.conversation.findIndex((t) => t.turn === turn);
       if (i < 0 || s.conversation[i]!.answer !== null) return s;
       return { ...s, conversation: s.conversation.map((t, j) => (j === i ? { ...t, answer: text, cites, request } : t)) };
+    }
+    case "agent.ended": {
+      const { asked, reason } = entry.payload;
+      if (!isNum(asked) || !isStr(reason)) return malformed(s, entry);
+      const i = s.conversation.findIndex((t) => t.asked_seq === asked);
+      if (i < 0 || s.conversation[i]!.answer !== null || s.conversation[i]!.ended !== null) return s;
+      return { ...s, conversation: s.conversation.map((t, j) => (j === i ? { ...t, ended: reason } : t)) };
     }
     default:
       return s;

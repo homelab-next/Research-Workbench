@@ -281,6 +281,11 @@ function applyPipeline(s: CaseState, entry: Entry): CaseState {
     case "model.response": {
       const u = entry.payload.usage;
       if (!isObj(u) || !isNum(u.input) || !isNum(u.output) || !isNum(u.reasoning)) return malformed(s, entry);
+      // what your agent says in the conversation is counted apart: a question does not spend the run's budget
+      if (entry.actor.kind === "agent" && entry.actor.stage === "agent") {
+        const a = s.agent_usage;
+        return { ...s, agent_usage: { usage: { input: a.usage.input + u.input, output: a.usage.output + u.output, reasoning: a.usage.reasoning + u.reasoning }, calls: a.calls + 1 } };
+      }
       const { usage } = s.run;
       return withRun(s, {
         usage: { input: usage.input + u.input, output: usage.output + u.output, reasoning: usage.reasoning + u.reasoning },

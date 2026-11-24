@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { apply, blockers, fold, initial, latestDraft, publishable } from "../../src/core/state";
+import { apply, blockers, fold, initial, latestDraft, publishable, runUsage } from "../../src/core/state";
 import type { CaseState } from "../../src/core/state";
 import type { Challenge, Draft, Entry, Product, StageDef } from "../../src/core/types";
 import { EntryBuilder } from "../helpers/entries";
@@ -247,11 +247,38 @@ test("agent.asked opens a turn and agent.answered fills it", () => {
   const b = run();
   b.add("agent.asked", { turn: "u1", text: "why?", left_out: [], added: [] });
   let s = fold(b.entries);
-  expect(s.conversation).toEqual([{ turn: "u1", asked: "why?", answer: null, cites: [], request: null }]);
+  expect(s.conversation).toEqual([{ turn: "u1", asked: "why?", answer: null, cites: [], request: null, asked_seq: 2, ended: null }]);
   expect(s.counters.turn).toBe(1);
   b.add("agent.answered", { turn: "u1", request: "r1", text: "because", cites: ["c1"] });
   s = fold(b.entries);
-  expect(s.conversation).toEqual([{ turn: "u1", asked: "why?", answer: "because", cites: ["c1"], request: "r1" }]);
+  expect(s.conversation).toEqual([{ turn: "u1", asked: "why?", answer: "because", cites: ["c1"], request: "r1", asked_seq: 2, ended: null }]);
+});
+
+test("agent.ended closes an unanswered turn by the seq of its question, once, and never an answered one", () => {
+  const b = run();
+  b.add("agent.asked", { turn: "u1", text: "a", left_out: [], added: [] });
+  b.add("agent.asked", { turn: "u2", text: "b", left_out: [], added: [] });
+  b.add("agent.ended", { asked: 2, reason: "interrupted" });
+  b.add("agent.ended", { asked: 2, reason: "second" });
+  b.add("agent.answered", { turn: "u2", request: "r1", text: "t", cites: [] });
+  b.add("agent.ended", { asked: 3, reason: "late" });
+  b.add("agent.ended", { asked: 99, reason: "nothing" });
+  const s = fold(b.entries);
+  expect(s.conversation.map((t) => [t.turn, t.ended, t.answer])).toEqual([["u1", "interrupted", null], ["u2", null, "t"]]);
+  expect(s.skipped).toEqual([]);
+  expect(fold([...b.entries, { ...b.entries[0]!, seq: 8, type: "agent.ended", payload: { asked: "x" } } as unknown as Entry]).skipped.length).toBe(1);
+});
+
+test("the conversation's model responses are counted apart and do not spend the run's usage", () => {
+  const b = run();
+  const usage = { input: 10, output: 5, reasoning: 1 };
+  const agent = { kind: "agent", id: "assistant", stage: "agent", profile: "p", model: "m", effort: null, where: "machine" } as const;
+  const other = { ...agent, id: "analyst", stage: "assemble" };
+  b.add("model.response", { request: "r1", response: { blob: "b", bytes: 1 }, stop: "end", usage, served_by: "m", reasoning: null }, { actor: other });
+  b.add("model.response", { request: "r2", response: { blob: "b", bytes: 1 }, stop: "end", usage, served_by: "m", reasoning: null }, { actor: agent });
+  const s = fold(b.entries);
+  expect(runUsage(s)).toEqual({ usage, model_calls: 1 });
+  expect(s.agent_usage).toEqual({ usage, calls: 1 });
 });
 
 test("analysis entries for an unknown draft hash change only seq", () => {

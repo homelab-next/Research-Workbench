@@ -83,6 +83,7 @@ const TABLE: Record<EntryType, [string, Say]> = {
   "feedback.recorded": ["feedback recorded", (p) => join(str(p.measure), str(p.value), str(p.note))],
   "agent.asked": ["question asked", (p) => str(p.text)],
   "agent.answered": ["question answered", (p) => str(p.text)],
+  "agent.ended": ["question not answered", (p) => str(p.reason)],
   "module.loaded": ["module loaded", (p) => join(str(p.kind), str(p.id))],
   "module.rejected": ["module rejected", (p) => join(str(p.path), str(p.error))],
   "setting.changed": ["setting changed", (p) => str(p.key)],

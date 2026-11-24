@@ -176,6 +176,8 @@ export interface Payloads {
   // your agent (the Agent lens)
   "agent.asked": { turn: string; text: string; left_out: string[]; added: string[] };
   "agent.answered": { turn: string; request: string; text: string; cites: string[] };
+  /** A question that will not be answered: `asked` is the seq of its agent.asked entry; `reason` is "interrupted" or the (scrubbed) text of what failed. */
+  "agent.ended": { asked: number; reason: string };
   // workbench chain
   "module.loaded": { kind: string; id: string; hash: string; root: string; path: string };
   "module.rejected": { root: string; path: string; error: string };
@@ -285,7 +287,7 @@ export const ENTRY_TYPES = listOf<EntryType>({
   "undo": true, "proposal.created": true, "proposal.accepted": true, "proposal.rejected": true,
   "assessment.made": true, "research.requested": true, "draft.revised": true, "check.run": true,
   "evaluation.made": true, "challenge.raised": true, "challenge.answered": true, "publish.rejected": true,
-  "product.published": true, "feedback.recorded": true, "agent.asked": true, "agent.answered": true,
+  "product.published": true, "feedback.recorded": true, "agent.asked": true, "agent.answered": true, "agent.ended": true,
   "module.loaded": true, "module.rejected": true, "setting.changed": true, "case.anchored": true,
 });
 const ENTRY_TYPE_SET: ReadonlySet<string> = new Set(ENTRY_TYPES);

@@ -21,6 +21,8 @@ export interface AgentSpec {
   policy: Record<Marking, Where[]>; max_marking: Marking | null; max_turns?: number;
   /** True for an agent that works beside the run (the conversational one): the run being paused, finished or out of budget does not stop it. The marking check and every entry written are the same. */
   outside_run?: boolean;
+  /** The seq of the entry this work answers (a question): put on the agent's own request and block entries, so a reader links them to it by cause rather than by position. */
+  cause?: number;
 }
 export interface CallRecord { call: string; tool: string; args: Json; ok: boolean }
 export type AgentEnd =
@@ -85,6 +87,7 @@ const count = (n: unknown): number => (typeof n === "number" && Number.isFinite(
 export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<AgentEnd> {
   const { actor, provider, ctx } = spec;
   const link = { run: ctx.link.run, stage: ctx.link.stage, job: ctx.link.job };
+  const because = spec.cause === undefined ? {} : { cause: spec.cause };
   const messages: ChatMessage[] = [{ role: "system", content: renderPack(spec.pack) }, { role: "user", content: spec.task }];
   const calls: CallRecord[] = [];
   let marking: Marking = spec.pack.marking;
@@ -103,7 +106,7 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     // 2. marking: the strictest of the pack and every tool result so far. A fixed part over the stage's limit (what must be fixed, say) is
     // never left out, so the call is not made instead.
     if (!mayGo(marking, provider.where, spec.policy) || tooStrict(marking, spec.max_marking)) {
-      session.commit(() => [{ type: "model.blocked", actor, ...link, payload: { stage: actor.stage, marking, model: spec.model, where: provider.where } }]);
+      session.commit(() => [{ type: "model.blocked", actor, ...link, ...because, payload: { stage: actor.stage, marking, model: spec.model, where: provider.where } }]);
       return { kind: "blocked", marking };
     }
     // 3. request, written before the provider is contacted
@@ -115,7 +118,7 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     const [requested] = session.commit((_s, ids) => {
       requestId = ids.next("request");
       return [{
-        type: "model.request", actor, ...link,
+        type: "model.request", actor, ...link, ...because,
         payload: { request: requestId, provider: provider.id, model: spec.model, effort: spec.effort, where: provider.where, marking, pack: spec.pack.items, left_out: spec.pack.left_out, messages: messagesBlob, tools: [...spec.tools] },
       }];
     });
@@ -169,9 +172,9 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     const stop = result.stop === "tool_calls" || result.stop === "length" ? result.stop : "end";
     // at most MAX_CALLS of a reply's tool calls run; the rest are one entry beside the response, not an entry each
     // an agent with no tools runs none: every call in its reply is skipped
-    const toRun = spec.tools.length === 0 ? [] : result.tool_calls.slice(0, MAX_CALLS);
+    const toRun = spec.outside_run === true && spec.tools.length === 0 ? [] : result.tool_calls.slice(0, MAX_CALLS);
     const extra = result.tool_calls.length - toRun.length;
-    const skippedNote = spec.tools.length === 0 ? `${extra} tool calls were not run: this agent has no tools` : `${extra} further tool calls were not run`;
+    const skippedNote = spec.outside_run === true && spec.tools.length === 0 ? `${extra} tool calls were not run: this agent has no tools` : `${extra} further tool calls were not run`;
     if (!guarded(() => [
       {
         type: "model.response", actor, ...link, cause: requested!.seq,

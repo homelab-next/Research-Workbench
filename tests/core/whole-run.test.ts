@@ -198,7 +198,7 @@ test("a whole run, live, equals its replay at every entry", () => {
   expect(final.queries[q1]).toMatchObject({ status: "done", card: "c1", coverage: { kind: "partial", reason: "row_limit" } });
   expect(final.cards.c1).toMatchObject({ pinned: true, place: "lane", validated: { outcome: "could_not_run" } });
   expect(final.incoming).toEqual(["c2"]);
-  expect(final.conversation).toEqual([{ turn: "u1", asked: "Why moderate?", answer: "One source.", cites: ["c1"], request: "r9" }]);
+  expect(final.conversation).toEqual([{ turn: "u1", asked: "Why moderate?", answer: "One source.", cites: ["c1"], request: "r9", asked_seq: expect.any(Number), ended: null }]);
 
   // ---- live equals replay at every entry
   const all = s.entries();

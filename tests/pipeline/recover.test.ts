@@ -49,7 +49,7 @@ test("a query left running is closed as failed: interrupted", () => {
   const s = reopen((c) => c.commit((_st, ids) => [issue(ids.next("query"))]));
   expect(s.state.queries.q1!.status).toBe("running");
   const r = recoverSession(s);
-  expect(r).toEqual({ queries: ["q1"], jobs: [], interrupted: false });
+  expect(r).toEqual({ queries: ["q1"], jobs: [], asks: [], interrupted: false });
   expect(s.state.queries.q1).toMatchObject({ status: "failed", error: "interrupted" });
   expect(s.entries().at(-1)!.cause).toBe(s.state.queries.q1!.issued_seq);
   expect(s.entries().at(-1)!.actor).toEqual({ kind: "system", id: "recovery" });
@@ -63,7 +63,7 @@ test("a running job is finished as failed and a running run is marked interrupte
   });
   const before = s.head().seq;
   const r = recoverSession(s);
-  expect(r).toEqual({ queries: [], jobs: ["j1"], interrupted: true });
+  expect(r).toEqual({ queries: [], jobs: ["j1"], asks: [], interrupted: true });
   expect(s.state.jobs.j1!.status).toBe("failed");
   expect(s.state.run.status).toBe("interrupted");
   expect(s.head().seq).toBe(before + 2);
@@ -76,7 +76,7 @@ test("a waiting or paused run is left as it is", () => {
   });
   const before = s.head().seq;
   expect(s.state.run.status).toBe("waiting");
-  expect(recoverSession(s)).toEqual({ queries: [], jobs: [], interrupted: false });
+  expect(recoverSession(s)).toEqual({ queries: [], jobs: [], asks: [], interrupted: false });
   expect(s.head().seq).toBe(before);
 
   s.commit(() => [{ type: "run.paused", actor: human, payload: { reason: "cap" } }]);
@@ -93,7 +93,7 @@ test("recovering twice writes nothing the second time", () => {
   });
   recoverSession(s);
   const head = s.head();
-  expect(recoverSession(s)).toEqual({ queries: [], jobs: [], interrupted: false });
+  expect(recoverSession(s)).toEqual({ queries: [], jobs: [], asks: [], interrupted: false });
   expect(s.head()).toEqual(head);
 });
 
@@ -106,4 +106,23 @@ test("the case still verifies after recovery", () => {
   expect(s.state.skipped).toEqual([]);
   wb.close();
   expect(verifyCase(join(dir, "cases", "CASE-1")).ok).toBe(true);
+});
+
+test("a question left without an answer or an end is closed as interrupted, and one that was answered is left alone", () => {
+  const asked = (turn: string, text: string): EntryInput => ({ type: "agent.asked", actor: human, payload: { turn, text, left_out: [], added: [] } });
+  const s = reopen((c) => {
+    c.commit((_st, ids) => [asked(ids.next("turn"), "one")]);
+    c.commit((_st, ids) => [asked(ids.next("turn"), "two")]);
+    c.commit(() => [{ type: "agent.answered", actor: agent, payload: { turn: "u2", request: "r1", text: "t", cites: [] } }]);
+    c.commit((_st, ids) => [asked(ids.next("turn"), "three")]);
+    c.commit((state) => [{ type: "agent.ended", actor: agent, payload: { asked: state.conversation[2]!.asked_seq, reason: "boom" } }]);
+    c.commit((_st, ids) => [asked(ids.next("turn"), "four")]);
+  });
+  const r = recoverSession(s);
+  expect(r.asks).toEqual(["u1", "u4"]);
+  expect(s.state.conversation.map((t) => t.ended)).toEqual(["interrupted", null, "boom", "interrupted"]);
+  const ended = s.entries().filter((e) => e.type === "agent.ended").at(-1)!;
+  expect(ended.actor).toEqual({ kind: "system", id: "recovery" });
+  expect(recoverSession(s).asks).toEqual([]);
+  expect(s.state.skipped).toEqual([]);
 });

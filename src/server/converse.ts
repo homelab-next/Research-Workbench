@@ -70,12 +70,12 @@ export function agentParts(session: CaseSession, deps: EngineDeps, added: readon
     const entries = session.entries();
     for (const t of [...state.conversation].reverse()) {
       if (t.answer === null) continue;
-      // the request that wrote the answer is exact even when two answers were being written at once
-      const wrote = entries.find((e) => e.type === "model.request" && e.payload.request === t.request)
-        ?? entries.findLast((e) => e.type === "agent.answered" && e.payload.turn === t.turn);
+      // the request that wrote the answer is exact even when two answers were being written at once; a turn whose request is not in the ledger is left out (its marking is unknown)
+      const wrote = entries.find((e) => e.type === "model.request" && e.payload.request === t.request);
+      if (wrote === undefined) continue;
       parts.push(packPart({
         kind: "turn", id: t.turn, title: `Earlier: ${clip(t.asked, TITLE_CHARS)}`, text: `Asked: ${t.asked}\nAnswered: ${t.answer}`, fixed: false,
-        entries, written_by: wrote === undefined ? [] : [wrote], floor: null,
+        entries, written_by: [wrote], floor: null,
       }));
     }
     for (const key of added) {
@@ -152,14 +152,26 @@ export async function ask(ctx: CommandContext, input: { text: string; left_out: 
   const first = assemblePack(without(agentParts(session, deps, input.added), input.left_out), { budget: packBudget(who.context), case_marking: session.state.meta!.marking, max_marking: null });
   if ("too_big" in first) throw new AskRefused("The fixed context does not fit this model.");
   let turn = "";
-  session.commit((_s, ids) => {
+  const [asked] = session.commit((_s, ids) => {
     turn = ids.next("turn");
     return [{ type: "agent.asked", actor: ctx.actor, payload: { turn, text, left_out: [...input.left_out], added: [...input.added] } }];
   });
-  hub.background(inTurn(hub, id, () => answer(ctx, who, { turn, text, left_out: input.left_out, added: input.added })));
+  const seq = asked!.seq;
+  hub.background(inTurn(hub, id, async () => {
+    try {
+      await answer(ctx, who, { turn, seq, text, left_out: input.left_out, added: input.added });
+    } catch (err) {
+      // a turn is never left without an end: say why this one will not be answered, then let the server report it
+      try {
+        const reason = clip(shown(deps, (err instanceof Error ? err.message : String(err)).split("\n")[0]!), 300);
+        session.commit(() => [{ type: "agent.ended", actor: { kind: "system", id: "converse" }, cause: seq, payload: { asked: seq, reason } }]);
+      } catch { /* the ledger refused even that; recovery ends the turn at the next open */ }
+      throw err;
+    }
+  }));
 }
 
-async function answer(ctx: CommandContext, who: Resolved, q: { turn: string; text: string; left_out: string[]; added: string[] }): Promise<void> {
+async function answer(ctx: CommandContext, who: Resolved, q: { turn: string; seq: number; text: string; left_out: string[]; added: string[] }): Promise<void> {
   const { session, deps } = ctx;
   const state = session.state;
   const pack = assemblePack(without(agentParts(session, deps, q.added), q.left_out), {
@@ -171,13 +183,13 @@ async function answer(ctx: CommandContext, who: Resolved, q: { turn: string; tex
   };
   const window = state.meta === null ? { from: null, to: null } : { ...state.meta.window };
   const end = await runAgent(session, {
-    actor, provider: who.provider, model: who.choice.model, effort: who.choice.effort, pack, task: q.text, tools: [], schema: null, outside_run: true,
+    actor, provider: who.provider, model: who.choice.model, effort: who.choice.effort, pack, task: q.text, tools: [], schema: null, outside_run: true, cause: q.seq,
     policy: deps.config.marking_policy, max_marking: Object.hasOwn(state.pack_limits, STAGE) ? state.pack_limits[STAGE]! : null,
     ctx: { session, deps: deps.runner, seeker: deps.seeker, actor, link: { run: null, stage: null, job: null }, draft: null, draft_hash: null, subgoal: null, window, limits: { ...DEFAULT_LIMITS } },
   });
   // anything but an answer has been recorded by the loop itself (a decline, a block, an error)
   if (end.kind !== "done") return;
-  const request = session.entries().findLast((e) => e.type === "model.request" && e.actor.kind === "agent" && e.actor.id === actor.id && e.actor.stage === STAGE);
+  const request = session.entries().findLast((e) => e.type === "model.request" && e.cause === q.seq);
   if (request === undefined || request.type !== "model.request") throw new Error("the answer has no request");
   const text = clip(end.content.trim() === "" ? "The model returned no text." : end.content, ANSWER_MAX);
   const cites = [...new Set(cardRefs(text))].filter((c) => Object.hasOwn(session.state.cards, c));
@@ -185,12 +197,14 @@ async function answer(ctx: CommandContext, who: Resolved, q: { turn: string; tex
 }
 
 /** The answered turn and the request that wrote it; refuses a turn that is not answered. */
-function answered(session: CaseSession, turn: string): { asked: string; text: string; cites: string[]; request: Extract<Entry, { type: "model.request" }> } {
+function answered(session: CaseSession, turn: string): { asked: string; text: string; cites: string[]; request: Extract<Entry, { type: "model.request" }>; answered_seq: number } {
   const t = session.state.conversation.find((x) => x.turn === turn);
   if (t === undefined || t.answer === null) throw new AskRefused(`there is no answered turn ${turn.slice(0, 40)}`);
   const request = session.entries().find((e) => e.type === "model.request" && e.payload.request === t.request);
   if (request === undefined || request.type !== "model.request" || request.actor.kind !== "agent") throw new AskRefused(`the answer to turn ${turn.slice(0, 40)} has no recorded request`);
-  return { asked: t.asked, text: t.answer, cites: t.cites, request };
+  const at = session.entries().findLast((e) => e.type === "agent.answered" && e.payload.turn === turn);
+  if (at === undefined) throw new AskRefused(`there is no answered turn ${turn.slice(0, 40)}`);
+  return { asked: t.asked, text: t.answer, cites: t.cites, request, answered_seq: at.seq };
 }
 
 const str: Schema = { type: "string" };
@@ -211,12 +225,14 @@ defineCommand("ask", {
 
 defineCommand("propose_answer", {
   args: obj({ turn: str, section: { enum: Object.keys(SECTION_TITLE) } }), then: "nothing",
-  perform: ({ session }, a) => {
+  perform: (ctx, a) => {
+    const { session } = ctx;
     const section = arg(a, "section") as AnswerSection;
     const got = answered(session, arg(a, "turn"));
     const by = got.request.actor as Extract<Actor, { kind: "agent" }>;
+    // the person pressed the button; the text is the agent's, which the payload says
     session.commit((_s, ids) => [{
-      type: "proposal.created", actor: by,
+      type: "proposal.created", actor: ctx.actor, cause: got.answered_seq,
       payload: { proposal: { id: ids.next("proposal"), kind: "narrative", title: `Your agent's answer as ${SECTION_TITLE[section]}`, by: by.id, section: section as Section, text: got.text, cites: [...got.cites] } },
     }]);
   },
@@ -224,15 +240,15 @@ defineCommand("propose_answer", {
 
 defineCommand("keep_answer", {
   args: obj({ turn: str }), then: "nothing",
-  perform: ({ session }, a) => {
+  perform: (ctx, a) => {
+    const { session } = ctx;
     const got = answered(session, arg(a, "turn"));
-    const by = got.request.actor as Extract<Actor, { kind: "agent" }>;
     session.commit((_s, ids) => {
       const card: Card = {
         id: ids.next("card"), title: `Note: ${clip(got.asked, TITLE_CHARS)}`, body: clip(got.text, NOTE_BODY), kind: "note", made_by: "agent", query: null, columns: [], column_types: [],
         rows: [], row_count: 0, coverage: null, empty: null, marking: got.request.payload.marking, source: null, step: null, subgoal: null, why: got.asked, event_time: null, quality_notes: [],
       };
-      return [{ type: "card.created", actor: by, payload: { card } }];
+      return [{ type: "card.created", actor: ctx.actor, cause: got.answered_seq, payload: { card } }];
     });
   },
 });
