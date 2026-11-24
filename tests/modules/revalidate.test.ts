@@ -13,7 +13,7 @@ import { ConnectorPool } from "../../src/modules/connectors";
 import { runQuery } from "../../src/modules/runner";
 import type { Connector, QueryOutcome } from "../../src/modules/connectors";
 import type { RunnerDeps } from "../../src/modules/runner";
-import { revalidateCard } from "../../src/modules/revalidate";
+import { difference, revalidateCard } from "../../src/modules/revalidate";
 import type { Revalidation, Verdict } from "../../src/modules/revalidate";
 import { startStandin } from "../helpers/http-standin";
 import type { Standin } from "../helpers/http-standin";
@@ -386,4 +386,61 @@ test("a trino pivot query re-runs from its pivot's text and stored values, keepi
   const r = await v();
   expect(r).toMatchObject({ outcome: "matches", rerun: "q2" });
   expect(issued("q2")).toMatchObject({ pivot: "lake_peers", pivot_hash: pivot.hash, text: issued("q1").text, purpose: "verify" });
+});
+
+test("a changed source gives the rows that left and the rows that came", async () => {
+  await runQuery(s, deps, flows);
+  edit("delete from flows where dst = ?", "198.51.100.0");
+  edit("insert into flows values (?, ?, ?, ?)", "2026-01-09T00:00:00.000Z", "192.0.2.17", "198.51.100.9", 5);
+  expect((await v()).outcome).toBe("differs");
+  expect(difference(s, deps, "c1")).toEqual({
+    original: "q1", rerun: "q2", columns: ["dst", "bytes"], removed: [["198.51.100.0", 100]], added: [["198.51.100.9", 5]], same: 2, cut: false,
+  });
+});
+
+test("rows are compared as a multiset: a repeated row counts each time", async () => {
+  await runQuery(s, deps, { ...flows, text: "select bytes from flows where src = {value}" });
+  edit("update flows set bytes = 100 where dst = ?", "198.51.100.2");
+  expect((await v()).outcome).toBe("differs");
+  expect(difference(s, deps, "c1")).toMatchObject({ removed: [[98]], added: [[100]], same: 2 });
+});
+
+test("each list is cut at 200 rows, and cut says so", async () => {
+  edit("delete from flows");
+  for (let i = 0; i < 250; i++) edit("insert into flows values (?, ?, ?, ?)", "2026-01-01T00:00:00.000Z", "192.0.2.17", `198.51.100.${i % 200}-a${i}`, i);
+  await runQuery(s, deps, flows);
+  edit("update flows set bytes = bytes + 1000");
+  expect((await v()).outcome).toBe("differs");
+  const d = difference(s, deps, "c1");
+  if ("reason" in d) throw new Error(d.reason);
+  expect(d.removed.length).toBe(200);
+  expect(d.added.length).toBe(200);
+  expect(d.cut).toBe(true);
+  expect(d.same).toBe(0);
+});
+
+test("a card that matches, or was never verified, has no difference to show", async () => {
+  await runQuery(s, deps, flows);
+  expect(difference(s, deps, "c1")).toEqual({ reason: "this card has no difference to show" });
+  await v();
+  expect(difference(s, deps, "c1")).toEqual({ reason: "this card has no difference to show" });
+  expect(difference(s, deps, "c9")).toEqual({ reason: "this card has no difference to show" });
+});
+
+test("a re-run that could not run has no difference to show; the newest verification decides", async () => {
+  await runQuery(s, deps, flows);
+  edit("insert into flows values (?, ?, ?, ?)", "2026-01-09T00:00:00.000Z", "192.0.2.17", "198.51.100.9", 5);
+  await v();
+  expect(difference(s, deps, "c1")).toMatchObject({ added: [["198.51.100.9", 5]] });
+  edit("delete from flows where dst = ?", "198.51.100.9");
+  await v();
+  expect(difference(s, deps, "c1")).toEqual({ reason: "this card has no difference to show" });
+});
+
+test("a stored result that cannot be read back row by row gives that reason", async () => {
+  await runQuery(s, deps, flows);
+  edit("insert into flows values (?, ?, ?, ?)", "2026-01-09T00:00:00.000Z", "192.0.2.17", "198.51.100.9", 5);
+  await v();
+  const gone = { ...registry, source: () => null } as unknown as typeof registry;
+  expect(difference(s, { ...deps, registry: gone }, "c1")).toEqual({ reason: "the stored result cannot be read back row by row" });
 });

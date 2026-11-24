@@ -4,6 +4,7 @@ import type { EndpointManifest, SourceManifest } from "../manifests";
 import { effectiveBound, PLACEHOLDER } from "./placeholders";
 import { assertNoEcho, LOOPBACK, loadCredential, parseBase, readCapped, scrub, TimedOut, TooBig } from "./shared";
 import { ConnectorError } from "./types";
+import { MAX_TS, MIN_TS } from "./types";
 import type { Bound, Connector, ConnectorContext, QueryOutcome, QueryRequest } from "./types";
 
 export const MAX_BODY_BYTES = 16_777_216;
@@ -51,29 +52,11 @@ export class HttpConnector implements Connector {
   }
 
   private url(e: EndpointManifest, bound: Bound): string {
-    const base = parseBase(this.source.location);
-    if (!e.path.startsWith("/")) throw new ConnectorError(`endpoint ${e.name} path must start with /`);
-    const path = e.path.replace(PLACEHOLDER, (_m, n: string) => {
-      if (!Object.hasOwn(bound, n)) throw new ConnectorError(`no value is bound for placeholder {${n}}`);
-      const v = bound[n];
-      if (v === null || v === undefined) throw new ConnectorError(`the value for placeholder {${n}} is null`);
-      const text = String(v);
-      if (text === "." || text === "..") throw new ConnectorError(`the value for placeholder {${n}} is a dot segment; refused`);
-      return encodeURIComponent(text);
-    });
-    const full = this.source.location.replace(/\/+$/, "") + path;
-    let parsed: URL;
-    try {
-      parsed = new URL(full);
-    } catch {
-      throw new ConnectorError(`endpoint ${e.name} does not form a valid URL`);
-    }
-    if (parsed.origin !== base.origin) throw new ConnectorError(`endpoint ${e.name} leaves the source's origin`);
-    return full;
+    return endpointUrl(this.source, e, bound);
   }
 
   private body(e: EndpointManifest, bound: Bound): string | null {
-    return e.method === "GET" ? null : JSON.stringify(bound);
+    return requestBody(e, bound);
   }
 
   render(req: QueryRequest): string {
@@ -155,9 +138,7 @@ export class HttpConnector implements Connector {
     // A result that carries the credential is refused whole, before anything of it is kept.
     assertNoEcho(bytes, secret === null ? [] : [secret, `Bearer ${secret}`], parsed ? doc : undefined);
     if (!parsed) throw new ConnectorError(`the response from endpoint ${e.name} is not valid JSON`);
-    const list = rowsAt(doc, e);
-    const more = list.length > req.max_rows;
-    const rows: Json[][] = list.slice(0, req.max_rows).map(item => e.columns.map(c => (Object.hasOwn(item, c) ? (item[c] as Json) ?? null : null)));
+    const { rows, more } = rowsOfDoc(doc, e, req.max_rows);
     return {
       columns: [...e.columns], rows, raw: bytes, media, cost: this.cost(),
       coverage: more ? { kind: "partial", reason: "row_limit", detail: `stopped at ${req.max_rows} rows` } : { kind: "full" },
@@ -165,6 +146,61 @@ export class HttpConnector implements Connector {
   }
 
   close(): void {}
+}
+
+/** The URL an endpoint is called at with these bound values; ConnectorError when it cannot be formed or leaves the source's origin. */
+export function endpointUrl(source: SourceManifest, e: EndpointManifest, bound: Bound): string {
+  const base = parseBase(source.location);
+  if (!e.path.startsWith("/")) throw new ConnectorError(`endpoint ${e.name} path must start with /`);
+  const path = e.path.replace(PLACEHOLDER, (_m, n: string) => {
+    if (!Object.hasOwn(bound, n)) throw new ConnectorError(`no value is bound for placeholder {${n}}`);
+    const v = bound[n];
+    if (v === null || v === undefined) throw new ConnectorError(`the value for placeholder {${n}} is null`);
+    const text = String(v);
+    if (text === "." || text === "..") throw new ConnectorError(`the value for placeholder {${n}} is a dot segment; refused`);
+    return encodeURIComponent(text);
+  });
+  const full = source.location.replace(/\/+$/, "") + path;
+  let parsed: URL;
+  try {
+    parsed = new URL(full);
+  } catch {
+    throw new ConnectorError(`endpoint ${e.name} does not form a valid URL`);
+  }
+  if (parsed.origin !== base.origin) throw new ConnectorError(`endpoint ${e.name} leaves the source's origin`);
+  return full;
+}
+
+const requestBody = (e: EndpointManifest, bound: Bound): string | null => (e.method === "GET" ? null : JSON.stringify(bound));
+
+/** The request text the runner records for an endpoint: `METHOD url [body]`. */
+function requestText(source: SourceManifest, e: EndpointManifest, bound: Bound): string {
+  const body = requestBody(e, bound);
+  return `${e.method} ${endpointUrl(source, e, bound)}${body === null ? "" : ` ${body}`}`;
+}
+
+/** The rows of a parsed response for an endpoint, cut at `max`; `more` says rows were left out. Throws ConnectorError when the body does not have them. */
+function rowsOfDoc(doc: unknown, e: EndpointManifest, max: number): { rows: Json[][]; more: boolean } {
+  const list = rowsAt(doc, e);
+  return { more: list.length > max, rows: list.slice(0, max).map(item => e.columns.map(c => (Object.hasOwn(item, c) ? (item[c] as Json) ?? null : null))) };
+}
+
+/**
+ * The columns and rows an http result's recorded response holds. The endpoint is the one whose request renders to the recorded text
+ * with the recorded bound values and window. Null when none does, or the bytes are not a response that endpoint would have accepted.
+ * Empty bytes are what a timed-out request kept: no rows. Pure: it reads the source manifest and the bytes only.
+ */
+export function rowsOfHttp(source: SourceManifest, issued: { text: string; bound: Record<string, unknown>; window: { from: string | null; to: string | null } }, bytes: Uint8Array, maxRows: number): { columns: string[]; rows: Json[][] } | null {
+  const bound = { ...issued.bound, "window.from": issued.window.from ?? MIN_TS, "window.to": issued.window.to ?? MAX_TS } as Bound;
+  const e = source.endpoints.find((x) => { try { return requestText(source, x, bound) === issued.text; } catch { return false; } });
+  if (e === undefined) return null;
+  if (bytes.length === 0) return { columns: [...e.columns], rows: [] };
+  try {
+    const doc: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    return { columns: [...e.columns], rows: rowsOfDoc(doc, e, maxRows).rows };
+  } catch {
+    return null;
+  }
 }
 
 function rowsAt(doc: unknown, e: EndpointManifest): Record<string, unknown>[] {

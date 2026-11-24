@@ -3,6 +3,9 @@ import type { Observable } from "../../core/types";
 import { tag } from "../chips";
 import type { TagKind } from "../chips";
 import { markingChip } from "../chips";
+import { makePivotPanel } from "../panels/pivot";
+import type { PivotPanel } from "../panels/pivot";
+import { makeVerify } from "../panels/verify";
 import { cardStatus, cellText } from "../derive";
 import { clear } from "../dom";
 import type { Nav } from "../app";
@@ -25,7 +28,7 @@ export interface CardEnv {
   readonly(): boolean;
   keep(card: string): void; discard(card: string): void; sendBack(card: string): void; pin(card: string, pinned: boolean): void; move(card: string, lane: string): void;
 }
-export interface CardView { el: HTMLElement; update(state: CaseState): void }
+export interface CardView { el: HTMLElement; update(state: CaseState): void; /** Opens the Pivot panel inside the card, starting from `values`. */ pivot(values: Observable[]): void }
 
 const cut = (text: string): string => (text.length > CELL_LIMIT ? `${text.slice(0, CELL_LIMIT)}…` : text);
 
@@ -39,6 +42,8 @@ export function makeCardView(env: CardEnv, id: string): CardView {
   } });
   let last: unknown[] | null = null;
   let current: CardState | null = null;
+  let panel: PivotPanel | null = null;
+  const verify = makeVerify(ui, env.store, id);
   const placeOf = (): string => current?.place ?? "incoming";
 
   const tags = (c: CardState): HTMLElement[] => {
@@ -68,7 +73,8 @@ export function makeCardView(env: CardEnv, id: string): CardView {
     const obs: Observable = { type, value: text };
     const chip = h("button", {
       type: "button", class: known.has(`${type}|${text}`) ? "chip value" : "chip value proposed", name: `${type} ${text}`, title: long ? text : `${type} ${text}`,
-      on: { click: () => env.nav.pivot(c.id, [obs]) },
+      disabled: env.readonly(),
+      on: { click: () => { if (!env.readonly()) env.nav.pivot(c.id, [obs]); } },
     }, cut(text));
     return h("td", props, chip);
   };
@@ -83,10 +89,25 @@ export function makeCardView(env: CardEnv, id: string): CardView {
         const text = cellText(row[col]);
         if (text !== "" && !seen.has(text)) { seen.add(text); values.push({ type, value: text }); }
       }
-      return h("th", null, h("button", { type: "button", class: "col", name: `All ${name} values`, title: `Pivot on every ${type} in ${name}`, on: { click: () => env.nav.pivot(c.id, values) } }, name));
+      return h("th", null, h("button", { type: "button", class: "col", name: `All ${name} values`, title: `Pivot on every ${type} in ${name}`, disabled: env.readonly(), on: { click: () => { if (!env.readonly()) env.nav.pivot(c.id, values); } } }, name));
     });
     const rows = open ? c.rows : c.rows.slice(0, CLOSED_ROWS);
     return h("table", null, h("thead", null, h("tr", null, head)), h("tbody", null, rows.map((row) => h("tr", null, c.columns.map((_n, col) => valueCell(c, col, row[col], known))))));
+  };
+
+  /** Every distinct typed value in the preview rows, in order of appearance (at most 12): what the Pivot action starts from. */
+  const typedValues = (c: CardState): Observable[] => {
+    const seen = new Set<string>();
+    const out: Observable[] = [];
+    for (const row of c.rows) {
+      c.column_types.forEach((type, col) => {
+        const text = cellText(row[col]);
+        if (type === null || type === undefined || text === "" || seen.has(`${type}|${text}`) || out.length >= 12) return;
+        seen.add(`${type}|${text}`);
+        out.push({ type, value: text });
+      });
+    }
+    return out;
   };
 
   const dl = (c: CardState, state: CaseState): HTMLElement => {
@@ -112,7 +133,11 @@ export function makeCardView(env: CardEnv, id: string): CardView {
     const ro = env.readonly();
     const button = (action: string, label: string, onClick: (() => void) | null): HTMLElement =>
       h("button", { type: "button", class: "action", data: { action }, disabled: ro || onClick === null, on: onClick === null ? undefined : { click: onClick } }, label);
-    const row: HTMLElement[] = [button("pivot", "Pivot…", null), button("verify", "Verify", null), button("cite", "Cite", () => env.nav.cite(c.id))];
+    const row: HTMLElement[] = [
+      button("pivot", "Pivot…", () => env.nav.pivot(c.id, typedValues(c))),
+      button("verify", "Verify", () => { void ui.send("verify_card", { card: c.id }); }),
+      button("cite", "Cite", () => env.nav.cite(c.id)),
+    ];
     if (c.place === "incoming") row.push(button("keep", "Keep", () => env.keep(c.id)));
     if (c.place === "lane") {
       const others = state.lanes.filter((l) => l.id !== c.lane);
@@ -127,9 +152,15 @@ export function makeCardView(env: CardEnv, id: string): CardView {
 
   return {
     el,
+    pivot(values) {
+      panel ??= makePivotPanel(ui, env.store, env.nav, id);
+      panel.setValues(values);
+      last = null;                                   // the panel joins the card on its next draw
+    },
     update(state) {
       const c = Object.hasOwn(state.cards, id) ? state.cards[id]! : null;
       if (c === null) return;
+      panel?.update();
       const open = env.isOpen(id);
       const q = c.query !== null && Object.hasOwn(state.queries, c.query) ? state.queries[c.query] : undefined;
       const known = env.known();
@@ -146,7 +177,9 @@ export function makeCardView(env: CardEnv, id: string): CardView {
       if (c.rows.length > 0) el.appendChild(table(c, open, known.values));
       if (open) {
         el.appendChild(h("p", { class: "rowcount muted" }, `${c.rows.length} of ${c.row_count} rows`));
-        el.append(dl(c, state), actions(c, state));
+        verify.update(state);
+        el.append(dl(c, state), verify.el, actions(c, state));
+        if (panel !== null) el.append(panel.el);
       }
     },
   };
@@ -159,7 +192,7 @@ function insideControl(target: EventTarget | null): boolean {
 }
 
 /** The card views of one case, made on first use and kept, so a card that moves between columns keeps its node. */
-export function makeCardPool(env: CardEnv): { el(id: string, state: CaseState): HTMLElement; patch(id: string, state: CaseState): void; forget(id: string): void } {
+export function makeCardPool(env: CardEnv): { el(id: string, state: CaseState): HTMLElement; patch(id: string, state: CaseState): void; pivot(id: string, state: CaseState, values: Observable[]): void; forget(id: string): void } {
   const views = new Map<string, CardView>();
   const view = (id: string): CardView => {
     let v = views.get(id);
@@ -169,6 +202,7 @@ export function makeCardPool(env: CardEnv): { el(id: string, state: CaseState): 
   return {
     el(id, state) { const v = view(id); v.update(state); return v.el; },
     patch(id, state) { view(id).update(state); },
+    pivot(id, state, values) { const v = view(id); v.pivot(values); v.update(state); },
     forget(id) { views.delete(id); },
   };
 }

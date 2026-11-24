@@ -27,6 +27,26 @@ function toJson(v: unknown): Json {
   return String(v);
 }
 
+/** The bytes a sql or files result is kept as: its columns and rows, as JSON. `rowsOfSqlRaw` reads them back. */
+export function sqlRaw(columns: string[], rows: Json[][]): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify({ columns, rows }));
+}
+
+/** The columns and rows of a sql or files result's raw bytes; null when they are not that. Pure. */
+export function rowsOfSqlRaw(bytes: Uint8Array): { columns: string[]; rows: Json[][] } | null {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    return null;
+  }
+  if (typeof doc !== "object" || doc === null || Array.isArray(doc)) return null;
+  const { columns, rows } = doc as { columns?: unknown; rows?: unknown };
+  if (!Array.isArray(columns) || !columns.every((c) => typeof c === "string")) return null;
+  if (!Array.isArray(rows) || !rows.every((r) => Array.isArray(r) && r.length === columns.length)) return null;
+  return { columns: columns as string[], rows: rows as Json[][] };
+}
+
 /** Runs one guarded statement on a database handle with bound values, stopping after max_rows. Shared by the sql and files connectors. */
 export function runOnDatabase(db: Database, req: QueryRequest): QueryOutcome {
   const sql = renderSql(req);
@@ -57,7 +77,7 @@ export function runOnDatabase(db: Database, req: QueryRequest): QueryOutcome {
       if (rows.length >= req.max_rows) { more = true; break; }
       rows.push(columns.map(c => toJson(row[c])));
     }
-    const raw = new TextEncoder().encode(JSON.stringify({ columns, rows }));
+    const raw = sqlRaw(columns, rows);
     return {
       columns, rows, raw, media: "application/json", cost: null,
       coverage: more ? { kind: "partial", reason: "row_limit", detail: `stopped at ${req.max_rows} rows` } : { kind: "full" },

@@ -783,3 +783,18 @@ test("a step id of __proto__ is an ordinary estimate key", () => {
   b.add("step.estimated", { step: "__proto__", estimate: { amount: 1, unit: "lookups" }, query: null });
   expect(Object.hasOwn(fold(b.entries).plan.estimates, "__proto__")).toBe(true);
 });
+
+test("route.finished is checked for shape only; a malformed one is recorded in skipped and changes nothing else", () => {
+  const good = { job: "job-1", want: "account", outcome: "answered", reached: [{ type: "account", value: "alice" }], blocked: [], caveats: ["x"], cards: ["c1"] };
+  const b = new EntryBuilder();
+  b.add("route.finished", good as never, { job: "job-1" });
+  const ok = fold(b.entries);
+  expect(ok.skipped).toEqual([]);
+  for (const bad of [{ ...good, outcome: "maybe" }, { ...good, reached: [{ type: 1 }] }, { ...good, cards: "c1" }, { ...good, job: 5 }]) {
+    const c = new EntryBuilder();
+    c.add("route.finished", bad as never);
+    const s = fold(c.entries);
+    expect(s.skipped.map((k) => k.reason)).toEqual(["malformed route.finished"]);
+    expect(s.cards).toEqual({});
+  }
+});

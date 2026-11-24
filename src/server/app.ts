@@ -13,6 +13,7 @@ import { argProblems, COMMANDS } from "./commands";
 import "./plan-commands";
 import "./draft-commands";
 import "./converse";
+import "./seek";
 import type { CommandContext } from "./commands";
 import { blobResponse, bundleFile, custodyOf } from "./evidence";
 import { CaseHub } from "./hub";
@@ -20,6 +21,8 @@ import { mayDo, mayRead } from "./roles";
 import type { Reading } from "./roles";
 import { entryStream } from "./stream";
 import { agentView } from "./converse";
+import { routesFor } from "./seek";
+import { difference } from "../modules/revalidate";
 import { modelsFor, referenceOf, shown } from "./views";
 
 export interface Assets { html: string; js: string; css: string }
@@ -148,6 +151,17 @@ export function createApp(opts: AppOptions): App {
     {
       method: "GET", path: /^\/api\/cases\/([^/]+)\/agent$/, needs: { read: "agent" }, kind: "api",
       handle: async ({ params }) => json(200, await agentView(hub.read(params[0]!), deps)),
+    },
+    {
+      method: "GET", path: /^\/api\/routes$/, needs: { read: "routes" }, kind: "api",
+      handle: ({ url }) => {
+        const made = routesFor(deps, url.searchParams);
+        return made.length > 0 && typeof made[0] === "string" ? refused(400, ...(made as string[])) : json(200, made);
+      },
+    },
+    {
+      method: "GET", path: /^\/api\/cases\/([^/]+)\/cards\/([^/]+)\/difference$/, needs: { read: "difference" }, kind: "api",
+      handle: ({ params }) => json(200, difference(hub.read(params[0]!), deps.runner, decodeURIComponent(params[1]!))),
     },
     {
       method: "GET", path: /^\/api\/cases\/([^/]+)\/entries$/, needs: { read: "entries" }, kind: "api",

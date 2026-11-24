@@ -67,7 +67,7 @@ button.primary { background: var(--accent); color: var(--bg); border-color: var(
 .topbar { display: grid; grid-template-columns: 1fr minmax(240px, 2fr) 1fr; align-items: start; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
 .topbar .cmd input { width: 100%; }
 .topbar .right { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
-.trail { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+nav.trail { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .trail .level, .trail .fly { display: inline-flex; align-items: center; gap: 4px; position: relative; }
 .trail .dot { width: 12px; height: 12px; padding: 0; border-radius: 50%; }
 .trail .dot.home { background: var(--accent); }
@@ -254,3 +254,22 @@ kbd { font-family: var(--mono); font-size: 12px; background: var(--panel-2); bor
 .replay-detail dd { margin: 0; overflow-wrap: anywhere; }
 .replay-detail .hash { display: block; font-family: monospace; }
 .changed { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Pivot panel and Verify (Task 13) */
+.pivot-panel { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+.pivot-panel .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.pivot-panel .label, .pivot-panel .wanted-label { color: var(--muted); font-size: 12px; }
+.pivot-panel .route { border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 8px; margin-top: 4px; }
+.pivot-panel .route-head { font-weight: 600; }
+.pivot-panel .hop { padding: 2px 0; overflow-wrap: anywhere; }
+.pivot-panel .cost.costly, .pivot-panel .needs-window, .pivot-panel .attention { color: var(--amber); }
+.pivot-panel .route-trail { margin-top: 6px; }
+.pivot-panel .lookup { padding: 2px 0; overflow-wrap: anywhere; }
+.pivot-panel .lookup.partial .status, .pivot-panel .lookup.failed .status { color: var(--amber); }
+.pivot-panel .finished .caveat, .pivot-panel .finished .dry { margin: 2px 0; }
+.pivot-panel .needs-budget { border: 1px dashed var(--amber); border-radius: var(--radius); padding: 6px 8px; margin-top: 4px; }
+.verify { margin: 6px 0; padding: 6px 8px; border-radius: var(--radius); border: 1px solid var(--line); overflow-wrap: anywhere; }
+.verify.matches { border-color: var(--green, currentColor); }
+.verify.differs, .verify.could-not { border-color: var(--amber); }
+.verify table { margin: 2px 0 6px; }
+.verify .diff-label { margin: 4px 0 0; font-weight: 600; }

@@ -1,8 +1,12 @@
+import { canonical } from "../core/canonical";
+import type { Json } from "../core/canonical";
 import type { CaseSession } from "../core/session";
+import type { Difference } from "../core/wire";
+import { rowsOfBlob } from "./connectors/rows";
 import type { Actor, Coverage, Payloads } from "../core/types";
 import { PivotError, bindPivot } from "./pivots";
 import type { RunnerDeps, RunQueryInput } from "./runner";
-import { runQuery } from "./runner";
+import { rowsHash, runQuery } from "./runner";
 
 /** `proposal` is the costly_query proposal the re-run raised (an agent's re-run of a costly source), else null. */
 export type Verdict = { outcome: "matches" | "differs" | "could_not_run"; detail: string; rerun: string | null; proposal: string | null };
@@ -114,4 +118,61 @@ export async function revalidateCard(
       return finish({ outcome: "differs", detail, rerun: r.query, proposal: null });
     }
   }
+}
+
+/** The most rows of each list a Difference carries. */
+export const DIFFERENCE_ROWS = 200;
+const NONE = "this card has no difference to show";
+const UNREADABLE = "the stored result cannot be read back row by row";
+
+/**
+ * The row-level difference behind the newest verify.run of a card that differs: both recorded results are read back from the case's
+ * blobs (by the connector's own reader) and compared as multisets of canonical JSON rows. Reads the ledger and its blobs and writes nothing;
+ * it contacts no source. A result that does not read back to the rows hash it was recorded with is not trusted.
+ */
+export function difference(session: CaseSession, deps: RunnerDeps, card: string): Difference | { reason: string } {
+  let run: Payloads["verify.run"] | null = null;
+  for (const e of session.entries()) if (e.type === "verify.run" && (e.payload as Payloads["verify.run"]).card === card) run = e.payload as Payloads["verify.run"];
+  if (run === null || run.outcome !== "differs" || run.rerun === null) return { reason: NONE };
+  const side = (id: string): { columns: string[]; rows: Json[][] } | null => {
+    const q = Object.hasOwn(session.state.queries, id) ? session.state.queries[id]! : null;
+    if (q === null || q.status !== "done" || q.result === null || q.rows_hash === null) return null;
+    const issued = session.entries().find((e) => e.seq === q.issued_seq);
+    if (issued === undefined || issued.type !== "query.issued") return null;
+    const was = issued.payload as Payloads["query.issued"];
+    const source = deps.registry.source(was.source);
+    if (source === null) return null;
+    let bytes: Uint8Array;
+    try {
+      bytes = session.blobs.get(q.result.blob);
+    } catch {
+      return null;
+    }
+    const back = rowsOfBlob(source, was, bytes);
+    return back !== null && rowsHash(back.columns, back.rows) === q.rows_hash ? back : null;
+  };
+  const a = side(run.original), b = side(run.rerun);
+  if (a === null || b === null) return { reason: UNREADABLE };
+  if (canonical(a.columns) !== canonical(b.columns)) return { reason: UNREADABLE };
+  const count = (rows: Json[][]): Map<string, number> => {
+    const m = new Map<string, number>();
+    for (const r of rows) { const k = canonical(r); m.set(k, (m.get(k) ?? 0) + 1); }
+    return m;
+  };
+  const leftOver = (from: Json[][], other: Map<string, number>): Json[][] => {
+    const left = new Map(other);
+    const out: Json[][] = [];
+    for (const r of from) {
+      const k = canonical(r);
+      const n = left.get(k) ?? 0;
+      if (n > 0) left.set(k, n - 1); else out.push(r);
+    }
+    return out;
+  };
+  const removed = leftOver(a.rows, count(b.rows));
+  const added = leftOver(b.rows, count(a.rows));
+  return {
+    original: run.original, rerun: run.rerun, columns: a.columns, removed: removed.slice(0, DIFFERENCE_ROWS), added: added.slice(0, DIFFERENCE_ROWS),
+    same: a.rows.length - removed.length, cut: removed.length > DIFFERENCE_ROWS || added.length > DIFFERENCE_ROWS,
+  };
 }

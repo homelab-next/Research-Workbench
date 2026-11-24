@@ -264,6 +264,35 @@ export class TrinoConnector implements Connector {
   }
 }
 
+/**
+ * The columns and rows a trino result's recorded pages hold (`[` page `,` page `]`, as joined by `run`), the rows cut at `maxRows`.
+ * Null when the bytes are not a list of pages. A result stopped by a budget kept fewer rows than this returns; the caller compares hashes. Pure.
+ */
+export function rowsOfTrino(bytes: Uint8Array, maxRows: number): { columns: string[]; rows: Json[][] } | null {
+  let pages: unknown;
+  try {
+    pages = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(pages) || pages.length === 0) return null;
+  let columns: string[] = [];
+  const rows: Json[][] = [];
+  for (const page of pages) {
+    if (typeof page !== "object" || page === null || Array.isArray(page)) return null;
+    const { columns: c, data } = page as Page;
+    if (c !== undefined) {
+      if (!Array.isArray(c) || !c.every(x => typeof x === "object" && x !== null && typeof (x as { name?: unknown }).name === "string")) return null;
+      columns = c.map(x => (x as { name: string }).name);
+    }
+    if (data !== undefined) {
+      if (!Array.isArray(data) || !data.every(r => Array.isArray(r))) return null;
+      for (const r of data as Json[][]) rows.push(r);
+    }
+  }
+  return { columns, rows: rows.slice(0, maxRows) };
+}
+
 /** `[` page1 `,` page2 ... `]`, each page's bytes exactly as received. */
 function joinPages(pages: Uint8Array[]): Uint8Array {
   const out = new Uint8Array(pages.reduce((n, p) => n + p.length, 0) + pages.length + 1);

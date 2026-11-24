@@ -1,4 +1,4 @@
-import { EMPTY_MEANS, isMarking, GATES, JOB_KINDS, JOB_OUTCOMES, QUERY_PURPOSES, RUN_OUTCOMES, SECTIONS, STAGE_RUNS, STEP_OUTCOMES, VERIFY_OUTCOMES } from "../types";
+import { EMPTY_MEANS, isMarking, GATES, JOB_KINDS, JOB_OUTCOMES, QUERY_PURPOSES, ROUTE_OUTCOMES, RUN_OUTCOMES, SECTIONS, STAGE_RUNS, STEP_OUTCOMES, VERIFY_OUTCOMES } from "../types";
 import type { Cost, Entry, ModelChoice, Plan, PlanStep, Proposal, StageDef, SubGoal } from "../types";
 import { has, isBool, isNum, isObj, isOneOf, isStr, isStrList, isStrOrNull, malformed } from "./guards";
 import { isBlobRefShape, isCard, isCount, isCoverage, isObservable, isStageFinishedShape, isTimeWindow } from "./shapes";
@@ -130,6 +130,13 @@ function applyQuery(s: CaseState, entry: Entry): CaseState {
       if (!isStr(original) || !isStrOrNull(rerun) || !isStr(card) || !isOneOf(outcome, VERIFY_OUTCOMES) || !isStr(detail)) return malformed(s, entry);
       if (!has(s.cards, card)) return s;
       return { ...s, cards: { ...s.cards, [card]: { ...s.cards[card]!, validated: { outcome, detail, seq: entry.seq, ts: entry.ts } } } };
+    }
+    case "route.finished": {
+      // the trail is read from the entries; the fold only checks the shape
+      const { job, want, outcome, reached, blocked, caveats, cards } = entry.payload;
+      if (!isStr(job) || !isStr(want) || !isOneOf(outcome, ROUTE_OUTCOMES) || !Array.isArray(reached) || !reached.every(isObservable)
+        || !isStrList(blocked) || !isStrList(caveats) || !isStrList(cards)) return malformed(s, entry);
+      return s;
     }
     default:
       return s;

@@ -49,6 +49,7 @@ const TABLE: Record<EntryType, [string, Say]> = {
   }],
   "query.failed": ["query failed", (p) => join(str(p.query), str(p.error))],
   "verify.run": ["card checked again", (p) => join(str(p.card), str(p.outcome), str(p.detail))],
+  "route.finished": ["route finished", (p) => join(str(p.job), str(p.outcome), Array.isArray(p.reached) ? plural(p.reached.length, "values") : "")],
   "model.request": ["model asked", (p) => join(str(p.provider), str(p.model))],
   "model.response": ["model answered", (p) => join(str(p.request), str(p.stop))],
   "model.declined": ["model declined", (p) => join(str(p.request), str(p.reason))],

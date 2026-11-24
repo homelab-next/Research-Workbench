@@ -78,7 +78,7 @@ export async function perform(intent: Intent, env: PerformEnv): Promise<{ cleare
     case "open_case": nav.go({ screen: "case", id: intent.id }); return done;
     case "go": nav.go({ screen: intent.to === "home" ? "home" : "pick" }); return done;
     case "lens": nav.openLens(intent.id); return done;
-    case "verify": nav.focusCard(intent.card); return done;
+    case "verify": nav.focusCard(intent.card); return { cleared: await ui.act("verify_card", { card: intent.card }) };
     case "replay": nav.openLens("replay", intent.seq === null ? undefined : String(intent.seq)); return done;
     case "ask": nav.ask(intent.text); return done;
     case "pause": return { cleared: await ui.act("pause") };

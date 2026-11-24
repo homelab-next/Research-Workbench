@@ -1,5 +1,5 @@
 import type { Entry } from "../core/types";
-import type { AgentView, CaseSummaryView, CommandResult, Custody, Me, ModelView, NewCaseInput, Preview, Reference } from "../core/wire";
+import type { AgentView, CaseSummaryView, CommandResult, Custody, Difference, Me, ModelView, NewCaseInput, Preview, Reference, RouteView } from "../core/wire";
 
 export type Fetcher = (req: Request) => Promise<Response>;
 export interface EntrySource { open(caseId: string, after: number, onEntry: (entry: Entry) => void, onDrop: () => void): () => void }
@@ -8,6 +8,10 @@ export interface Api {
   newCase(input: NewCaseInput): Promise<{ id: string } | { refused: string[] }>;
   command(caseId: string, name: string, args: Record<string, unknown>): Promise<CommandResult>;
   agent(caseId: string): Promise<AgentView>;
+  /** The routes the finder offers (a read of the registry: no source is asked and nothing is written), cheapest first. */
+  routes(q: { have: string[]; want: string; max_weight: number | null; unconfirmed: boolean }): Promise<RouteView[]>;
+  /** The row-level difference behind a card's newest verification, or why there is none. */
+  difference(caseId: string, card: string): Promise<Difference | { reason: string }>;
   custody(caseId: string): Promise<Custody>; preview(caseId: string): Promise<Preview>;
   blobText(caseId: string, hash: string): Promise<string>;
   blobPath(caseId: string, hash: string): string; bundlePath(caseId: string, n: number, file: string): string;
@@ -50,6 +54,15 @@ export function makeApi(fetcher: Fetcher, origin: string, entries: EntrySource):
       return { ok: false, refused: await refusedOf(res) };
     },
     agent: (id) => read<AgentView>(`/api/cases/${seg(id)}/agent`),
+    routes(q) {
+      const params = new URLSearchParams();
+      for (const t of q.have) params.append("have", t);
+      params.set("want", q.want);
+      if (q.max_weight !== null) params.set("max_weight", String(q.max_weight));
+      params.set("unconfirmed", q.unconfirmed ? "1" : "0");
+      return read<RouteView[]>(`/api/routes?${params.toString()}`);
+    },
+    difference: (id, card) => read<Difference | { reason: string }>(`/api/cases/${seg(id)}/cards/${seg(card)}/difference`),
     custody: (id) => read<Custody>(`/api/cases/${seg(id)}/custody`),
     preview: (id) => read<Preview>(`/api/cases/${seg(id)}/preview`),
     async blobText(id, hash) {

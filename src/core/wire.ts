@@ -1,6 +1,7 @@
 /**
  * What crosses between the server and the browser besides entries. Types only, browser-safe: the server and src/web/ both import from here.
  */
+import type { Json } from "./canonical";
 import type { RunState } from "./state";
 import type { EmptyMeans, Marking, ModelChoice, Observable, TimeWindow, Where } from "./types";
 
@@ -44,4 +45,12 @@ export interface PartView { key: string; kind: string; id: string; title: string
 export interface AgentView {
   agent: string; profile: string; objective: string | null; model: ModelChoice | null; budget_chars: number | null;
   parts: PartView[]; addable: { key: string; title: string }[];
+}
+
+/** What a re-run of a card's query found against the original, row by row: `removed` is in the original only, `added` in the re-run only. Each list is cut at 200 rows (`cut`). Computed from the two recorded results; it writes nothing. */
+export interface Difference { original: string; rerun: string; columns: string[]; removed: Json[][]; added: Json[][]; same: number; cut: boolean }
+/** A route the finder offers: its hops in order, cheapest route first. */
+export interface RouteView {
+  weight: number;
+  hops: { pivot: string; title: string; source: string; source_title: string; from: string; to: string; free: boolean; weight: number; unit: string; needs_window: boolean; empty_means: EmptyMeans; confirmed: boolean }[];
 }

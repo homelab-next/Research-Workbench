@@ -1,4 +1,5 @@
 import type { CaseState } from "../../core/state";
+import type { Observable } from "../../core/types";
 import { knownValues } from "../derive";
 import { clear } from "../dom";
 import type { CaseHandlers, CaseScreen, LensId, Open } from "../app";
@@ -28,6 +29,8 @@ export interface WorkArea extends View {
   closeLens(): boolean;
   /** Opens the Narrative lens (when it is not the one open) and cites `card` there. */
   cite(card: string, section?: string): void;
+  /** Opens the card and its Pivot panel, starting from `values`. */
+  pivot(card: string, values: Observable[]): void;
   /** Opens the Agent lens (when it is not the one open) and sends `text` to your agent. */
   ask(text: string): void;
   /** The key actions of the work area, by the names KEYMAP gives them. */
@@ -45,6 +48,7 @@ export function caseScreenFor(ui: Ui): CaseScreen {
       closeLens: () => area.closeLens(),
       focusCard: (card) => { area.open(card); area.select(card); },
       cite: (card, section) => area.cite(card, section),
+      pivot: (card, values) => area.pivot(card, values),
       ask: (text) => area.ask(text),
       focusLane: (lane) => area.focusColumn(lane),
       actions: area.actions(),
@@ -112,7 +116,13 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
     current: () => lensId,
   });
   const toggleDock = (): void => { dock = dock === "bottom" ? "right" : "bottom"; ui.prefs.set("dock", dock); layout(); shelf.update(); };
-  const banner = h("div", { class: "replay-banner", role: "status" });
+  const bannerText = h("span", { class: "banner-text" });
+  const bannerStep = (dir: 1 | -1) => (): void => { if (store.at !== null) stepReplay(dir); };
+  const banner = h("div", { class: "replay-banner", role: "status", tabindex: 0, data: { area: "replay" } },
+    bannerText,
+    h("button", { type: "button", name: "Previous entry", on: { click: bannerStep(-1) } }, "◂"),
+    h("button", { type: "button", name: "Next entry", on: { click: bannerStep(1) } }, "▸"),
+    h("button", { type: "button", name: "Return to live", on: { click: () => store.goTo(null) } }, "Return to live"));
   const stage = h("div", { class: "stage-col" }, brief.el, lanes.el);
   const lensBox = h("div", { class: "lens-dock", tabindex: 0, data: { area: "lens" }, hidden: true });
   const el = h("div", { class: "workarea", data: { screen: "case" }, tabindex: -1 }, incoming.el, stage, lensBox, shelf.el);
@@ -140,7 +150,7 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
     const text = store.at === null ? "" : `Replay · entry ${store.at} of ${store.live.seq} · read-only`;
     if (text !== replayText) {
       replayText = text;
-      if (text === "") banner.remove(); else { banner.textContent = text; stage.insertBefore(banner, stage.firstChild); }
+      if (text === "") banner.remove(); else { bannerText.textContent = text; stage.insertBefore(banner, stage.firstChild); }
     }
     markChanged();
     layout();
@@ -228,6 +238,12 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
     cite(card, section) {
       if (lensId !== "narrative") area.openLens("narrative");
       (lensView as (View & { cite?(card: string, section?: string): void }) | null)?.cite?.(card, section);
+    },
+    pivot(card, values) {
+      if (store.at !== null) return;                       // nothing is asked of a source while replaying
+      area.open(card);
+      pool.pivot(card, store.shown, values);
+      byData("card", card)?.querySelector<HTMLElement>(".pivot-panel select")?.focus();
     },
     ask(text) {
       if (lensId !== "agent") area.openLens("agent");

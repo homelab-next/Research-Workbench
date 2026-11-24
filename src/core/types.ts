@@ -134,6 +134,8 @@ export interface Payloads {
   "query.issued": { query: string; source: string; source_hash: string; pivot: string | null; pivot_hash: string | null; connector: string; text: string; bound: Record<string, Json>; window: TimeWindow; why: string; estimate: Cost | null; step: string | null; verifies: string | null; purpose: QueryPurpose };
   "query.result": { query: string; result: BlobRef; rows: number; rows_hash: string; coverage: Coverage; duration_ms: number; cost: Cost | null };
   "query.failed": { query: string; error: string };
+  /** The end of a route the person asked for: what it reached, which pivots ran dry, what the answer rests on, and the cards its lookups made. The lookups themselves are the query entries that carry `job`. */
+  "route.finished": { job: string; want: string; outcome: "answered" | "blocked"; reached: Observable[]; blocked: string[]; caveats: string[]; cards: string[] };
   "verify.run": { original: string; rerun: string | null; card: string; outcome: "matches" | "differs" | "could_not_run"; detail: string };
   // models
   "model.request": { request: string; provider: string; model: string; effort: string | null; where: Where; marking: Marking; pack: PackItem[]; left_out: PackItem[]; messages: BlobRef; tools: string[] };
@@ -262,6 +264,7 @@ export const STEP_OUTCOMES = listOf<StepOutcome>({ answered: true, empty: true, 
 export const JOB_KINDS = listOf<Payloads["job.started"]["kind"]>({ research: true, query: true, model: true, check: true });
 export const JOB_OUTCOMES = listOf<Payloads["job.finished"]["outcome"]>({ done: true, failed: true });
 export const QUERY_PURPOSES = listOf<QueryPurpose>({ result: true, estimate: true, verify: true });
+export const ROUTE_OUTCOMES = listOf<Payloads["route.finished"]["outcome"]>({ answered: true, blocked: true });
 export const VERIFY_OUTCOMES = listOf<Payloads["verify.run"]["outcome"]>({ matches: true, differs: true, could_not_run: true });
 export const PLACES = listOf<Place>({ incoming: true, lane: true, discarded: true });
 export const EMPTY_MEANS = listOf<EmptyMeans>({ "proven-negative": true, "not-seen": true });
@@ -280,7 +283,7 @@ export const ENTRY_TYPES = listOf<EntryType>({
   "stage.finished": true, "stage.sent_back": true, "gate.waiting": true, "gate.passed": true, "budget.set": true,
   "job.started": true, "job.finished": true, "plan.proposed": true, "plan.accepted": true, "plan.denied": true,
   "plan.replan_requested": true, "step.started": true, "step.finished": true, "step.estimated": true, "query.issued": true,
-  "query.result": true, "query.failed": true, "verify.run": true, "model.request": true, "model.response": true,
+  "query.result": true, "query.failed": true, "verify.run": true, "route.finished": true, "model.request": true, "model.response": true,
   "model.declined": true, "model.blocked": true, "tool.called": true, "tool.returned": true, "tool.skipped": true, "card.created": true,
   "card.kept": true, "card.moved": true, "card.discarded": true, "card.restored": true, "card.sent_back": true,
   "card.pinned": true, "lane.created": true, "lane.renamed": true, "lane.removed": true, "lane.target_set": true,
