@@ -83,6 +83,8 @@ export function loadProviders(registry: Registry, secrets: Secrets): { providers
   const problem = (m: LoadedManifest, error: string): void => {
     problems.push({ root: m.root, path: m.path, error });
   };
+  // The trusted-root and duplicate-id checks below are defence in depth: the registry already refuses model and script
+  // manifests from untrusted roots and duplicate ids before they load.
   const trusted = (m: LoadedManifest): boolean => registry.rootOf(m.path)?.trusted === true;
 
   const scripts: Script[] = [];

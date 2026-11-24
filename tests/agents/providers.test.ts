@@ -113,3 +113,18 @@ test("bad settings are problems", () => {
   expect(loadLocal(local({ base_url: "null" })).providers.get("lm")).toBeNull();
   expect(loadLocal(local({ efforts: "[1]" })).providers.get("lm")).toBeNull();
 });
+
+/** A registry stand-in that holds manifests the real one would not pass on (it refuses duplicates and untrusted roots itself). */
+const fake = (models: Record<string, unknown>[]): Registry => ({
+  all: (kind: string) => (kind === "model" ? models.map((body, i) => ({ kind: "model", id: String(body.id ?? `m${i}`), title: "t", hash: "h", root: "/r", path: `/r/m${i}.yaml`, dir: "/r", body, text: null })) : []),
+  rootOf: () => ({ path: "/r", trusted: true, credentials: [] }),
+}) as unknown as Registry;
+
+test("loadProviders itself refuses a scripted model that is not on this machine, and a body that fails the schema", () => {
+  const { providers, problems } = loadProviders(fake([
+    { kind: "model", id: "far", provider: "scripted", where: "hosted" },
+    { kind: "model", id: "nameless", where: "machine" },
+  ]), secrets);
+  expect(providers.all()).toEqual([]);
+  expect(problems.map((p) => p.error)).toEqual([expect.stringMatching(/where must be machine/), expect.stringMatching(/provider/)]);
+});

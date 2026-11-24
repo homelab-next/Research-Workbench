@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { ScriptedProvider } from "../../src/agents/providers/scripted";
+import { ScriptedProvider, toScript } from "../../src/agents/providers/scripted";
 import type { Script } from "../../src/agents/providers/scripted";
 import type { ChatMessage, TurnRequest } from "../../src/agents/providers/types";
 
@@ -72,4 +72,48 @@ test("usage is deterministic", async () => {
   expect(a.kind === "answer" && a.usage).toEqual({ input: Math.ceil(text(p.body(req)).length / 4), output: 2, reasoning: 1 });
   const c = await p.turn({ ...req, ordinal: 1 });
   expect(c.kind === "answer" && c.usage.output).toBe(99);
+});
+
+const cardsMsg = (payload: unknown): ChatMessage => ({ role: "tool", tool_call_id: "x", content: JSON.stringify(payload) });
+const citing = (title: string) => make([{ actor: "analyst", reply: { tool_calls: [{ tool: "p", args: { c: `{{card:${title}}}` } }] } }]);
+const ask = (p: ScriptedProvider, ...tool: ChatMessage[]) => p.turn({ ...req, key: "analyst", messages: [...base, ...tool] });
+const cited = (r: Awaited<ReturnType<typeof ask>>): unknown => (r.kind === "answer" ? JSON.parse(r.tool_calls[0]!.arguments).c : r);
+
+test("a title shown for two different cards is ambiguous, not resolved to the first", async () => {
+  const r = await ask(citing("Asset: x"), cardsMsg({ kept: [{ id: "c1", title: "Asset: x" }], discarded: [{ id: "c2", title: "Asset: x" }] }));
+  expect(r).toMatchObject({ kind: "error", message: "ambiguous card title: Asset: x" });
+});
+
+test("the same card shown twice under one title resolves", async () => {
+  const r = await ask(citing("Asset: x"), cardsMsg({ cards: [{ id: "c1", title: "Asset: x" }] }), cardsMsg({ card: { id: "c1", title: "Asset: x" } }));
+  expect(cited(r)).toBe("c1");
+});
+
+test("a title matches exactly, not as a prefix of another", async () => {
+  const m = cardsMsg({ cards: [{ id: "c17", title: "Asset: 192.0.2.17" }] });
+  expect(await ask(citing("Asset: 192.0.2.1"), m)).toMatchObject({ kind: "error" });
+  expect(cited(await ask(citing("Asset: 192.0.2.17"), m))).toBe("c17");
+});
+
+test("a card shown only as discarded resolves to its own id", async () => {
+  expect(cited(await ask(citing("Gone"), cardsMsg({ discarded: [{ id: "c9", title: "Gone" }] })))).toBe("c9");
+});
+
+test("an object that is not a card does not resolve", async () => {
+  const r = await ask(citing("Plan"), cardsMsg({ proposal: { id: "p1", title: "Plan" }, plans: [{ id: "p2", title: "Plan" }] }));
+  expect(r).toMatchObject({ kind: "error", message: 'script s refers to a card titled "Plan" that this conversation has not shown' });
+});
+
+test("a script whose args are not plain JSON is refused at load, and turn never throws", async () => {
+  const manifest = { kind: "script", id: "s", title: "s", hash: "h", root: "r", path: "p", dir: "d", text: null,
+    body: { turns: [{ actor: "planner", reply: { tool_calls: [{ tool: "t", args: { x: NaN } }] } }] } };
+  expect(() => toScript(manifest)).toThrow(/turns\[0\]: tool_calls\[0\] args are not plain JSON/);
+  const p = make([{ actor: "planner", reply: { tool_calls: [{ tool: "t", args: { x: Infinity } }] } }]);
+  const r = await p.turn(req);
+  expect(r.kind).toBe("error");
+});
+
+test("a placeholder left unresolved (a title with a newline) is an error", async () => {
+  const r = await ask(citing("two\nlines"), cardsMsg({ cards: [{ id: "c1", title: "two\nlines" }] }));
+  expect(r).toMatchObject({ kind: "error", message: "script s has a card placeholder that could not be resolved" });
 });

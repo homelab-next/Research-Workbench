@@ -24,22 +24,40 @@ class Unresolved extends Error {
   }
 }
 
-/** Every object with a string id and title, anywhere in a parsed tool result. */
-function collectCards(value: unknown, out: Map<string, string>): void {
+/**
+ * The fields a tool result uses to hold cards: `card`, `cards`, `kept`, `incoming` and `discarded` (the card views of the
+ * agent tools). Only objects with a string id and title found under one of these count; a proposal, plan or any other
+ * object that happens to carry an id and a title is not a card.
+ */
+const CARD_FIELDS = new Set(["card", "cards", "kept", "incoming", "discarded"]);
+
+/** Every card a parsed tool result shows, as title -> the distinct ids shown under that title. */
+function collectCards(value: unknown, out: Map<string, Set<string>>, asCard = false): void {
   if (Array.isArray(value)) {
-    for (const v of value) collectCards(v, out);
+    for (const v of value) collectCards(v, out, asCard);
   } else if (isPlainObject(value)) {
-    if (typeof value.id === "string" && typeof value.title === "string" && !out.has(value.title)) out.set(value.title, value.id);
-    for (const v of Object.values(value)) collectCards(v, out);
+    if (asCard && typeof value.id === "string" && typeof value.title === "string") {
+      const ids = out.get(value.title) ?? new Set<string>();
+      ids.add(value.id);
+      out.set(value.title, ids);
+    }
+    for (const [k, v] of Object.entries(value)) collectCards(v, out, CARD_FIELDS.has(k));
   }
 }
 
-function resolveJson(value: Json, cards: Map<string, string>): Json {
+class Ambiguous extends Error {
+  constructor(readonly title: string) {
+    super(title);
+  }
+}
+
+function resolveJson(value: Json, cards: Map<string, Set<string>>): Json {
   if (typeof value === "string") {
     return value.replace(PLACEHOLDER, (_m, title: string) => {
-      const id = cards.get(title);
-      if (id === undefined) throw new Unresolved(title);
-      return id;
+      const ids = cards.get(title);
+      if (ids === undefined) throw new Unresolved(title);
+      if (ids.size > 1) throw new Ambiguous(title);
+      return [...ids][0]!;
     });
   }
   if (Array.isArray(value)) return value.map(v => resolveJson(v, cards));
@@ -73,6 +91,11 @@ function checkReply(reply: unknown, where: string): ScriptReply {
     if (!Array.isArray(reply.tool_calls)) throw new ManifestError(`${where}: tool_calls must be a list`);
     out.tool_calls = reply.tool_calls.map((c: unknown, i: number) => {
       if (!isPlainObject(c) || !isNonEmptyString(c.tool) || !isPlainObject(c.args)) throw new ManifestError(`${where}: tool_calls[${i}] needs a tool name and an args mapping`);
+      try {
+        canonical(c.args as Json);
+      } catch {
+        throw new ManifestError(`${where}: tool_calls[${i}] args are not plain JSON`);
+      }
       return { tool: c.tool, args: c.args as Record<string, Json> };
     });
   }
@@ -125,6 +148,14 @@ export class ScriptedProvider implements Provider {
   }
 
   async turn(req: TurnRequest): Promise<TurnResult> {
+    try {
+      return this.#turn(req);
+    } catch (err) {
+      return { kind: "error", message: `script ${req.model}: ${(err as Error).message}`, raw: null };
+    }
+  }
+
+  #turn(req: TurnRequest): TurnResult {
     const missing = (): TurnResult => ({ kind: "error", message: `script ${req.model} has no turn ${req.ordinal + 1} for ${req.key}`, raw: null });
     const script = this.#scripts.get(req.model);
     if (script === undefined) return missing();
@@ -134,7 +165,7 @@ export class ScriptedProvider implements Provider {
     if ("declined" in reply) return { kind: "declined", reason: reply.declined, served_by: script.id, raw: enc.encode(canonical(reply)) };
     if ("error" in reply) return { kind: "error", message: reply.error, raw: enc.encode(canonical(reply)) };
 
-    const cards = new Map<string, string>();
+    const cards = new Map<string, Set<string>>();
     for (const m of req.messages) {
       if (m.role !== "tool") continue;
       try {
@@ -149,8 +180,12 @@ export class ScriptedProvider implements Provider {
       content = resolveJson(reply.content ?? "", cards) as string;
       calls = (reply.tool_calls ?? []).map(c => ({ tool: c.tool, args: resolveJson(c.args, cards) as Record<string, Json> }));
     } catch (err) {
+      if (err instanceof Ambiguous) return { kind: "error", message: `ambiguous card title: ${err.title}`, raw: null };
       if (!(err instanceof Unresolved)) throw err;
       return { kind: "error", message: `script ${script.id} refers to a card titled "${err.title}" that this conversation has not shown`, raw: null };
+    }
+    if (content.includes("{{card:") || JSON.stringify(calls).includes("{{card:")) {
+      return { kind: "error", message: `script ${script.id} has a card placeholder that could not be resolved`, raw: null };
     }
     const reasoning = reply.reasoning ?? null;
     const tool_calls: ToolCall[] = calls.map((c, i) => ({ id: `call-${req.ordinal}-${i}`, name: c.tool, arguments: JSON.stringify(c.args) }));
