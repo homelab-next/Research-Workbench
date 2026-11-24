@@ -1,6 +1,7 @@
 import { Window } from "happy-dom";
 import type { Config } from "../../src/modules/config";
 import type { Entry } from "../../src/core/types";
+import type { Reference } from "../../src/core/wire";
 import { makeH } from "../../src/web/dom";
 import { makeApi } from "../../src/web/api";
 import type { EntrySource, Fetcher } from "../../src/web/api";
@@ -22,6 +23,9 @@ export interface Page {
   toasts(): string[];
   close(): Promise<void>;
 }
+
+/** What a role that may not read the reference sees: nothing to choose from. */
+const noReference: Reference = { types: [], sources: [], pivots: [], objectives: [], phases: [], profile: { id: "none", title: "none" } };
 
 /** A Ui over a happy-dom window with no server behind it: for tests of the helpers alone. */
 export function testUi(win: Window, over: Partial<Ui> = {}): Ui {
@@ -53,7 +57,7 @@ export async function page(opts: { role?: Role; reducedMotion?: boolean; hash?: 
     },
   };
   const api = makeApi(fetcher, s.origin, source);
-  const ui = testUi(win, { api, me: await api.me(), ref: await api.reference(), reducedMotion: () => opts.reducedMotion === true, toast: (m) => { toasts.push(m); } });
+  const ui = testUi(win, { api, me: await api.me(), ref: await api.reference().catch(() => noReference), reducedMotion: () => opts.reducedMotion === true, toast: (m) => { toasts.push(m); } });
   const root = doc.createElement("div");
   doc.body.append(root);
   const app = startApp(ui, root);
