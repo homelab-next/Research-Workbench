@@ -1,7 +1,7 @@
 import type { Json } from "../core/canonical";
 import { canonical } from "../core/canonical";
-import { basename, dirname, isAbsolute, join } from "node:path";
-import { existsSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { sha256Hex } from "../core/hash";
 import type { Schema } from "../core/schema";
 import { validate } from "../core/schema";
@@ -139,23 +139,36 @@ const CHECK_SCHEMA: Schema = {
 };
 
 /** The checks a registry holds that may run: from trusted roots only, each with a script that is a plain file inside its own folder. Others are left out with a problem. */
-export function loadChecks(registry: Registry): { checks: CheckManifest[]; problems: string[] } {
+export function loadChecks(registry: Registry): { checks: CheckManifest[]; problems: string[]; broken: { id: string; problem: string }[] } {
   const problems: string[] = [];
   const checks: CheckManifest[] = [];
+  /** Checks a trusted root declares that cannot run: the Checks stage does not pass while any is here. No absolute path is named. */
+  const broken: { id: string; problem: string }[] = [];
   for (const m of registry.all("check")) {
     const root = registry.rootOf(m.path);
     if (root?.trusted !== true) { problems.push(`check ${m.id} is in a root that is not trusted for scripts; it will not run`); continue; }
+    const bad = (problem: string): void => { problems.push(`check ${m.id}: ${problem}`); broken.push({ id: m.id, problem }); };
     const errors = validate(CHECK_SCHEMA, m.body as Json);
-    if (errors.length > 0) { problems.push(`check ${m.id} (${m.path}): ${describeErrors(errors)}`); continue; }
+    if (errors.length > 0) { problems.push(`check ${m.id} (${m.path}): ${describeErrors(errors)}`); broken.push({ id: m.id, problem: describeErrors(errors) }); continue; }
     const b = m.body as unknown as { script: string; order: number; runner: "bun" | "exec"; timeout_ms: number; title?: string };
-    if (!(b.timeout_ms > 0) || !Number.isFinite(b.timeout_ms)) { problems.push(`check ${m.id}: timeout_ms must be a positive number`); continue; }
+    if (!(b.timeout_ms > 0) || !Number.isFinite(b.timeout_ms)) { bad("timeout_ms must be a positive number"); continue; }
     const plain = b.script === basename(b.script) && b.script !== "." && b.script !== ".." && !isAbsolute(b.script) && !/[\\/]/.test(b.script);
-    if (!plain) { problems.push(`check ${m.id}: script "${b.script}" must be a plain file name in the manifest's folder`); continue; }
+    if (!plain) { bad(`script "${b.script}" must be a plain file name in the manifest's folder`); continue; }
     const file = join(dirname(m.path), b.script);
-    if (!staysInside(root.path, file)) { problems.push(`check ${m.id}: script "${b.script}" is outside the module root`); continue; }
-    if (!existsSync(file) || !statSync(file).isFile()) { problems.push(`check ${m.id}: script "${b.script}" is missing`); continue; }
+    if (!staysInside(root.path, file)) { bad(`script "${b.script}" is outside the module root`); continue; }
+    if (!existsSync(file) || !statSync(file).isFile()) { bad(`script "${b.script}" is missing`); continue; }
     checks.push({ id: m.id, title: b.title ?? m.title, order: b.order, hash: m.hash, path: m.path, script: b.script, runner: b.runner, timeout_ms: b.timeout_ms });
   }
+  // a check manifest in a trusted root that the registry itself refused (it does not parse, or its id is taken) is broken too
+  for (const p of registry.problems) {
+    if (registry.rootOf(p.path)?.trusted !== true) continue;
+    let text: string;
+    try { text = readFileSync(p.path, "utf8"); } catch { continue; }
+    if (!/^kind:\s*["']?check["']?\s*$/m.test(text)) continue;
+    const id = /^id:\s*["']?([^"'\s]+)/m.exec(text)?.[1] ?? basename(p.path);
+    if (broken.some((x) => x.id === id)) continue;
+    broken.push({ id, problem: `${relative(p.root, p.path)}: ${p.error.split(p.root).join("")}` });
+  }
   checks.sort((a, b) => a.order - b.order);
-  return { checks, problems };
+  return { checks, problems, broken };
 }

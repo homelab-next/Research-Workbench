@@ -341,3 +341,39 @@ test("checkInput carries the cards the narrative cites too", () => {
     expect(Object.keys(i.cards)).toEqual(["c1"]);
   } finally { close(); }
 });
+
+test("a declared check that cannot be loaded fails the Checks stage, though every other check passed", async () => {
+  const { env, close } = stageRig({ a: [PRINT("{ pass: true, findings: [] }"), { order: 1 }], b: [PRINT("{ pass: true, findings: [] }"), { order: 2 }] });
+  try {
+    rmSync(join(dir, "stage-root", "checks", "b.ts"));
+    const d = latestDraft(env.session.state)!;
+    const end = await checksRunner(env);
+    expect(end).toMatchObject({ kind: "finished", outcome: "fail", draft_hash: d.hash, reason: `check b could not be loaded: script "b.ts" is missing` });
+    const es = runs(env);
+    expect(es.map((e) => e.type === "check.run" && [e.payload.check, e.payload.pass])).toEqual([["b", false], ["a", true]]);
+    expect(env.session.state.reviews[d.hash]!.checks.find((c) => c.check === "b")).toMatchObject({ pass: false });
+    expect(env.session.state.skipped).toEqual([]);
+  } finally { close(); }
+});
+
+test("a check manifest the registry refused, or one that is not valid, is broken; one from an untrusted root is not", () => {
+  const root = join(dir, "broken-root");
+  write(root, "fine", PRINT("{ pass: true, findings: [] }"));
+  write(root, "nort", PRINT("{ pass: true, findings: [] }"), { runner: "perl" });
+  writeFileSync(join(root, "garbled.yaml"), "kind: check\nid: garbled\norder: [1\n");
+  const evil = join(dir, "evil-root");
+  write(evil, "ghost", PRINT("{ pass: true, findings: [] }"));
+  const r = loadChecks(Registry.load([{ path: root, trusted: true, credentials: [] }, { path: evil, trusted: false, credentials: [] }]));
+  expect(r.checks.map((c) => c.id)).toEqual(["fine"]);
+  expect(r.broken.map((b) => b.id).sort()).toEqual(["garbled", "nort"]);
+  for (const b of r.broken) expect(b.problem).not.toContain(dir);
+});
+
+test("the sample with one check's script gone loads ten checks and names the eleventh as broken", () => {
+  const root = join(dir, "sample-copy");
+  copySample(root);
+  rmSync(join(root, "checks", "08-gaps-and-negatives.ts"));
+  const r = loadChecks(Registry.load([{ path: root, trusted: true, credentials: [] }]));
+  expect(r.checks).toHaveLength(10);
+  expect(r.broken).toEqual([{ id: "gaps-and-negatives", problem: `script "08-gaps-and-negatives.ts" is missing` }]);
+});

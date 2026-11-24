@@ -9,15 +9,25 @@ const CHECKS: Actor = { kind: "system", id: "checks" };
 
 /**
  * Checks: runs each form check, in order, on the draft pinned at the start of the stage, and records every run against that draft's hash
- * with the exact input and output. The stage passes, naming that hash, only when every check passed.
+ * with the exact input and output. The stage passes, naming that hash, only when every check a trusted root declares was loaded, ran and passed.
  */
 export async function checksRunner(env: StageEnv): Promise<StageEnd> {
   const { session, deps, stage } = env;
   const d = latestDraft(session.state);
   if (d === null) return { kind: "stalled", reason: "Checks: there is no draft to check" };
-  const { checks, problems } = loadChecks(deps.registry);
-  if (checks.length === 0) return { kind: "stalled", reason: `Checks has nothing to run: ${problems.length === 0 ? "no check is installed" : problems.join("; ")}` };
+  const { checks, problems, broken } = loadChecks(deps.registry);
+  if (checks.length === 0 && broken.length === 0) return { kind: "stalled", reason: `Checks has nothing to run: ${problems.length === 0 ? "no check is installed" : problems.join("; ")}` };
   const done: { check: string; pass: boolean; first: string }[] = [];
+  // a check that is declared but cannot be loaded is a failed check on this draft, like one whose script cannot be read when it runs
+  for (const b of broken) {
+    const message = `check ${b.id} could not be loaded: ${b.problem}`;
+    const nothing = session.blobs.put(new Uint8Array(0));
+    session.commit((s) => [{
+      type: "check.run", actor: CHECKS, run: s.run.id, stage: stage.id,
+      payload: { check: b.id, script_hash: "", input: nothing, output: nothing, draft_hash: d.hash, pass: false, findings: [{ check: b.id, where: "check", message }] },
+    }]);
+    done.push({ check: b.id, pass: false, first: message });
+  }
   for (const check of checks) {
     let input: ReturnType<typeof checkInput>;
     try {
@@ -39,5 +49,7 @@ export async function checksRunner(env: StageEnv): Promise<StageEnd> {
   const failing = done.filter((c) => !c.pass);
   if (failing.length === 0) return { kind: "finished", outcome: "pass", draft_hash: d.hash, output, reason: null };
   const more = failing.length > 1 ? ` and ${failing.length - 1} more` : "";
-  return { kind: "finished", outcome: "fail", draft_hash: d.hash, output, reason: `${failing[0]!.check} failed: ${failing[0]!.first}${more}` };
+  const first = failing[0]!;
+  const why = broken.some((b) => b.id === first.check) ? first.first : `${first.check} failed: ${first.first}`;
+  return { kind: "finished", outcome: "fail", draft_hash: d.hash, output, reason: `${why}${more}` };
 }
