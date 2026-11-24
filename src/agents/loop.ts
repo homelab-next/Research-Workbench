@@ -187,8 +187,9 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     // 6. the tool calls that are present decide, not the finish label
     if (toRun.length > 0) {
       const results: ChatMessage[] = [];
-      for (const [i, tc] of toRun.entries()) {
-        if (i > 0 && !spec.outside_run && (session.state.run.status === "paused" || session.state.run.status === "finished")) return { kind: "stopped", why: "paused" };
+      for (const tc of toRun) {
+        // checked before every call, the first included: a reply that arrives after a stop runs nothing
+        if (!spec.outside_run && (session.state.run.status === "paused" || session.state.run.status === "finished")) return { kind: "stopped", why: "paused" };
         const name = clip(String(tc.name), NAME_CHARS);
         const parsed = parseCall(spec.tools, name, tc.arguments);
         const why = clip(parsed.why, WHY_CHARS);

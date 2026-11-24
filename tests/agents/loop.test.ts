@@ -229,7 +229,7 @@ const startRun = (): void => {
   f.s.commit((_s, ids) => [{ type: "run.started", actor: human, payload: { run: ids.next("run"), pipeline: "p", pipeline_hash: "h", stages: [] } }]);
 };
 
-test("a paused run stops the loop before the next call", async () => {
+test("a run paused while the model is asked runs none of the reply's calls, the first included", async () => {
   startRun();
   const p = spy([{ tool_calls: [{ tool: "list_sources", args: { why: "w" } }] }, { content: "x" }]);
   const inner = p.turn;
@@ -241,7 +241,21 @@ test("a paused run stops the loop before the next call", async () => {
   const end = await runAgent(f.s, spec(p));
   expect(end).toEqual({ kind: "stopped", why: "paused" });
   expect(p.turns).toBe(1);
-  expect(ofType("tool.returned").length).toBe(1);
+  expect(ofType("model.response").length).toBe(1);
+  expect(ofType("tool.called").length).toBe(0);
+  expect(ofType("tool.returned").length).toBe(0);
+});
+
+test("a run paused after a reply's first call runs none of the rest", async () => {
+  startRun();
+  const p = spy([{ tool_calls: [{ tool: "list_sources", args: { why: "w" } }, { tool: "list_sources", args: { why: "v" } }] }, { content: "x" }]);
+  const off = f.s.subscribe((e) => {
+    if (e.type === "tool.returned" && f.s.state.run.status !== "paused") f.s.commit(() => [{ type: "run.paused", actor: human, payload: { reason: "person asked" } }]);
+  });
+  try {
+    expect(await runAgent(f.s, spec(p))).toEqual({ kind: "stopped", why: "paused" });
+  } finally { off(); }
+  expect(ofType("tool.called").length).toBe(1);
 });
 
 test("a run that is paused before the first call makes none", async () => {

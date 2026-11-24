@@ -222,3 +222,31 @@ test("the set of proposals being run belongs to the hub and is empty once they a
   await s.app.hub.idle();
   expect(s.app.hub.running.size).toBe(0);
 });
+
+test("nothing runs after a person's stop that lands while a researcher's model turn is in flight", async () => {
+  s = await served();
+  const id = await s.newCase();
+  cases.push(id);
+  await s.toPlanGate(id);
+  const session = s.app.hub.read(id);
+  let stopped = false;
+  const off = session.subscribe((e) => {
+    if (!stopped && e.type === "model.request" && e.actor.kind === "agent" && e.actor.stage === "research") {
+      stopped = true;
+      // the person's stop arrives while the provider is being asked
+      queueMicrotask(() => { s.app.hub.engine(id).stop({ kind: "human", id: "analyst" }, "stop now"); });
+    }
+  });
+  try {
+    const plan = session.state.plan.current!;
+    expect((await s.command(id, "accept_plan", { plan: plan.id, steps: plan.steps.map((x) => x.id), budgets: { s3: 5 } })).status).toBe(200);
+    await s.app.hub.idle();
+  } finally { off(); }
+  expect(stopped).toBe(true);
+  const all = s.entries(id);
+  const at = all.findIndex((e) => e.type === "run.finished" && e.payload.outcome === "stopped");
+  expect(at).toBeGreaterThan(-1);
+  const after = all.slice(at + 1).map((e) => `${e.seq} ${e.type} ${e.actor.kind}:${e.actor.id}`);
+  // a query already issued may still record its result; nothing new starts
+  expect(after.filter((x) => /tool\.called|query\.issued|proposal\.accepted|card\.created/.test(x))).toEqual([]);
+});

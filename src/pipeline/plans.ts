@@ -169,7 +169,15 @@ export async function spendPlanBudget(session: CaseSession, deps: RunnerDeps, pr
     return earlier !== null && earlier.kind === "costly_query" && earlier.step === step;
   });
   if (spent) return null;
-  return runProposal(session, deps, { proposal, budget: accepted.payload.budgets[step]!, actor: accepted.actor, cause: accepted.seq });
+  // the run as it is now: if it is stopped, paused or replaced before the query is priced, nothing is accepted in the person's name
+  const run0 = session.state.run.id;
+  const guard = (): string | null => {
+    const now = session.state.run;
+    if (now.id !== run0) return "the run changed while the query was being priced";
+    if (now.status === "finished" || now.status === "paused") return `the run is ${now.status}`;
+    return null;
+  };
+  return runProposal(session, deps, { proposal, budget: accepted.payload.budgets[step]!, actor: accepted.actor, cause: accepted.seq, guard });
 }
 
 /**
