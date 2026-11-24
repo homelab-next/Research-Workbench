@@ -50,7 +50,7 @@ export function fixture(accepted = true): Fixture {
     s.commit((_st, ids) => [{ type: "plan.proposed", actor: agent, payload: { plan: PLAN(ids.next("plan")) } }]);
     s.commit(() => [{ type: "plan.accepted", actor: person, payload: { plan: "plan-1", steps: ["s1", "s2", "s3", "s4"], budgets: {} } }]);
   }
-  const ctx: ToolContext = { session: s, deps: sample.deps, seeker: sample.seeker, actor: agent, link: { run: null, stage: null, job: null }, subgoal: null, window: WINDOW, limits: DEFAULT_LIMITS };
+  const ctx: ToolContext = { session: s, deps: sample.deps, seeker: sample.seeker, actor: agent, link: { run: null, stage: null, job: null }, draft: null, draft_hash: null, subgoal: null, window: WINDOW, limits: DEFAULT_LIMITS };
   return {
     s, ctx, sample,
     call: (name, args, allowed = TOOL_NAMES) => execTool(ctx, parseCall(allowed, name, JSON.stringify(args))),

@@ -6,7 +6,9 @@ import type { CaseSession } from "../../core/session";
 import type { Actor, Marking, TimeWindow } from "../../core/types";
 import type { RunnerDeps, RunQueryResult } from "../../modules/runner";
 import type { Seeker, SeekLimits } from "../../modules/seeker";
+import type { DraftWork } from "../draft";
 import type { ToolSpec } from "../providers/types";
+import { ANALYSIS_TOOLS } from "./analysis";
 import { CARD_TOOLS } from "./cards";
 import { params, TOOL_VIEW_CHARS, ToolError, VIEW_ROWS } from "./kit";
 import { RESEARCH_TOOLS } from "./research";
@@ -21,6 +23,8 @@ export type ToolName = (typeof TOOL_NAMES)[number];
 export interface ToolContext {
   session: CaseSession; deps: RunnerDeps; seeker: Seeker; actor: Extract<Actor, { kind: "agent" }>;
   link: { run: string | null; stage: string | null; job: string | null };
+  /** The draft being assembled in an analysis stage, and the hash of the one under review in a review stage; null elsewhere. */
+  draft: DraftWork | null; draft_hash: string | null;
   subgoal: string | null; window: TimeWindow; limits: SeekLimits;
   /** Set by the engine. Called when a costly step raised a proposal; returns the result if the person's plan budget ran it, else null. */
   onNeedsBudget?: (proposal: string, step: string | null) => Promise<RunQueryResult | null>;
@@ -34,7 +38,7 @@ const unavailable = (name: ToolName): ToolDef => ({
   call: async () => ({ ok: false, summary: "not available", view: { error: "not available" }, marking: null }),
 });
 
-const defs = new Map<string, ToolDef>([...SOURCE_TOOLS, ...RESEARCH_TOOLS, ...CARD_TOOLS].map((t) => [t.name, t]));
+const defs = new Map<string, ToolDef>([...SOURCE_TOOLS, ...RESEARCH_TOOLS, ...CARD_TOOLS, ...ANALYSIS_TOOLS].map((t) => [t.name, t]));
 export const TOOLS = Object.fromEntries(TOOL_NAMES.map((n) => [n, defs.get(n) ?? unavailable(n)])) as Record<ToolName, ToolDef>;
 
 export function toolSpecs(names: readonly ToolName[]): ToolSpec[] {
