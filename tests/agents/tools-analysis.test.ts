@@ -214,3 +214,46 @@ test("while a draft is assembled, the tool's likelihood parameter is the standar
   expect(props.statement).toBeUndefined();
   expect(spec!.parameters.required).toContain("claim");
 });
+
+// ---- refuse at the source (task 11 item 2) ----
+
+/** A card made by hand: no rows, with this empty meaning and coverage. */
+function emptyCard(empty: "not-seen" | "proven-negative" | null, coverage: { kind: "full" } | { kind: "partial"; reason: "row_limit" } | null): string {
+  let id = "";
+  f.s.commit((_s, ids) => {
+    id = ids.next("card");
+    return [{ type: "card.created", actor: person, payload: { card: {
+      id, title: "t", body: "b", kind: "result", made_by: "human", query: null, columns: [], column_types: [], rows: [], row_count: 0, coverage, empty,
+      marking: "TLP:GREEN", source: "assets", step: null, subgoal: null, why: "w", event_time: null, quality_notes: [],
+    } } }];
+  });
+  return id;
+}
+
+test("a finding may not cite an empty card that is not a proven negative with full coverage: it is a gap, not evidence", async () => {
+  f.ctx.draft = drafting();
+  for (const [empty, coverage] of [["not-seen", { kind: "full" }], ["proven-negative", { kind: "partial", reason: "row_limit" }], ["proven-negative", null], [null, { kind: "full" }]] as const) {
+    const id = emptyCard(empty, coverage);
+    const r = await f.call("propose_assessment", assess({ cites: ["c1", id] }));
+    expect(r.ok).toBe(false);
+    expect(view(r).error).toBe(`${id} is not seen (not proof of absence): put it in gaps_and_limits, not in a finding`);
+  }
+  expect(f.ctx.draft.findings).toEqual([]);
+});
+
+test("a finding may cite an empty card that is a proven negative with full coverage", async () => {
+  f.ctx.draft = drafting();
+  const id = emptyCard("proven-negative", { kind: "full" });
+  const r = await f.call("propose_assessment", assess({ cites: [id] }));
+  expect(r.ok).toBe(true);
+  expect(f.ctx.draft.findings[0]!.cites).toEqual([id]);
+});
+
+test("a finding that cites an unknown or a discarded card is refused, and nothing is added", async () => {
+  f.ctx.draft = drafting();
+  expect(view(await f.call("propose_assessment", assess({ cites: ["c404"] }))).error).toBe("unknown card: c404");
+  const id = emptyCard("proven-negative", { kind: "full" });
+  f.s.commit(() => [{ type: "card.discarded", actor: person, payload: { card: id } }]);
+  expect(view(await f.call("propose_assessment", assess({ cites: [id] }))).error).toBe(`card ${id} was discarded`);
+  expect(f.ctx.draft.findings).toEqual([]);
+});

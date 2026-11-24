@@ -39,6 +39,13 @@ async function proposeAssessment(ctx: ToolContext, a: Record<string, Json>): Pro
   }
   const cites = strings(a.cites);
   cardsExist(ctx, cites);
+  // an empty result is evidence only when it is a proven negative over full coverage; anything else is a gap (check 8 reads the same rule)
+  for (const c of cites) {
+    const card = ctx.session.state.cards[c]!;
+    if (card.row_count === 0 && !(card.empty === "proven-negative" && card.coverage !== null && card.coverage.kind === "full")) {
+      throw new ToolError(`${c} is not seen (not proof of absence): put it in gaps_and_limits, not in a finding`);
+    }
+  }
   const id = work.setFinding({
     statement: composeStatement(likelihood, claim, terms), likelihood, confidence: str(a.confidence) as "low" | "moderate" | "high",
     confidence_basis: str(a.confidence_basis), cites, assumptions: strings(a.assumptions), reasoning: str(a.reasoning),
@@ -104,7 +111,7 @@ function assessmentParameters(likelihood: readonly string[] | null): Schema {
 export const ANALYSIS_TOOLS: ToolDef[] = [
   {
     name: "propose_assessment",
-    description: "Propose a finding in the draft, citing the cards that support it. Write the claim plainly, give how likely it is as one of the standard's likelihood terms, and say how confident you are and why; the statement is worded from them. Name `replaces` to change one you already proposed.",
+    description: "Propose a finding in the draft, citing the cards that support it. Write the claim plainly, give how likely it is as one of the standard's likelihood terms, and say how confident you are and why; the statement is worded from them. A card with no rows may be cited only when it is a proven negative with full coverage; any other empty card is a gap. Name `replaces` to change one you already proposed.",
     parameters: assessmentParameters(null),
     parametersFor: (ctx) => assessmentParameters(ctx.draft?.terms?.likelihood ?? null),
     call: proposeAssessment,
