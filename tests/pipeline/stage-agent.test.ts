@@ -213,3 +213,21 @@ test("a stage's sampling and max_output_tokens reach the model request; a stage 
   expect(seen[0]).not.toHaveProperty("max_output_tokens");
   expect(seen[1]).toMatchObject({ sampling: { temperature: 0.2, presence_penalty: 1 }, max_output_tokens: 70000 });
 });
+
+test("a stage's max_turns overrides the loop's 16: the task counts to it and the agent stops there", async () => {
+  const call = { tool_calls: [{ tool: "list_sources", args: { why: "w" } }] };
+  const r = rig(script(call, call, call, call));
+  const inner = r.deps.providers.get("scripted")!;
+  const seen: Parameters<Provider["turn"]>[0][] = [];
+  r.deps.providers = new Providers([{
+    id: inner.id, kind: inner.kind, where: inner.where, models: () => inner.models(), body: (q) => inner.body(q),
+    turn: (q) => { seen.push(q); return inner.turn(q); },
+  }]);
+  r.engine.start(person);
+  const env = r.env();
+  const end = await stageAgent({ ...env, stage: { ...env.stage, tools: ["list_sources"], max_turns: 3 } }, { actor_id: "orchestrator", task: "t", extras: [] });
+  expect(end).toEqual({ kind: "stalled", reason: "Frame: the agent used all its turns without an answer" });
+  expect(seen).toHaveLength(3);
+  expect(seen[0]!.messages[1]!.content).toBe("t\n\nTurn 1 of 3.");
+  expect(seen[2]!.tool_choice).toBe("none");
+});

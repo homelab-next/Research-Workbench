@@ -157,3 +157,16 @@ test("a stage may give sampling and max_output_tokens, validated; a stage withou
     expect(pipeline === null || !pipeline.stages.some((s) => s.id === "plan")).toBe(true);
   }
 });
+
+test("a stage may set max_turns, a positive integer; a stage without it has none", () => {
+  expect(load().pipeline!.stages.find((s) => s.id === "plan")!.max_turns).toBeNull();
+  const text = readFileSync(file("plan"), "utf8");
+  writeFileSync(file("plan"), text + "max_turns: 30\n");
+  expect(load().pipeline!.stages.find((s) => s.id === "plan")!.max_turns).toBe(30);
+  for (const bad of ["max_turns: 0\n", "max_turns: -2\n", "max_turns: 2.5\n", "max_turns: many\n"]) {
+    writeFileSync(file("plan"), text + bad);
+    const { pipeline, problems } = load();
+    expect(problems.some((p) => p.includes("plan") && p.includes("max_turns"))).toBe(true);
+    expect(pipeline === null || !pipeline.stages.some((s) => s.id === "plan")).toBe(true);
+  }
+});
