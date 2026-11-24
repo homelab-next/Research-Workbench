@@ -121,3 +121,34 @@ test("a missing source manifest and a missing quality note are shown, not droppe
     { source: "gone", quality: "source manifest not loaded" },
   ]);
 });
+
+test("a carried-over narrative keeps its cards' marking and sources in the next revision", () => {
+  const cards = { c1: card("c1", "assets", "TLP:GREEN"), c2: card("c2", "dns", "TLP:AMBER", ["n1"]) };
+  const w1 = new DraftWork(null);
+  w1.setFinding(f("a", ["c1"]), null);
+  w1.setSection("summary", "text", ["c2"]);
+  const p1 = buildProduct(w1, facts(cards));
+  const w2 = new DraftWork(p1);
+  w2.setFinding(f("a2", ["c1"]), "f1");
+  const p2 = buildProduct(w2, facts(cards));
+  expect(p2.marking).toBe("TLP:AMBER");
+  expect(p2.sources).toEqual(p1.sources);
+  expect(p2.sources.map((x) => x.source)).toContain("dns");
+});
+
+test("a revision never has a lower marking than the one before it", () => {
+  const cards = { c1: card("c1", "dns", "TLP:AMBER"), c2: card("c2", "assets", "TLP:GREEN") };
+  const w1 = new DraftWork(null);
+  w1.setFinding(f("a", ["c1"]), null);
+  const p1 = buildProduct(w1, facts(cards));
+  const w2 = new DraftWork(p1);
+  w2.setFinding(f("b", ["c2"]), "f1");
+  expect(buildProduct(w2, facts(cards)).marking).toBe("TLP:AMBER");
+});
+
+test("the refusal for a discarded card is a ToolError", () => {
+  const w = new DraftWork(null);
+  w.setFinding(f("a", ["c1"]), null);
+  const gone = { ...card("c1", "dns", "TLP:GREEN"), place: "discarded" } as unknown as CardState;
+  expect(() => buildProduct(w, facts({ c1: gone }))).toThrow(ToolError);
+});

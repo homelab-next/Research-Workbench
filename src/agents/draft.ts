@@ -17,7 +17,11 @@ export class DraftWork {
   readonly narrativeCites: Record<TextSection, string[]> = { summary: [], gaps_and_limits: [], alternatives: [], assessment: [] };
   readonly research: { question: string; why: string }[] = [];
 
+  /** The revision this one starts from: its marking is a floor and its sources are kept (narrative cites are not stored in a product). */
+  readonly previous: Product | null;
+
   constructor(previous: Product | null) {
+    this.previous = previous;
     this.findings = previous === null ? [] : previous.key_findings.map((f) => ({ ...f, cites: [...f.cites], assumptions: [...f.assumptions] }));
     this.sections = previous === null
       ? { summary: "", gaps_and_limits: "", alternatives: "", assessment: "" }
@@ -51,7 +55,7 @@ export function buildProduct(work: DraftWork, facts: {
   const live = (id: string, what: string): CardState | null => {
     if (!Object.hasOwn(facts.cards, id)) return null;
     const c = facts.cards[id]!;
-    if (c.place === "discarded") throw new Error(`${what} cites card ${id}, which was discarded`);
+    if (c.place === "discarded") throw new ToolError(`${what} cites card ${id}, which was discarded`);
     return c;
   };
   const found = new Map<string, CardState>();
@@ -66,10 +70,14 @@ export function buildProduct(work: DraftWork, facts: {
     const notes = named.map((nid) => m.quality_notes.find((n) => n.id === nid)?.text ?? `${nid} (note no longer in the source manifest)`);
     sources.push({ source: id, quality: [m.quality, ...notes].join(" ") });
   }
+  const prev = work.previous;
+  const kept = new Map((prev === null ? [] : prev.sources).map((x) => [x.source, x]));
+  for (const x of sources) kept.set(x.source, x);
+  const allSources = [...kept.values()].sort((a, b) => (a.source < b.source ? -1 : a.source > b.source ? 1 : 0));
   return {
-    objective: facts.objective, question: facts.question, marking: strictest(facts.case_marking, ...cited.map((c) => c.marking)),
+    objective: facts.objective, question: facts.question, marking: strictest(facts.case_marking, ...cited.map((c) => c.marking), ...(prev === null ? [] : [prev.marking])),
     summary: work.sections.summary, key_findings: work.findings.map((f) => ({ ...f })), gaps_and_limits: work.sections.gaps_and_limits,
-    alternatives: work.sections.alternatives, assessment: work.sections.assessment, sources, assumptions: [...facts.assumptions], change: facts.change,
+    alternatives: work.sections.alternatives, assessment: work.sections.assessment, sources: allSources, assumptions: [...facts.assumptions], change: facts.change,
   };
 }
 
