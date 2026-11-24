@@ -163,6 +163,8 @@ export interface Payloads {
   "proposal.created": { proposal: Proposal };
   "proposal.accepted": { proposal: string; budget: number | null };
   "proposal.rejected": { proposal: string; reason: string };
+  /** A person's budget did not cover the source's fresh estimate: nothing ran and the proposal stays open at the new price. `query` is the estimate query, when the source answered one. */
+  "proposal.repriced": { proposal: string; estimate: Cost; budget: number; query: string | null };
   // analysis
   "assessment.made": { finding: Finding; draft_hash: string };
   "research.requested": { question: string; why: string };
@@ -287,7 +289,7 @@ export const ENTRY_TYPES = listOf<EntryType>({
   "model.declined": true, "model.blocked": true, "tool.called": true, "tool.returned": true, "tool.skipped": true, "card.created": true,
   "card.kept": true, "card.moved": true, "card.discarded": true, "card.restored": true, "card.sent_back": true,
   "card.pinned": true, "lane.created": true, "lane.renamed": true, "lane.removed": true, "lane.target_set": true,
-  "undo": true, "proposal.created": true, "proposal.accepted": true, "proposal.rejected": true,
+  "undo": true, "proposal.created": true, "proposal.accepted": true, "proposal.rejected": true, "proposal.repriced": true,
   "assessment.made": true, "research.requested": true, "draft.revised": true, "check.run": true,
   "evaluation.made": true, "challenge.raised": true, "challenge.answered": true, "publish.rejected": true,
   "product.published": true, "feedback.recorded": true, "agent.asked": true, "agent.answered": true, "agent.ended": true,

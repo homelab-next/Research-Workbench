@@ -157,6 +157,7 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
   const weight = pivot !== null ? pivotWeight(pivot, source) : source.cost.weight;
   let estimate: Cost | null = null;
   let cause: number | null = null;
+  let estimateQuery: string | null = null;
   if (weight > 0) {
     // An agent asking again for the same costly query is pointed at the proposal already waiting for a person.
     if (input.actor.kind === "agent") {
@@ -190,13 +191,24 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
         }
       }
       cause = priced.resultSeq;
+      if (priced.result.status === "done" || priced.result.status === "failed") estimateQuery = priced.result.query;
     }
     // An estimate the runner cannot compare with a budget in the source's unit is no estimate.
     if (estimate !== null && !isEstimate(estimate, source.cost.unit)) estimate = null;
     // With no estimate, only a person may decide that a budget is enough.
     const funded = budget !== null && (estimate !== null ? estimate.amount <= budget : input.actor.kind === "human");
     if (!funded) {
-      if (input.actor.kind !== "agent") return { status: "needs_budget", proposal: null, estimate };
+      if (input.actor.kind !== "agent") {
+        // A person's budget that a fresh estimate overtakes leaves a record: the proposal is open at its new price and nothing ran.
+        if (input.actor.kind === "human" && input.accept != null && budget !== null && estimate !== null && openProposal(session, input.accept.proposal)) {
+          const priced = estimate;
+          session.commit(() => [{
+            type: "proposal.repriced", actor: input.actor, cause, ...link,
+            payload: { proposal: input.accept!.proposal, estimate: priced, budget, query: estimateQuery },
+          }]);
+        }
+        return { status: "needs_budget", proposal: null, estimate };
+      }
       const entries = session.commit((_state, ids) => {
         const id = ids.next("proposal");
         return [{
@@ -232,6 +244,10 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
     purpose: input.verifies != null ? "verify" : "result", estimate, cause: resultCause, makeCard: input.make_card !== false, title,
   });
   return ran.result;
+}
+
+function openProposal(session: CaseSession, id: string): boolean {
+  return Object.hasOwn(session.state.proposals, id) && session.state.proposals[id]!.kind === "costly_query" && session.state.proposals[id]!.status === "open";
 }
 
 /** An open costly_query proposal for the same source, text, bound values and window, if there is one. */

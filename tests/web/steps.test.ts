@@ -231,6 +231,22 @@ test("an open costly proposal can be run with a budget or rejected with a reason
   expect(p.all(".lens .waiting-budget").length).toBe(0);
 });
 
+test("a proposal a budget did not cover says what the source now estimates, and can still be run", async () => {
+  await atGate();
+  const r = await runPivot(p.s.app.hub.read("CASE-1"), p.s.app.hub.deps.runner, { pivot: "address_to_verdict", value: "198.51.100.77", window: state().plan.current!.window, why: "w", actor: agent });
+  if (r.status !== "needs_budget" || r.proposal === null || r.estimate === null) throw new Error("no proposal");
+  const id = r.proposal;
+  await p.settle();
+  const amount = 900;
+  const budget = 100;
+  p.s.app.hub.read("CASE-1").commit(() => [{ type: "proposal.repriced", actor: { kind: "human", id: "analyst" }, cause: null, payload: { proposal: id, estimate: { amount, unit: r.estimate!.unit }, budget, query: null } }]);
+  await p.settle();
+  expect(state().proposals[id]).toMatchObject({ status: "open", refused_budget: budget });
+  const row = p.q(`[data-proposal=${id}]`);
+  expect(row.textContent).toContain(`The source now estimates ${amount} ${r.estimate.unit}; a budget of ${budget} did not cover it. Nothing ran.`);
+  expect(row.querySelector("[data-action=run-proposal]")).not.toBeNull();
+});
+
 test("a source's own words are shown as text", async () => {
   await atGate();
   const evil = "<img src=x onerror=alert(1)>";

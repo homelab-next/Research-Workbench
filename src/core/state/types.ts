@@ -65,7 +65,7 @@ export interface QueryState {
   rows: number | null; rows_hash: string | null; coverage: Coverage | null; result: BlobRef | null;
   error: string | null; card: string | null;
 }
-export type ProposalState = Proposal & { status: "open" | "accepted" | "rejected"; seq: number; budget: number | null; reason: string | null };
+export type ProposalState = Proposal & { status: "open" | "accepted" | "rejected"; seq: number; budget: number | null; reason: string | null; refused_budget: number | null };
 export interface ReviewState {
   checks: { check: string; pass: boolean; findings: CheckFinding[] }[];
   evaluation: { pass: boolean; findings: CheckFinding[] } | null;

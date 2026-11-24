@@ -310,6 +310,38 @@ test("proposals open, then are accepted with a budget or rejected with a reason"
   expect(s.proposals.p2).toMatchObject({ status: "rejected", reason: "too dear" });
 });
 
+test("proposal.repriced sets the estimate and the refused budget of an open costly proposal, and only that", () => {
+  const b = new EntryBuilder();
+  const mk = (id: string) => ({
+    id, kind: "costly_query" as const, title: "T", by: "a1", step: null, subgoal: null, source: "src", pivot: null, pivot_hash: null, source_hash: "sh1", text: "t",
+    bound: {}, window: { from: null, to: null }, estimate: { amount: 5, unit: "rows" }, why: "w",
+  });
+  b.add("proposal.created", { proposal: mk("p1") });
+  b.add("proposal.created", { proposal: mk("p2") });
+  b.add("proposal.created", { proposal: mk("p3") });
+  expect(fold(b.entries).proposals.p1).toMatchObject({ refused_budget: null });
+  b.add("proposal.accepted", { proposal: "p2", budget: 9 });
+  b.add("proposal.rejected", { proposal: "p3", reason: "no" });
+  const before = fold(b.entries);
+  const est = { amount: 900, unit: "rows" };
+  for (const id of ["p2", "p3", "p9"]) b.add("proposal.repriced", { proposal: id, estimate: est, budget: 100, query: null });
+  const same = fold(b.entries);
+  expect(same.proposals).toEqual(before.proposals);
+  expect(same.skipped).toEqual([]);
+  b.add("proposal.repriced", { proposal: "p1", estimate: est, budget: 100, query: "q4" });
+  const s = fold(b.entries);
+  expect(s.proposals.p1).toMatchObject({ status: "open", estimate: est, refused_budget: 100 });
+  expect(s.skipped).toEqual([]);
+});
+
+test("a malformed proposal.repriced is skipped", () => {
+  const b = new EntryBuilder();
+  b.add("proposal.repriced", { proposal: "p1", estimate: { amount: "x", unit: "rows" }, budget: 1, query: null } as never);
+  b.add("proposal.repriced", { proposal: "p1", estimate: { amount: 1, unit: "rows" }, budget: "1", query: null } as never);
+  b.add("proposal.repriced", { proposal: "p1", estimate: { amount: 1, unit: "rows" }, budget: 1, query: 4 } as never);
+  expect(fold(b.entries).skipped).toHaveLength(3);
+});
+
 test("case.phase_changed sets the phase", () => {
   const b = new EntryBuilder();
   b.add("case.phase_changed", { phase: "produce" });
@@ -430,7 +462,7 @@ const HANDLED = [
   "run.started", "run.paused", "run.resumed", "run.interrupted", "run.finished", "stage.model_set", "stage.started", "stage.finished",
   "stage.sent_back", "gate.waiting", "gate.passed", "budget.set", "job.started", "job.finished", "plan.proposed", "plan.accepted",
   "plan.denied", "plan.replan_requested", "step.started", "step.finished", "step.estimated", "query.issued", "query.result", "query.failed", "verify.run",
-  "model.response", "model.blocked", "tool.skipped", "card.created", "proposal.created", "proposal.accepted", "proposal.rejected",
+  "model.response", "model.blocked", "tool.skipped", "card.created", "proposal.created", "proposal.accepted", "proposal.rejected", "proposal.repriced",
 ] as const;
 
 function raw(type: string, payload: unknown): Entry {

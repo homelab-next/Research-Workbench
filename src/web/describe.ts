@@ -72,6 +72,10 @@ const TABLE: Record<EntryType, [string, Say]> = {
   "proposal.created": ["proposal made", (p) => { const x = loose(p.proposal); return join(str(x.id), str(x.title)); }],
   "proposal.accepted": ["proposal accepted", (p) => join(str(p.proposal), typeof p.budget === "number" ? `budget ${p.budget}` : "")],
   "proposal.rejected": ["proposal rejected", (p) => join(str(p.proposal), str(p.reason))],
+  "proposal.repriced": ["proposal repriced", (p) => {
+    const e = loose(p.estimate);
+    return join(str(p.proposal), typeof e.amount === "number" && typeof e.unit === "string" ? `${e.amount} ${e.unit}` : "", typeof p.budget === "number" ? `budget ${p.budget} not enough` : "");
+  }],
   "assessment.made": ["assessment made", (p) => { const f = loose(p.finding); return join(str(f.id), str(f.statement)); }],
   "research.requested": ["more research asked for", (p) => join(str(p.question), str(p.why))],
   "draft.revised": ["draft revised", (p) => { const d = loose(p.draft); return join(typeof d.n === "number" ? `draft ${d.n}` : "", str(d.reason)); }],

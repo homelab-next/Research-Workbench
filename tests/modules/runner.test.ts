@@ -580,6 +580,36 @@ test("a failed estimate is query.failed; with no estimate only a person's budget
   expect(s.state.proposals.p1).toMatchObject({ estimate: null }); // never the ranking weight
 });
 
+test("a person's budget below the fresh estimate records proposal.repriced and runs nothing", async () => {
+  trino.on(/^explain/i, plan(40));
+  const first = await runQuery(s, deps, { ...lakeInput, actor: agent });
+  expect(first).toEqual({ status: "needs_budget", proposal: "p1", estimate: { amount: 40, unit: "rows" } });
+  trino.on(/^explain/i, plan(900));
+  const r = await runProposal(s, deps, { proposal: "p1", budget: 100, actor: human });
+  expect(r).toEqual({ status: "needs_budget", proposal: null, estimate: { amount: 900, unit: "rows" } });
+  const e = s.entries().at(-1)!;
+  const estimateResult = s.entries().filter((x) => x.type === "query.result").at(-1)!;
+  const estimateIssued = s.entries().filter((x) => x.type === "query.issued").at(-1)!;
+  expect(e.type).toBe("proposal.repriced");
+  expect(e.actor).toEqual(human);
+  expect(e.payload).toEqual({ proposal: "p1", estimate: { amount: 900, unit: "rows" }, budget: 100, query: (estimateIssued.payload as { query: string }).query });
+  expect(e.cause).toBe(estimateResult.seq);
+  expect(s.state.proposals.p1).toMatchObject({ status: "open", estimate: { amount: 900, unit: "rows" }, refused_budget: 100 });
+  expect(s.entries().some((x) => x.type === "proposal.accepted")).toBe(false);
+  expect(trino.statements.filter((x) => !x.sql.startsWith("EXPLAIN")).length).toBe(0);
+  expect(s.state.skipped).toEqual([]);
+});
+
+test("an estimate the engine cannot give leaves the decision to the person", async () => {
+  trino.on(/^explain/i, { columns: ["Query Plan"], pages: [[[JSON.stringify({ estimate: { outputRowCount: "NaN" } })]]] });
+  trino.on(/^select/i, { columns: ["a"], pages: [[["p"], ["q"]], [["r"], ["s"]], [["t"]]] });
+  expect(await runQuery(s, deps, { ...lakeInput, actor: agent })).toEqual({ status: "needs_budget", proposal: "p1", estimate: null });
+  const r = await runProposal(s, deps, { proposal: "p1", budget: 3, actor: human });
+  expect(r).toMatchObject({ status: "done", outcome: "partial", coverage: { kind: "partial", reason: "budget" } });
+  expect(s.entries().some((x) => x.type === "proposal.repriced")).toBe(false);
+  expect(s.state.skipped).toEqual([]);
+});
+
 // ---------- final review finding 6: budgets are enforced ----------
 test("a non-finite or wrongly-unitted estimate counts as none", async () => {
   for (const bad of [{ amount: NaN, unit: "lookups" }, { amount: Infinity, unit: "lookups" }, { amount: -1, unit: "lookups" }, { amount: 1, unit: "usd" }]) {

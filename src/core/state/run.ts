@@ -162,7 +162,7 @@ function applyJobsAndProposals(s: CaseState, entry: Entry): CaseState {
       const p = entry.payload.proposal;
       if (!isProposal(p)) return malformed(s, entry);
       if (Object.hasOwn(s.proposals, p.id)) return s;
-      const state: ProposalState = { ...p, status: "open", seq: entry.seq, budget: null, reason: null };
+      const state: ProposalState = { ...p, status: "open", seq: entry.seq, budget: null, reason: null, refused_budget: null };
       return { ...s, proposals: { ...s.proposals, [p.id]: state } };
     }
     case "proposal.accepted": {
@@ -170,6 +170,13 @@ function applyJobsAndProposals(s: CaseState, entry: Entry): CaseState {
       if (!isStr(proposal) || !(budget === null || isNum(budget))) return malformed(s, entry);
       if (!has(s.proposals, proposal) || s.proposals[proposal]!.status !== "open") return s;
       return { ...s, proposals: { ...s.proposals, [proposal]: { ...s.proposals[proposal]!, status: "accepted", budget } } };
+    }
+    case "proposal.repriced": {
+      const { proposal, estimate, budget, query } = entry.payload;
+      if (!isStr(proposal) || !isCost(estimate) || !isNum(budget) || !isStrOrNull(query)) return malformed(s, entry);
+      const p = has(s.proposals, proposal) ? s.proposals[proposal]! : null;
+      if (p === null || p.status !== "open" || p.kind !== "costly_query") return s;
+      return { ...s, proposals: { ...s.proposals, [proposal]: { ...p, estimate: { amount: estimate.amount, unit: estimate.unit }, refused_budget: budget } } };
     }
     case "proposal.rejected": {
       const { proposal, reason } = entry.payload;

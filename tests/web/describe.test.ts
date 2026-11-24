@@ -60,3 +60,8 @@ test("text from an entry is returned as plain text, never changed", () => {
   const evil = '<img src=x onerror="alert(1)">';
   expect(describe(sampleOf("card.created", { card: { id: "c1", title: evil } }), ref).detail).toBe(`c1 "${evil}"`);
 });
+
+test("a repriced proposal says what the source now estimates and the budget that did not cover it", () => {
+  const d = describe(sampleOf("proposal.repriced", { proposal: "P1", estimate: { amount: 900, unit: "rows" }, budget: 100, query: null }), ref);
+  expect(d).toMatchObject({ what: "proposal repriced", detail: "P1 · 900 rows · budget 100 not enough" });
+});

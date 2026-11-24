@@ -236,6 +236,8 @@ export function makeSteps(ui: Ui, open: Open, arg: string | null = null): View {
         h("span", { class: "title" }, p.title), " ", tag(ui, "agent", `proposed by ${p.by}`),
         h("p", { class: "why" }, `the agent's own account: ${p.why}`),
         h("span", { class: "estimate" }, p.estimate === null ? "no estimate" : cost(p.estimate)),
+        p.refused_budget !== null && p.estimate !== null
+          ? h("p", { class: "repriced" }, `The source now estimates ${cost(p.estimate)}; a budget of ${p.refused_budget} did not cover it. Nothing ran.`) : null,
         box, run,
         asking === `reject:${p.id}`
           ? askLine({ key: `reject:${p.id}`, label: `Reason for rejecting ${p.id}`, confirm: "Reject the proposal", action: "confirm-reject", send: (reason) => ui.act("reject_proposal", { proposal: p.id, reason }) })
