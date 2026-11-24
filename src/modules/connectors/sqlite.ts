@@ -5,7 +5,7 @@ import type { Json } from "../../core/canonical";
 import { assertReadOnly } from "../sqlguard";
 import { staysInside } from "../registry";
 import type { SourceManifest } from "../manifests";
-import { effectiveBound, placeholders } from "./placeholders";
+import { effectiveBound, PLACEHOLDER, placeholders } from "./placeholders";
 import { ConnectorError } from "./types";
 import type { Connector, ConnectorContext, QueryOutcome, QueryRequest } from "./types";
 
@@ -14,7 +14,7 @@ const paramName = (name: string): string => name.replace(/\./g, "_");
 /** Guards the text, then turns each {name} into a named parameter $name (dots become underscores). */
 export function renderSql(req: QueryRequest): string {
   assertReadOnly(req.text);
-  return req.text.replace(/\{([A-Za-z_][A-Za-z0-9_.]*)\}/g, (_m, name: string) => `$${paramName(name)}`);
+  return req.text.replace(PLACEHOLDER, (_m, name: string) => `$${paramName(name)}`);
 }
 
 function toJson(v: unknown): Json {

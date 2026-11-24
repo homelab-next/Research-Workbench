@@ -1,26 +1,20 @@
 import type { Json } from "../../core/canonical";
 import type { Cost } from "../../core/types";
 import type { SourceManifest } from "../manifests";
-import { assertReadOnly, checkGuardrails, GuardError, stripForAnalysis } from "../sqlguard";
+import { assertReadOnly, checkGuardrails, GuardError, stripForAnalysis, tablePattern } from "../sqlguard";
 import type { TableGuard } from "../sqlguard";
-import { effectiveBound } from "./placeholders";
-import { CONTROL, loadCredential } from "./shared";
+import { effectiveBound, PLACEHOLDER } from "./placeholders";
+import { CONTROL, loadCredential, parseBase, readCapped, scrub, TimedOut, TooBig } from "./shared";
 import { ConnectorError } from "./types";
 import type { Connector, ConnectorContext, QueryOutcome, QueryRequest } from "./types";
 
 export const MAX_PAGE_BYTES = 16_777_216;
 export const MAX_TOTAL_BYTES = 67_108_864;
 const CANCEL_TIMEOUT_MS = 2000;
-const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
-const NAME = /\{([A-Za-z_][A-Za-z0-9_.]*)\}/g;
 const ISO_MS = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2}\.\d{3})Z$/;
 
-class TimedOut extends Error {}
 /** The engine reported the query failed: it has already ended, so there is nothing to cancel. */
 class EngineError extends ConnectorError {}
-class TooBig extends Error {
-  constructor(readonly limit: "page" | "total") { super(limit); }
-}
 
 /** One value as a SQL literal. The window ends become zoned timestamps; strings double their quotes. */
 export function renderLiteral(name: string, value: string | number | null): string {
@@ -58,15 +52,14 @@ export class TrinoConnector implements Connector {
     const guards = this.guards();
     if (req.window.from === null) {
       const s = stripForAnalysis(req.text);
-      const esc = (x: string): string => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       for (const g of guards) {
-        if (new RegExp(`(?<![\\w$])${g.table.toLowerCase().split(".").map(esc).join("\\s*\\.\\s*")}(?![\\w$])`).test(s)) {
+        if (tablePattern(g.table).test(s)) {
           throw new GuardError(["a guarded table needs a bounded window"]);
         }
       }
     }
     const bound = effectiveBound(req);
-    const sql = req.text.replace(NAME, (_m, n: string) => {
+    const sql = req.text.replace(PLACEHOLDER, (_m, n: string) => {
       if (!Object.hasOwn(bound, n)) throw new ConnectorError(`no value is bound for placeholder {${n}}`);
       return renderLiteral(n, bound[n] ?? null);
     });
@@ -103,19 +96,6 @@ export class TrinoConnector implements Connector {
 
   close(): void {}
 
-  private base(): URL {
-    let u: URL;
-    try {
-      u = new URL(this.source.location);
-    } catch {
-      throw new ConnectorError("the source location is not a valid URL");
-    }
-    if (u.username !== "" || u.password !== "") throw new ConnectorError("the source location must not contain credentials; use the credential setting");
-    const ok = u.protocol === "https:" || (u.protocol === "http:" && LOOPBACK.has(u.hostname));
-    if (!ok) throw new ConnectorError(`the source location must be https (http is allowed only on loopback): ${u.protocol}//${u.host}`);
-    return u;
-  }
-
   private auth(): Auth {
     const user = this.source.user;
     if (user === null || user === "") throw new ConnectorError("the source has no user; the engine needs one");
@@ -132,12 +112,6 @@ export class TrinoConnector implements Connector {
       redact.push(token, secret);
     }
     return { headers, redact };
-  }
-
-  private scrub(text: string, redact: string[]): string {
-    let out = text;
-    for (const r of redact) if (r !== "") out = out.split(r).join("[secret]");
-    return out;
   }
 
   private init(method: string, headers: Record<string, string>, signal: AbortSignal, body?: string): RequestInit {
@@ -162,7 +136,7 @@ export class TrinoConnector implements Connector {
   }
 
   private async execute(sql: string, maxRows: number, timeoutMs: number): Promise<Paged> {
-    const base = this.base();
+    const base = parseBase(this.source.location);
     const { headers, redact } = this.auth();
     const echoes = redact.flatMap(r => (r === "" ? [] : [r, JSON.stringify(r).slice(1, -1)]));
     const ctl = new AbortController();
@@ -174,6 +148,7 @@ export class TrinoConnector implements Connector {
     let pending: string | null = null;
     let total = 0;
     let capped = false;
+    let overTotal = false;
 
     const step = async (method: string, url: string, body?: string): Promise<void> => {
       const res = await fetch(url, this.init(method, headers, ctl.signal, body));
@@ -182,12 +157,8 @@ export class TrinoConnector implements Connector {
         throw new ConnectorError(`HTTP ${res.status}${res.status < 400 ? " (redirects are not followed)" : ""} from the engine`);
       }
       const limit = Math.min(MAX_PAGE_BYTES, MAX_TOTAL_BYTES - total);
-      const which = limit < MAX_PAGE_BYTES ? "total" : "page";
-      if (Number(res.headers.get("content-length") ?? "0") > limit) {
-        await res.body?.cancel().catch(() => undefined);
-        throw new TooBig(which);
-      }
-      const bytes = await readCapped(res, ctl.signal, limit, which);
+      overTotal = limit < MAX_PAGE_BYTES;
+      const bytes = await readCapped(res, ctl.signal, limit);
       total += bytes.length;
       if (echoes.length > 0) {
         const seen = new TextDecoder("utf-8").decode(bytes);
@@ -222,7 +193,7 @@ export class TrinoConnector implements Connector {
       if (page.error !== undefined && page.error !== null) {
         const msg = typeof page.error === "object" && typeof (page.error as { message?: unknown }).message === "string"
           ? (page.error as { message: string }).message : "unspecified error";
-        throw new EngineError(this.scrub(`the engine reported an error: ${msg}`, redact));
+        throw new EngineError(scrub(`the engine reported an error: ${msg}`, redact));
       }
       if (page.columns !== undefined) {
         if (!Array.isArray(page.columns) || !page.columns.every(x => typeof x === "object" && x !== null && typeof (x as { name?: unknown }).name === "string")) {
@@ -262,38 +233,14 @@ export class TrinoConnector implements Connector {
       if (pending !== null) await this.cancel(pending, headers);
       if (err instanceof ConnectorError) throw err;
       if (err instanceof TooBig) {
-        const lim = err.limit === "page" ? `${MAX_PAGE_BYTES} bytes for one page` : `${MAX_TOTAL_BYTES} bytes for all pages`;
+        const lim = overTotal ? `${MAX_TOTAL_BYTES} bytes for all pages` : `${MAX_PAGE_BYTES} bytes for one page`;
         throw new ConnectorError(`the engine's response is larger than the limit of ${lim}`);
       }
-      throw new ConnectorError(this.scrub(`the request to the engine failed: ${(err as Error).message}`, redact));
+      throw new ConnectorError(scrub(`the request to the engine failed: ${(err as Error).message}`, redact));
     } finally {
       clearTimeout(timer);
     }
   }
-}
-
-async function readCapped(res: Response, signal: AbortSignal, limit: number, which: "page" | "total"): Promise<Uint8Array> {
-  if (res.body === null) return new Uint8Array();
-  const reader = res.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    for (;;) {
-      if (signal.aborted) throw new TimedOut();
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.length;
-      if (total > limit) throw new TooBig(which);
-      chunks.push(value);
-    }
-  } catch (err) {
-    await reader.cancel().catch(() => undefined);
-    throw err;
-  }
-  const out = new Uint8Array(total);
-  let at = 0;
-  for (const c of chunks) { out.set(c, at); at += c.length; }
-  return out;
 }
 
 /** `[` page1 `,` page2 ... `]`, each page's bytes exactly as received. */

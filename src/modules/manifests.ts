@@ -222,6 +222,11 @@ export function toSource(body: Record<string, Json>, hash: string, dir: string, 
   };
 }
 
+/** What a query by this pivot weighs: the pivot's own weight if it sets one, else its source's. Zero is free. */
+export function pivotWeight(pivot: Pick<PivotManifest, "weight">, source: Pick<SourceManifest, "cost">): number {
+  return pivot.weight ?? source.cost.weight;
+}
+
 export function toType(item: Record<string, Json>): ObservableType {
   return { id: item.id as string, title: (item.title as string | undefined) ?? (item.id as string), pattern: item.pattern as string };
 }

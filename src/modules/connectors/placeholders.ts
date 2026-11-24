@@ -1,7 +1,8 @@
 import { MAX_TS, MIN_TS } from "./types";
 import type { Bound, QueryRequest } from "./types";
 
-const PLACEHOLDER = /\{([A-Za-z_][A-Za-z0-9_.]*)\}/g;
+/** A {name} placeholder in a query template; the one pattern every connector uses. */
+export const PLACEHOLDER = /\{([A-Za-z_][A-Za-z0-9_.]*)\}/g;
 
 /** Names inside {...}, in order of first use. */
 export function placeholders(text: string): string[] {

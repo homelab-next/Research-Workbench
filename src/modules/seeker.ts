@@ -1,4 +1,5 @@
 import type { EmptyMeans, Marking } from "../core/types";
+import { pivotWeight } from "./manifests";
 import type { PivotManifest, Registry, SourceManifest } from "./registry";
 
 export interface Hop {
@@ -16,7 +17,7 @@ export interface Seeker {
 const MAX_ROUTES = 5;
 
 function hopOf(p: PivotManifest, s: SourceManifest): Hop {
-  const weight = p.weight ?? s.cost.weight;
+  const weight = pivotWeight(p, s);
   return {
     pivot: p.id, title: p.title, source: s.id, from: p.from, to: p.to, free: weight === 0, weight,
     needs_window: p.needs_window, empty_means: p.empty_means, confirmed: s.confirmed, marking: s.marking, unit: s.cost.unit,

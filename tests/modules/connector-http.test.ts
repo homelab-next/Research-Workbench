@@ -139,6 +139,15 @@ test("an unknown endpoint is a ConnectorError", async () => {
   await expect(c.estimate(req("nope"))).rejects.toThrow(ConnectorError);
 });
 
+test("a base URL with a query string or a fragment is refused, so nothing in it reaches the query text", async () => {
+  for (const loc of [`${s.url}?api_key=abcdefgh123`, `${s.url}/?k=v`, `${s.url}#frag`, `${s.url}?`]) {
+    const c = makeConnector(source(loc), ctx());
+    expect(() => c.render(req("reputation", { value: "198.51.100.77" }))).toThrow(/must not contain a (query string|fragment)/);
+    await expect(c.run(req("reputation", { value: "198.51.100.77" }))).rejects.toThrow(ConnectorError);
+  }
+  expect(s.requests).toHaveLength(0);
+});
+
 test("a non-https base URL is refused unless it is loopback", async () => {
   const bad = makeConnector(source("http://203.0.113.5"), ctx());
   expect(() => bad.render(req("lookup"))).toThrow(ConnectorError);

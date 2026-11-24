@@ -124,6 +124,11 @@ export function assertReadOnly(sql: string): void {
 
 const escapeRe = (x: string): string => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** Matches a mention of `table` (dotted parts may be spaced) in text from stripForAnalysis. The one pattern for a guarded table. */
+export function tablePattern(table: string): RegExp {
+  return new RegExp(`(?<![\\w$])${table.toLowerCase().split(".").map(escapeRe).join("\\s*\\.\\s*")}(?![\\w$])`);
+}
+
 const SELECT_STAR = /(?:\b(?:select|distinct|all)\s+|,\s*)\*(?=\s*(?:,|from\b|$))|[\w$]\.\*/;
 const TS_LITERAL = /\btimestamp\s+'((?:[^']|'')*)'/gi;
 const ZONED = /(?:\sutc|z|[+-]\d{2}:?\d{2}|\s[a-z_]+(?:\/[\w+-]+)+)$/i;
@@ -157,7 +162,7 @@ export function checkGuardrails(sql: string, guards: TableGuard[]): string[] {
 
   for (const g of guards) {
     const table = g.table.toLowerCase();
-    if (!new RegExp(`(?<![\\w$])${table.split(".").map(escapeRe).join("\\s*\\.\\s*")}(?![\\w$])`).test(s)) continue;
+    if (!tablePattern(table).test(s)) continue;
 
     if (g.time_column !== null) {
       const col = escapeRe(g.time_column.toLowerCase());

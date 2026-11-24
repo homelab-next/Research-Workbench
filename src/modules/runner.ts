@@ -7,6 +7,7 @@ import type { Actor, Card, Coverage, Cost, EmptyMeans, EntryInput, TimeWindow } 
 import { ConnectorError } from "./connectors";
 import type { Bound, ConnectorPool, QueryOutcome, QueryRequest } from "./connectors";
 import type { Observables } from "./observables";
+import { pivotWeight } from "./manifests";
 import type { PivotManifest, Registry, SourceManifest } from "./registry";
 import { GuardError } from "./sqlguard";
 
@@ -92,7 +93,7 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
     throw err;
   }
 
-  const weight = typeof pivot?.weight === "number" ? pivot.weight : source.cost.weight;
+  const weight = pivot !== null ? pivotWeight(pivot, source) : source.cost.weight;
   let estimate: Cost | null = null;
   if (weight > 0) {
     try {

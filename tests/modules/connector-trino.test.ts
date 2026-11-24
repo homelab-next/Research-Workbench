@@ -215,6 +215,13 @@ test("a plain-http location off loopback and a location with credentials are ref
   await expect(make("https://u:p@lake.example").run(okReq)).rejects.toBeInstanceOf(ConnectorError);
 });
 
+test("a location with a query string or a fragment is refused before anything is sent", async () => {
+  for (const loc of [`${t.url}?password=abcdefgh123`, `${t.url}#x`]) {
+    await expect(make(loc).run(okReq)).rejects.toThrow(/must not contain a (query string|fragment)/);
+  }
+  expect(t.statements).toHaveLength(0);
+});
+
 test("tls verification is switched off only when the source says so", async () => {
   const seen: (RequestInit & { tls?: unknown })[] = [];
   globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: RequestInit) => { seen.push(init ?? {}); return realFetch(input, init); }) as typeof fetch;
