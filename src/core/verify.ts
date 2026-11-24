@@ -221,6 +221,7 @@ export function verifyPublished(caseDir: string): PublishedReport {
     try {
       const body = parseJson(new TextDecoder().decode(store.get(r.blob)))?.value;
       if (!isObj(body) || !isObj(body.manifest) || !Array.isArray(body.manifest.files)) return out("bad_blob", "the bundle blob is not a bundle");
+      if (!body.manifest.files.every((f) => isObj(f) && typeof f.name === "string" && typeof f.sha256 === "string")) return out("bad_blob", "the bundle's manifest lists a file that is not a name and a hash");
       manifest = body.manifest as unknown as BundleManifestShape;
       manifestBytes = canonical(body.manifest as Json);
     } catch (err) {

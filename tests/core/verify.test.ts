@@ -536,3 +536,14 @@ test("verifyCase is not ok when a bundle differs, and the command exits 1", () =
   mkdirSync(join(dir, "published", "9"), { recursive: true });
   expect(run(dir).stdout.toString()).toContain("published/9: no entry records this folder");
 });
+
+test("a manifest whose files list holds something that is not a file entry is bad_blob, not a throw", () => {
+  for (const bad of [null, 7, "x", [], { name: 3, sha256: "a" }]) {
+    const t = ledger.get(2)!;
+    const manifest = { case: "CASE-1", n: 1, draft: 1, draft_hash: "a".repeat(64), head: { seq: 2, hash: t.hash }, marking: "TLP:GREEN", title: "T", note: "N", files: [bad] };
+    const bundle = blobs.put(canonical({ manifest, files: {} } as never));
+    ledger.append({ type: "product.published", payload: { n: 1 + ledger.head().seq, draft_hash: "a".repeat(64), head_hash: t.hash, dir: "published/x", bundle }, actor: human });
+  }
+  const r = verifyPublished(dir);
+  expect(r.bundles.map((b) => b.state)).toEqual(["bad_blob", "bad_blob", "bad_blob", "bad_blob", "bad_blob"]);
+});
