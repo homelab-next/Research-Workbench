@@ -21,6 +21,8 @@ export const LOOPBACK: ReadonlySet<string> = new Set(["127.0.0.1", "localhost", 
  */
 export function refuseOwnServer(location: string, own: readonly string[]): void {
   if (own.length === 0) return;
+  // the URL parser already reads 127.1, 0x7f000001 and the IPv6 long form as 127.0.0.1 and [::1]; a trailing dot and the IPv4-mapped form it leaves
+  const loopback = (hostname: string): boolean => LOOPBACK.has(hostname.replace(/\.$/, "")) || hostname === "[::ffff:7f00:1]";
   let target: URL;
   try {
     target = new URL(location);
@@ -30,12 +32,12 @@ export function refuseOwnServer(location: string, own: readonly string[]): void 
   const loopbackPort = (host: string): string | null => {
     try {
       const u = new URL(`http://${host}`);
-      return LOOPBACK.has(u.hostname) ? (u.port || "80") : null;
+      return loopback(u.hostname) ? (u.port || "80") : null;
     } catch {
       return null;
     }
   };
-  const port = LOOPBACK.has(target.hostname) ? (target.port || (target.protocol === "https:" ? "443" : "80")) : null;
+  const port = loopback(target.hostname) ? (target.port || (target.protocol === "https:" ? "443" : "80")) : null;
   for (const host of own) {
     if (target.host === host.toLowerCase() || (port !== null && port === loopbackPort(host))) {
       throw new ConnectorError("this source points at the workbench's own server");

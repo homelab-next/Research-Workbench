@@ -24,6 +24,20 @@ test("the shared check: the same host:port under any loopback name, https or htt
   expect(() => refuseOwnServer("not a url", ["127.0.0.1:4747"])).not.toThrow();
 });
 
+test("the shared check sees through other spellings of loopback: 127.1, 0x7f000001, a trailing dot, the IPv6 long and mapped forms", () => {
+  const refused = (location: string): boolean => { try { refuseOwnServer(location, ["127.0.0.1:4747"]); return false; } catch (e) { return String(e).includes(OWN); } };
+  const missed: string[] = [];
+  for (const scheme of ["http", "https"]) {
+    for (const host of ["127.1", "0x7f000001", "2130706433", "127.0.0.1.", "localhost.", "LOCALHOST", "[0:0:0:0:0:0:0:1]", "[::ffff:127.0.0.1]"]) {
+      if (!refused(`${scheme}://${host}:4747/x`)) missed.push(`${scheme}://${host}:4747`);
+      if (refused(`${scheme}://${host}:4748/x`)) missed.push(`not ${scheme}://${host}:4748`);
+    }
+  }
+  expect(missed).toEqual([]);
+  // and the server's own address given in another spelling is the same server
+  expect(() => refuseOwnServer("http://127.0.0.1:4747", ["localhost.:4747"])).toThrow(OWN);
+});
+
 function source(location: string): SourceManifest {
   return {
     id: "lake", title: "Lake", hash: "h1", dir: "/nonexistent", root: "/nonexistent", connector: "trino", location, credential: null, user: "workbench",

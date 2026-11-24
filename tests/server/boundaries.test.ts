@@ -2,6 +2,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import type { Actor } from "../../src/core/types";
+import { SAMPLE_START, SAMPLE_WINDOW } from "../../scripts/make-sample-data";
 import { served } from "../helpers/served";
 import type { Served } from "../helpers/served";
 
@@ -238,6 +239,54 @@ test("entries and blobs reach the browser as recorded, and no response of any ki
   for (const { path, body } of seen.filter((x) => x.path.startsWith("/api/") && !x.path.includes("/blobs/") && !x.path.includes("/published/"))) {
     expect(`${path}: ${body.includes(location)}`).toBe(`${path}: false`);
     expect(`${path}: ${body.includes(s.dir)}`).toBe(`${path}: false`);
+  }
+});
+
+test("POST answers, refusals, the difference route, errors and the stream hold no planted credential and carry no CORS header", async () => {
+  const seen: { path: string; status: number; body: string; headers: Headers }[] = [];
+  const keep = async (path: string, res: Response): Promise<Response> => { seen.push({ path, status: res.status, body: await text(res), headers: res.headers }); return res; };
+  const post = (path: string, body: unknown): Promise<Response> => asPerson(path, { method: "POST", headers: { origin: s.origin, "content-type": "application/json" }, body: JSON.stringify(body) });
+  const command = (c: string, name: string, args: Record<string, unknown>) => post(`/api/cases/${c}/commands`, { command: name, args });
+  const made = await keep("create_case", await post("/api/cases", { title: "Planted", asked: "Is the address known to be bad?", why: "test", starting: [SAMPLE_START], window: SAMPLE_WINDOW, objective: "sample-objective", marking: "TLP:GREEN" }));
+  expect(made.status).toBe(200);
+  const other = (JSON.parse(seen.at(-1)!.body) as { id: string }).id;
+  // the pivot that uses the credentialled source: refused without a budget, then run with one
+  expect((await keep("pivot, no budget", await command(other, "run_pivot", { pivot: "address_to_verdict", value: SAMPLE_START.value, window: SAMPLE_WINDOW, why: "is it bad" }))).status).toBe(409);
+  expect((await keep("pivot", await command(other, "run_pivot", { pivot: "address_to_verdict", value: SAMPLE_START.value, window: SAMPLE_WINDOW, why: "is it bad", budget: 10 }))).status).toBe(200);
+  const card = Object.values(s.app.hub.read(other).state.cards).at(-1)!.id;
+  expect((await keep("verify", await command(other, "verify_card", { card, budget: 10 }))).status).toBe(200);
+  await s.app.hub.idle();
+  await keep("difference", await asPerson(`/api/cases/${other}/cards/${card}/difference`));
+  await keep("difference, published case", await asPerson(`/api/cases/${id}/cards/c1/difference`));
+  expect((await keep("refusal", await command(id, "stop", { reason: "done" }))).status).toBe(409);
+  expect((await keep("unknown command", await command(id, "no_such_command", {}))).status).toBe(400);
+  expect((await keep("unknown case", await asPerson("/api/cases/CASE-404/custody"))).status).toBe(404);
+  expect((await keep("bad stream position", await asPerson(`/api/cases/${id}/entries?after=x`))).status).toBe(400);
+  const ctl = new AbortController();
+  const stream = await asPerson(`/api/cases/${id}/entries`, { signal: ctl.signal });
+  seen.push({ path: "stream", status: stream.status, body: "", headers: stream.headers });
+  ctl.abort();
+  for (const { path, body, headers } of seen) {
+    expect(`${path}: ${body.includes(SECRET)}`).toBe(`${path}: false`);
+    expect(`${path}: ${body.includes(SECRET_NAME)}`).toBe(`${path}: false`);
+    for (const name of headers.keys()) expect(`${path}: ${name.toLowerCase().startsWith("access-control-")}`).toBe(`${path}: false`);
+    expect(`${path}: ${headers.get("x-content-type-options")}`).toBe(`${path}: nosniff`);
+  }
+  expect(s.app.hub.read(other).state.skipped).toEqual([]);
+});
+
+test("the page loads exactly one script and one stylesheet, and every bundle file is nosniff", async () => {
+  const html = await (await asPerson("/")).text();
+  expect((html.match(/<script\b/g) ?? []).length).toBe(1);
+  expect(html).toMatch(/<script [^>]*src="\/app\.js"/);
+  expect((html.match(/<link\b[^>]*rel="stylesheet"/g) ?? []).length).toBe(1);
+  expect((html.match(/<link\b/g) ?? []).length).toBe(1);
+  expect(html).toMatch(/<link [^>]*href="\/app\.css"/);
+  for (const f of ["product.md", "product.json", "provenance.md", "provenance.json", "manifest.json"]) {
+    const res = await asPerson(`/api/cases/${id}/published/1/${f}`);
+    expect(`${f}: ${res.status} ${res.headers.get("x-content-type-options")}`).toBe(`${f}: 200 nosniff`);
+    expect(res.headers.get("content-type")).toBe(f.endsWith(".md") ? "text/markdown; charset=utf-8" : "application/json");
+    await res.arrayBuffer();
   }
 });
 
