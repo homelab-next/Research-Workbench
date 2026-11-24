@@ -102,9 +102,17 @@ export async function assembleRunner(env: StageEnv): Promise<StageEnd> {
   }
   const actor = agentActor(session, actorId);
   const reason = reasonFor(env);
+  // A section carried over from the draft before keeps the cards it cited by tool only (a product does not store them). Those that cited the old
+  // findings are not carried, nor are cards discarded since; when every section was rewritten there is nothing carried over.
+  const SECTIONS = Object.keys(work.sections) as (keyof typeof work.sections)[];
+  const carried: string[] = [];
+  if (latest !== null && SECTIONS.some((k) => product[k] === latest.product[k])) {
+    const byFindings = new Set(latest.product.key_findings.flatMap((x) => x.cites));
+    for (const id of latest.cited ?? []) if (!byFindings.has(id) && Object.hasOwn(now.cards, id) && now.cards[id]!.place !== "discarded") carried.push(id);
+  }
   let hash = "";
   session.commit((s) => {
-    const draft = draftOf(product, s.drafts.length + 1, actor as Actor, reason);
+    const draft = draftOf(product, s.drafts.length + 1, actor as Actor, reason, carried);
     hash = draft.hash;
     const entries: EntryInput[] = [{ type: "draft.revised", actor, run: s.run.id, stage: stage.id, payload: { draft } }];
     for (const finding of product.key_findings) entries.push({ type: "assessment.made", actor, run: s.run.id, stage: stage.id, payload: { finding, draft_hash: draft.hash } });

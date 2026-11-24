@@ -7,6 +7,7 @@ import { canonical } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
 import type { CaseSession } from "../../src/core/session";
 import { blockers, latestDraft, publishable } from "../../src/core/state";
+import { buildBundle } from "../../src/pipeline/publish";
 import { ReviseRefused } from "../../src/pipeline/revise";
 import type { Entry } from "../../src/core/types";
 import { loadProfile } from "../../src/agents/context";
@@ -167,6 +168,29 @@ test("a revision starts from the previous draft and changes only what was propos
   expect(d2!.product.change).toBe("second");
   expect(d2!.reason).toBe("revised after Checks: f1 cites too little");
   expect(ofType("assessment.made").map((e) => e.payload.draft_hash)).toEqual([d1!.hash, d1!.hash, d2!.hash, d2!.hash]);
+});
+
+test("a revision keeps the cards a carried-over section cited by tool only", async () => {
+  const first: ScriptReply[] = [calls(finding("it is internal", ["c1"]), section("summary", "all clear", ["c2"])), out("first")];
+  const r = rig({ analyst: [...first, ...SECOND], evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
+  r.checks.fail = 1;
+  await go(r);
+  const [d1, d2] = f.s.state.drafts;
+  expect(d1!.cited).toEqual(["c1", "c2"]);
+  expect(d2!.product.summary).toBe("all clear");
+  expect(d2!.product.key_findings.flatMap((x) => x.cites)).toEqual(["c1"]);
+  expect(d2!.cited).toEqual(["c1", "c2"]);
+  const prov = JSON.parse(buildBundle(f.s, d2!, { title: "t", note: "" }, f.s.head(), 1).files["provenance.json"]!) as { card: string }[];
+  expect(prov.map((p) => p.card)).toEqual(["c1", "c2"]);
+});
+
+test("a revision that rewrites every section does not carry their old cards", async () => {
+  const first: ScriptReply[] = [calls(finding("it is internal", ["c1"]), section("summary", "all clear", ["c2"])), out("first")];
+  const second: ScriptReply[] = [calls(...["summary", "gaps_and_limits", "alternatives", "assessment"].map((s) => section(s, "rewritten"))), out("second")];
+  const r = rig({ analyst: [...first, ...second], evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
+  r.checks.fail = 1;
+  await go(r);
+  expect(f.s.state.drafts[1]!.cited).toEqual(["c1"]);
 });
 
 test("the analyst is told what failed", async () => {
