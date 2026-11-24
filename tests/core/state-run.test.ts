@@ -830,3 +830,16 @@ test("route.finished is checked for shape only; a malformed one is recorded in s
     expect(s.cards).toEqual({});
   }
 });
+
+test("a step finished by reusing an answered query names that query; a reused that is not a query id is malformed", () => {
+  const b = new EntryBuilder();
+  b.add("plan.proposed", { plan: plan() });
+  b.add("step.finished", { step: "s1", outcome: "answered", cards: ["c1"], note: "reused q1", reused: "q1" });
+  let s = fold(b.entries);
+  expect(s.skipped).toEqual([]);
+  expect(s.plan.steps.s1).toEqual({ status: "answered", cards: ["c1"], note: "reused q1" });
+  b.add("step.finished", { step: "s2", outcome: "answered", cards: [], note: "", reused: 7 } as never);
+  s = fold(b.entries);
+  expect(s.skipped.map((x) => x.type)).toEqual(["step.finished"]);
+  expect(s.plan.steps.s2).toEqual({ status: "pending", cards: [], note: "" });
+});

@@ -1,8 +1,10 @@
 import type { Json } from "../../core/canonical";
 import type { CaseSession } from "../../core/session";
-import type { StepOutcome } from "../../core/types";
+import type { StepOutcome, TimeWindow } from "../../core/types";
 import { pivotWeight } from "../../modules/manifests";
-import { runPivot, yielded } from "../../modules/pivots";
+import { bindPivot, runPivot, yielded } from "../../modules/pivots";
+import { answeredBefore, reuseNote } from "../../modules/reuse";
+import type { Reused } from "../../modules/reuse";
 import type { PivotManifest } from "../../modules/registry";
 import { previewCell, runQuery } from "../../modules/runner";
 import type { RunQueryResult } from "../../modules/runner";
@@ -29,12 +31,14 @@ export function resultOf(ctx: ToolContext, r: RunQueryResult, pivot: PivotManife
     case "done": {
       const card = r.card !== null && Object.hasOwn(ctx.session.state.cards, r.card) ? ctx.session.state.cards[r.card]! : null;
       const empty = card === null ? null : card.empty;
+      const reused = "reused" in r ? (r as Reused) : null;
       const view = {
-        ...none, status: r.status, outcome: r.outcome, card: card === null ? null : [cardBrief(ctx.deps.registry, card)], rows: r.rows, coverage: scrubCoverage(ctx.deps.registry, r.coverage), empty,
+        ...none, ...(reused === null ? {} : { reused: { query: reused.reused.query, at: reused.reused.at } }), status: r.status, outcome: r.outcome, card: card === null ? null : [cardBrief(ctx.deps.registry, card)], rows: r.rows, coverage: scrubCoverage(ctx.deps.registry, r.coverage), empty,
         columns: r.columns, data: r.data.slice(0, VIEW_ROWS).map((row) => row.map(previewCell)),
         found: pivot === null ? null : yielded(pivot, r, ctx.deps.observables).map((o) => o.value),
       };
-      return { ok: true, summary: describe(r, empty), view: json(view), marking: source === null ? null : source.marking };
+      const said = describe(r, empty);
+      return { ok: true, summary: reused === null ? said : `${reuseNote(reused)} · ${said}`, view: json(view), marking: source === null ? null : source.marking };
     }
     case "failed":
       return {
@@ -57,6 +61,15 @@ function acceptedPlan(session: CaseSession): NonNullable<CaseSession["state"]["p
   return p.current;
 }
 
+/**
+ * The recorded answer to this pivot on this value over this window, when the case already has one that can stand for it (see answeredBefore);
+ * null when the value is not one the pivot takes (the runner then refuses it) or nothing can be reused.
+ */
+function reusable(ctx: ToolContext, pivot: PivotManifest | null, value: string, window: TimeWindow): Reused | null {
+  if (pivot === null || !ctx.deps.observables.matches(pivot.from, value)) return null;
+  return answeredBefore(ctx.session, ctx.deps, pivot, bindPivot(pivot, value, ctx.deps.observables).bound, window);
+}
+
 async function runPivotTool(ctx: ToolContext, args: Record<string, Json>): Promise<ToolResult> {
   const id = str(args.pivot);
   const pivot = ctx.deps.registry.pivot(id);
@@ -73,6 +86,9 @@ async function runPivotTool(ctx: ToolContext, args: Record<string, Json>): Promi
   const goals = subgoals.map((g) => stepById.get(g.steps[g.steps.length - 1] ?? "")?.to).filter((t): t is string => t !== undefined);
   const leads = goals.some((goal) => pivot.to === goal || ctx.seeker.routes([pivot.to], goal, ctx.limits).length > 0);
   if (!leads) throw new ToolError(`${id} does not lead to this sub-goal`);
+  // the same lookup answered before in this case is read back, not sent to the source again
+  const before = reusable(ctx, pivot, str(args.value), ctx.window);
+  if (before !== null) return resultOf(ctx, before, pivot, pivot.source);
   const r = await runPivot(ctx.session, ctx.deps, {
     pivot: id, value: str(args.value), window: ctx.window, why: str(args.why), actor: ctx.actor, subgoal: ctx.subgoal, ...ctx.link,
   });
@@ -100,6 +116,18 @@ async function runStepTool(ctx: ToolContext, args: Record<string, Json>): Promis
   if (value === "") throw new ToolError("this step needs a value from an earlier step");
   const pivot = ctx.deps.registry.pivot(step.pivot);
   const earlier = had === null ? [] : had.cards;
+
+  const before = reusable(ctx, pivot, value, step.window);
+  if (before !== null) {
+    // nothing is run: the step finishes on the recorded answer, citing its query and card
+    const note = reuseNote(before);
+    const cards = before.card === null || earlier.includes(before.card) ? earlier : [...earlier, before.card];
+    ctx.session.commit(() => [
+      { type: "step.started", actor: ctx.actor, ...ctx.link, payload: { step: id } },
+      { type: "step.finished", actor: ctx.actor, ...ctx.link, cause: before.reused.card_seq, payload: { step: id, outcome: before.outcome, cards, note, reused: before.query } },
+    ]);
+    return resultOf(ctx, before, pivot, pivot === null ? step.source : pivot.source);
+  }
 
   ctx.session.commit(() => [{ type: "step.started", actor: ctx.actor, ...ctx.link, payload: { step: id } }]);
   const finish = (outcome: StepOutcome, cards: string[], note: string): void => {

@@ -127,7 +127,8 @@ export interface Payloads {
   "plan.denied": { plan: string; reason: string };
   "plan.replan_requested": { plan: string; note: string };
   "step.started": { step: string };
-  "step.finished": { step: string; outcome: StepOutcome; cards: string[]; note: string };
+  /** `reused`: the query whose recorded answer finished the step, when none was run for it. */
+  "step.finished": { step: string; outcome: StepOutcome; cards: string[]; note: string; reused?: string };
   /** A person asked for the price of a costly step before accepting the plan. `query` is the estimate query the source answered, when there was one. */
   "step.estimated": { step: string; estimate: Cost | null; query: string | null };
   // queries

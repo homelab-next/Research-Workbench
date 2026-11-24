@@ -5,7 +5,7 @@ import type { Json } from "../../src/core/canonical";
 import { execTool, parseCall } from "../../src/agents/tools";
 import type { Payloads } from "../../src/core/types";
 import type { RunQueryResult } from "../../src/modules/runner";
-import { agent, fixture, person, PLAN, START } from "../helpers/tools-fixture";
+import { agent, fixture, person, PLAN, START, WINDOW } from "../helpers/tools-fixture";
 import type { Fixture } from "../helpers/tools-fixture";
 
 let f: Fixture;
@@ -292,4 +292,116 @@ test("run_step given a pivot id says it is a pivot and names the steps to use", 
     .toBe("address_to_verdict is a pivot, not a step; the plan's steps are s1 (address_to_asset), s2 (address_to_internal_peers), s3 (address_to_verdict), s4 (address_to_asset)");
   expect((await f.call("run_step", { step: "nope", why: "w" })).summary).toBe("unknown step: nope");
   expect(issued()).toEqual([]);
+});
+
+// ---------- reuse of an answered query (task 9 item 1) ----------
+const finishedSteps = (): Payloads["step.finished"][] => f.s.entries().filter((e) => e.type === "step.finished").map((e) => e.payload as Payloads["step.finished"]);
+
+test("a step whose query was already answered reuses it: nothing is issued, and the step cites its card", async () => {
+  await f.call("run_step", { step: "s1", why: "is it internal" });
+  expect(issued()).toHaveLength(1);
+  const q1 = f.s.state.queries.q1!;
+  const r = await f.call("run_step", { step: "s4", value: START, why: "same lookup again" });
+  expect(issued()).toHaveLength(1);
+  const note = `reused q1 from ${q1.issued_ts}; same pivot, value and window`;
+  expect(r.ok).toBe(true);
+  expect(r.summary).toBe(`${note} · no rows · proven negative`);
+  expect(view(r)).toMatchObject({ status: "done", reused: { query: "q1", at: q1.issued_ts }, empty: "proven-negative" });
+  expect((view(r).card as { id: string }[])[0]!.id).toBe("c1");
+  expect(f.s.state.plan.steps.s4).toEqual({ status: "empty", cards: ["c1"], note });
+  expect(finishedSteps().at(-1)).toEqual({ step: "s4", outcome: "empty", cards: ["c1"], note, reused: "q1" });
+  const fin = f.s.entries().filter((e) => e.type === "step.finished").at(-1)!;
+  expect(fin.cause).toBe(f.s.state.cards.c1!.created_seq);
+  expect(Object.keys(f.s.state.cards)).toEqual(["c1"]);
+});
+
+test("run_pivot reuses an answered query with the same pivot, value and window, and says so", async () => {
+  f.ctx.subgoal = "g1";
+  const asset = { why: "which asset", pivot: "address_to_asset", value: "192.0.2.17" };
+  const first = await f.call("run_pivot", asset);
+  expect(first.summary).toBe("1 row · full coverage");
+  const again = await f.call("run_pivot", asset);
+  expect(issued()).toHaveLength(1);
+  expect(again.summary).toBe(`reused q1 from ${f.s.state.queries.q1!.issued_ts}; same pivot, value and window · 1 row · full coverage`);
+  expect(view(again).found).toEqual(["ws-17.example.net"]);
+  expect(view(again).data).toEqual(view(first).data);
+  expect(view(again).card).toEqual(view(first).card);
+  expect(view(first).reused).toBeUndefined();
+  expect(again.marking).toBe(first.marking);
+  // a step on the same pivot, value and window is answered by the same query
+  f.ctx.subgoal = "g2";
+  const step = await f.call("run_step", { step: "s4", value: "192.0.2.17", why: "the plan's step" });
+  expect(issued()).toHaveLength(1);
+  expect(view(step).reused).toMatchObject({ query: "q1" });
+  expect(f.s.state.plan.steps.s4).toMatchObject({ status: "answered", cards: ["c1"] });
+});
+
+test("a different value or window, a failed result, or a changed pivot or source runs again", async () => {
+  f.ctx.subgoal = "g1";
+  const asset = { why: "w", pivot: "address_to_asset", value: "192.0.2.17" };
+  await f.call("run_pivot", asset);
+  await f.call("run_pivot", { ...asset, value: START });
+  expect(issued()).toHaveLength(2);
+  f.ctx.window = { from: "2026-11-18T00:00:00.000Z", to: "2026-11-24T00:00:00.000Z" };
+  await f.call("run_pivot", asset);
+  expect(issued()).toHaveLength(3);
+  f.ctx.window = WINDOW;
+  const pivot = f.sample.registry.pivot("address_to_asset")!;
+  const pivotHash = pivot.hash;
+  pivot.hash = "a-changed-pivot";
+  await f.call("run_pivot", asset);
+  expect(issued()).toHaveLength(4);
+  pivot.hash = pivotHash;
+  const source = f.sample.registry.source("assets")!;
+  const sourceHash = source.hash;
+  source.hash = "a-changed-source";
+  await f.call("run_pivot", asset);
+  expect(issued()).toHaveLength(5);
+  source.hash = sourceHash;
+  // the unchanged manifests find their first answer again
+  expect((await f.call("run_pivot", asset)).summary).toStartWith("reused q1 ");
+  expect(issued()).toHaveLength(5);
+});
+
+test("a partial result is not reused", async () => {
+  Object.assign(f.sample.registry.source("flows")!.limits, { max_rows: 1 });
+  f.ctx.subgoal = "g2";
+  const peers = { why: "w", pivot: "address_to_internal_peers", value: START };
+  expect((await f.call("run_pivot", peers)).summary).toBe("1 row · partial: row_limit");
+  expect((await f.call("run_pivot", peers)).summary).toBe("1 row · partial: row_limit");
+  expect(issued()).toHaveLength(2);
+});
+
+test("a failed query is not reused", async () => {
+  const db = join(f.sample.root, "data", "flows.sqlite");
+  const saved = Bun.file(db);
+  const bytes = new Uint8Array(await saved.arrayBuffer());
+  rmSync(db);
+  f.ctx.subgoal = "g2";
+  const peers = { why: "w", pivot: "address_to_internal_peers", value: START };
+  expect((await f.call("run_pivot", peers)).ok).toBe(false);
+  await Bun.write(db, bytes);
+  const r = await f.call("run_pivot", peers);
+  expect(r.ok).toBe(true);
+  expect(view(r).reused).toBeUndefined();
+  expect(issued()).toHaveLength(2);
+});
+
+test("a person's lookup always runs fresh", async () => {
+  const { runPivot } = await import("../../src/modules/pivots");
+  const ask = { pivot: "address_to_asset", value: START, window: WINDOW, why: "w", actor: person };
+  await runPivot(f.s, f.sample.deps, ask);
+  await runPivot(f.s, f.sample.deps, ask);
+  expect(issued()).toHaveLength(2);
+});
+
+test("an answer whose card a person discarded is not reused", async () => {
+  f.ctx.subgoal = "g1";
+  const asset = { why: "w", pivot: "address_to_asset", value: "192.0.2.17" };
+  await f.call("run_pivot", asset);
+  f.s.commit(() => [{ type: "card.discarded", actor: person, payload: { card: "c1" } }]);
+  expect(f.s.state.discarded).toEqual(["c1"]);
+  const r = await f.call("run_pivot", asset);
+  expect(view(r).reused).toBeUndefined();
+  expect(issued()).toHaveLength(2);
 });

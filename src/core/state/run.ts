@@ -81,8 +81,8 @@ function applyPlan(s: CaseState, entry: Entry): CaseState {
       return { ...s, plan: { ...p, steps: { ...p.steps, [step]: { ...p.steps[step]!, status: "running" } } } };
     }
     case "step.finished": {
-      const { step, outcome, cards, note } = entry.payload;
-      if (!isStr(step) || !isOneOf(outcome, STEP_OUTCOMES) || !isStrList(cards) || !isStr(note)) return malformed(s, entry);
+      const { step, outcome, cards, note, reused } = entry.payload;
+      if (!isStr(step) || !isOneOf(outcome, STEP_OUTCOMES) || !isStrList(cards) || !isStr(note) || !(reused === undefined || isStr(reused))) return malformed(s, entry);
       if (!has(p.steps, step)) return s;
       return { ...s, plan: { ...p, steps: { ...p.steps, [step]: { status: outcome, cards, note } } } };
     }

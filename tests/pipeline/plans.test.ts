@@ -287,6 +287,9 @@ test("a costly step paid under one plan is paid again under the next plan that b
   f.s.commit((_st, ids) => [{ type: "plan.proposed", actor: agent, payload: { plan: PLAN(ids.next("plan")) } }]);
   acceptPlan(f.s, { actor: person, budgets: { s3: 2 } });
   const second = f.s.entries().findLast((e) => e.type === "plan.accepted")!;
+  // the first answer would be reused (same pivot, value and window); a person discarded it, so the step must run and be paid again
+  const firstCard = Object.values(f.s.state.queries).find((q) => q.purpose === "result")!.card!;
+  f.s.commit(() => [{ type: "card.discarded", actor: person, payload: { card: firstCard } }]);
   const r = await f.call("run_step", { step: "s3", why: "reputation again" });
   expect(r.view).toMatchObject({ status: "needs_budget", proposal: "p2" });
   expect((await spendPlanBudget(f.s, f.sample.deps, "p2", "s3"))?.status).toBe("done");
@@ -296,6 +299,20 @@ test("a costly step paid under one plan is paid again under the next plan that b
   const p2 = f.s.state.proposals.p2!;
   f.s.commit((_st, ids) => [{ type: "proposal.created", actor: agent, payload: { proposal: { ...p2, id: ids.next("proposal"), status: "open" } as never } }]);
   expect(await spendPlanBudget(f.s, f.sample.deps, "p3", "s3")).toBeNull();
+});
+
+test("a costly step answered under one plan is reused under the next: nothing is asked for or paid", async () => {
+  await costly({ s3: 1 });
+  expect((await spendPlanBudget(f.s, f.sample.deps, "p1", "s3"))?.status).toBe("done");
+  f.s.commit((st) => [{ type: "gate.waiting", actor: system, run: st.run.id, payload: { gate: "plan" } }]);
+  f.s.commit((_st, ids) => [{ type: "plan.proposed", actor: agent, payload: { plan: PLAN(ids.next("plan")) } }]);
+  acceptPlan(f.s, { actor: person, budgets: { s3: 2 } });
+  const issuedBefore = f.s.entries().filter((e) => e.type === "query.issued").length;
+  const r = await f.call("run_step", { step: "s3", why: "reputation again" });
+  expect(r.view).toMatchObject({ status: "done", reused: { query: Object.values(f.s.state.queries).find((q) => q.purpose === "result")!.id } });
+  expect(f.s.entries().filter((e) => e.type === "query.issued")).toHaveLength(issuedBefore);
+  expect(Object.keys(f.s.state.proposals)).toEqual(["p1"]);
+  expect(f.s.state.plan.steps.s3).toMatchObject({ status: "answered" });
 });
 
 // ---------- estimateStep ----------
