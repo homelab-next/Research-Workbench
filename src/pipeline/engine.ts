@@ -3,7 +3,7 @@ import { canonical } from "../core/canonical";
 import type { CaseSession } from "../core/session";
 import type { RunState } from "../core/state";
 import { latestDraft } from "../core/state";
-import type { Actor, EntryInput, Marking, ModelChoice } from "../core/types";
+import type { Actor, Draft, EntryInput, Marking, ModelChoice, Product } from "../core/types";
 import type { Providers, } from "../agents/providers";
 import type { Profile } from "../agents/context";
 import type { Config } from "../modules/config";
@@ -12,8 +12,12 @@ import { runProposal } from "../modules/proposals";
 import type { RunnerDeps, RunQueryResult } from "../modules/runner";
 import type { Seeker } from "../modules/seeker";
 import type { Pipeline, Role, StageManifest } from "./manifests";
-import { nextStep } from "./next";
+import { firstUnpassedReview, nextStep } from "./next";
 import { acceptPlan, denyPlan, requestReplan, spendPlanBudget } from "./plans";
+import { reviseDraft } from "./revise";
+import { assembleRunner } from "./stages/assemble";
+import { challengeRunner } from "./stages/challenge";
+import { evaluateRunner } from "./stages/evaluate";
 import { frameRunner } from "./stages/frame";
 import { planRunner } from "./stages/plan";
 import { researchRunner } from "./stages/research";
@@ -59,7 +63,7 @@ export class Engine {
   private readonly runners: Partial<Record<Role, StageRunner>>;
 
   constructor(private readonly session: CaseSession, private readonly deps: EngineDeps, opts: { runners?: Partial<Record<Role, StageRunner>> } = {}) {
-    this.runners = { frame: frameRunner, plan: planRunner, research: researchRunner, ...opts.runners };
+    this.runners = { frame: frameRunner, plan: planRunner, research: researchRunner, assemble: assembleRunner, evaluate: evaluateRunner, challenge: challengeRunner, ...opts.runners };
     // A case opened here that this process did not create may hold work a stopped process left half done.
     if (!recovered.has(session)) {
       recovered.add(session);
@@ -110,6 +114,11 @@ export class Engine {
   /** Asks the planner to plan again with the person's note. */
   replan(input: { note: string; actor: Actor }): void {
     requestReplan(this.session, input);
+  }
+
+  /** A person edits the draft: a new revision in their name, and review starts again. Throws ReviseRefused; advances nothing. */
+  revise(input: { product: Product; reason: string; actor: Actor }): Draft {
+    return reviseDraft(this.session, this.deps.pipeline, input);
   }
 
   setModel(stage: string, choice: ModelChoice, actor: Actor): void {
@@ -195,13 +204,30 @@ export class Engine {
       payload: { stage: stageId, attempt, outcome, draft_hash, output: output === null ? null : this.session.blobs.put(canonical(output)), reason },
     });
     // a review that does not name the draft it reviewed has reviewed nothing: it fails, rather than being run again for ever
+    let supersededBy: string | null = null;
     if (end.kind === "finished" && end.outcome === "pass" && manifest.reviews) {
-      const latest = latestDraft(this.session.state)?.hash ?? null;
-      if (end.draft_hash === null || end.draft_hash !== latest) end = { kind: "finished", outcome: "fail", draft_hash: latest, output: end.output, reason: `${title} did not review the latest draft` };
+      const latestD = latestDraft(this.session.state);
+      const latest = latestD?.hash ?? null;
+      // the one exception: a person edited the draft while the stage worked. Its verdict stays on the hash it examined, and review of the edit starts over
+      const named = end.draft_hash;
+      const edited = latestD !== null && latestD.author.kind === "human" && named !== null && this.session.state.drafts.some((d) => d.hash === named);
+      if (named !== null && named !== latest && edited) supersededBy = latest;
+      else if (end.draft_hash === null || end.draft_hash !== latest) end = { kind: "finished", outcome: "fail", draft_hash: latest, output: end.output, reason: `${title} did not review the latest draft` };
+    } else if (end.kind === "finished" && end.outcome === "fail" && manifest.reviews) {
+      const latestD = latestDraft(this.session.state);
+      const named = end.draft_hash;
+      if (latestD !== null && latestD.author.kind === "human" && named !== null && named !== latestD.hash && this.session.state.drafts.some((d) => d.hash === named)) supersededBy = latestD.hash;
     }
     switch (end.kind) {
       case "finished":
-        this.session.commit(() => [finish(end.outcome, end.draft_hash, end.output, end.reason)]);
+        this.session.commit((s) => {
+          const out = [finish(end.outcome, end.draft_hash, end.output, end.reason)];
+          if (supersededBy !== null) {
+            const first = firstUnpassedReview(s, this.deps.pipeline);
+            if (first !== null) out.push({ type: "stage.started", actor: ENGINE, ...link, stage: first, payload: { stage: first, attempt: (s.run.stages.find((x) => x.id === first)?.attempts ?? 0) + 1 } });
+          }
+          return out;
+        });
         return true;
       case "declined":
         this.session.commit(() => [

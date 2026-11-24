@@ -2,8 +2,8 @@ import type { Json } from "../../core/canonical";
 import { parseJson } from "../../core/canonical";
 import type { CaseSession } from "../../core/session";
 import { runUsage } from "../../core/state";
-import type { Actor, TimeWindow } from "../../core/types";
-import { ContextError, casePart, schemaOf, stageParts } from "../../agents/context";
+import type { Actor, Draft, TimeWindow } from "../../core/types";
+import { ContextError, cardPart, casePart, schemaOf, stageParts } from "../../agents/context";
 import type { PackPart } from "../../agents/context";
 import type { CallRecord } from "../../agents/loop";
 import { runAgent } from "../../agents/loop";
@@ -133,4 +133,22 @@ export function frameOf(session: CaseSession): { window: TimeWindow; limits: See
       max_hops: DEFAULT_LIMITS.max_hops,
     },
   };
+}
+
+/** The agent actor the named agent's latest model request was made as; throws when it made none. */
+export function agentActor(session: CaseSession, actorId: string): AgentActor {
+  const e = [...session.entries()].reverse().find((x) => x.type === "model.request" && x.actor.kind === "agent" && x.actor.id === actorId);
+  if (e === undefined || e.actor.kind !== "agent") throw new Error(`${actorId} made no request`);
+  return e.actor;
+}
+
+/** The cards a draft's findings cite, as pack parts (a card that no longer exists is left out). */
+export function citedCardParts(session: CaseSession, draft: Draft): PackPart[] {
+  const ids = [...new Set(draft.product.key_findings.flatMap((f) => f.cites))];
+  return ids.filter((id) => Object.hasOwn(session.state.cards, id)).map((id) => cardPart(session.state.cards[id]!));
+}
+
+/** The draft's product as a part the model cannot lose from its context. */
+export function draftPart(draft: Draft): PackPart {
+  return { kind: "draft", id: `draft-${draft.n}`, title: `Draft ${draft.n} (${draft.hash.slice(0, 12)})`, text: JSON.stringify(draft.product, null, 2), marking: draft.product.marking, fixed: true };
 }

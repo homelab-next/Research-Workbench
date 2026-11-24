@@ -3,7 +3,7 @@ import { blockers, latestDraft, publishable } from "../core/state";
 import type { Pipeline, StageManifest } from "./manifests";
 
 export const SEND_BACK_CAP = 3;
-/** A stage restarted this many times with no send-back in between pauses the run. */
+/** A stage that has been started this many times in a run, not counting the starts that were send-backs, pauses the run. */
 const MAX_REPEATS = 5;
 
 export type Step =
@@ -35,10 +35,13 @@ export function nextStep(state: Readonly<CaseState>, pipeline: Pipeline, opts: {
   const stateOf = (id: string): StageState | null => run.stages.find((s) => s.id === id) ?? null;
   const title = (id: string): string => stateOf(id)?.title ?? id;
   const attemptsOf = (id: string): number => stateOf(id)?.attempts ?? 0;
-  /** A stage the run does not know pauses; a stage run again with no send-back, five times already, pauses (a loop that goes nowhere). */
+  /** Starts of the stage in this run that were not send-backs; send-backs are bounded by SEND_BACK_CAP. */
+  const startsWithoutSendBack = (id: string): number =>
+    attemptsOf(id) - Object.entries(run.sendbacks).reduce((n, [edge, count]) => (edge.endsWith(`>${id}`) ? n + count : n), 0);
+  /** A stage the run does not know pauses; a stage started again with no send-back, five times already in this run, pauses (a loop that goes nowhere). */
   const begin = (stage: string, sent_back: { from: string; to: string; reason: string; count: number } | null = null, again = true): Step => {
     if (stateOf(stage) === null) return { kind: "pause", reason: `the stage ${stage} is not part of this run` };
-    if (again && sent_back === null && stage === run.current && attemptsOf(stage) >= MAX_REPEATS && opts.allow_capped !== true) {
+    if (again && sent_back === null && startsWithoutSendBack(stage) >= MAX_REPEATS && opts.allow_capped !== true) {
       return { kind: "pause", reason: `${title(stage)} has run ${MAX_REPEATS} times` };
     }
     return { kind: "start", stage, attempt: attemptsOf(stage) + 1, sent_back };

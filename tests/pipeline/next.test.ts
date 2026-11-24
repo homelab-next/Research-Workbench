@@ -214,3 +214,19 @@ test("a review stage restarted without a send-back pauses after five runs", () =
   expect(nextStep(stale(5), pipeline)).toEqual({ kind: "pause", reason: "Evaluate has run 5 times" });
   expect(nextStep(stale(5), pipeline, { allow_capped: true })).toMatchObject({ kind: "start", stage: "evaluate", attempt: 6 });
 });
+
+test("a stage's attempts are counted across the run, not only its restarts of the current stage", () => {
+  const d1 = draft(1).hash;
+  // Challenge keeps being run (and failing) while Assemble, the current stage, passes the draft on to it again
+  const stale = (n: number, sb = 0) => run((b) => {
+    passed(b, "assemble"); revised(b, 1); started(b, "checks"); finished(b, "checks", "pass", null, d1); started(b, "evaluate"); finished(b, "evaluate", "pass", null, d1);
+    for (let i = 1; i <= sb; i++) b.add("stage.sent_back", { from: "evaluate", to: "challenge", reason: "r", count: i });
+    for (let i = 1; i <= n; i++) { b.add("stage.started", { stage: "challenge", attempt: i }); b.add("stage.finished", { stage: "challenge", attempt: i, outcome: "fail", draft_hash: d1, output: null, reason: "x" }); }
+    b.add("stage.started", { stage: "assemble", attempt: 2 }); b.add("stage.finished", { stage: "assemble", attempt: 2, outcome: "pass", draft_hash: d1, output: null, reason: null });
+  });
+  expect(nextStep(stale(4), pipeline)).toMatchObject({ kind: "start", stage: "challenge", attempt: 5 });
+  expect(nextStep(stale(5), pipeline)).toEqual({ kind: "pause", reason: "Challenge has run 5 times" });
+  expect(nextStep(stale(5), pipeline, { allow_capped: true })).toMatchObject({ kind: "start", stage: "challenge", attempt: 6 });
+  // attempts that began with a send-back are bounded by the send-back cap, not by this rule
+  expect(nextStep(stale(5, 2), pipeline)).toMatchObject({ kind: "start", stage: "challenge", attempt: 6 });
+});
