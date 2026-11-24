@@ -2,7 +2,8 @@ import type { Entry } from "../core/types";
 import type { AgentView, CaseSummaryView, CommandResult, Custody, Difference, Me, ModelView, NewCaseInput, Preview, Reference, RouteView } from "../core/wire";
 
 export type Fetcher = (req: Request) => Promise<Response>;
-export interface EntrySource { open(caseId: string, after: number, onEntry: (entry: Entry) => void, onDrop: () => void): () => void }
+/** `onDrop` is told "ahead" when the server says the position is ahead of the case, so what the store holds is not this case's record. */
+export interface EntrySource { open(caseId: string, after: number, onEntry: (entry: Entry) => void, onDrop: (why?: "ahead") => void): () => void }
 export interface Api {
   me(): Promise<Me>; cases(): Promise<CaseSummaryView[]>; reference(): Promise<Reference>; models(caseId: string): Promise<ModelView[]>;
   newCase(input: NewCaseInput): Promise<{ id: string } | { refused: string[] }>;
@@ -81,13 +82,24 @@ export function eventSourceEntries(win: Window, origin: string): EntrySource {
   return {
     open(caseId, after, onEntry, onDrop) {
       const Source = (win as Window & typeof globalThis).EventSource;
-      const es = new Source(`${origin}/api/cases/${seg(caseId)}/entries?after=${after}`);
+      const url = `${origin}/api/cases/${seg(caseId)}/entries?after=${after}`;
+      const es = new Source(url);
       let done = false;
+      let got = false;
+      let closed = false;
       es.addEventListener("message", (event) => {
+        got = true;
         try { onEntry(JSON.parse(String((event as MessageEvent).data)) as Entry); } catch { es.close(); if (!done) { done = true; onDrop(); } }
       });
-      es.addEventListener("error", () => { es.close(); if (!done) { done = true; onDrop(); } });
-      return () => { done = true; es.close(); };
+      es.addEventListener("error", () => {
+        es.close();
+        if (done) return;
+        done = true;
+        if (got) { onDrop(); return; }
+        // refused before any entry: an EventSource does not say why, so ask once; a 409 means this position is ahead of the case
+        win.fetch(url).then((res) => { void res.body?.cancel().catch(() => {}); if (!closed) onDrop(res.status === 409 ? "ahead" : undefined); }, () => { if (!closed) onDrop(); });
+      });
+      return () => { done = true; closed = true; es.close(); };
     },
   };
 }

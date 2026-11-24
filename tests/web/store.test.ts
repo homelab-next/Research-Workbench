@@ -10,6 +10,7 @@ import type { CaseSession } from "../../src/core/session";
 import type { CaseState } from "../../src/core/state";
 import type { Entry } from "../../src/core/types";
 import { CaseStore, follow, SNAPSHOT_EVERY } from "../../src/web/store";
+import { eventSourceEntries } from "../../src/web/api";
 import type { EntrySource } from "../../src/web/api";
 import { served } from "../helpers/served";
 
@@ -228,7 +229,7 @@ test("an entry of another case, a fork of the chain, or a repeated seq with anot
   expect(store.push(next)).toBe("applied");
 });
 
-test("follow treats a fork as a reason to reopen", () => {
+test("follow treats a fork as a reason to drop what it holds and reload from 0", () => {
   let feed: ((e: Entry) => void) | null = null;
   const opened: number[] = [];
   const source: EntrySource = { open(_id, after, onEntry) { opened.push(after); feed = onEntry; return () => {}; } };
@@ -238,6 +239,47 @@ test("follow treats a fork as a reason to reopen", () => {
   for (const e of run.entries.slice(0, 3)) feed!(e);
   feed!({ ...run.entries[3]!, prev_hash: "0".repeat(64) } as Entry);
   expect(store.connection).toBe("reconnecting");
+  // what it held is off the server's chain: none of it is kept
+  expect(store.live.seq).toBe(0);
+  expect(store.entries.length).toBe(0);
   tick();
-  expect(opened).toEqual([0, 3]);
+  expect(opened).toEqual([0, 0]);
+  for (const e of run.entries.slice(0, 12)) feed!(e);
+  expect(store.connection).toBe("live");
+  expect(c(store.live)).toBe(c(run.session.stateAt(12)));
+});
+
+test("a store ahead of the server drops what it holds and reloads from 0", () => {
+  let feed: { onEntry(e: Entry): void; onDrop(why?: "ahead"): void } | null = null;
+  const opened: number[] = [];
+  const source: EntrySource = { open(_id, after, onEntry, onDrop) { opened.push(after); feed = { onEntry, onDrop }; return () => {}; } };
+  const { win, run: tick } = fakeWin();
+  const store = new CaseStore(run.session.id);
+  follow(store, source, win);
+  for (const e of run.entries.slice(0, 6)) feed!.onEntry(e);
+  feed!.onDrop();                                     // an ordinary drop reopens after the head
+  tick();
+  expect(opened).toEqual([0, 6]);
+  feed!.onDrop("ahead");                              // the server says this position is ahead of the case
+  expect(store.live.seq).toBe(0);
+  tick();
+  expect(opened).toEqual([0, 6, 0]);
+  for (const e of run.entries.slice(0, 4)) feed!.onEntry(e);
+  expect(store.connection).toBe("live");
+  expect(c(store.live)).toBe(c(run.session.stateAt(4)));
+});
+
+test("the browser's source says the position is ahead when the server answers 409, and a plain drop otherwise", async () => {
+  const drops: (string | undefined)[] = [];
+  for (const status of [409, 200, 500]) {
+    const listeners = new Map<string, () => void>();
+    class FakeSource { constructor(readonly url: string) {} addEventListener(t: string, fn: () => void) { listeners.set(t, fn); } close() {} }
+    const win = { EventSource: FakeSource, fetch: async () => new Response(status === 200 ? "" : "the stream position is ahead of this case; reload from 0", { status }) } as unknown as Window;
+    let done: () => void = () => {};
+    const dropped = new Promise<void>((r) => { done = r; });
+    eventSourceEntries(win, "http://127.0.0.1:1").open("CASE-1", 7, () => {}, (why) => { drops.push(why); done(); });
+    listeners.get("error")!();
+    await dropped;
+  }
+  expect(drops).toEqual(["ahead", undefined, undefined]);
 });

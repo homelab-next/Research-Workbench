@@ -64,6 +64,17 @@ export class CaseStore {
     for (const fn of [...this.listeners]) fn();
   }
 
+  /** Drops every entry and the state they fold to, so the case is read again from 0: what it held is not the server's record. */
+  reset(): void {
+    this.entries.length = 0;
+    this.head = initial();
+    this.snapshots.length = 0;
+    this.snapshots.push(initial());
+    this.pos = null;
+    this.shownCache = null;
+    this.notify();
+  }
+
   /** Tells watchers the connection changed. */
   setConnection(c: "live" | "reconnecting"): void {
     if (this.connection === c) return;
@@ -74,7 +85,10 @@ export class CaseStore {
 
 const BACKOFF_MS = [1000, 2000, 5000];
 
-/** Keeps a store fed: opens the source after the store's head; on "gap" or a drop, closes and reopens after the head (after 1 s, 2 s, then every 5 s), setting `connection`. Returns the stop function. */
+/**
+ * Keeps a store fed: opens the source after the store's head; on "gap" or a drop, closes and reopens after the head (after 1 s, 2 s, then every 5 s), setting `connection`.
+ * An entry off the store's chain, or a server that says the head is ahead of the case, empties the store first, so it reopens from 0. Returns the stop function.
+ */
 export function follow(store: CaseStore, source: EntrySource, win: Window): () => void {
   let stopped = false;
   let closeStream: (() => void) | null = null;
@@ -86,9 +100,11 @@ export function follow(store: CaseStore, source: EntrySource, win: Window): () =
     const mine = ++generation;
     let closer: (() => void) | null = null;
     let lostEarly = false;
-    const lost = (): void => {
+    const lost = (why?: "ahead" | "fork"): void => {
       if (stopped || mine !== generation) return;
       generation++;
+      // ahead of the server, or off its chain: what is held is not this case's record, so it is dropped and read again from 0
+      if (why !== undefined) store.reset();
       if (closer === null) lostEarly = true; else { closer(); closeStream = null; }
       store.setConnection("reconnecting");
       const delay = BACKOFF_MS[Math.min(failures, BACKOFF_MS.length - 1)]!;
@@ -98,7 +114,8 @@ export function follow(store: CaseStore, source: EntrySource, win: Window): () =
     closer = source.open(store.id, store.live.seq, (entry) => {
       if (stopped || mine !== generation) return;
       const result = store.push(entry);
-      if (result === "gap") lost();
+      // a skipped seq is reopened after the head; anything else that does not follow on is off the chain
+      if (result === "gap") lost(entry.case === store.id && entry.seq > store.live.seq + 1 ? undefined : "fork");
       else if (result === "applied") { failures = 0; store.setConnection("live"); }
     }, lost);
     if (lostEarly) closer(); else closeStream = closer;

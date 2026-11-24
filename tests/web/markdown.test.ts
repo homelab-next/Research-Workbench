@@ -77,3 +77,14 @@ test("the provenance fields are plain text: nothing in them can start a heading,
 test("with no draft there is nothing to copy", () => {
   expect(narrativeMarkdown(initial(), { types: [], sources: [], pivots: [], objectives: [], phases: [], profile: { id: "p", title: "p" }, send_back_cap: 3 })).toBe("");
 });
+
+test("the banner is the strictest of the product's marking and every cited card's", async () => {
+  const { state, ref } = await sample();
+  const d = state.drafts.at(-1)!;
+  const id = d.product.key_findings[0]!.cites[0]!;
+  expect(d.product.marking).toBe("TLP:GREEN");
+  const stricter: CaseState = { ...state, cards: { ...state.cards, [id]: { ...state.cards[id]!, marking: "TLP:AMBER" } } };
+  const lines = narrativeMarkdown(stricter, ref).split("\n");
+  expect(lines[0]).toBe("TLP:AMBER");
+  expect(lines.at(-1)).toBe("TLP:AMBER");
+});

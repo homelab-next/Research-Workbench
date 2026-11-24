@@ -1,6 +1,6 @@
 import { cardRefs, latestDraft } from "../core/state";
 import type { CaseState } from "../core/state";
-import { SECTIONS } from "../core/types";
+import { SECTIONS, strictest } from "../core/types";
 import type { Draft, Product } from "../core/types";
 import type { Reference } from "../core/wire";
 
@@ -31,12 +31,15 @@ function fenced(text: string): string {
   return `${fence}\n${text}\n${fence}`;
 }
 
-/** The recorded product as Markdown: the marking first and last, the five sections, and the provenance of every card the draft cites. Plain text; it is never drawn as HTML. */
+/** The recorded product as Markdown: the marking first and last (the strictest of the product's and its cited cards'), the five sections, and the provenance of every card the draft cites. Plain text; it is never drawn as HTML. */
 export function narrativeMarkdown(state: CaseState, ref: Reference): string {
   const d = latestDraft(state);
   if (d === null) return "";
   const p = d.product;
-  const out: string[] = [p.marking, "", `# ${plain(state.meta?.title ?? "Case")}`, ""];
+  // the copy carries each cited card's title and query, so its banner is as strict as the strictest of them
+  const cited = citedIds(d);
+  const banner = strictest(p.marking, ...cited.filter((id) => Object.hasOwn(state.cards, id)).map((id) => state.cards[id]!.marking));
+  const out: string[] = [banner, "", `# ${plain(state.meta?.title ?? "Case")}`, ""];
   for (const { id, title } of SECTION_TITLES) {
     out.push(`## ${title}`, "");
     if (id !== "key_findings") { out.push(p[id], ""); continue; }
@@ -50,7 +53,7 @@ export function narrativeMarkdown(state: CaseState, ref: Reference): string {
     out.push("");
   }
   out.push("## Provenance", "");
-  for (const id of citedIds(d)) {
+  for (const id of cited) {
     const c = Object.hasOwn(state.cards, id) ? state.cards[id]! : null;
     if (c === null) { out.push(`### ${id}`, "", "This card is not in the record.", ""); continue; }
     const q = c.query !== null && Object.hasOwn(state.queries, c.query) ? state.queries[c.query]! : null;
@@ -65,6 +68,6 @@ export function narrativeMarkdown(state: CaseState, ref: Reference): string {
     out.push(`- Coverage: ${plain(coverage)}`);
     out.push(`- Rows: ${c.row_count}`, "");
   }
-  out.push(p.marking);
+  out.push(banner);
   return out.join("\n");
 }
