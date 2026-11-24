@@ -36,9 +36,11 @@ test("a user, a credential name and a host are hidden in any case or encoding", 
   const s = f.sample.registry.source("flows")!;
   s.user = "Svc-User";
   s.credential = "LAKE_TOKEN_NAME";
-  for (const v of ["as svc-user ok", "as SVC-USER ok", "as Svc%2DUser ok", "env lake_token_name", "env LAKE_Token_Name", `as ${encodeURIComponent("Svc-User")}`]) {
+  for (const v of ["as svc-user ok", "as SVC-USER ok", "env lake_token_name", "env LAKE_Token_Name", `as ${encodeURIComponent("Svc-User")}`]) {
     expect(clean(v)).not.toMatch(/svc.?user|lake.token.name/i);
   }
+  // `-` is not encoded by encodeURIComponent: a hand-encoded one, in either case and encoded twice, is still the user
+  for (const v of ["as Svc%2DUser ok", "as svc%2duser ok", "as Svc%252DUser ok", "as %53%76%63%2D%55%73%65%72 ok"]) expect(clean(v)).toBe("as [hidden] ok");
   const h = f.sample.registry.source("reputation")!;
   h.location = "http://Example-Host.internal:4801/Base/Path";
   for (const v of [
@@ -108,4 +110,50 @@ test("a card put in a pack has its title, body and coverage detail scrubbed as t
   expect(p.text).toContain("[hidden]");
   expect(p.text).toContain("partial (source_error: ");
   expect(p.marking).toBe(c.marking);
+});
+
+test("a path is hidden when it is encoded in other ways, after a colon, under a home, above the folder, a UNC share or has spaces", () => {
+  const abs = join(f.sample.root, "data", "flows.sqlite");
+  const all = (t: string): string => [...t].map((c) => `%${c.charCodeAt(0).toString(16).padStart(2, "0")}`).join("");
+  for (const v of [
+    `open ${abs.replaceAll("/", "%2f")} failed`, `open ${all(abs)} failed`, `open ${encodeURIComponent(encodeURIComponent(abs))} failed`,
+    `open ${encodeURIComponent(abs).replaceAll("%2F", "%252F")} failed`,
+  ]) {
+    const out = clean(v);
+    expect(out).toBe("open [hidden] failed");
+  }
+  expect(clean("cannot open path:/srv/secret/lake.db now")).toBe("cannot open path:[hidden] now");
+  expect(clean("cannot open ~/secret/lake.db now")).toBe("cannot open [hidden] now");
+  expect(clean("cannot open ~svc/secret/lake.db now")).toBe("cannot open [hidden] now");
+  expect(clean("cannot open ../../secret/lake.db now")).toBe("cannot open [hidden] now");
+  expect(clean("cannot open \\\\fileserver\\share\\secret\\lake.db now")).toBe("cannot open [hidden] now");
+  expect(clean("cannot open //fileserver/share/secret/lake.db now")).toBe("cannot open [hidden] now");
+  expect(clean("cannot open /srv/my lake/secret file.db")).not.toMatch(/my lake|secret/);
+  // nothing else in the text moves
+  expect(clean("no rows · proven negative and/or 1/2, at 12:30")).toBe("no rows · proven negative and/or 1/2, at 12:30");
+});
+
+test("a query's text is shown exactly as it was run, less the secrets: oddly spelled paths in it are not tidied", () => {
+  const s = f.sample.registry.source("flows")!;
+  s.user = "svc-flows-user";
+  const query = "SELECT '//a/./b' AS x, 'svc-flows-user' AS u FROM t WHERE p LIKE '%2F%'";
+  expect(scrub(f.sample.registry, query, { backstop: false })).toBe("SELECT '//a/./b' AS x, '[hidden]' AS u FROM t WHERE p LIKE '%2F%'");
+});
+
+test("read_card shows an http query without its location and with the source's other secrets hidden", async () => {
+  const rep = f.sample.registry.source("reputation")!;
+  rep.user = "svc-rep-user";
+  f.s.commit((_st, ids) => {
+    const q = ids.next("query");
+    return [
+      { type: "query.issued", actor: f.ctx.actor, payload: {
+        query: q, source: "reputation", source_hash: rep.hash, pivot: null, pivot_hash: null, connector: "http", text: `GET ${rep.location}/v1/reputation/198.51.100.77?as=svc-rep-user`,
+        bound: {}, window: { from: null, to: null }, why: "w", estimate: null, step: null, verifies: null, purpose: "result",
+      } },
+      { type: "card.created", actor: f.ctx.actor, payload: { card: card(ids.next("card"), { title: "Verdict", source: "reputation", query: q }) } },
+    ];
+  });
+  const r = await f.call("read_card", { why: "w", card: "c1" });
+  const text = (r.view as { provenance: { text: string } }).provenance.text;
+  expect(text).toBe("GET /v1/reputation/198.51.100.77?as=[hidden]");
 });
