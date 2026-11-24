@@ -1,7 +1,7 @@
 import type { Json } from "../core/canonical";
 import { canonical, isPlainObject } from "../core/canonical";
 import { sha256Hex } from "../core/hash";
-import { isCoverage } from "../core/state/shapes";
+import { isCard, isCoverage } from "../core/state/shapes";
 import type { CaseSession } from "../core/session";
 import type { ProposalState } from "../core/state";
 import type { Actor, Card, Coverage, Cost, EmptyMeans, EntryInput, QueryPurpose, TimeWindow } from "../core/types";
@@ -13,6 +13,16 @@ import type { PivotManifest, Registry, SourceManifest } from "./registry";
 import { GuardError } from "./sqlguard";
 
 export const CARD_PREVIEW_ROWS = 50;
+/** The longest a previewed card cell may be, in characters. The blob keeps every value whole. */
+export const CARD_CELL_CHARS = 4096;
+
+/** A cell as the card previews it: a string longer than CARD_CELL_CHARS is cut (ending in …); so is a list or object, as its JSON text. */
+export function previewCell(v: Json): Json {
+  if (typeof v === "string") return v.length > CARD_CELL_CHARS ? `${v.slice(0, CARD_CELL_CHARS - 1)}…` : v;
+  if (v === null || typeof v !== "object") return v;
+  const text = JSON.stringify(v);
+  return text.length > CARD_CELL_CHARS ? `${text.slice(0, CARD_CELL_CHARS - 1)}…` : v;
+}
 
 export interface RunnerDeps { registry: Registry; pool: ConnectorPool; observables: Observables }
 
@@ -282,10 +292,12 @@ async function issueAndRun(session: CaseSession, deps: RunnerDeps, q: Issue): Pr
         const card: Card = {
           id: cardId, title: q.title, body: bodyOf(rows, out.coverage, empty), kind: "result",
           made_by: q.actor.kind, query, columns: out.columns, column_types: deps.observables.columnTypes(out.columns, hints, out.rows),
-          rows: out.rows.slice(0, CARD_PREVIEW_ROWS), row_count: rows, coverage: out.coverage, empty, marking: source.marking,
+          rows: out.rows.slice(0, CARD_PREVIEW_ROWS).map((row) => row.map(previewCell)), row_count: rows, coverage: out.coverage, empty, marking: source.marking,
           source: source.id, step: q.step, subgoal: q.subgoal, why: q.why, event_time: null,
           quality_notes: source.quality_notes.filter((n) => overlaps(n, req.window)).map((n) => n.id),
         };
+        // a card the fold would refuse must not leave a done query with no card: refuse the whole commit instead
+        if (!isCard(card)) throw new Error("the card built from the result is malformed");
         entries.push({ type: "card.created", actor: q.actor, cause: issuedAt.seq, ...link, payload: { card } });
       }
       return entries;

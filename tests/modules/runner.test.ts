@@ -12,7 +12,7 @@ import { Observables } from "../../src/modules/observables";
 import { Secrets } from "../../src/modules/secrets";
 import { ConnectorPool } from "../../src/modules/connectors";
 import type { Connector, QueryOutcome, QueryRequest } from "../../src/modules/connectors";
-import { CARD_PREVIEW_ROWS, rowsHash, runQuery } from "../../src/modules/runner";
+import { CARD_CELL_CHARS, CARD_PREVIEW_ROWS, rowsHash, runQuery } from "../../src/modules/runner";
 import { runProposal } from "../../src/modules/proposals";
 import type { RunnerDeps, RunQueryInput } from "../../src/modules/runner";
 import { startStandin } from "../helpers/http-standin";
@@ -674,4 +674,33 @@ test("only a person may run a proposal; an unknown, changed or unfunded one is r
   expect(await refusal({ proposal: "p1", budget: 2, actor: human }, { ...deps, registry: gone })).toBe("the source rep is no longer loaded");
   expect(s.head().seq).toBe(before);
   expect(standin.requests).toHaveLength(0);
+});
+
+// ---------- final review minor 15 and the Task 6 isCard row ----------
+test("a previewed card cell is capped at 4,096 characters; the blob and the result keep the whole value", async () => {
+  const long = "x".repeat(20_000);
+  const nested = { deep: "y".repeat(5000) };
+  const raw = new TextEncoder().encode(JSON.stringify([long]));
+  const r = await runQuery(s, stubDeps({ columns: ["dst", "obj", "n"], rows: [[long, nested, 7]], raw }), base);
+  expect(r.status).toBe("done");
+  const cell = s.state.cards.c1!.rows[0]!;
+  expect((cell[0] as string).length).toBe(CARD_CELL_CHARS);
+  expect(cell[0]).toEndWith("…");
+  expect(typeof cell[1]).toBe("string");
+  expect((cell[1] as string).length).toBe(CARD_CELL_CHARS);
+  expect(cell[2]).toBe(7);
+  if (r.status === "done") {
+    expect(r.data[0]![0]).toBe(long);
+    expect(r.rows_hash).toBe(rowsHash(["dst", "obj", "n"], [[long, nested, 7]]));
+  }
+  expect(s.blobs.get(s.state.queries.q1!.result!.blob)).toEqual(raw);
+});
+
+test("a card the fold would refuse fails the query whole: no result is recorded without its card", async () => {
+  const d = stubDeps({ rows: [["a"]] });
+  const broken = { ...d, observables: { columnTypes: () => [5] } as unknown as Observables };
+  const r = await runQuery(s, broken, base);
+  expect(r).toMatchObject({ status: "failed", error: "the card built from the result is malformed" });
+  expect(types()).toEqual(["case.created", "query.issued", "query.failed"]);
+  expect(s.state.queries.q1!.status).toBe("failed");
 });
