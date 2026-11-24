@@ -3,6 +3,7 @@ import type { Json } from "../../src/core/canonical";
 import type { Entry, EntryType, Marking, Where } from "../../src/core/types";
 import { MARKINGS } from "../../src/core/types";
 import type { Schema } from "../../src/core/schema";
+import { IdAllocator } from "../../src/core/ids";
 import { extractJson, MAX_TURNS, runAgent } from "../../src/agents/loop";
 import type { AgentEnd, AgentSpec } from "../../src/agents/loop";
 import type { Pack } from "../../src/agents/pack";
@@ -292,4 +293,115 @@ test("entries carry the link's run, stage and job", async () => {
   await runAgent(f.s, spec(spy([{ content: "hi" }])));
   expect(ofType("model.request")[0]!.stage).toBe("research");
   expect(ofType("model.response")[0]!.stage).toBe("research");
+});
+
+// ---- review fixes ----
+const huge = "x".repeat(300_000);
+/** Makes the next commit whose first entry has this type throw once, as a refused entry would. */
+function refuseOnce(type: string): void {
+  const real = f.s.commit.bind(f.s);
+  let done = false;
+  f.s.commit = ((build: Parameters<typeof real>[0]) => {
+    if (!done) {
+      const first = build(f.s.state, new IdAllocator(f.s.state))[0];
+      if (first?.type === type) { done = true; throw new Error("refused: payload too large"); }
+    }
+    return real(build);
+  }) as typeof f.s.commit;
+}
+
+test("a 300k-character tool name and 300k-character arguments are recorded small and the loop goes on", async () => {
+  const p = spy([{ tool_calls: [{ tool: huge, args: { why: "w" } }, { tool: "list_cards", args: { why: "w", note: huge } }] }, { content: "ok" }]);
+  const end = await runAgent(f.s, spec(p));
+  expect(end.kind).toBe("done");
+  const called = ofType("tool.called");
+  expect(called[0]!.payload.tool.length).toBeLessThanOrEqual(200);
+  expect(JSON.stringify(called[1]!.payload.args).length).toBeLessThan(1000);
+  expect(ofType("tool.returned").length).toBe(2);
+});
+
+test("a long why is clipped to 500 in the entry", async () => {
+  await runAgent(f.s, spec(spy([{ tool_calls: [{ tool: "list_cards", args: { why: huge } }] }, { content: "ok" }])));
+  expect(ofType("tool.called")[0]!.payload.why.length).toBe(500);
+});
+
+test("a refused model.response is replaced by a small error response, and the loop ends with error", async () => {
+  refuseOnce("model.response");
+  const end = await runAgent(f.s, spec(spy([{ content: "hi" }])));
+  expect(end.kind).toBe("error");
+  const res = ofType("model.response");
+  expect(res.length).toBe(1);
+  expect(res[0]!.payload.stop).toBe("error");
+});
+
+test("a refused tool.returned is replaced by a small failed return, and the loop ends with error", async () => {
+  refuseOnce("tool.returned");
+  const end = await runAgent(f.s, spec(spy([{ tool_calls: [{ tool: "list_cards", args: { why: "w" } }] }, { content: "ok" }])));
+  expect(end.kind).toBe("error");
+  expect(ofType("tool.returned").map((e) => e.payload.ok)).toEqual([false]);
+});
+
+test("a refused tool.called ends with error and the tool is not run", async () => {
+  refuseOnce("tool.called");
+  const end = await runAgent(f.s, spec(spy([{ tool_calls: [{ tool: "run_step", args: { step: "s1", why: "w" } }] }, { content: "ok" }])));
+  expect(end.kind).toBe("error");
+  expect(ofType("step.started").length).toBe(0);
+});
+
+test("extractJson on 1 MiB of open braces is linear", () => {
+  const t0 = performance.now();
+  expect(extractJson("{".repeat(1024 * 1024))).toBeNull();
+  expect(extractJson("```\n".repeat(200_000))).toBeNull();
+  expect(performance.now() - t0).toBeLessThan(200);
+});
+
+test("negative, fractional and non-finite usage is clamped to non-negative integers", async () => {
+  const inner = spy([{ content: "hi" }]);
+  const p: Provider = { ...inner, body: (r) => inner.body(r), models: () => inner.models(), turn: async (r) => {
+    const t = await inner.turn(r);
+    return t.kind === "answer" ? { ...t, usage: { input: -50, output: Number.NaN, reasoning: 2.7 } } : t;
+  } };
+  const end = await runAgent(f.s, spec(p));
+  expect(end.kind).toBe("done");
+  expect(ofType("model.response")[0]!.payload.usage).toEqual({ input: 0, output: 0, reasoning: 2 });
+});
+
+test("at most 16 tool calls run per reply; the rest are returned as failed without running", async () => {
+  const many = Array.from({ length: 40 }, (_, i) => ({ tool: "list_cards", args: { why: `w${i}` } }));
+  const p = spy([{ tool_calls: many }, { content: "ok" }]);
+  const end = await runAgent(f.s, spec(p));
+  expect(end.kind).toBe("done");
+  const returns = ofType("tool.returned");
+  expect(returns.length).toBe(40);
+  expect(returns.slice(16).every((e) => !e.payload.ok && e.payload.summary === "too many tool calls in one reply")).toBe(true);
+  expect(returns.slice(0, 16).every((e) => e.payload.ok)).toBe(true);
+  expect(p.seen[1]!.messages.filter((m) => m.role === "tool").length).toBe(40);
+});
+
+test("a pause between calls stops the remaining calls of the turn", async () => {
+  startRun();
+  const p = spy([{ tool_calls: [{ tool: "list_cards", args: { why: "a" } }, { tool: "list_cards", args: { why: "b" } }] }, { content: "x" }]);
+  const unsub = f.s.subscribe((e) => {
+    if (e.type === "tool.returned") f.s.commit(() => [{ type: "run.paused", actor: human, payload: { reason: "r" } }]);
+  });
+  const end = await runAgent(f.s, spec(p));
+  unsub();
+  expect(end).toEqual({ kind: "stopped", why: "paused" });
+  expect(ofType("tool.called").length).toBe(1);
+});
+
+test("a withheld result leaves the marking unchanged", async () => {
+  f.sample.registry.source("assets")!.marking = "TLP:AMBER";
+  const p = spy([{ tool_calls: [{ tool: "run_step", args: { step: "s1", why: "w" } }] }, { content: "a" }], "hosted");
+  await runAgent(f.s, spec(p, { max_marking: "TLP:GREEN" }));
+  expect(ofType("model.request").map((e) => e.payload.marking)).toEqual(["TLP:GREEN", "TLP:GREEN"]);
+});
+
+test("a card read raises the marking when there is no limit", async () => {
+  await f.call("run_step", { step: "s1", why: "w" });
+  f.s.state.cards.c1!.marking = "TLP:RED";
+  const p = spy([{ tool_calls: [{ tool: "list_cards", args: { why: "w" } }] }, { content: "a" }], "hosted");
+  const end = await runAgent(f.s, spec(p));
+  expect(end).toEqual({ kind: "blocked", marking: "TLP:RED" });
+  expect(p.turns).toBe(1);
 });
