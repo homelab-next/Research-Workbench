@@ -84,13 +84,14 @@ export async function serve(argv: string[], out: { log(line: string): void; erro
     if (problems.length > 0) throw problems[0];
   })());
   try {
+    // the lock first: a second serve on this data directory writes nothing and starts nothing, the sample and its fixture included
+    wb = Workbench.open(config.data_dir, { onError: (e) => out.error(`workbench: ${reason(e)}`) });
     if (p.fixture !== null) {
       const root = config.roots[0];
       if (root === undefined) throw new ConfigError("--sample-fixture needs a root in the configuration");
       ensureSampleData(root.path);
       fixture = startReputationFixture(join(root.path, "data"), p.fixture);
     }
-    wb = Workbench.open(config.data_dir, { onError: (e) => out.error(`workbench: ${reason(e)}`) });
     // the server's own address, known once it is listening; every source and model endpoint is checked against it when it is used
     let host: string | null = null;
     composed = compose(config, wb, { refuse_hosts: () => (host === null ? [] : [host]) });

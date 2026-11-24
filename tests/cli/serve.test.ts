@@ -91,6 +91,24 @@ test("a second serve on the same data directory is refused", async () => {
   expect((await fetch(`${first.origin}/`)).status).toBe(200);
 });
 
+test("a repeated serve --sample-fixture on the same data directory is refused by the lock before the fixture starts", async () => {
+  const e = setup();
+  const first = await serve(["--config", e.config, "--port", "0", "--sample-fixture", String(e.fixturePort)], quiet);
+  stops.push(() => first.stop());
+  const err = await serve(["--config", e.config, "--port", "0", "--sample-fixture", String(e.fixturePort)], quiet).catch((x: unknown) => x);
+  expect(err).toBeInstanceOf(WorkbenchLockedError);
+  const r = Bun.spawnSync(["bun", "run", join(REPO, "src", "cli", "serve.ts"), "--config", e.config, "--port", "0", "--sample-fixture", String(e.fixturePort)], {
+    cwd: REPO, timeout: 60_000, stdout: "pipe", stderr: "pipe", env: { ...process.env, RESEARCH_WORKBENCH_CONFIG: "" },
+  });
+  expect(r.exitCode).toBe(1);
+  const out = r.stderr.toString();
+  expect(out).toContain("is in use by");
+  expect(out).not.toContain("Failed to start server");
+  expect(out).not.toContain("unexpected error");
+  // the first is still answering, fixture included
+  expect((await fetch(`${first.origin}/`)).status).toBe(200);
+});
+
 test("the process exits 1 on a locked data directory and 2 on a configuration error or usage error", async () => {
   const e = setup();
   const first = await serve(["--config", e.config, "--port", "0", "--sample-fixture", String(e.fixturePort)], quiet);
