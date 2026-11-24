@@ -66,7 +66,7 @@ export async function stageAgent(env: StageEnv, opts: {
   }
   if ("too_big" in pack) return { kind: "stalled", reason: `${title}: the fixed context does not fit this model` };
 
-  const { window, limits } = frameOf(session);
+  const { window, limits } = frameOf(env);
   const end = await runAgent(session, {
     actor: who.actor, provider: who.provider, model: who.model, effort: who.effort, pack, task: opts.task, tools: stage.tools.filter((t) => !(opts.omit_tools ?? []).includes(t)), schema,
     policy: deps.config.marking_policy, max_marking: Object.hasOwn(state.pack_limits, stage.id) ? state.pack_limits[stage.id]! : null,
@@ -135,10 +135,11 @@ export function requestsOfPass(entries: readonly Entry[], finished: Entry): Entr
 export const stageOfRole = (env: StageEnv, role: Role): string | null => env.deps.pipeline.stages.find((s) => s.role === role)?.id ?? null;
 
 /** The window and limits Frame chose, with max_hops from the defaults; the case window and the defaults when there is no Frame output. */
-export function frameOf(session: CaseSession): { window: TimeWindow; limits: SeekLimits } {
-  const meta = session.state.meta;
+export function frameOf(env: StageEnv): { window: TimeWindow; limits: SeekLimits } {
+  const meta = env.session.state.meta;
   const fallback = { window: meta === null ? { from: null, to: null } : { ...meta.window }, limits: { ...DEFAULT_LIMITS } };
-  const out = lastOutput(session, "frame");
+  const frame = stageOfRole(env, "frame");
+  const out = frame === null ? null : lastOutput(env.session, frame);
   if (out === null || typeof out !== "object" || Array.isArray(out)) return fallback;
   const { window, limits } = out as { window?: { from?: unknown; to?: unknown }; limits?: { allow_unconfirmed?: unknown; max_weight?: unknown } };
   if (window === undefined || limits === undefined || typeof window.from !== "string" || typeof window.to !== "string") return fallback;

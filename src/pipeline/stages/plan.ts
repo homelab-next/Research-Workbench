@@ -1,10 +1,11 @@
 import type { Json } from "../../core/canonical";
 import type { Actor, Where } from "../../core/types";
+import { ContextError, packPart } from "../../agents/context";
 import type { PackPart } from "../../agents/context";
 import { buildPlan } from "../plans";
 import type { PlanOutput } from "../plans";
 import type { StageEnd, StageEnv } from "../engine";
-import { frameOf, lastOutput, noSchema, stageAgent } from "./agent";
+import { frameOf, lastPass, noSchema, requestsOfPass, stageAgent, stageOfRole, titleOf } from "./agent";
 
 /** The `where` of the provider chosen for the first stage whose role is research; null when it cannot be resolved. */
 function researchWhere(env: StageEnv): { where: Where } | null {
@@ -20,17 +21,30 @@ export async function planRunner(env: StageEnv): Promise<StageEnd> {
   const stalled = noSchema(env);
   if (stalled !== null) return stalled;
   const state = session.state;
-  const frameOut = lastOutput(session, "frame");
+  const entries = session.entries();
+  const frameStage = stageOfRole(env, "frame");
+  const frameOut = frameStage === null ? null : lastPass(session, frameStage);
   const extras: PackPart[] = [];
-  if (frameOut !== null) extras.push({ kind: "frame", id: "frame-output", title: "Frame's output", text: JSON.stringify(frameOut, null, 2), marking: null, fixed: false });
+  try {
+    // Frame's output is text a model wrote: as strict as the requests of that pass
+    if (frameOut !== null) {
+      extras.push(packPart({
+        kind: "frame", id: "frame-output", title: "Frame's output", text: JSON.stringify(frameOut.output, null, 2), fixed: false,
+        entries, written_by: requestsOfPass(entries, frameOut.entry), floor: null,
+      }));
+    }
+  } catch (err) {
+    if (err instanceof ContextError) return { kind: "stalled", reason: `${titleOf(env)}: ${err.message}` };
+    throw err;
+  }
   if (state.plan.status === "replanning") {
-    const asked = [...session.entries()].reverse().find((e) => e.type === "plan.replan_requested");
+    const asked = [...entries].reverse().find((e) => e.type === "plan.replan_requested");
     if (asked !== undefined && asked.type === "plan.replan_requested") {
-      extras.push({ kind: "note", id: "replan-note", title: "The person's re-plan note", text: asked.payload.note, marking: null, fixed: false });
+      extras.push(packPart({ kind: "note", id: "replan-note", title: "The person's re-plan note", text: asked.payload.note, fixed: false, entries, written_by: [asked], floor: null }));
     }
   }
   const actorId = deps.profile.stages[stage.id]?.agent ?? "planner";
-  const frame = frameOf(session);
+  const frame = frameOf(env);
   const research = researchWhere(env);
   const m = state.meta;
   let task = [

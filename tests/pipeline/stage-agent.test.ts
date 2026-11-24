@@ -125,7 +125,7 @@ test("lastOutput and frameOf read Frame's passed output, and fall back to the ca
   const r = rig(script());
   r.engine.start(person);
   expect(lastOutput(f.s, "frame")).toBeNull();
-  expect(frameOf(f.s)).toEqual({ window: WINDOW, limits: { allow_unconfirmed: false, max_weight: null, max_hops: 4 } });
+  expect(frameOf(r.env("plan"))).toEqual({ window: WINDOW, limits: { allow_unconfirmed: false, max_weight: null, max_hops: 4 } });
   const finish = (outcome: "pass" | "fail", output: unknown) => f.s.commit((st) => [{
     type: "stage.finished", actor: { kind: "system", id: "engine" }, run: st.run.id, stage: "frame",
     payload: { stage: "frame", attempt: 1, outcome, draft_hash: null, output: f.s.blobs.put(JSON.stringify(output)), reason: null },
@@ -134,5 +134,5 @@ test("lastOutput and frameOf read Frame's passed output, and fall back to the ca
   finish("pass", narrow);
   finish("fail", { other: 1 });
   expect(lastOutput(f.s, "frame")).toEqual(narrow);
-  expect(frameOf(f.s)).toEqual({ window: { from: "2026-11-18T00:00:00.000Z", to: "2026-11-19T00:00:00.000Z" }, limits: { allow_unconfirmed: true, max_weight: 3, max_hops: 4 } });
+  expect(frameOf(r.env("plan"))).toEqual({ window: { from: "2026-11-18T00:00:00.000Z", to: "2026-11-19T00:00:00.000Z" }, limits: { allow_unconfirmed: true, max_weight: 3, max_hops: 4 } });
 });

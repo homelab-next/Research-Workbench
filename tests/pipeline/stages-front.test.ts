@@ -356,3 +356,24 @@ test("an empty result that is only not seen does not answer a sub-goal", async (
   expect(fin.outcome).toBe("fail");
   expect(JSON.parse(f.s.blobs.text(fin.output!.blob)).subgoals.map((g: { outcome: string }) => g.outcome)).toEqual(["blocked"]);
 });
+
+test("Frame's output in the planner's pack is as strict as Frame's requests: under a pack limit it is left out", async () => {
+  const orchestrator = { kind: "agent", id: "orchestrator", stage: "frame", profile: "investigation", model: "m", effort: null, where: "machine" } as const;
+  const r = rig({ planner: [say(planOut())] }, {
+    runners: {
+      frame: async () => {
+        // what an orchestrator that had read a red card asked its model
+        f.s.commit((st, ids) => [{
+          type: "model.request", actor: orchestrator, run: st.run.id, stage: "frame",
+          payload: { request: ids.next("request"), provider: "scripted", model: "m", effort: null, where: "machine", marking: "TLP:RED", pack: [], left_out: [], messages: f.s.blobs.put("[]"), tools: [] },
+        }]);
+        return { kind: "finished", outcome: "pass", draft_hash: null, output: { ...FRAME, notes: "the red detail" } as unknown as Json, reason: null };
+      },
+    },
+  });
+  r.engine.setPackLimit("plan", "TLP:AMBER", person);
+  await toGate(r);
+  const planner = ofType("model.request").find((e) => e.actor.id === "planner")!;
+  expect(planner.payload.left_out.map((i) => i.id)).toContain("frame-output");
+  expect(f.s.blobs.text(planner.payload.messages.blob)).not.toContain("the red detail");
+});
