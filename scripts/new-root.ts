@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { LocalProvider } from "../src/agents/providers/local";
 import { Secrets } from "../src/modules/secrets";
@@ -32,15 +32,30 @@ function walk(dir: string, base = dir): string[] {
   return out.sort();
 }
 
-/** Rewrites the one `model:` line of a stage whose parsed model is not null. */
+/** Rewrites the one `model:` line of a stage whose parsed model is not null, and checks nothing else changed. */
 function pointStage(file: string, text: string, model: { provider: string; model: string }): string {
-  const parsed = Bun.YAML.parse(text) as { model?: unknown } | null;
+  const parsed = Bun.YAML.parse(text) as Record<string, unknown> | null;
   if (parsed === null || typeof parsed !== "object" || parsed.model === null || parsed.model === undefined) return text;
   const lines = text.split("\n");
   const at = lines.findIndex((l) => l.startsWith("model:"));
   if (at < 0) throw new Error(`${file}: the stage has a model but no line starting with "model:" to rewrite`);
   lines[at] = `model: { provider: ${model.provider}, model: ${JSON.stringify(model.model)}, effort: null }`;
-  return lines.join("\n");
+  const out = lines.join("\n");
+  let again: Record<string, unknown> | null;
+  try { again = Bun.YAML.parse(out) as Record<string, unknown> | null; } catch { again = null; }
+  const expected = { ...parsed, model: { provider: model.provider, model: model.model, effort: null } };
+  if (JSON.stringify(again) !== JSON.stringify(expected)) throw new Error(`${file}: the model line cannot be rewritten in place (write it on the one line "model: ...")`);
+  return out;
+}
+
+/** Throws naming the first symbolic link under `dir`. */
+function refuseLinks(dir: string): void {
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name);
+    const st = lstatSync(p);
+    if (st.isSymbolicLink()) throw new Error(`${p} is a symbolic link: the sample is copied, never linked`);
+    if (st.isDirectory()) refuseLinks(p);
+  }
 }
 
 /** Makes a module root of your own at `dir` from the generic half of the sample. Returns the files written, sorted. */
@@ -56,6 +71,13 @@ export function newRoot(dir: string, opts: NewRootOptions): string[] {
   // The same check the workbench makes when it loads the model, so a refusal comes now and nothing is written.
   new LocalProvider({ id: provider, base_url: opts.base_url, where, credential: null, secrets: new Secrets({}, null), context: null, efforts: [], timeout_ms: 300000 });
 
+  for (const need of ["context", "checks", "stages"]) {
+    if (!existsSync(join(sample, need)) || !statSync(join(sample, need)).isDirectory()) throw new Error(`${join(sample, need)}: the sample has no ${need} folder`);
+  }
+  if (!existsSync(join(sample, "types.yaml"))) throw new Error(`${join(sample, "types.yaml")}: the sample has no types.yaml`);
+  for (const need of ["context", "checks", "stages"]) refuseLinks(join(sample, need));
+  if (lstatSync(join(sample, "types.yaml")).isSymbolicLink()) throw new Error(`${join(sample, "types.yaml")} is a symbolic link: the sample is copied, never linked`);
+
   const stages = new Map<string, string>();
   for (const f of readdirSync(join(sample, "stages")).sort()) {
     const p = join(sample, "stages", f);
@@ -65,25 +87,33 @@ export function newRoot(dir: string, opts: NewRootOptions): string[] {
   const keep = types.filter((t) => t.id === "address" || t.id === "domain");
   if (keep.length !== 2) throw new Error("the sample's types.yaml must define address and domain");
 
-  mkdirSync(dir, { recursive: true });
-  cpSync(join(sample, "context"), join(dir, "context"), { recursive: true });
-  cpSync(join(sample, "checks"), join(dir, "checks"), { recursive: true });
-  mkdirSync(join(dir, "stages"));
-  for (const [f, text] of stages) writeFileSync(join(dir, "stages", f), text);
-  mkdirSync(join(dir, "models"));
-  writeFileSync(join(dir, "models", `${provider}.yaml`), [
-    "kind: model", `id: ${provider}`, "title: Local model", "provider: local", `where: ${where}`,
-    `base_url: ${JSON.stringify(opts.base_url)}`, "efforts: []", "timeout_ms: 300000", "",
-  ].join("\n"));
-  writeFileSync(join(dir, "types.yaml"), ["kind: types", "types:", ...keep.map((t) => `  - { id: ${t.id}, title: ${t.title}, pattern: '${t.pattern.replace(/'/g, "''")}' }`), ""].join("\n"));
-  writeFileSync(join(dir, "pivots.yaml"), "kind: pivots\npivots: []\n");
-  mkdirSync(join(dir, "sources"));
+  const made = !existsSync(dir);
+  try {
+    mkdirSync(dir, { recursive: true });
+    cpSync(join(sample, "context"), join(dir, "context"), { recursive: true });
+    cpSync(join(sample, "checks"), join(dir, "checks"), { recursive: true });
+    mkdirSync(join(dir, "stages"));
+    for (const [f, text] of stages) writeFileSync(join(dir, "stages", f), text);
+    mkdirSync(join(dir, "models"));
+    writeFileSync(join(dir, "models", `${provider}.yaml`), [
+      "kind: model", `id: ${provider}`, "title: Local model", "provider: local", `where: ${where}`,
+      `base_url: ${JSON.stringify(opts.base_url)}`, "efforts: []", "timeout_ms: 300000", "",
+    ].join("\n"));
+    writeFileSync(join(dir, "types.yaml"), ["kind: types", "types:", ...keep.map((t) => `  - { id: ${t.id}, title: ${t.title}, pattern: '${t.pattern.replace(/'/g, "''")}' }`), ""].join("\n"));
+    writeFileSync(join(dir, "pivots.yaml"), "kind: pivots\npivots: []\n");
+    mkdirSync(join(dir, "sources"));
+  } catch (err) {
+    // Remove what this run made: the folder itself if it was new, else (an empty folder) its contents.
+    if (made) rmSync(dir, { recursive: true, force: true });
+    else for (const n of readdirSync(dir)) rmSync(join(dir, n), { recursive: true, force: true });
+    throw err;
+  }
   return walk(dir);
 }
 
 /** The configuration to save beside the root; paths in it are relative to the file it is saved in. */
 export function configFor(dir: string): string {
-  return ["data_dir: ./data", "roots:", `  - { path: ./${basename(resolve(dir))}, trusted: true, credentials: [] }`, "research: { parallel: 1 }", ""].join("\n");
+  return ["data_dir: ./data", "roots:", `  - { path: ${JSON.stringify("./" + basename(resolve(dir)))}, trusted: true, credentials: [] }`, "research: { parallel: 1 }", ""].join("\n");
 }
 
 function main(argv: string[]): number {

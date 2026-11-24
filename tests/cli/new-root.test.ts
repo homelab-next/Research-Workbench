@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { loadProfile } from "../../src/agents/context";
@@ -8,7 +8,7 @@ import { loadConfig } from "../../src/modules/config";
 import { Registry } from "../../src/modules/registry";
 import { Secrets } from "../../src/modules/secrets";
 import { loadChecks, loadPipeline } from "../../src/pipeline/manifests";
-import { newRoot } from "../../scripts/new-root";
+import { configFor, newRoot } from "../../scripts/new-root";
 
 const REPO = join(import.meta.dir, "..", "..");
 const SCRIPT = join(REPO, "scripts", "new-root.ts");
@@ -92,4 +92,44 @@ test("a bad command line exits 2 with usage, and a refusal exits 1", () => {
   const inRepo = run([join(REPO, "tests", "never-made"), "--base-url", "http://127.0.0.1:1/v1", "--model", "m"]);
   expect(inRepo.exitCode).toBe(1);
   expect(existsSync(join(REPO, "tests", "never-made"))).toBe(false);
+});
+
+test("the printed configuration points at the root whatever the folder is called", () => {
+  for (const name of ["a, b", "a: b", "{x}", "x #y", "it's", "[z]"]) {
+    const dir = join(tmp, "names", name);
+    const path = join(tmp, "names", "config.yaml");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path, configFor(dir));
+    const cfg = loadConfig({ path, env: {}, home: tmp });
+    expect(cfg.roots).toEqual([{ path: dir, trusted: true, credentials: [] }]);
+    expect(cfg.research.parallel).toBe(1);
+  }
+});
+
+const sampleCopy = (): string => {
+  const s = fresh();
+  cpSync(join(REPO, "sample"), s, { recursive: true, filter: (p) => !/[\\/]sample[\\/](?:data|fixture)(?:[\\/]|$)/.test(p) });
+  return s;
+};
+const OPTS = { base_url: "http://127.0.0.1:1234/v1", model: "m" };
+
+test("a stage whose model line cannot be rewritten in place is refused, naming the file, before anything is written", () => {
+  const sample = sampleCopy();
+  const f = join(sample, "stages", "plan.yaml");
+  writeFileSync(f, readFileSync(f, "utf8").replace(/^model:.*$/m, "model:\n  provider: scripted\n  model: sample-run\n  effort: null"));
+  const root = fresh();
+  expect(() => newRoot(root, { ...OPTS, sample })).toThrow("plan.yaml");
+  expect(existsSync(root)).toBe(false);
+});
+
+test("a sample holding a symbolic link or lacking a folder is refused before anything is written", () => {
+  const linked = sampleCopy();
+  symlinkSync(join(linked, "context", "rules.md"), join(linked, "context", "alias.md"));
+  const root = fresh();
+  expect(() => newRoot(root, { ...OPTS, sample: linked })).toThrow("alias.md");
+  expect(existsSync(root)).toBe(false);
+  const gutted = sampleCopy();
+  rmSync(join(gutted, "checks"), { recursive: true });
+  expect(() => newRoot(root, { ...OPTS, sample: gutted })).toThrow("checks");
+  expect(existsSync(root)).toBe(false);
 });
