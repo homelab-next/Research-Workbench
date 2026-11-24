@@ -15,6 +15,8 @@ export interface Ui {
   send(command: string, args?: Record<string, unknown>, refusal?: string, forCase?: string): Promise<Extract<CommandResult, { ok: true }> | null>;
 }
 
+/** The lens argument that says the person asked to be taken to the gate: the lens may then put focus on the gate's own control, once. */
+export const AT_GATE = "gate";
 export const REPLAY_REFUSAL = "Return to live to change the case";
 export const NO_ANSWER = "The server did not answer.";
 

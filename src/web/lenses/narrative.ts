@@ -9,7 +9,7 @@ import type { Child } from "../dom";
 import { clear, fileLink } from "../dom";
 import { narrativeMarkdown, SECTION_TITLES, TEXT_SECTIONS } from "../markdown";
 import type { TextSection } from "../markdown";
-import { REPLAY_REFUSAL } from "../ui";
+import { AT_GATE, REPLAY_REFUSAL } from "../ui";
 import type { Ui, View } from "../ui";
 
 export interface NarrativeView extends View {
@@ -34,7 +34,7 @@ interface EditForm {
 }
 
 /** The Narrative lens (guide §5.3, spec §9.5): the draft, how the review stands, and the publish gate. Everything shown comes from the fold, the preview the server computes, and the recorded text. */
-export function makeNarrative(ui: Ui, open: Open): NarrativeView {
+export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): NarrativeView {
   const { h } = ui;
   const { store, nav } = open;
   const el = h("div", { class: "lens lens-narrative", name: "Narrative" });
@@ -65,6 +65,11 @@ export function makeNarrative(ui: Ui, open: Open): NarrativeView {
   let asked = -1;
   let pickerAt: HTMLElement | null = null;
   let focusedAtGate = false;
+  /** The draft the Approve focus was offered for: a new draft offers it again. */
+  let focusedFor: string | null = null;
+  // a one-shot: the person asked to be taken to the gate (Shift+Enter, the brief's button, the command bar), from where focus was then
+  let armed = arg === AT_GATE;
+  const armedFrom = armed ? ui.doc.activeElement : null;
   /** Commands sent and not yet seen: the answer's seq once it has come (the press stays off until that entry is here), null while the answer is awaited. */
   const inflight = new Map<string, number | null>();
   let inflightVersion = 0;
@@ -514,10 +519,17 @@ export function makeNarrative(ui: Ui, open: Open): NarrativeView {
       paint(previewBox, [wantsPreview(s), preview, store.live.seq, tab], () => (wantsPreview(s) ? previewView() : []));
     }
     // the first time Approve can be pressed, a person who came here for the gate is on it (Approve waits for the server's check, so this cannot be done on opening)
+    if (d !== null && d.hash !== focusedFor) { focusedFor = d.hash; focusedAtGate = false; }
     if (!focusedAtGate && el.isConnected) {
       const ap = gateBox.querySelector("[data-action=approve]:not([disabled])") as HTMLElement | null;
       const at = ui.doc.activeElement;
-      if (ap !== null) { focusedAtGate = true; if (at === null || at === ui.doc.body || el.contains(at) || at.closest("[data-area=lens]") !== null) ap.focus(); }
+      if (ap !== null) {
+        focusedAtGate = true;
+        // asked for the gate and focus has not moved since; else only a person on the page or in this lens
+        const asked = armed && at === armedFrom;
+        armed = false;
+        if (asked || at === null || at === ui.doc.body || el.contains(at) || at.closest("[data-area=lens]") !== null) ap.focus();
+      }
     }
     paint(copyBox, [fallback], () => (fallback === null ? [] : [h("div", { class: "copy-fallback" },
       h("p", null, "Select all and copy:"),

@@ -358,6 +358,45 @@ test("a narrative proposal shows the marking of the text beside it, or that it i
   expect((p.q(`[data-proposal=${none}] [data-action=accept-proposal]`) as HTMLButtonElement).disabled).toBe(true);
 });
 
+test("Shift+Enter from a card at the publish gate puts focus on Approve once it can be pressed", async () => {
+  p = await page();
+  const id = await p.s.newCase();
+  await p.s.toPublishGate(id);
+  p.win.location.hash = `#/case/${id}`;
+  await settled();
+  const card = p.q("[data-card]");
+  card.focus();
+  expect(p.doc.activeElement).toBe(card);
+  p.press("Enter", { shift: true });
+  for (let i = 0; i < 10 && (p.doc.activeElement as HTMLElement | null)?.dataset?.action !== "approve"; i++) await settled();
+  expect((p.doc.activeElement as HTMLElement).dataset.action).toBe("approve");
+  expect(state().published.length).toBe(0);
+});
+
+test("the publish gate's Approve does not take focus from the Command field when the lens was not asked for the gate", async () => {
+  await atGate();
+  const bar = p.q("[aria-label=Command]") as HTMLInputElement;
+  bar.focus();
+  // a new draft: the lens offers Approve again, but only to a person on the body or in the lens
+  expect((await p.s.command("CASE-1", "revise", { product: { ...latest().product, summary: "A changed summary." }, reason: "edit" })).status).toBe(200);
+  for (let i = 0; i < 5; i++) await settled();
+  expect(approve().disabled).toBe(false);
+  expect(p.doc.activeElement).toBe(bar);
+});
+
+test("a new draft offers Approve focus again to a person in the lens", async () => {
+  await atGate();
+  for (let i = 0; i < 5 && (p.doc.activeElement as HTMLElement | null)?.dataset?.action !== "approve"; i++) await settled();
+  expect((p.doc.activeElement as HTMLElement).dataset.action).toBe("approve");
+  const n = latest().n;
+  expect((await p.s.command("CASE-1", "revise", { product: { ...latest().product, summary: "A changed summary." }, reason: "edit" })).status).toBe(200);
+  (p.doc.activeElement as HTMLElement | null)?.blur();
+  for (let i = 0; i < 10 && !(latest().n > n && !approve().disabled && (p.doc.activeElement as HTMLElement | null)?.dataset?.action === "approve"); i++) await settled();
+  expect(latest().n).toBe(n + 1);
+  expect(approve().disabled).toBe(false);
+  expect((p.doc.activeElement as HTMLElement).dataset.action).toBe("approve");
+});
+
 test("Copy as Markdown puts the recorded text on the clipboard; when it cannot, the text is shown selected", async () => {
   await atGate();
   const written: string[] = [];

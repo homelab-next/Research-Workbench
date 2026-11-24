@@ -9,6 +9,7 @@ import { goals, nextThing, runButton, stageMark } from "../derive";
 import type { StageMark } from "../derive";
 import { shortLocal } from "../time";
 import type { Ui, View } from "../ui";
+import { AT_GATE } from "../ui";
 
 const PLAN_WORDS = { none: "no plan", proposed: "plan proposed", accepted: "plan accepted", denied: "plan denied", replanning: "re-planning" } as const;
 const SIGN: Record<StageMark, string> = {
@@ -114,7 +115,7 @@ export function makeBrief(ui: Ui, open: Open): View {
       h("span", { class: "right" },
         h("button", {
           type: "button", class: "run-button", disabled: ro || rb.disabled,
-          on: { click: () => { if (rb.command !== null) void ui.act(rb.command); else if (rb.lens !== null) lens(rb.lens); } },
+          on: { click: () => { if (rb.command !== null) void ui.act(rb.command); else if (rb.lens !== null) lens(rb.lens, AT_GATE); } },
         }, rb.label),
         h("button", { type: "button", class: "pause", disabled: ro || !(run.status === "running" || run.status === "waiting"), on: { click: () => void ui.act("pause") } }, "Pause"),
         stopping
@@ -125,7 +126,7 @@ export function makeBrief(ui: Ui, open: Open): View {
           }, "Stop"),
         next === null ? null : h("button", {
           type: "button", class: "next-thing", disabled: ro && "command" in next,
-          on: { click: () => { if ("command" in next) { if (next.command === "resume") void ui.act("resume"); else nav.nextThing(); } else lens(next.lens); } },
+          on: { click: () => { if ("command" in next) { if (next.command === "resume") void ui.act("resume"); else nav.nextThing(); } else lens(next.lens, AT_GATE); } },
         }, next.label)),
     ]);
 

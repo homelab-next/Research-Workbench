@@ -1,4 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Actor, Entry, Plan } from "../../src/core/types";
 import { runPivot } from "../../src/modules/pivots";
 import { page } from "../helpers/dom";
@@ -256,6 +258,62 @@ test("while replaying every gate control is disabled and nothing is sent", async
 test("opening Steps at the gate puts focus on a control that moves the gate forward", async () => {
   await atGate();
   // Accept is disabled until s3 has a budget, so focus goes to the field that needs one
+  expect(p.doc.activeElement?.getAttribute("aria-label")).toBe("Budget for s3, in lookups");
+});
+
+test("the plan gate arriving while Steps is open does not take focus from the Command field", async () => {
+  p = await page();
+  const id = await p.s.newCase();
+  p.win.location.hash = `#/case/${id}`;
+  await p.settle();
+  p.press("s");                                   // Steps open before the run
+  await p.settle();
+  const bar = p.q("[aria-label=Command]") as HTMLInputElement;
+  bar.focus();
+  await p.s.toPlanGate(id);
+  await settled();
+  expect(p.q("[data-step=s3]")).not.toBeNull();
+  expect(p.doc.activeElement).toBe(bar);
+});
+
+test("with an all-free plan, a Space or Enter typed elsewhere does not accept it", async () => {
+  p = await page({ before: (root) => {
+    const f = join(root, "scripts", "sample-run.yaml");
+    const y = readFileSync(f, "utf8");
+    const cut = y.replace(/"route": \["address_to_asset", "asset_to_accounts"\]\},\n[\s\S]*?"route": \["address_to_verdict"\]\}/, '"route": ["address_to_asset", "asset_to_accounts"]}');
+    if (cut === y) throw new Error("script not changed");
+    writeFileSync(f, cut);
+  } });
+  const id = await p.s.newCase();
+  p.win.location.hash = `#/case/${id}`;
+  await p.settle();
+  p.press("s");
+  await p.settle();
+  const bar = p.q("[aria-label=Command]") as HTMLInputElement;
+  bar.focus();
+  await p.s.command(id, "start_run");
+  await settled(); await settled();
+  expect(state().run.waiting).toBe("plan");
+  expect(state().plan.current!.steps.every((x) => x.free)).toBe(true);
+  expect(accept().disabled).toBe(false);
+  const a = p.doc.activeElement as HTMLElement;
+  expect(a).toBe(bar);
+  a.click();                                      // what a browser does with Space or Enter on the focused element
+  await settled();
+  expect(types().filter((t) => t === "plan.accepted" || t === "gate.passed")).toEqual([]);
+});
+
+test("Shift+Enter from a column takes the person to the plan gate's control", async () => {
+  p = await page();
+  const id = await p.s.newCase();
+  await p.s.toPlanGate(id);
+  p.win.location.hash = `#/case/${id}`;
+  await p.settle();
+  const column = p.q("[data-area=incoming]");
+  column.focus();
+  expect(p.doc.activeElement).toBe(column);
+  p.press("Enter", { shift: true });
+  await settled();
   expect(p.doc.activeElement?.getAttribute("aria-label")).toBe("Budget for s3, in lookups");
 });
 

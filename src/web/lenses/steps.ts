@@ -3,6 +3,7 @@ import type { CaseState } from "../../core/state";
 import type { Cost, PlanStep } from "../../core/types";
 import type { Open } from "../app";
 import { tag } from "../chips";
+import { AT_GATE } from "../ui";
 import { cardChip } from "../chips";
 import type { Child } from "../dom";
 import { clear } from "../dom";
@@ -26,7 +27,7 @@ const joinWords = (ids: string[]): string => (ids.length <= 1 ? (ids[0] ?? "") :
 interface Ask { key: string; label: string; confirm: string; action: string; send(text: string): Promise<boolean> }
 
 /** The Steps lens (guide §7): the plan, the gate and its buttons, and the costly queries waiting for a budget. Everything shown comes from the fold. */
-export function makeSteps(ui: Ui, open: Open): View {
+export function makeSteps(ui: Ui, open: Open, arg: string | null = null): View {
   const { h } = ui;
   const { store, nav } = open;
   const el = h("div", { class: "lens lens-steps", name: "Steps" });
@@ -39,6 +40,9 @@ export function makeSteps(ui: Ui, open: Open): View {
   let planId: string | null = null;
   let focusAsk = false;
   let focusedAtGate = false;
+  // a one-shot: the person asked to be taken to the gate (Shift+Enter, the brief's button, the command bar), from where focus was then
+  let armed = arg === AT_GATE;
+  const armedFrom = armed ? ui.doc.activeElement : null;
   let last: unknown[] | null = null;
   let acceptBtn: HTMLButtonElement | null = null;
   let freeBtn: HTMLButtonElement | null = null;
@@ -264,6 +268,11 @@ export function makeSteps(ui: Ui, open: Open): View {
     }
     if (!focusedAtGate && atGate(s) && el.isConnected && !ro()) {
       focusedAtGate = true;
+      // a gate that arrives while the person is elsewhere does not take their focus: only one asked for, or focus on the page or in this lens
+      const at = ui.doc.activeElement;
+      const asked = armed && at === armedFrom;
+      armed = false;
+      if (!(asked || at === null || at === ui.doc.body || el.contains(at))) return;
       // the Accept button when it can be pressed; else the first field that still needs a budget
       const need = el.querySelector("[data-action=accept_plan]:not([disabled])") as HTMLElement | null
         ?? [...el.querySelectorAll<HTMLInputElement>(".step input.budget")].find((i) => budgetOf(i.value) === null)

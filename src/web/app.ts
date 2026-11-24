@@ -8,7 +8,7 @@ import { newView } from "./views/newcase";
 import { pickView, soonView } from "./views/pick";
 import { topBar } from "./views/topbar";
 import { caseScreenFor } from "./views/workarea";
-import { makeSend } from "./ui";
+import { AT_GATE, makeSend } from "./ui";
 import { makeToasts } from "./views/toasts";
 import { makeHelp } from "./views/help";
 import { dispatchKey } from "./keys";
@@ -188,11 +188,11 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
     next_thing: () => {
       const next = store === null ? null : nextThing(store.live);
       if (next === null) return;
-      if ("lens" in next) { nav.openLens(next.lens); return; }
+      if ("lens" in next) { nav.openLens(next.lens, AT_GATE); return; }
       if (next.command === "resume") { void ui.act("resume"); return; }
       // A gate is passed only by its own button in its lens: the key takes you there.
       const lens = next.command === "approve" ? "narrative" : "steps";
-      nav.openLens(lens);
+      nav.openLens(lens, AT_GATE);
       ui.toast(next.command === "approve" ? "Approve the draft from the Narrative lens" : "Accept the plan from the Steps lens");
       (root.querySelector(`.lens-dock [data-action=${next.command}]:not([disabled])`) as HTMLElement | null)?.focus();
     },
