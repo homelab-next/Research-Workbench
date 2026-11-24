@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { compose } from "../../src/cli/compose";
 import type { CommandResult } from "../../src/core/wire";
 import type { Entry } from "../../src/core/types";
+import type { CaseState } from "../../src/core/state";
 import { Workbench } from "../../src/core/workbench";
 import type { NewCase } from "../../src/core/workbench";
 import { SAMPLE_START, SAMPLE_WINDOW } from "../../scripts/make-sample-data";
@@ -91,6 +92,13 @@ export async function served(opts: { role?: Role; listen?: boolean; credential?:
     },
     entries: (id) => app.hub.read(id).entries(),
     async command(id, name, args = {}) {
+      // A gate command must name what the person was shown; the helper shows it the current plan or draft unless the test says otherwise.
+      if (name === "accept_plan" || name === "approve") {
+        let state: CaseState | null = null;
+        try { state = app.hub.read(id).state; } catch { /* no such case: the server says so */ }
+        if (state !== null && name === "accept_plan" && args.plan === undefined) args = { plan: state.plan.current?.id ?? "", ...args };
+        if (state !== null && name === "approve" && args.draft_hash === undefined) args = { draft_hash: state.drafts.length > 0 ? state.drafts[state.drafts.length - 1]!.hash : "", ...args };
+      }
       const res = await s.post(`/api/cases/${id}/commands`, { command: name, args });
       return { status: res.status, body: (await res.json()) as CommandResult };
     },

@@ -138,3 +138,15 @@ test("accept_plan carries the plan the person saw, and is refused when it is not
   expect(s.entries(id).length).toBe(before);
   expect((await s.command(id, "accept_plan", { plan: state(id).plan.current!.id, budgets: { s3: 1 } })).status).toBe(200);
 });
+
+test("approve without the draft it was shown, and accept_plan without the plan it was shown, are refused by the schema", async () => {
+  s = await served();
+  const id = await s.newCase();
+  cases.push(id);
+  await s.toPlanGate(id);
+  const raw = async (name: string, args: Record<string, unknown>) => (await s.post(`/api/cases/${id}/commands`, { command: name, args })).status;
+  const before = s.entries(id).length;
+  expect(await raw("accept_plan", { budgets: { s3: 1 } })).toBe(400);
+  expect(await raw("approve", {})).toBe(400);
+  expect(s.entries(id).length).toBe(before);
+});

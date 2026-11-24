@@ -98,6 +98,13 @@ export function makeBrief(ui: Ui, open: Open): View {
     ]);
     if (hiding) return;
 
+    /** A gate command names what the person was shown: the plan or the draft on screen now. */
+    const gateArgs = (command: string): Record<string, unknown> => {
+      const live = store.live;
+      if (command === "approve") return { draft_hash: latestDraft(live)?.hash ?? "" };
+      if (command === "accept_plan") return { plan: live.plan.current?.id ?? "" };
+      return {};
+    };
     const g = goals(state);
     const draft = latestDraft(state);
     const run = state.run;
@@ -112,7 +119,7 @@ export function makeBrief(ui: Ui, open: Open): View {
       h("span", { class: "right" },
         h("button", {
           type: "button", class: "run-button", disabled: ro || rb.disabled,
-          on: { click: () => { if (rb.command !== null) void ui.act(rb.command); else if (rb.lens !== null) lens(rb.lens); } },
+          on: { click: () => { if (rb.command !== null) void ui.act(rb.command, gateArgs(rb.command)); else if (rb.lens !== null) lens(rb.lens); } },
         }, rb.label),
         h("button", { type: "button", class: "pause", disabled: ro || !(run.status === "running" || run.status === "waiting"), on: { click: () => void ui.act("pause") } }, "Pause"),
         stopping
@@ -123,7 +130,7 @@ export function makeBrief(ui: Ui, open: Open): View {
           }, "Stop"),
         next === null ? null : h("button", {
           type: "button", class: "next-thing", disabled: ro && "command" in next,
-          on: { click: () => { if ("command" in next) void ui.act(next.command); else lens(next.lens); } },
+          on: { click: () => { if ("command" in next) void ui.act(next.command, gateArgs(next.command)); else lens(next.lens); } },
         }, next.label)),
     ]);
 
