@@ -23,6 +23,10 @@ import { frameRunner } from "./stages/frame";
 import { planRunner } from "./stages/plan";
 import { researchRunner } from "./stages/research";
 import { recoverSession } from "./recover";
+import { approve, reject } from "./publish";
+import { recordFeedback } from "./feedback";
+import { feedbackRunner } from "./stages/feedback";
+import { publishRunner } from "./stages/publish";
 
 export interface EngineDeps {
   config: Config; registry: Registry; runner: RunnerDeps; seeker: Seeker; providers: Providers; pipeline: Pipeline; profile: Profile;
@@ -64,7 +68,7 @@ export class Engine {
   private readonly runners: Partial<Record<Role, StageRunner>>;
 
   constructor(private readonly session: CaseSession, private readonly deps: EngineDeps, opts: { runners?: Partial<Record<Role, StageRunner>> } = {}) {
-    this.runners = { frame: frameRunner, plan: planRunner, research: researchRunner, assemble: assembleRunner, checks: checksRunner, evaluate: evaluateRunner, challenge: challengeRunner, ...opts.runners };
+    this.runners = { frame: frameRunner, plan: planRunner, research: researchRunner, assemble: assembleRunner, checks: checksRunner, evaluate: evaluateRunner, challenge: challengeRunner, publish: publishRunner, feedback: feedbackRunner, ...opts.runners };
     // A case opened here that this process did not create may hold work a stopped process left half done.
     if (!recovered.has(session)) {
       recovered.add(session);
@@ -125,6 +129,22 @@ export class Engine {
   /** A person answers an open challenge. Throws ReviseRefused. */
   answerChallenge(actor: Actor, id: string, answer: string, action: "revised" | "rebutted"): void {
     answerChallenge(this.session, actor, id, answer, action);
+  }
+
+  /** A person approves the draft at the publish gate. Throws PublishRefused and writes nothing when it may not be published. Advances nothing; the anchor is made here. */
+  approve(input: { actor: Actor }): { n: number; dir: string; draft_hash: string } {
+    return approve(this.session, this.deps, input);
+  }
+
+  /** A person sends the draft back to the stage the pipeline names, or stops the run. Throws PublishRefused. */
+  reject(input: { reason: string; stop: boolean; actor: Actor }): void {
+    reject(this.session, this.deps.pipeline, input);
+    if (input.stop) this.anchorCase("closed");
+  }
+
+  /** A person's measure of effectiveness. Throws FeedbackRefused. */
+  feedback(input: { measure: string; value: number | string; note: string; actor: Actor }): void {
+    recordFeedback(this.session, this.deps.registry, input);
   }
 
   setModel(stage: string, choice: ModelChoice, actor: Actor): void {
@@ -254,7 +274,8 @@ export class Engine {
 
   private finish(outcome: "published" | "stopped"): void {
     this.session.commit((s) => [{ type: "run.finished", actor: ENGINE, payload: { outcome }, run: s.run.id }]);
-    this.anchorCase(outcome === "published" ? "published" : "closed");
+    // a published run was anchored when the person approved the product; only a run that ends without one is anchored here
+    if (outcome === "stopped") this.anchorCase("closed");
   }
 
   private anchorCase(why: "published" | "closed"): void {

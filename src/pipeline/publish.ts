@@ -1,0 +1,242 @@
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { Json } from "../core/canonical";
+import { canonical, parseJson } from "../core/canonical";
+import { sha256Hex } from "../core/hash";
+import type { CaseSession } from "../core/session";
+import { blockers, latestDraft } from "../core/state";
+import type { Actor, Draft, Entry, EntryInput, Marking } from "../core/types";
+import type { EngineDeps } from "./engine";
+import type { Pipeline } from "./manifests";
+
+export class PublishRefused extends Error {
+  readonly reasons: string[];
+  constructor(reasons: string[]) {
+    super(reasons.join(". "));
+    this.name = "PublishRefused";
+    this.reasons = reasons;
+  }
+}
+
+export interface BundleManifest {
+  case: string; n: number; draft: number; draft_hash: string; head: { seq: number; hash: string }; marking: Marking; title: string; note: string;
+  files: { name: string; sha256: string; bytes: number }[];
+}
+export interface Bundle { manifest: BundleManifest; files: Record<string, string> }
+
+const HUMAN_ONLY = "only a person may publish or send back a product";
+const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
+const who = (a: Actor): string => `${a.kind}:${a.id}`;
+const byId = (a: string, b: string): number => a.localeCompare(b, "en", { numeric: true });
+
+/** Why a draft's hash is not the hash of its product; null when it is. */
+export function draftProblem(draft: Draft): string | null {
+  try {
+    return sha256Hex(canonical(draft.product as unknown as Json)) === draft.hash ? null : "the draft's hash does not match its product";
+  } catch (err) {
+    return `the draft's product cannot be hashed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+interface Provenance {
+  card: string; title: string | null; source: string | null; source_hash: string | null; query: string | null; text: string | null; bound: Json; window: Json;
+  why: string | null; by: string | null; issued: string | null; marking: Marking | null; coverage: Json; empty: string | null; rows: number | null;
+  rows_hash: string | null; result_sha256: string | null;
+}
+
+function provenanceOf(session: CaseSession, draft: Draft): Provenance[] {
+  const ids = [...new Set(draft.product.key_findings.flatMap((f) => f.cites))].sort(byId);
+  const issued = new Map<string, Extract<Entry, { type: "query.issued" }>>();
+  const result = new Map<string, Extract<Entry, { type: "query.result" }>>();
+  for (const e of session.entries()) {
+    if (e.type === "query.issued") issued.set(e.payload.query, e);
+    else if (e.type === "query.result") result.set(e.payload.query, e);
+  }
+  return ids.map((id): Provenance => {
+    const c = Object.hasOwn(session.state.cards, id) ? session.state.cards[id]! : null;
+    if (c === null) {
+      return { card: id, title: null, source: null, source_hash: null, query: null, text: null, bound: null, window: null, why: null, by: null, issued: null, marking: null, coverage: null, empty: null, rows: null, rows_hash: null, result_sha256: null };
+    }
+    const q = c.query === null ? undefined : issued.get(c.query);
+    const r = c.query === null ? undefined : result.get(c.query);
+    return {
+      card: id, title: c.title, source: c.source, source_hash: q?.payload.source_hash ?? null, query: c.query, text: q?.payload.text ?? null,
+      bound: (q?.payload.bound ?? null) as Json, window: (q?.payload.window ?? null) as unknown as Json, why: q?.payload.why ?? c.why, by: q === undefined ? c.made_by : who(q.actor),
+      issued: q?.ts ?? null, marking: c.marking, coverage: (r?.payload.coverage ?? c.coverage ?? null) as unknown as Json, empty: c.empty,
+      rows: r?.payload.rows ?? c.row_count, rows_hash: r?.payload.rows_hash ?? null, result_sha256: r?.payload.result.blob ?? null,
+    };
+  });
+}
+
+function productMarkdown(draft: Draft, title: string): string {
+  const p = draft.product;
+  const cites = (ids: string[]): string => (ids.length === 0 ? "none" : ids.map((c) => `[${c}]`).join(" "));
+  const list = (items: string[]): string => (items.length === 0 ? "None." : items.map((x) => `- ${x}`).join("\n"));
+  const findings = p.key_findings.map((f) => [
+    `### ${f.id}. ${f.statement}`, "",
+    `Likelihood: ${f.likelihood}. Confidence: ${f.confidence} (${f.confidence_basis}).`, `Citations: ${cites(f.cites)}.`,
+    `Assumptions: ${f.assumptions.length === 0 ? "none" : f.assumptions.join("; ")}.`, `Reasoning: ${f.reasoning}`,
+  ].join("\n"));
+  return [
+    p.marking, "", `# ${title}`, "",
+    `Objective: ${p.objective}`, `Question: ${p.question}`, `Draft ${draft.n}, hash ${draft.hash}`, "",
+    "## Summary", "", p.summary, "",
+    "## Key findings", "", findings.length === 0 ? "None." : findings.join("\n\n"), "",
+    "## Assessment", "", p.assessment, "",
+    "## Alternatives considered", "", p.alternatives, "",
+    "## Gaps and limits", "", p.gaps_and_limits, "",
+    "## Sources and their quality", "", list(p.sources.map((s) => `${s.source}: ${s.quality}`)), "",
+    "## Assumptions", "", list(p.assumptions), "",
+    "## Change from earlier judgments", "", p.change, "",
+    p.marking, "",
+  ].join("\n");
+}
+
+function provenanceMarkdown(rows: Provenance[], marking: Marking): string {
+  const text = (v: unknown): string => (v === null ? "none" : typeof v === "string" ? v : JSON.stringify(v));
+  const cards = rows.map((r) => [
+    `## [${r.card}] ${r.title ?? "(card not in the case)"}`, "",
+    `- Source: ${text(r.source)} (hash ${text(r.source_hash)})`, `- Query ${text(r.query)}: ${text(r.text)}`, `- Bound values: ${text(r.bound)}`, `- Window: ${text(r.window)}`,
+    `- Why: ${text(r.why)}`, `- By: ${text(r.by)}`, `- Issued: ${text(r.issued)}`, `- Marking: ${text(r.marking)}`, `- Coverage: ${text(r.coverage)}`, `- If empty, it means: ${text(r.empty)}`,
+    `- Rows: ${text(r.rows)} (hash ${text(r.rows_hash)})`, `- Result bytes SHA-256: ${text(r.result_sha256)}`,
+  ].join("\n"));
+  return [marking, "", "# Provenance of the cited cards", "", cards.length === 0 ? "No card is cited." : cards.join("\n\n"), "", marking, ""].join("\n");
+}
+
+/** The files of a bundle, and the manifest that lists them. Nothing here reads a clock. */
+export function buildBundle(session: CaseSession, draft: Draft, cover: { title: string; note: string }, head: { seq: number; hash: string }, n: number): Bundle {
+  const prov = provenanceOf(session, draft);
+  const files: Record<string, string> = {
+    "product.json": canonical(draft.product as unknown as Json),
+    "product.md": productMarkdown(draft, cover.title),
+    "provenance.json": canonical(prov as unknown as Json),
+    "provenance.md": provenanceMarkdown(prov, draft.product.marking),
+  };
+  const manifest: BundleManifest = {
+    case: session.id, n, draft: draft.n, draft_hash: draft.hash, head: { seq: head.seq, hash: head.hash }, marking: draft.product.marking, title: cover.title, note: cover.note,
+    files: Object.entries(files).map(([name, text]) => ({ name, sha256: sha256Hex(bytesOf(text)), bytes: bytesOf(text).byteLength })),
+  };
+  return { manifest, files };
+}
+
+/** The Publish stage's last output on this exact draft in the current run: the publisher's title and note. */
+function coverOf(session: CaseSession, stage: string, hash: string): { title: string; note: string } | null {
+  const entries = session.entries();
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i]!;
+    if (e.type === "run.started") return null;
+    if (e.type !== "stage.finished" || e.payload.stage !== stage || e.payload.outcome !== "pass" || e.payload.draft_hash !== hash || e.payload.output === null) continue;
+    const parsed = parseJson(session.blobs.text(e.payload.output.blob));
+    const out = parsed === null ? null : parsed.value;
+    if (typeof out !== "object" || out === null || Array.isArray(out) || typeof out.title !== "string" || typeof out.note !== "string") return null;
+    return { title: out.title, note: out.note };
+  }
+  return null;
+}
+
+const publishStage = (pipeline: Pipeline): string | null => pipeline.stages.find((s) => s.gate === "publish")?.id ?? null;
+
+function atGate(session: CaseSession, actor: Actor): void {
+  if (actor.kind !== "human") throw new PublishRefused([HUMAN_ONLY]);
+  const { run } = session.state;
+  if (run.status === "none" || run.status === "finished" || run.waiting !== "publish") throw new PublishRefused(["the run is not waiting at the publish gate"]);
+}
+
+class Stale extends Error {}
+const ATTEMPTS = 3;
+
+/**
+ * A person approves the draft the run waits on. Everything is checked again at this moment, from the ledger: the person, the gate, the hash against
+ * the product, and the publish rule. The bundle is written to the case's published folder and stored as a blob, and one commit records it.
+ */
+export function approve(session: CaseSession, deps: EngineDeps, input: { actor: Actor }): { n: number; dir: string; draft_hash: string } {
+  const { actor } = input;
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    atGate(session, actor);
+    const state = session.state;
+    const d = latestDraft(state);
+    if (d === null) throw new PublishRefused(["there is no draft to publish"]);
+    const problem = draftProblem(d);
+    if (problem !== null) throw new PublishRefused([problem]);
+    const why = blockers(state, d.hash);
+    if (why.length > 0) throw new PublishRefused(why);
+    const stage = publishStage(deps.pipeline);
+    const cover = stage === null ? null : coverOf(session, stage, d.hash);
+    if (cover === null) throw new PublishRefused(["the Publish stage has not named this draft"]);
+    const n = state.published.length + 1;
+    const head = session.head();
+    const bundle = buildBundle(session, d, cover, head, n);
+    const rel = `published/${n}`;
+    const out = join(session.dir, rel);
+    rmSync(out, { recursive: true, force: true });
+    mkdirSync(out, { recursive: true });
+    try {
+      for (const [name, text] of Object.entries(bundle.files)) writeFileSync(join(out, name), text);
+      writeFileSync(join(out, "manifest.json"), canonical(bundle.manifest as unknown as Json));
+      const blob = session.blobs.put(canonical({ manifest: bundle.manifest, files: bundle.files } as unknown as Json));
+      session.commit((s, ids) => {
+        if (s.seq !== head.seq) throw new Stale();
+        const link = { run: s.run.id };
+        const entries: EntryInput[] = [{ type: "gate.passed", actor, ...link, payload: { gate: "publish" } }];
+        const loose = [...new Set(d.product.key_findings.flatMap((f) => f.cites))].sort(byId)
+          .filter((id) => Object.hasOwn(s.cards, id) && s.cards[id]!.place === "incoming");
+        let lanes = s.lanes.map((l) => ({ id: l.id, subgoal: l.subgoal }));
+        if (loose.length > 0 && lanes.length === 0) {
+          const lane = ids.next("lane");
+          entries.push({ type: "lane.created", actor, ...link, payload: { lane, title: "Cited evidence", subgoal: null } });
+          lanes = [{ id: lane, subgoal: null }];
+        }
+        for (const id of loose) {
+          const sub = s.cards[id]!.subgoal;
+          const lane = (sub === null ? undefined : lanes.find((l) => l.subgoal === sub)) ?? lanes[0]!;
+          entries.push({ type: "card.kept", actor, ...link, payload: { card: id, lane: lane.id, index: null } });
+        }
+        entries.push({ type: "product.published", actor, ...link, payload: { n, draft_hash: d.hash, head_hash: head.hash, dir: rel, bundle: blob } });
+        return entries;
+      });
+    } catch (err) {
+      rmSync(out, { recursive: true, force: true });
+      if (err instanceof Stale) continue;
+      throw err;
+    }
+    const now = session.head();
+    deps.anchor?.({ case: session.id, seq: now.seq, hash: now.hash, why: "published" });
+    return { n, dir: rel, draft_hash: d.hash };
+  }
+  throw new PublishRefused(["the case kept changing while the product was being published; try again"]);
+}
+
+/**
+ * A person sends the draft back, or stops the run. Without `stop` the run goes to the Publish stage's on_fail stage like an engine send-back,
+ * except that the cap does not apply to a person.
+ */
+export function reject(session: CaseSession, pipeline: Pipeline, input: { reason: string; stop: boolean; actor: Actor }): void {
+  const { actor, stop } = input;
+  atGate(session, actor);
+  if (input.reason.trim() === "") throw new PublishRefused(["a rejection needs a reason"]);
+  const id = publishStage(pipeline);
+  const manifest = pipeline.stages.find((s) => s.id === id);
+  if (manifest === undefined) throw new PublishRefused(["the pipeline has no publish stage"]);
+  if (!stop && manifest.on_fail === null) throw new PublishRefused(["the Publish stage has nowhere to send work back to; stop the run instead"]);
+  const engine: Actor = { kind: "system", id: "engine" };
+  session.commit((s) => {
+    const d = latestDraft(s);
+    if (d === null) throw new PublishRefused(["there is no draft to reject"]);
+    const link = { run: s.run.id };
+    const out: EntryInput[] = [{ type: "publish.rejected", actor, ...link, payload: { draft_hash: d.hash, reason: input.reason, stop } }];
+    if (stop) {
+      out.push({ type: "run.finished", actor, ...link, payload: { outcome: "stopped" } });
+      return out;
+    }
+    const to = manifest.on_fail!;
+    const target = pipeline.stages.find((x) => x.id === to);
+    const edge = `${manifest.id}>${to}`;
+    const count = (Object.hasOwn(s.run.sendbacks, edge) ? s.run.sendbacks[edge]! : 0) + 1;
+    const attempt = (s.run.stages.find((x) => x.id === manifest.id)?.attempts ?? 1);
+    out.push({ type: "stage.finished", actor: engine, ...link, stage: manifest.id, payload: { stage: manifest.id, attempt, outcome: "fail", draft_hash: d.hash, output: null, reason: input.reason } });
+    out.push({ type: "stage.sent_back", actor: engine, ...link, stage: to, payload: { from: manifest.id, to, reason: input.reason, count } });
+    if (target?.phase != null && target.phase !== s.phase) out.push({ type: "case.phase_changed", actor: engine, ...link, stage: to, payload: { phase: target.phase } });
+    out.push({ type: "stage.started", actor: engine, ...link, stage: to, payload: { stage: to, attempt: (s.run.stages.find((x) => x.id === to)?.attempts ?? 0) + 1 } });
+    return out;
+  });
+}
