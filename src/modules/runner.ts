@@ -101,7 +101,10 @@ function bodyOf(rows: number, coverage: Coverage, empty: EmptyMeans | null): str
 
 /**
  * The one way a query reaches a source. Writes query.issued before the source is contacted, then query.result
- * (and a card) or query.failed. Refusals and unfunded costly queries write nothing (an agent's become a proposal).
+ * (and a card) or query.failed. Refusals write nothing. A costly query (weight above zero) is first priced: locally, or
+ * by an estimate query the source answers, recorded like any other (purpose "estimate"). It runs only on a budget that
+ * covers the estimate, or, with no estimate, on a person's budget. An agent's budget is ignored: its costly query becomes
+ * a costly_query proposal (an open one for the same request is reused), which a person runs with runProposal.
  */
 export async function runQuery(session: CaseSession, deps: RunnerDeps, input: RunQueryInput): Promise<RunQueryResult> {
   // Everything that decides what runs, and whether an empty answer proves anything, is checked here before a write.
