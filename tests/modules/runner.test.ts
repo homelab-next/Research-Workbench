@@ -217,14 +217,22 @@ test("zero rows with full coverage on a proven-negative pivot is a proven negati
 });
 
 test("zero rows on a not-seen pivot is not a proven negative", async () => {
-  await runQuery(s, deps, { ...none, pivot: registry.pivot("seen")! });
+  await runQuery(s, deps, { ...none, text: registry.pivot("seen")!.query, pivot: registry.pivot("seen")! });
   expect(s.state.cards.c1).toMatchObject({ empty: "not-seen", body: "No rows · not seen (not proof of absence)" });
 });
 
 test("zero rows with partial coverage is never a proven negative", async () => {
-  const r = await runQuery(s, stubDeps({ coverage: { kind: "partial", reason: "timeout" } }), { ...none, pivot: registry.pivot("peers")! });
+  const r = await runQuery(s, stubDeps({ coverage: { kind: "partial", reason: "timeout" } }), { ...none, text: registry.pivot("peers")!.query, pivot: registry.pivot("peers")! });
   expect(r).toMatchObject({ status: "done", outcome: "partial" });
   expect(s.state.cards.c1).toMatchObject({ empty: "not-seen", coverage: { kind: "partial", reason: "timeout" } });
+});
+
+test("the same empty answer is a proven negative with full coverage and not-seen with partial", async () => {
+  const text = registry.pivot("peers")!.query; // the proven-negative pivot
+  await runQuery(s, stubDeps({ coverage: { kind: "full" } }), { ...none, text, pivot: registry.pivot("peers")! });
+  await runQuery(s, stubDeps({ coverage: { kind: "partial", reason: "timeout" } }), { ...none, text, pivot: registry.pivot("peers")! });
+  expect(s.state.cards.c1!.empty).toBe("proven-negative");
+  expect(s.state.cards.c2!.empty).toBe("not-seen");
 });
 
 test("zero rows with no pivot is not-seen", async () => {
@@ -674,6 +682,63 @@ test("only a person may run a proposal; an unknown, changed or unfunded one is r
   expect(await refusal({ proposal: "p1", budget: 2, actor: human }, { ...deps, registry: gone })).toBe("the source rep is no longer loaded");
   expect(s.head().seq).toBe(before);
   expect(standin.requests).toHaveLength(0);
+});
+
+test("a proposal carries its source's hash", async () => {
+  await runQuery(s, deps, paidRep());
+  expect(s.state.proposals.p1).toMatchObject({ source_hash: registry.source("rep")!.hash });
+});
+
+test("a proposal whose source has changed is refused and stays open", async () => {
+  await runQuery(s, deps, paidRep());
+  const file = join(dir, "modules", "sources", "rep.yaml");
+  writeFileSync(file, readFileSync(file, "utf8").replace("title: Reputation", "title: Reputation, edited"));
+  const reloaded = Registry.load([{ path: join(dir, "modules"), trusted: true, credentials: ["REP_KEY"] }]);
+  expect(reloaded.source("rep")!.hash).not.toBe(registry.source("rep")!.hash);
+  const r = await runProposal(s, { ...deps, registry: reloaded }, { proposal: "p1", budget: 2, actor: human });
+  expect(r).toEqual({ status: "refused", reasons: ["the source rep has changed since the proposal"] });
+  expect(s.state.proposals.p1!.status).toBe("open");
+  expect(standin.requests).toHaveLength(0);
+  // an agent asking again does not reuse the proposal made against the old source
+  expect(await runQuery(s, { ...deps, registry: reloaded }, paidRep())).toMatchObject({ status: "needs_budget", proposal: "p2" });
+});
+
+test("a budget below the fresh estimate leaves the proposal open", async () => {
+  await runQuery(s, deps, paidRep());
+  const r = await runProposal(s, deps, { proposal: "p1", budget: 0.5, actor: human });
+  expect(r.status).toBe("needs_budget");
+  expect(s.state.proposals.p1!.status).toBe("open");
+  expect(s.entries().some((e) => e.type === "proposal.accepted")).toBe(false);
+  expect((await runProposal(s, deps, { proposal: "p1", budget: 1, actor: human })).status).toBe("done");
+});
+
+test("a proposal the guard now refuses stays open", async () => {
+  await runQuery(s, deps, { ...lakeInput, actor: agent });
+  const text = "select * from iceberg.s.events; drop table x";
+  // the guard refuses this text, so the person's run is refused before any acceptance is written
+  const bad = { ...lakeInput, text, actor: human, budget: 5, accept: { proposal: "p1" } };
+  const r = await runQuery(s, deps, bad);
+  expect(r.status).toBe("refused");
+  expect(s.state.proposals.p1!.status).toBe("open");
+  expect(s.entries().some((e) => e.type === "proposal.accepted")).toBe(false);
+});
+
+test("accept is ignored unless the actor is a person", async () => {
+  await runQuery(s, deps, paidRep());
+  for (const actor of [agent, { kind: "system", id: "x" } as Actor]) {
+    await runQuery(s, deps, { ...repInput, actor, pivot: registry.pivot("free_rep")!, budget: 2, accept: { proposal: "p1" } });
+  }
+  expect(s.state.proposals.p1!.status).toBe("open");
+  expect(s.entries().some((e) => e.type === "proposal.accepted")).toBe(false);
+});
+
+test("the accepted entry is the cause of the query it paid for", async () => {
+  await runQuery(s, deps, paidRep());
+  await runProposal(s, deps, { proposal: "p1", budget: 2, actor: human });
+  const accepted = s.entries().find((e) => e.type === "proposal.accepted")!;
+  const result = s.entries().filter((e) => e.type === "query.issued").at(-1)!;
+  expect(result.cause).toBe(accepted.seq);
+  expect(accepted.cause).toBe(s.state.proposals.p1!.seq);
 });
 
 // ---------- final review minor 15 and the Task 6 isCard row ----------

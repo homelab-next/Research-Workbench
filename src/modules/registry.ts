@@ -89,6 +89,7 @@ export class Registry {
   private readonly typeById = new Map<string, ObservableType>();
   private readonly pivotById = new Map<string, PivotManifest>();
   private roots: RootConfig[] = [];
+  private readonly conflicted = new Set<string>();
 
   private constructor() {}
 
@@ -156,8 +157,21 @@ export class Registry {
 
   private add(m: LoadedManifest): boolean {
     const k = key(m.kind, m.id);
-    if (this.manifests.has(k)) {
-      this.reject(m.root, m.path, `duplicate ${m.kind} id "${m.id}"; the first one loaded is kept`);
+    const first = this.manifests.get(k);
+    if (first !== undefined) {
+      if (first.root === m.root) {
+        this.reject(m.root, m.path, `duplicate ${m.kind} id "${m.id}"; the first one loaded is kept`);
+        return false;
+      }
+      // the same id from two roots: neither loads, so a root listed first cannot take another root's id
+      this.reject(m.root, m.path, `${m.kind} id "${m.id}" is defined in two module roots; neither is loaded`);
+      this.reject(first.root, first.path, `${m.kind} id "${m.id}" is defined in two module roots; neither is loaded`);
+      this.conflicted.add(k);
+      this.drop(m.kind, m.id);
+      return false;
+    }
+    if (this.conflicted.has(k)) {
+      this.reject(m.root, m.path, `${m.kind} id "${m.id}" is defined in two module roots; neither is loaded`);
       return false;
     }
     this.manifests.set(k, m);
@@ -227,10 +241,15 @@ export class Registry {
     if (parsed.kind === "source") this.sourceById.set(id, toSource(body, hash, dir, resolve(root.path)));
   }
 
+  private isTrusted(root: string): boolean {
+    return this.roots.some(r => r.path === root && r.trusted);
+  }
+
   private drop(kind: string, id: string): void {
     this.manifests.delete(key(kind, id));
     if (kind === "source") this.sourceById.delete(id);
     else if (kind === "pivot") this.pivotById.delete(id);
+    else if (kind === "type") this.typeById.delete(id);
   }
 
   /** Checks what refers to what, once every file is read: columns to types, then pivots to sources and types. */
@@ -247,7 +266,12 @@ export class Registry {
     for (const p of this.pivots()) {
       const names = [p.from, p.to, ...Object.values(p.yields)];
       const missingType = names.find(t => !this.typeById.has(t));
+      const home = this.manifests.get(key("pivot", p.id))!;
+      const owner = this.manifests.get(key("source", p.source));
       if (!this.sourceById.has(p.source)) reject("pivot", p.id, `pivot "${p.id}": source "${p.source}" is not loaded`);
+      else if (owner !== undefined && owner.root !== home.root && !(this.isTrusted(home.root) && this.isTrusted(owner.root))) {
+        reject("pivot", p.id, `pivot "${p.id}": source "${p.source}" belongs to another root; only a pivot from a trusted root may use it`);
+      }
       else if (missingType !== undefined) reject("pivot", p.id, `pivot "${p.id}": type "${missingType}" is not a known observable type`);
       else if (!Object.values(p.yields).includes(p.to)) reject("pivot", p.id, `pivot "${p.id}": yields maps no column to its target type "${p.to}"`);
     }

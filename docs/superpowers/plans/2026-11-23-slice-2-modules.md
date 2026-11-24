@@ -63,7 +63,7 @@ Read `src/core/` before starting a task; these are the rules most likely to trip
 **Interfaces:**
 - Consumes (plan 1): `Ledger`, `Actor`, `Marking`, `Where`, `Json`, `Schema`, `validate`, `sha256Hex`.
 - Produces:
-  - `interface RootConfig { path: string; trusted_scripts: boolean }`
+  - `interface RootConfig { path: string; trusted: boolean; credentials: string[] }`
   - `interface Config { path: string | null; data_dir: string; user: string; role: "analyst" | "requester" | "leader"; roots: RootConfig[]; secrets_file: string | null; seeker: string; marking_policy: Record<Marking, Where[]>; server: { port: number }; research: { parallel: number } }`
   - `loadConfig(opts?: { path?: string; env?: Record<string, string | undefined>; home?: string; repoRoot?: string }): Config`
   - `class ConfigError extends Error`
@@ -92,7 +92,8 @@ user: analyst
 role: analyst
 roots:
   - path: ./sample
-    trusted_scripts: true
+    trusted: true
+    credentials: []
 secrets_file: ~/.config/research-workbench/secrets.yaml
 seeker: cheapest
 marking_policy:
@@ -105,7 +106,7 @@ server: { port: 4747 }
 research: { parallel: 3 }
 ```
 
-The values shown are the defaults, except: `user` defaults to `env.USER` or `"analyst"`; `data_dir` uses `env.XDG_DATA_HOME` when set; the default root is `<repoRoot>/sample` with `trusted_scripts: true`; `secrets_file` defaults to that path only if the file exists, otherwise `null`.
+The values shown are the defaults, except: `user` defaults to `env.USER` or `"analyst"`; `data_dir` uses `env.XDG_DATA_HOME` when set; the default root is `<repoRoot>/sample` with `trusted: true` and `credentials: []`; `secrets_file` defaults to that path only if the file exists, otherwise `null`.
 
 **Manifest files.** A manifest is a `.yaml`/`.yml` file, or a `.md` file whose YAML front matter (between two `---` lines) is the manifest and whose remainder becomes `text`. Every manifest has `kind`. Three kinds are validated here:
 
@@ -174,13 +175,13 @@ Any other `kind` is loaded as-is: it must have string `kind` and `id`; `title` d
 test("with no file, defaults point at the bundled sample root", () => {
   const c = loadConfig({ env: { USER: "pat" }, home: "/h", repoRoot: "/repo" });
   expect(c).toMatchObject({ path: null, user: "pat", role: "analyst", seeker: "cheapest", data_dir: "/h/.local/share/research-workbench",
-    roots: [{ path: "/repo/sample", trusted_scripts: true }], server: { port: 4747 }, research: { parallel: 3 }, secrets_file: null });
+    roots: [{ path: "/repo/sample", trusted: true, credentials: [] }], server: { port: 4747 }, research: { parallel: 3 }, secrets_file: null });
   expect(c.marking_policy["TLP:RED"]).toEqual(["machine"]);
 });
 test("XDG_DATA_HOME moves the data directory", ...);                   // "/x/research-workbench"
 test("an explicit path wins over the environment, which wins over the home file", ...);
 test("relative root paths resolve against the config file's folder, and ~ expands", ...);
-test("roots given without trusted_scripts are not trusted", ...);
+test("roots given without trusted are not trusted", ...);
 test("an unknown key is refused", () => {
   // file contains "rooots: []" -> ConfigError whose message names "rooots"
 });

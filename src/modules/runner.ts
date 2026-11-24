@@ -32,6 +32,11 @@ export interface RunQueryInput {
   budget?: number | null; run?: string | null; stage?: string | null; job?: string | null; make_card?: boolean;
   /** An earlier entry this query follows from, recorded as the query.issued cause. */
   cause?: number | null;
+  /**
+   * Set by runProposal: the proposal this query carries out. Honoured only for a person. The proposal.accepted entry is
+   * written when the result query is about to be issued (so a refusal or needs_budget leaves the proposal open) and is that query's cause.
+   */
+  accept?: { proposal: string } | null;
 }
 
 export type RunQueryResult =
@@ -155,7 +160,7 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
   if (weight > 0) {
     // An agent asking again for the same costly query is pointed at the proposal already waiting for a person.
     if (input.actor.kind === "agent") {
-      const open = openProposalFor(session, source.id, input.text, bound, window);
+      const open = openProposalFor(session, source.id, source.hash, input.text, bound, window);
       if (open !== null) return { status: "needs_budget", proposal: open.id, estimate: open.estimate };
     }
     let estimateReq: QueryRequest | null;
@@ -199,7 +204,7 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
           payload: {
             proposal: {
               id, kind: "costly_query", title, by: input.actor.id, step: input.step ?? null, subgoal: input.subgoal ?? null, source: source.id,
-              pivot: pivot?.id ?? null, pivot_hash: pivot?.hash ?? null, text: input.text, bound: { ...bound }, window: { ...window }, estimate, why: input.why,
+              pivot: pivot?.id ?? null, pivot_hash: pivot?.hash ?? null, source_hash: source.hash, text: input.text, bound: { ...bound }, window: { ...window }, estimate, why: input.why,
             },
           },
         }];
@@ -209,19 +214,28 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
     }
   }
 
+  let resultCause = cause ?? input.cause ?? null;
+  if (input.actor.kind === "human" && input.accept != null && budget !== null) {
+    const id = input.accept.proposal;
+    const p = Object.hasOwn(session.state.proposals, id) ? session.state.proposals[id]! : null;
+    if (p === null || p.kind !== "costly_query" || p.status !== "open") return { status: "refused", reasons: [`proposal ${id} is not open`] };
+    resultCause = session.commit(() => [{
+      type: "proposal.accepted", actor: input.actor, cause: p.seq, ...link, payload: { proposal: id, budget },
+    }])[0]!.seq;
+  }
   const ran = await issueAndRun(session, deps, {
     ...base, req, rendered, pivot, why: input.why, verifies: input.verifies ?? null,
-    purpose: input.verifies != null ? "verify" : "result", estimate, cause: cause ?? input.cause ?? null, makeCard: input.make_card !== false, title,
+    purpose: input.verifies != null ? "verify" : "result", estimate, cause: resultCause, makeCard: input.make_card !== false, title,
   });
   return ran.result;
 }
 
 /** An open costly_query proposal for the same source, text, bound values and window, if there is one. */
-function openProposalFor(session: CaseSession, source: string, text: string, bound: Bound, window: TimeWindow): Extract<ProposalState, { kind: "costly_query" }> | null {
+function openProposalFor(session: CaseSession, source: string, sourceHash: string, text: string, bound: Bound, window: TimeWindow): Extract<ProposalState, { kind: "costly_query" }> | null {
   const key = canonical(bound);
   for (const p of Object.values(session.state.proposals)) {
     if (p.kind !== "costly_query" || p.status !== "open") continue;
-    if (p.source === source && p.text === text && p.window.from === window.from && p.window.to === window.to && canonical(p.bound) === key) return p;
+    if (p.source === source && p.source_hash === sourceHash && p.text === text && p.window.from === window.from && p.window.to === window.to && canonical(p.bound) === key) return p;
   }
   return null;
 }

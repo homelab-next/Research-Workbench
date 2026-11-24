@@ -295,7 +295,7 @@ test("verify.run with no re-run (null) still stamps the card", () => {
 test("proposals open, then are accepted with a budget or rejected with a reason", () => {
   const b = new EntryBuilder();
   const mk = (id: string) => ({
-    id, kind: "costly_query" as const, title: "T", by: "a1", step: null, subgoal: null, source: "src", pivot: null, pivot_hash: null, text: "t",
+    id, kind: "costly_query" as const, title: "T", by: "a1", step: null, subgoal: null, source: "src", pivot: null, pivot_hash: null, source_hash: "sh1", text: "t",
     bound: {}, window: { from: null, to: null }, estimate: { amount: 5, unit: "usd" }, why: "w",
   });
   const e1 = b.add("proposal.created", { proposal: mk("p1") });
@@ -501,7 +501,7 @@ test("a plan step with id '__proto__' is tracked like any other", () => {
 
 test("a costly proposal carries what it takes to run it; estimate may be null; one missing a part is malformed", () => {
   const full = {
-    id: "p1", kind: "costly_query" as const, title: "T", by: "a1", step: null, subgoal: "g1", source: "lake", pivot: "pv", pivot_hash: "h",
+    id: "p1", kind: "costly_query" as const, title: "T", by: "a1", step: null, subgoal: "g1", source: "lake", pivot: "pv", pivot_hash: "h", source_hash: "sh1",
     text: "select {value}", bound: { value: "x" }, window: { from: "2026-01-01T00:00:00.000Z", to: null }, estimate: null, why: "w",
   };
   const b = new EntryBuilder();
@@ -526,6 +526,15 @@ test("a proposal missing a required field is ignored", () => {
   b.add("proposal.created", { proposal: costly } as never);
   b.add("proposal.created", { proposal: { ...good, section: "bogus" } } as never);
   expect(fold(b.entries).proposals).toEqual({});
+});
+
+test("a costly_query proposal without source_hash is malformed", () => {
+  const costly = { id: "p1", kind: "costly_query" as const, title: "T", by: "a", step: null, subgoal: null, source: "s", pivot: null, pivot_hash: null, text: "t", bound: {}, window: { from: null, to: null }, estimate: null, why: "w" };
+  const b = new EntryBuilder();
+  b.add("proposal.created", { proposal: costly } as never);
+  const s = fold(b.entries);
+  expect(s.proposals).toEqual({});
+  expect(s.skipped).toHaveLength(1);
 });
 
 test("a plan with a step missing source, or a bad subgoal, is ignored", () => {

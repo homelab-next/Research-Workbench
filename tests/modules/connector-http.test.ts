@@ -287,6 +287,25 @@ test("a response that echoes the credential, plainly or encoded, is refused whol
   }
 });
 
+test("a body holding base64 of the bearer header, or of the secret at any offset, is refused", async () => {
+  const bodies: [string, string][] = [
+    ["header", btoa(`Bearer ${SECRET}`)],
+    ["offset 1", btoa(`x${SECRET}`)],
+    ["offset 2 with a tail", btoa(`xy${SECRET}z`)],
+    ["offset 0 with a tail", btoa(`${SECRET}zz`)],
+  ];
+  for (const [name, text] of bodies) {
+    s.stop();
+    s = startStandin({ "GET /v1/reputation/198.51.100.77": () => json(JSON.stringify({ results: [{ address: "198.51.100.77", verdict: text }] })) });
+    const err = await make().run(req("reputation", { value: "198.51.100.77", days: 7 })).catch((e: unknown) => e);
+    expect(err, name).toBeInstanceOf(ConnectorError);
+    expect((err as Error).message, name).toBe("the source echoed the credential; result refused");
+  }
+  s.stop();
+  s = startStandin({ "GET /v1/reputation/198.51.100.77": () => json(body) });
+  expect((await make().run(req("reputation", { value: "198.51.100.77", days: 7 }))).rows).toHaveLength(1);
+});
+
 // ---------- final review finding 6: the budget is honoured in the source's unit ----------
 test("a budget below the fixed cost of one request is refused before anything is sent", async () => {
   const c = make();

@@ -105,7 +105,24 @@ function encodedForms(secret: string): string[] {
   }).join("");
   const b64 = bytes.toString("base64");
   const b64url = bytes.toString("base64url");
-  return [...new Set([secret, JSON.stringify(secret).slice(1, -1), u(false), u(true), b64, b64.replace(/=+$/, ""), b64url, encodeURIComponent(secret)])];
+  return [...new Set([secret, JSON.stringify(secret).slice(1, -1), u(false), u(true), b64, b64.replace(/=+$/, ""), b64url, encodeURIComponent(secret), ...base64Alignments(bytes)])];
+}
+
+/**
+ * What the secret's bytes look like inside base64 text whose first group did not start on the secret: encode it after
+ * 0, 1 and 2 filler bytes and keep only the groups the secret fills (the leading group, which holds filler, and the
+ * trailing one, which may hold what follows, are dropped), in both alphabets. A secret too short to fill a group yields none.
+ */
+function base64Alignments(secret: Buffer): string[] {
+  const out: string[] = [];
+  for (const pad of [0, 1, 2]) {
+    const enc = Buffer.concat([Buffer.alloc(pad, 0x78), secret]).toString("base64").replace(/=+$/, "");
+    const from = pad === 0 ? 0 : 4;
+    const filled = Math.floor((pad + secret.length) / 3) * 4; // complete groups
+    const cut = enc.slice(from, filled);
+    if (cut.length >= 4) out.push(cut, cut.replace(/\+/g, "-").replace(/\//g, "_"));
+  }
+  return out;
 }
 
 /** Every string in a parsed JSON value, keys included. */

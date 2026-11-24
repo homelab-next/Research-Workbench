@@ -74,6 +74,33 @@ function patternChars(pattern: string): string[] {
   return out.length > 0 ? out : ["a"];
 }
 
+/** The literal prefixes of a pattern (the characters before its first quantified element, each prefix of them from one character up), and a sample of that quantified element. */
+function literalPrefixes(pattern: string): { prefixes: string[]; quantified: string | null } {
+  let text = "";
+  let quantified: string | null = null;
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i]!;
+    let lit: string;
+    let next = i + 1;
+    if (c === "\\") {
+      const n = pattern[i + 1] ?? "";
+      next = i + 2;
+      if (Object.hasOwn(CLASS_SAMPLE, n)) lit = CLASS_SAMPLE[n]!;
+      else lit = n;
+    } else if (SYNTAX.has(c) && c !== ".") {
+      break;
+    } else {
+      lit = c === "." ? "a" : c;
+    }
+    if (/^[*+?{]/.test(pattern.slice(next))) { quantified = lit === "" ? null : lit; break; } // this element is quantified: the prefix ends before it
+    text += lit;
+    i = next - 1;
+  }
+  const out: string[] = [];
+  for (let n = 1; n <= text.length; n++) out.push(text.slice(0, n));
+  return { prefixes: out, quantified };
+}
+
 /**
  * Times a type's pattern, compiled as compileType compiles it, on three probe strings built from the characters in the
  * pattern (all of them in turn, the first repeated, the last repeated), each ending in a character the pattern does not
@@ -86,10 +113,14 @@ export function probePattern(pattern: string, limitMs = PATTERN_PROBE_LIMIT_MS):
   const chars = patternChars(pattern);
   const end = TERMINATORS.find((t) => !chars.includes(t)) ?? "\u0002";
   const bodies = [chars.join(""), chars[0]!, chars[chars.length - 1]!];
+  // a pattern can be cheap until a literal prefix has matched: try each prefix, then each body
+  const { prefixes, quantified } = literalPrefixes(pattern);
+  const withPrefix = quantified === null ? bodies : [...bodies, quantified]; // the first repeated element is the likeliest body
+  const units = [...bodies.map((body) => ({ prefix: "", body })), ...prefixes.flatMap((prefix) => withPrefix.map((body) => ({ prefix, body })))];
   let worst = 0;
-  for (const unit of bodies) {
+  for (const { prefix, body: unit } of units) {
     for (const length of PROBE_LENGTHS) {
-      const probe = unit.repeat(Math.ceil(length / unit.length)).slice(0, length - 1) + end;
+      const probe = (prefix + unit.repeat(Math.ceil(length / unit.length))).slice(0, length - 1) + end;
       const started = performance.now();
       re.test(probe);
       const took = performance.now() - started;

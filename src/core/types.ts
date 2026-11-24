@@ -92,7 +92,7 @@ export type Proposal =
    */
   | {
     id: string; kind: "costly_query"; title: string; by: string; step: string | null; subgoal: string | null; source: string;
-    pivot: string | null; pivot_hash: string | null; text: string; bound: Record<string, Json>; window: TimeWindow; estimate: Cost | null; why: string;
+    pivot: string | null; pivot_hash: string | null; source_hash: string; text: string; bound: Record<string, Json>; window: TimeWindow; estimate: Cost | null; why: string;
   }
   | { id: string; kind: "narrative"; title: string; by: string; section: Section; text: string; cites: string[] };
 

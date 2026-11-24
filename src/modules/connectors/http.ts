@@ -122,7 +122,7 @@ export class HttpConnector implements Connector {
       parsed = false;
     }
     // A result that carries the credential is refused whole, before anything of it is kept.
-    assertNoEcho(bytes, secret === null ? [] : [secret], parsed ? doc : undefined);
+    assertNoEcho(bytes, secret === null ? [] : [secret, `Bearer ${secret}`], parsed ? doc : undefined);
     if (!parsed) throw new ConnectorError(`the response from endpoint ${e.name} is not valid JSON`);
     const list = rowsAt(doc, e);
     const more = list.length > req.max_rows;

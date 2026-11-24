@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { Observables } from "../../src/modules/observables";
+import { Observables, PATTERN_PROBE_LIMIT_MS, probePattern } from "../../src/modules/observables";
 
 const obs = new Observables([
   { id: "address", title: "Address", pattern: "^(?:\\d{1,3}\\.){3}\\d{1,3}$" },
@@ -49,4 +49,10 @@ test("a very long value matches no type, quickly", () => {
 
 test("compiling a catastrophic pattern is refused", () => {
   expect(() => new Observables([{ id: "x", title: "X", pattern: "(a+)+" }])).toThrow();
+});
+
+test("a pattern that blows up only after a literal prefix is refused", () => {
+  expect(probePattern("id-\\d*\\d*\\d*\\d*z")).toBeGreaterThan(PATTERN_PROBE_LIMIT_MS);
+  expect(probePattern("x\\s*\\s*\\s*\\s*y")).toBeGreaterThan(PATTERN_PROBE_LIMIT_MS);
+  expect(probePattern("^(?:\\d{1,3}\\.){3}\\d{1,3}$")).toBeLessThan(PATTERN_PROBE_LIMIT_MS);
 });

@@ -181,13 +181,12 @@ test("a column typed with a missing observable type is a problem", () => {
   expect(r.problems[0]!.error).toContain("domain");
 });
 
-test("a duplicate id keeps the first and reports the second", () => {
-  const a = root({ "s.yaml": sourceWith("dup", "title: First\n").replace("title: T\n", "") });
+test("a duplicate id in one root keeps the first and reports the second; in two roots neither loads", () => {
+  const a = root({ "s.yaml": sourceWith("dup").replace("title: T", "title: First") });
   const b = root({ "s.yaml": sourceWith("dup").replace("title: T", "title: Second") });
   const r = Registry.load([a, b]);
-  expect(r.source("dup")!.title).toBe("First");
-  expect(r.problems).toHaveLength(1);
-  expect(r.problems[0]).toMatchObject({ root: b.path, path: join(b.path, "s.yaml") });
+  expect(r.source("dup")).toBeNull();
+  expect(r.problems.map((p) => p.path).sort()).toEqual([join(a.path, "s.yaml"), join(b.path, "s.yaml")].sort());
   const within = Registry.load([root({ "a.yaml": "kind: k\nid: x\n", "b.yaml": "kind: k\nid: x\n" })]);
   expect(within.all("k")).toHaveLength(1);
   expect(within.problems).toHaveLength(1);
@@ -440,4 +439,60 @@ test("a trino source's cost unit must be rows", () => {
     "a trino source's cost unit must be rows (the engine estimates in rows), not seconds",
     "a trino source's cost unit must be rows (the engine estimates in rows), not seconds",
   ]);
+});
+
+// ---------- plan 3 task 0: a pivot may not borrow a source; an id from two roots loads from neither ----------
+const REP_SOURCE = httpSource("rep", "cost: { weight: 5, unit: lookups }\n");
+const pivotFor = (id: string, source: string, extra = ""): string =>
+  `kind: pivots\npivots:\n  - { id: ${id}, title: T, from: address, to: address, source: ${source}, query: x, ${extra}yields: { a: address } }\n`;
+
+test("a pivot from an untrusted root may not name a trusted root's source", () => {
+  const r = Registry.load([
+    root({ "types.yaml": TYPES, "sources/rep.yaml": REP_SOURCE }),
+    root({ "pivots.yaml": pivotFor("a_free_rep", "rep", "weight: 0, empty_means: proven-negative, ") }, { trusted: false }),
+  ]);
+  expect(r.source("rep")).not.toBeNull();
+  expect(r.pivot("a_free_rep")).toBeNull();
+  expect(r.problems.map((p) => p.error)).toContain('pivot "a_free_rep": source "rep" belongs to another root; only a pivot from a trusted root may use it');
+});
+
+test("an untrusted root's pivot may use its own sources", () => {
+  const r = Registry.load([
+    root({ "types.yaml": TYPES }),
+    root({ "sources/own.yaml": sourceWith("own"), "pivots.yaml": pivotFor("mine", "own") }, { trusted: false }),
+  ]);
+  expect(r.problems).toEqual([]);
+  expect(r.pivot("mine")).not.toBeNull();
+});
+
+test("a trusted root's pivot may use another trusted root's source, never an untrusted one", () => {
+  const r = Registry.load([
+    root({ "types.yaml": TYPES, "sources/rep.yaml": REP_SOURCE }),
+    root({ "sources/own.yaml": sourceWith("own") }, { trusted: false }),
+    root({ "pivots.yaml": pivotFor("to_trusted", "rep") + "" }),
+    root({ "pivots.yaml": pivotFor("to_untrusted", "own") }),
+  ]);
+  expect(r.pivot("to_trusted")).not.toBeNull();
+  expect(r.pivot("to_untrusted")).toBeNull();
+  expect(r.problems.map((p) => p.error)).toEqual(['pivot "to_untrusted": source "own" belongs to another root; only a pivot from a trusted root may use it']);
+});
+
+test("a pivot id defined in a trusted and an untrusted root loads from neither", () => {
+  const r = Registry.load([
+    root({ "types.yaml": TYPES, "sources/own.yaml": sourceWith("own"), "pivots.yaml": pivotFor("p1", "own") }, { trusted: false }),
+    root({ "sources/mine.yaml": sourceWith("mine"), "pivots.yaml": pivotFor("p1", "mine") }),
+  ]);
+  expect(r.pivot("p1")).toBeNull();
+  expect(r.get("pivot", "p1")).toBeNull();
+  expect(r.problems.filter((p) => p.error.includes("defined in two module roots"))).toHaveLength(2);
+});
+
+test("a source id defined in two roots loads from neither, and a pivot naming it is dropped", () => {
+  const r = Registry.load([
+    root({ "types.yaml": TYPES, "sources/s.yaml": sourceWith("s") }),
+    root({ "sources/s.yaml": sourceWith("s") }, { trusted: false }),
+    root({ "pivots.yaml": pivotFor("p", "s") }),
+  ]);
+  expect(r.source("s")).toBeNull();
+  expect(r.pivot("p")).toBeNull();
 });

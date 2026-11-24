@@ -9,8 +9,9 @@ export interface RunProposalInput { proposal: string; budget: number; actor: Act
 
 /**
  * A person accepts an agent's costly_query proposal with a budget and runs it. Only a person may; the proposal must be
- * open; its pivot (if any) must be unchanged and its source still loaded. Writes proposal.accepted with the budget, then
- * runs the stored text, bound values and window through runQuery, citing the acceptance. A refusal writes nothing.
+ * open; its pivot (if any) and its source must be unchanged and still loaded. Runs the stored text, bound values and
+ * window through runQuery, which writes proposal.accepted with the budget only when the result query is about to be
+ * issued, and cites it. A refusal, or a budget below the fresh estimate, writes no acceptance and the proposal stays open.
  */
 export async function runProposal(session: CaseSession, deps: RunnerDeps, input: RunProposalInput): Promise<RunQueryResult> {
   const refused = (reason: string): RunQueryResult => ({ status: "refused", reasons: [reason] });
@@ -22,17 +23,15 @@ export async function runProposal(session: CaseSession, deps: RunnerDeps, input:
   if (typeof input.budget !== "number" || !Number.isFinite(input.budget) || input.budget <= 0) return refused("the budget must be a number above zero");
   const source = deps.registry.source(p.source);
   if (source === null) return refused(`the source ${p.source} is no longer loaded`);
+  if (source.hash !== p.source_hash) return refused(`the source ${p.source} has changed since the proposal`);
   let pivot: PivotManifest | null = null;
   if (p.pivot !== null) {
     pivot = deps.registry.pivot(p.pivot);
     if (pivot === null || pivot.hash !== p.pivot_hash) return refused(`the pivot ${p.pivot} has changed since the proposal`);
     if (pivot.source !== source.id) return refused(`the pivot ${p.pivot} is now for source ${pivot.source}`);
   }
-  const accepted = session.commit(() => [{
-    type: "proposal.accepted", actor: input.actor, cause: p.seq, payload: { proposal: p.id, budget: input.budget },
-  }])[0]!;
   return runQuery(session, deps, {
     source: source.id, text: p.text, bound: { ...p.bound } as Bound, window: { ...p.window }, why: p.why, actor: input.actor, pivot,
-    title: p.title, step: p.step, subgoal: p.subgoal, budget: input.budget, cause: accepted.seq,
+    title: p.title, step: p.step, subgoal: p.subgoal, budget: input.budget, accept: { proposal: p.id },
   });
 }
