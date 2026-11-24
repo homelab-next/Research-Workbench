@@ -4,7 +4,8 @@ import type { Usage } from "../../core/state";
 import type { Where } from "../../core/types";
 import { assertNoEcho, CONTROL, LOOPBACK, loadCredential, NUMERIC_LOOPBACK, parseBase, readCapped, refuseOwnServer, scrub, TimedOut, TooBig } from "../../modules/connectors/shared";
 import type { Secrets } from "../../modules/secrets";
-import type { ModelInfo, Provider, ToolCall, Transient, TurnRequest, TurnResult } from "./types";
+import { mergeSampling } from "./sampling";
+import type { ModelInfo, Provider, Sampling, ToolCall, Transient, TurnRequest, TurnResult } from "./types";
 
 export const DEFAULT_CONTEXT = 8192;
 /** The most tokens a reply may hold (reasoning included) when the manifest names no max_output_tokens; sent as max_tokens on every chat request. */
@@ -25,6 +26,8 @@ export interface LocalOptions {
   max_bytes?: number;
   /** Sent as max_tokens on every chat request; DEFAULT_MAX_OUTPUT_TOKENS when absent. */
   max_output_tokens?: number;
+  /** Sampling settings sent on every chat request (a request's own win key by key). */
+  sampling?: Sampling;
   /** Whether a request may carry a json_schema response_format; true when absent. */
   structured_output?: boolean;
   /** `host:port` of this workbench's own server, asked each time: a model endpoint may not point at it. */
@@ -49,6 +52,7 @@ export class LocalProvider implements Provider {
   readonly where: Where;
   readonly max_output_tokens: number;
   readonly structured_output: boolean;
+  readonly sampling: Sampling;
   readonly #base: string;
   readonly #origin: string;
   readonly #secret: string | null;
@@ -79,6 +83,7 @@ export class LocalProvider implements Provider {
     this.#max = opts.max_bytes ?? MODEL_MAX_BYTES;
     this.max_output_tokens = opts.max_output_tokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
     this.structured_output = opts.structured_output ?? true;
+    this.sampling = mergeSampling(undefined, opts.sampling);
   }
 
   /** Throws a plain Error naming the cause when the endpoint is the workbench's own server. */
@@ -169,7 +174,8 @@ export class LocalProvider implements Provider {
       out.tools = req.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters as Json } }));
     }
     out.stream = false;
-    out.max_tokens = this.max_output_tokens;
+    out.max_tokens = req.max_output_tokens ?? this.max_output_tokens;
+    Object.assign(out, mergeSampling(this.sampling, req.sampling));
     if (req.effort !== null && this.#efforts.includes(req.effort)) out.reasoning_effort = req.effort;
     if (req.response_format !== undefined && this.structured_output) {
       const name = req.response_format.name.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64) || "output";

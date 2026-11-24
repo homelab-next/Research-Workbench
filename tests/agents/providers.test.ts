@@ -173,3 +173,19 @@ test("structured_output is true or false, true when the manifest gives none", ()
   expect(out.providers.get("lm")).toBeNull();
   expect(out.problems.map((p) => p.error).join()).toContain("structured_output");
 });
+
+test("sampling is a map of known settings in sane ranges; the provider sends the ones given", () => {
+  const sent = (text: string): Record<string, unknown> | null => {
+    const p = loadLocal(text).providers.get("lm");
+    return p === null ? null : (JSON.parse(new TextDecoder().decode(p.body({ model: "m", effort: null, messages: [], tools: [], key: "a", ordinal: 0 }))) as Record<string, unknown>);
+  };
+  const good = sent(local({ sampling: "{ temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0, presence_penalty: 1.5, frequency_penalty: 0, repeat_penalty: 1.1 }" }));
+  expect(good).toMatchObject({ temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0, presence_penalty: 1.5, frequency_penalty: 0, repeat_penalty: 1.1 });
+  expect(sent(local({}))).not.toHaveProperty("temperature");
+  expect(sent(local({ sampling: "null" }))).not.toHaveProperty("temperature");
+  for (const bad of ["{ temperature: 3 }", "{ temperature: -1 }", "{ top_p: 1.5 }", "{ top_k: 1.5 }", "{ min_p: -0.1 }", "{ presence_penalty: 5 }", "{ repeat_penalty: 0 }", "{ temprature: 0.5 }", "{ temperature: hot }", "[1]"]) {
+    const out = loadLocal(local({ sampling: bad }));
+    expect(out.providers.get("lm")).toBeNull();
+    expect(out.problems.map((p) => p.error).join()).toContain("sampling");
+  }
+});

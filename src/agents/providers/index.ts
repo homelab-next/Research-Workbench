@@ -1,4 +1,5 @@
 import type { Json } from "../../core/canonical";
+import { isPlainObject } from "../../core/canonical";
 import { validate } from "../../core/schema";
 import type { Schema } from "../../core/schema";
 import { describeErrors, ManifestError, withoutNulls } from "../../modules/manifests";
@@ -6,10 +7,11 @@ import type { LoadedManifest } from "../../modules/manifests";
 import type { Problem, Registry } from "../../modules/registry";
 import type { Secrets } from "../../modules/secrets";
 import { LocalProvider } from "./local";
+import { SAMPLING_SCHEMA } from "./sampling";
 import { ScriptedProvider, toScript } from "./scripted";
 import type { Script } from "./scripted";
 import type { Where } from "../../core/types";
-import type { Provider } from "./types";
+import type { Provider, Sampling } from "./types";
 
 export type { ChatMessage, ModelInfo, Provider, ToolCall, ToolSpec, TurnRequest, TurnResult } from "./types";
 
@@ -50,6 +52,7 @@ const LOCAL_SCHEMA: Schema = {
     timeout_ms: { type: "integer", minimum: 1, maximum: 600000 },
     max_output_tokens: { type: "integer", minimum: 1 },
     structured_output: { type: "boolean" },
+    sampling: SAMPLING_SCHEMA,
   },
   additionalProperties: true,
 };
@@ -75,6 +78,7 @@ function buildLocal(m: LoadedManifest, registry: Registry, secrets: Secrets, own
       timeout_ms: typeof body.timeout_ms === "number" ? body.timeout_ms : 120000,
       ...(typeof body.max_output_tokens === "number" ? { max_output_tokens: body.max_output_tokens } : {}),
       ...(typeof body.structured_output === "boolean" ? { structured_output: body.structured_output } : {}),
+      ...(isPlainObject(body.sampling) ? { sampling: body.sampling as Sampling } : {}),
       ...(own === undefined ? {} : { refuse_hosts: own }),
     });
   } catch (err) {

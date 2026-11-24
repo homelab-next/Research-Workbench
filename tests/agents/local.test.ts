@@ -16,12 +16,13 @@ const standin = (replies: (StandinReply | ((b: Record<string, never>) => Standin
   stops.push(m.stop);
   return m;
 };
-const provider = (url: string, o: { credential?: string | null; context?: number | null; efforts?: string[]; timeout_ms?: number; max_bytes?: number; max_output_tokens?: number; structured_output?: boolean } = {}) =>
+const provider = (url: string, o: { credential?: string | null; context?: number | null; efforts?: string[]; timeout_ms?: number; max_bytes?: number; max_output_tokens?: number; structured_output?: boolean; sampling?: Record<string, number> } = {}) =>
   new LocalProvider({
     id: "lm", base_url: url, where: "machine", credential: o.credential ?? null, secrets: new Secrets({ LM_KEY: KEY }, null),
     context: o.context ?? null, efforts: o.efforts ?? [], timeout_ms: o.timeout_ms ?? 5000, ...(o.max_bytes === undefined ? {} : { max_bytes: o.max_bytes }),
     ...(o.max_output_tokens === undefined ? {} : { max_output_tokens: o.max_output_tokens }),
     ...(o.structured_output === undefined ? {} : { structured_output: o.structured_output }),
+    ...(o.sampling === undefined ? {} : { sampling: o.sampling }),
   });
 const req = (over: Partial<TurnRequest> = {}): TurnRequest => ({
   model: "qwen/qwen3.6-35b-a3b", effort: null, key: "a", ordinal: 0,
@@ -282,4 +283,27 @@ test("a request asking for structured output carries an OpenAI-style json_schema
   const off = provider("http://127.0.0.1:1/v1", { structured_output: false });
   expect(off.structured_output).toBe(false);
   expect(JSON.parse(new TextDecoder().decode(off.body(asked))) as Record<string, unknown>).not.toHaveProperty("response_format");
+});
+
+const SAMPLING = { temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0, presence_penalty: 1.5, frequency_penalty: 0.1, repeat_penalty: 1.1 };
+const sentBodies = (m: { requests: { method: string; body: string }[] }): Record<string, unknown>[] => m.requests.filter((x) => x.method === "POST").map((x) => JSON.parse(x.body) as Record<string, unknown>);
+
+test("the manifest's sampling settings go in the chat request body under the OpenAI field names, and only those given", async () => {
+  const m = standin([ok({ content: "a" }), ok({ content: "b" })]);
+  await provider(m.url, { sampling: SAMPLING }).turn(req());
+  await provider(m.url, { sampling: { temperature: 0.2 } }).turn(req());
+  const [all, some] = sentBodies(m);
+  expect(all).toMatchObject(SAMPLING);
+  expect(some!.temperature).toBe(0.2);
+  for (const k of ["top_p", "top_k", "min_p", "presence_penalty", "frequency_penalty", "repeat_penalty"]) expect(some).not.toHaveProperty(k);
+  const p = provider(m.url, { sampling: SAMPLING });
+  expect(JSON.parse(new TextDecoder().decode(p.body(req()))) as Record<string, unknown>).toMatchObject(SAMPLING);
+  expect(JSON.parse(new TextDecoder().decode(provider(m.url).body(req()))) as Record<string, unknown>).not.toHaveProperty("temperature");
+});
+
+test("a request's own sampling and max_output_tokens win over the model's, key by key", async () => {
+  const m = standin([ok({ content: "a" })]);
+  const p = provider(m.url, { sampling: SAMPLING, max_output_tokens: 1000 });
+  await p.turn(req({ sampling: { temperature: 0.3, top_k: 40 }, max_output_tokens: 4096 }));
+  expect(sentBodies(m)[0]).toMatchObject({ ...SAMPLING, temperature: 0.3, top_k: 40, max_tokens: 4096 });
 });

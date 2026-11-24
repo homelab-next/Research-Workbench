@@ -2,6 +2,8 @@ import type { Schema } from "../../core/schema";
 import type { Usage } from "../../core/state";
 import type { Where } from "../../core/types";
 
+/** Sampling settings, sent in the chat request body under these names; only the ones given are sent. */
+export interface Sampling { temperature?: number; top_p?: number; top_k?: number; min_p?: number; presence_penalty?: number; frequency_penalty?: number; repeat_penalty?: number }
 export interface ToolSpec { name: string; description: string; parameters: Schema }
 /** `arguments` is the text the model gave, unparsed. */
 export interface ToolCall { id: string; name: string; arguments: string }
@@ -10,7 +12,9 @@ export interface ChatMessage { role: "system" | "user" | "assistant" | "tool"; c
 export interface ModelInfo { id: string; context: number | null; efforts: string[]; loaded: boolean | null }
 /** `key` is the calling agent's actor id; `ordinal` is how many model requests that actor id has already made in the case. */
 /** `response_format`: the reply is to be one JSON object matching `schema`; sent only to a provider whose `structured_output` is true. */
-export interface TurnRequest { model: string; effort: string | null; messages: ChatMessage[]; tools: ToolSpec[]; key: string; ordinal: number; response_format?: { name: string; schema: Schema } }
+export interface TurnRequest { model: string; effort: string | null; messages: ChatMessage[]; tools: ToolSpec[]; key: string; ordinal: number; response_format?: { name: string; schema: Schema };
+  /** This request's own sampling and output limit (a stage's): each wins over the provider's. */
+  sampling?: Sampling; max_output_tokens?: number }
 export type TurnResult =
   | { kind: "answer"; content: string; reasoning: string | null; tool_calls: ToolCall[]; stop: "end" | "tool_calls" | "length"; usage: Usage; served_by: string; raw: Uint8Array }
   | { kind: "declined"; reason: string; served_by: string; raw: Uint8Array }
@@ -23,6 +27,8 @@ export interface Provider {
   readonly where: Where;
   /** The most tokens a reply may hold, when the provider sets one (a local model sends it as max_tokens). */
   readonly max_output_tokens?: number;
+  /** The sampling the provider sends on every request, when it sets any. */
+  readonly sampling?: Sampling;
   /** True when the provider can be asked for a reply that matches a JSON schema (an OpenAI-compatible json_schema response_format). */
   readonly structured_output?: boolean;
   models(): Promise<ModelInfo[]>;
