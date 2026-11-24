@@ -6,7 +6,11 @@ import { runQuery } from "./runner";
 import type { RunnerDeps, RunQueryResult } from "./runner";
 
 /** `cause` is the entry the acceptance follows from (the plan.accepted that gave the budget); by default the proposal.created. */
-export interface RunProposalInput { proposal: string; budget: number; actor: Actor; cause?: number | null }
+export interface RunProposalInput {
+  proposal: string; budget: number; actor: Actor; cause?: number | null;
+  /** Asked just before the acceptance is written: a reason means the case has moved on, and nothing is accepted or run. */
+  guard?: () => string | null;
+}
 
 /**
  * A person accepts an agent's costly_query proposal with a budget and runs it. Only a person may; the proposal must be
@@ -33,6 +37,6 @@ export async function runProposal(session: CaseSession, deps: RunnerDeps, input:
   }
   return runQuery(session, deps, {
     source: source.id, text: p.text, bound: { ...p.bound } as Bound, window: { ...p.window }, why: p.why, actor: input.actor, pivot,
-    title: p.title, step: p.step, subgoal: p.subgoal, budget: input.budget, accept: { proposal: p.id, ...(input.cause != null ? { cause: input.cause } : {}) },
+    title: p.title, step: p.step, subgoal: p.subgoal, budget: input.budget, accept: { proposal: p.id, ...(input.cause != null ? { cause: input.cause } : {}), ...(input.guard === undefined ? {} : { guard: input.guard }) },
   });
 }

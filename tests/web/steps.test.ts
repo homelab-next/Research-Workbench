@@ -280,3 +280,32 @@ test("a step is shown as being estimated while an estimate query for it is runni
   await p.settle();
   expect(p.q("[data-step=s3] [data-action=estimate]").textContent).toBe("Estimate");
 });
+
+test("a proposal whose query is running reads running…, found by its cause and not by its text", async () => {
+  await atGate();
+  let open = () => {};
+  const gate = new Promise<void>((r) => { open = r; });
+  const pool = p.s.app.hub.deps.runner.pool;
+  const real = pool.for.bind(pool);
+  (pool as { for: unknown }).for = (src: never) => {
+    const c = real(src) as unknown as Record<string, unknown>;
+    return new Proxy(c, { get(t, k) {
+      const v = t[k as string];
+      if (k === "run") return async (...a: unknown[]) => { await gate; return (v as (...x: unknown[]) => unknown).apply(t, a); };
+      return typeof v === "function" ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+    } });
+  };
+  const r = await runPivot(p.s.app.hub.read("CASE-1"), p.s.app.hub.deps.runner, { pivot: "address_to_verdict", value: "198.51.100.77", window: state().plan.current!.window, why: "w", actor: agent });
+  if (r.status !== "needs_budget" || r.proposal === null) throw new Error("no proposal");
+  await p.settle();
+  p.fill("[data-proposal] input", "50");
+  p.click("[data-action=run-proposal]");
+  while (!types().includes("query.issued") || Object.values(state().queries).every((q) => q.purpose !== "result")) await Bun.sleep(10);
+  await Bun.sleep(50);   // the hub is not idle while the query is held, so settle would wait for it
+  const row = p.q(`[data-proposal=${r.proposal}]`);
+  expect(row.textContent).toContain("running…");
+  expect(row.dataset.running).toBe("true");
+  open();
+  await settled();
+  expect(p.all(`[data-proposal=${r.proposal}]`).length).toBe(0);
+});

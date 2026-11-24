@@ -62,12 +62,14 @@ async function withProposalOn(id: string): Promise<string> {
   return r.proposal;
 }
 
-test("run_proposal with a budget below the estimate runs nothing and leaves the proposal open", async () => {
+test("run_proposal with a budget below the estimate is refused in the queue and leaves the proposal open", async () => {
   const { id, proposal } = await withProposal();
   const before = s.entries(id).length;
   const r = await s.command(id, "run_proposal", { proposal, budget: 0.5 });
-  expect(r.status).toBe(200);
+  expect(r.status).toBe(409);
+  expect(JSON.stringify(r.body)).toMatch(/the estimate is \d+ lookups; the budget does not cover it/);
   await s.app.hub.idle();
+  expect(s.entries(id).length).toBe(before);
   expect(types(id).filter((t) => t === "proposal.accepted")).toEqual([]);
   expect(state(id).proposals[proposal]!.status).toBe("open");
   expect(s.entries(id).slice(before).filter((e) => e.type === "query.result" && state(id).queries[e.payload.query]!.purpose === "result")).toEqual([]);
@@ -149,4 +151,74 @@ test("run_proposal still refuses at once what can be seen without the source", a
   expect((await s.command(id, "run_proposal", { proposal: "p99", budget: 10 })).status).toBe(409);
   expect((await s.command(id, "run_proposal", { proposal: "p1", budget: -1 })).status).toBe(409);
   expect(s.entries(id).length).toBe(before);
+});
+
+// ---------- a command that is still pricing when the case moves on ----------
+/** Holds every connector's `method` until `gate` opens. */
+function hold(method: "estimate" | "run", gate: Promise<void>): void {
+  const pool = s.app.hub.deps.runner.pool;
+  const real = pool.for.bind(pool);
+  (pool as { for: unknown }).for = (src: never) => {
+    const c = real(src) as unknown as Record<string, unknown>;
+    return new Proxy(c, { get(t, k) {
+      const v = t[k as string];
+      if (k === method) return async (...a: unknown[]) => { await gate; return (v as (...x: unknown[]) => unknown).apply(t, a); };
+      return typeof v === "function" ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+    } });
+  };
+}
+const gateOf = (): { gate: Promise<void>; open: () => void } => { let open = () => {}; const gate = new Promise<void>((r) => { open = r; }); return { gate, open }; };
+const after = (id: string, at: number): string[] => s.entries(id).slice(at).map((e) => e.type);
+
+for (const [how, args] of [["stop", { reason: "enough" }], ["deny_plan", { reason: "no" }], ["replan", { note: "again" }]] as const) {
+  test(`a proposal still being priced when the case is ${how === "stop" ? "stopped" : how === "deny_plan" ? "denied" : "re-planned"} is not accepted or run`, async () => {
+    const { id, proposal } = await withProposal();
+    const g = gateOf();
+    hold("estimate", g.gate);
+    expect((await s.command(id, "run_proposal", { proposal, budget: 10 })).status).toBe(200);
+    expect((await s.command(id, how, args)).status).toBe(200);
+    const at = s.entries(id).length;
+    g.open();
+    await s.app.hub.idle();
+    await Bun.sleep(50);
+    await s.app.hub.idle();
+    expect(after(id, at).filter((t) => t.startsWith("proposal.") || t.startsWith("query.") || t === "card.created")).toEqual([]);
+    expect(state(id).proposals[proposal]!.status).toBe("open");
+  });
+}
+
+test("a query that was issued before the case was stopped still writes its result and card", async () => {
+  const { id, proposal } = await withProposal();
+  const g = gateOf();
+  hold("run", g.gate);
+  expect((await s.command(id, "run_proposal", { proposal, budget: 10 })).status).toBe(200);
+  while (!types(id).includes("proposal.accepted")) await Bun.sleep(10);
+  expect((await s.command(id, "stop", { reason: "enough" })).status).toBe(200);
+  const at = s.entries(id).length;
+  g.open();
+  await s.app.hub.idle();
+  expect(after(id, at)).toContain("query.result");
+});
+
+test("an estimate still being made when the run is stopped writes no step.estimated", async () => {
+  const { id } = await withProposal();
+  const g = gateOf();
+  hold("estimate", g.gate);
+  expect((await s.command(id, "estimate_step", { step: "s3" })).status).toBe(200);
+  expect((await s.command(id, "stop", { reason: "enough" })).status).toBe(200);
+  const at = s.entries(id).length;
+  g.open();
+  await s.app.hub.idle();
+  await Bun.sleep(50);
+  await s.app.hub.idle();
+  expect(after(id, at)).not.toContain("step.estimated");
+  expect(state(id).plan.estimates).toEqual({});
+});
+
+test("the set of proposals being run belongs to the hub and is empty once they are done", async () => {
+  const { id, proposal } = await withProposal();
+  expect(s.app.hub.running.size).toBe(0);
+  await s.command(id, "run_proposal", { proposal, budget: 10 });
+  await s.app.hub.idle();
+  expect(s.app.hub.running.size).toBe(0);
 });

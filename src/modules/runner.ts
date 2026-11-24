@@ -36,7 +36,7 @@ export interface RunQueryInput {
    * Set by runProposal: the proposal this query carries out. Honoured only for a person. The proposal.accepted entry is
    * written when the result query is about to be issued (so a refusal or needs_budget leaves the proposal open) and is that query's cause.
    */
-  accept?: { proposal: string; cause?: number } | null;
+  accept?: { proposal: string; cause?: number; guard?: () => string | null } | null;
 }
 
 export type RunQueryResult =
@@ -220,6 +220,9 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
     const acceptCause = input.accept.cause;
     const p = Object.hasOwn(session.state.proposals, id) ? session.state.proposals[id]! : null;
     if (p === null || p.kind !== "costly_query" || p.status !== "open") return { status: "refused", reasons: [`proposal ${id} is not open`] };
+    // the case may have moved on while the query was priced: then nothing is accepted and nothing runs
+    const moved = input.accept.guard?.() ?? null;
+    if (moved !== null) return { status: "refused", reasons: [moved] };
     resultCause = session.commit(() => [{
       type: "proposal.accepted", actor: input.actor, cause: acceptCause ?? p.seq, ...link, payload: { proposal: id, budget },
     }])[0]!.seq;

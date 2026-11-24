@@ -14,8 +14,6 @@ const text = (a: Record<string, Json>, key: string): string => a[key] as string;
 const later = (hub: { background(work: Promise<unknown>): void }, work: Promise<unknown>): void => {
   hub.background(work.catch((error: unknown) => { if (!(error instanceof Refused)) throw error; }));
 };
-/** Proposals being run now, so a second press cannot start a second run while the first is still pricing. */
-const running = new Set<string>();
 
 defineCommand("estimate_step", {
   args: obj({ step: { type: "string" } }), then: "nothing",
@@ -29,6 +27,7 @@ defineCommand("estimate_step", {
 defineCommand("run_proposal", {
   args: obj({ proposal: { type: "string" }, budget: { type: "number" } }), then: "nothing",
   perform: ({ hub, case: caseId, session, deps, actor }, a) => {
+    const running = hub.running;
     const id = text(a, "proposal");
     const p = Object.hasOwn(session.state.proposals, id) ? session.state.proposals[id]! : null;
     if (p === null) throw new Refused(`unknown proposal: ${id}`);
@@ -36,12 +35,23 @@ defineCommand("run_proposal", {
     if (p.status !== "open") throw new Refused(`proposal ${id} is ${p.status}, not open`);
     const budget = a.budget as number;
     if (!Number.isFinite(budget) || budget <= 0) throw new Refused("the budget must be a number above zero");
+    if (p.estimate !== null && p.estimate.amount > budget) throw new Refused(`the estimate is ${p.estimate.amount} ${p.estimate.unit}; the budget does not cover it`);
     const key = `${caseId}:${id}`;
     if (running.has(key)) throw new Refused(`proposal ${id} is already being run`);
     running.add(key);
+    // what the case looked like at the click: if the run ends or pauses, or the plan is decided or replaced, before the query is priced, nothing is accepted
+    const { run, plan } = session.state;
+    const run0 = run.id, plan0 = plan.current?.id ?? null;
+    const moved = (): string | null => {
+      const now = session.state;
+      if (now.run.id !== run0) return "the run changed while the query was being priced";
+      if (run0 !== null && (now.run.status === "finished" || now.run.status === "paused")) return `the run is ${now.run.status}`;
+      if ((now.plan.current?.id ?? null) !== plan0 || (plan0 !== null && (now.plan.status === "denied" || now.plan.status === "replanning"))) return "the plan was decided while the query was being priced";
+      return null;
+    };
     // The runner prices it, runs it if the budget covers the estimate, and writes its own entries as they happen. A budget that does not cover the
     // estimate runs nothing and leaves the proposal open: the screen shows that from the entries.
-    later(hub, runProposal(session, deps.runner, { proposal: id, budget, actor }).finally(() => { running.delete(key); }));
+    later(hub, runProposal(session, deps.runner, { proposal: id, budget, actor, guard: moved }).finally(() => { running.delete(key); }));
   },
 });
 

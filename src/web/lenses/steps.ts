@@ -196,9 +196,17 @@ export function makeSteps(ui: Ui, open: Open): View {
   const waiting = (s: CaseState): HTMLElement | null => {
     const open = Object.values(s.proposals).filter((p) => p.kind === "costly_query" && p.status === "open"
       && !(s.plan.status === "accepted" && p.step !== null && Object.hasOwn(s.plan.budgets, p.step)));
-    // a proposal that was accepted and whose query is still running is shown as running, from the query on the stream
-    const underway = Object.values(s.proposals).filter((p) => p.kind === "costly_query" && p.status === "accepted"
-      && Object.values(s.queries).some((q) => q.status === "running" && q.purpose === "result" && q.source === p.source && q.text === p.text && q.why === p.why));
+    // A proposal that was accepted and whose query has not finished reads as running. The query is the one its acceptance caused (the cause on the
+    // entries), not one with matching text: the text on the screen is what the source was sent, not what the proposal stored.
+    const entries = store.entries.slice(0, s.seq);
+    const underway = Object.values(s.proposals).filter((p) => {
+      if (p.kind !== "costly_query" || p.status !== "accepted") return false;
+      const accepted = entries.find((e) => e.type === "proposal.accepted" && e.payload.proposal === p.id);
+      if (accepted === undefined) return false;
+      const issued = entries.find((e) => e.type === "query.issued" && e.cause === accepted.seq);
+      if (issued === undefined || issued.type !== "query.issued") return true;
+      return Object.hasOwn(s.queries, issued.payload.query) && s.queries[issued.payload.query]!.status === "running";
+    });
     if (open.length === 0 && underway.length === 0) return null;
     return h("section", { class: "waiting-budget" }, h("h3", null, "Waiting for a budget"), underway.map((p) =>
       h("div", { class: "proposal", data: { proposal: p.id, running: "true" } }, h("span", { class: "title" }, p.title), " ", h("span", { class: "tag tag-attention" }, "running…"))), open.map((p) => {

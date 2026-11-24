@@ -10,6 +10,8 @@ export class CaseHub {
   /** The session each engine was made for: a session closed and opened again is a new one and needs a new engine. */
   private readonly sessionOf = new WeakMap<Engine, CaseSession>();
   private readonly flying = new Set<Promise<unknown>>();
+  /** Proposals being run now, as "case:proposal", so a second press cannot start a second run while the first is still pricing. */
+  readonly running = new Set<string>();
 
   constructor(private readonly wb: Workbench, readonly deps: EngineDeps, private readonly onError: (error: unknown) => void) {}
 

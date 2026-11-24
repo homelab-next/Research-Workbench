@@ -198,7 +198,8 @@ export async function estimateStep(session: CaseSession, deps: RunnerDeps, input
   if (result.status === "refused") throw new PlanRefused(result.reasons.join("; "));
   if (result.status !== "needs_budget") throw new PlanRefused("this step is no longer priced as the plan says");
   // the plan may have been decided while the source was asked; the write below is one synchronous commit, so nothing can come between this look and it
-  if (session.state.plan.current?.id !== plan.id || session.state.plan.status !== "proposed") throw new PlanRefused("the plan was decided while the estimate was being made");
+  const { run } = session.state;
+  if (session.state.plan.current?.id !== plan.id || session.state.plan.status !== "proposed" || run.status === "finished" || run.status === "none" || run.waiting !== "plan") throw new PlanRefused("the plan was decided while the estimate was being made");
   const issued = Object.values(session.state.queries).filter((q) => q.purpose === "estimate" && q.step === step.id && q.issued_seq > began).sort((a, b) => b.issued_seq - a.issued_seq)[0];
   session.commit(() => [{ type: "step.estimated", actor, ...link(session), payload: { step: step.id, estimate: result.estimate, query: issued?.id ?? null } }]);
   return result.estimate;
