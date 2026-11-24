@@ -5,8 +5,10 @@ import { describeErrors, ManifestError, withoutNulls } from "../../modules/manif
 import type { LoadedManifest } from "../../modules/manifests";
 import type { Problem, Registry } from "../../modules/registry";
 import type { Secrets } from "../../modules/secrets";
+import { LocalProvider } from "./local";
 import { ScriptedProvider, toScript } from "./scripted";
 import type { Script } from "./scripted";
+import type { Where } from "../../core/types";
 import type { Provider } from "./types";
 
 export type { ChatMessage, ModelInfo, Provider, ToolCall, ToolSpec, TurnRequest, TurnResult } from "./types";
@@ -37,8 +39,46 @@ const MODEL_SCHEMA: Schema = {
   additionalProperties: true,
 };
 
+const LOCAL_SCHEMA: Schema = {
+  type: "object",
+  required: ["base_url"],
+  properties: {
+    base_url: { type: "string", minLength: 1 },
+    credential: { type: "string", minLength: 1 },
+    context: { type: "integer", minimum: 1 },
+    efforts: { type: "array", items: { type: "string", minLength: 1 } },
+    timeout_ms: { type: "integer", minimum: 1 },
+  },
+  additionalProperties: true,
+};
+
+/** A local provider from its manifest, or the reason it cannot be built. */
+function buildLocal(m: LoadedManifest, registry: Registry, secrets: Secrets): LocalProvider | string {
+  const body = withoutNulls(m.body as Json) as Record<string, Json>;
+  const errors = validate(LOCAL_SCHEMA, body);
+  if (errors.length > 0) return describeErrors(errors);
+  const credential = typeof body.credential === "string" ? body.credential : null;
+  if (credential !== null && !(registry.rootOf(m.path)?.credentials ?? []).includes(credential)) {
+    return `model "${m.id}" names credential "${credential}", which this root's credentials do not include`;
+  }
+  try {
+    return new LocalProvider({
+      id: m.id,
+      base_url: body.base_url as string,
+      where: m.body.where as Where,
+      credential,
+      secrets,
+      context: typeof body.context === "number" ? body.context : null,
+      efforts: Array.isArray(body.efforts) ? (body.efforts as string[]) : [],
+      timeout_ms: typeof body.timeout_ms === "number" ? body.timeout_ms : 120000,
+    });
+  } catch (err) {
+    return `model "${m.id}": ${(err as Error).message}`;
+  }
+}
+
 /** Reads every model manifest and every script. Each problem leaves only its own manifest out. */
-export function loadProviders(registry: Registry, _secrets: Secrets): { providers: Providers; problems: Problem[] } {
+export function loadProviders(registry: Registry, secrets: Secrets): { providers: Providers; problems: Problem[] } {
   const problems: Problem[] = [];
   const problem = (m: LoadedManifest, error: string): void => {
     problems.push({ root: m.root, path: m.path, error });
@@ -68,7 +108,10 @@ export function loadProviders(registry: Registry, _secrets: Secrets): { provider
       seen.add(m.id);
       list.push(new ScriptedProvider({ id: m.id, scripts }));
     } else if (kind === "local") {
-      problem(m, "the local provider is not built yet");
+      const built = buildLocal(m, registry, secrets);
+      if (typeof built === "string") { problem(m, built); continue; }
+      seen.add(m.id);
+      list.push(built);
     } else {
       problem(m, `unknown provider "${kind}"`);
     }

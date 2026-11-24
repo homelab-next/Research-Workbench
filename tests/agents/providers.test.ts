@@ -49,14 +49,12 @@ test("an unknown provider kind and a duplicate id are problems", () => {
   put("t", "a.yaml", model("odd", "mystery"));
   put("t", "b.yaml", model("dup"));
   put("t", "c.yaml", model("dup"));
-  put("t", "d.yaml", model("loc", "local"));
   const { providers, problems } = loadProviders(load(["t", true]), secrets);
   expect(providers.all().map((p) => p.id)).toEqual(["dup"]);
   const reg = load(["t", true]);
   const all = [...reg.problems, ...problems].map((p) => p.error).join("\n");
   expect(all).toMatch(/unknown provider "mystery"/);
   expect(all).toMatch(/duplicate model id "dup"/);
-  expect(all).toMatch(/local provider is not built yet/);
 });
 
 test("a script with a turn that has no actor is left out with a problem", async () => {
@@ -67,4 +65,51 @@ test("a script with a turn that has no actor is left out with a problem", async 
   expect(problems).toHaveLength(1);
   expect(problems[0]!.error).toMatch(/missing actor/);
   expect((await providers.get("scripted")!.models()).map((m) => m.id)).toEqual(["good"]);
+});
+
+const local = (over: Record<string, string>): string => {
+  const f = { kind: "model", id: "lm", title: "L", provider: "local", where: "machine", base_url: "http://127.0.0.1:1234/v1", credential: "null", context: "null", efforts: "[]", timeout_ms: "1000", ...over };
+  return Object.entries(f).map(([k, v]) => `${k}: ${v}`).join("\n") + "\n";
+};
+const loadLocal = (text: string, credentials: string[] = [], env: Record<string, string> = {}) => {
+  put("t", "lm.yaml", text);
+  const registry = Registry.load([{ path: join(dir, "t"), trusted: true, credentials }]);
+  const out = loadProviders(registry, new Secrets(env, null));
+  return { ...out, problems: [...registry.problems, ...out.problems] };
+};
+
+test("a local model loads with the manifest's settings", () => {
+  const { providers, problems } = loadLocal(local({}));
+  expect(problems).toEqual([]);
+  expect(providers.get("lm")!.kind).toBe("local");
+  expect(providers.get("lm")!.where).toBe("machine");
+});
+
+test("a local model on another host may not say it is on this machine", () => {
+  const { providers, problems } = loadLocal(local({ base_url: "https://models.example.net/v1" }));
+  expect(providers.get("lm")).toBeNull();
+  expect(problems.map((p) => p.error).join()).toMatch(/machine/);
+  expect(loadLocal(local({ base_url: "https://models.example.net/v1", where: "network" })).problems).toEqual([]);
+});
+
+test("plain http is accepted for loopback only", () => {
+  expect(loadLocal(local({ base_url: "http://127.0.0.1:1234/v1" })).problems).toEqual([]);
+  const bad = loadLocal(local({ base_url: "http://models.example.net/v1", where: "network" }));
+  expect(bad.providers.get("lm")).toBeNull();
+  expect(bad.problems.map((p) => p.error).join()).toMatch(/https/);
+});
+
+test("a credential the root was not granted is a problem", () => {
+  const bad = loadLocal(local({ credential: "LM_KEY" }), [], { LM_KEY: "some-long-secret" });
+  expect(bad.providers.get("lm")).toBeNull();
+  expect(bad.problems.map((p) => p.error).join()).toMatch(/credential/);
+  const good = loadLocal(local({ credential: "LM_KEY" }), ["LM_KEY"], { LM_KEY: "some-long-secret" });
+  expect(good.problems).toEqual([]);
+  expect(good.providers.get("lm")).not.toBeNull();
+});
+
+test("bad settings are problems", () => {
+  expect(loadLocal(local({ timeout_ms: "0" })).providers.get("lm")).toBeNull();
+  expect(loadLocal(local({ base_url: "null" })).providers.get("lm")).toBeNull();
+  expect(loadLocal(local({ efforts: "[1]" })).providers.get("lm")).toBeNull();
 });
