@@ -17,7 +17,10 @@ const itemOf = (p: PackPart): PackItem => ({ kind: p.kind, id: p.id, title: p.ti
 
 /** True when a limit is set and the marking is stricter than it. A marking that is not one of MARKINGS is the strictest. */
 export function tooStrict(marking: Marking | null, max: Marking | null): boolean {
-  if (max === null || marking === null) return false;
+  if (max === null) return false;
+  // a limit that is not one of MARKINGS cannot be compared with, so it keeps out everything that is not fixed
+  if (!isMarking(max)) return true;
+  if (marking === null) return false;
   const rank = isMarking(marking) ? MARKINGS.indexOf(marking) : MARKINGS.length - 1;
   return rank > MARKINGS.indexOf(max);
 }
@@ -51,9 +54,10 @@ export function assemblePack(parts: PackPart[], opts: { budget: number; case_mar
   return { parts: went, items, left_out, chars: items.reduce((n, i) => n + i.chars, 0), budget: opts.budget, marking };
 }
 
+/** Left-out items are named by kind and id only: nothing of their content, titles included, may reach the model. */
 export function renderPack(pack: Pack): string {
   const blocks = pack.parts.map((p) => `## ${p.title}\n${p.text}`);
-  if (pack.left_out.length > 0) blocks.push(`Left out of this turn: ${pack.left_out.map((i) => i.title).join(", ")}`);
+  if (pack.left_out.length > 0) blocks.push(`Left out of this turn: ${pack.left_out.map((i) => `${i.kind} ${i.id}`).join(", ")}`);
   return blocks.join("\n\n");
 }
 

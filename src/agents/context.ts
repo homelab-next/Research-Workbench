@@ -3,7 +3,7 @@ import { isPlainObject } from "../core/canonical";
 import type { Schema } from "../core/schema";
 import type { CardState, CaseState } from "../core/state/types";
 import type { Marking } from "../core/types";
-import { isMarking } from "../core/types";
+import { isMarking, strictest } from "../core/types";
 import type { LoadedManifest, Registry } from "../modules/registry";
 
 export class ContextError extends Error {
@@ -15,7 +15,7 @@ export class ContextError extends Error {
 
 export interface PackPart { kind: string; id: string; title: string; text: string; marking: Marking | null; fixed: boolean }
 export interface ProfileStage { agent: string; persona: string; goal: string; procedure: string | null; skills: string[]; references: string[]; gates: string[] }
-export interface Profile { id: string; title: string; hash: string; rules: string; framework: string | null; standard: string | null; stages: Record<string, ProfileStage> }
+export interface Profile { id: string; title: string; hash: string; marking: Marking | null; rules: string; framework: string | null; standard: string | null; stages: Record<string, ProfileStage> }
 
 const PREVIEW_ROWS = 10;
 
@@ -50,9 +50,15 @@ export function loadProfile(registry: Registry, id: string): Profile {
     };
   }
   return {
-    id, title: m.title, hash: m.hash, rules: b.rules as string, framework: (b.framework as string | null | undefined) ?? null,
+    id, title: m.title, hash: m.hash, marking: markingOf(m), rules: b.rules as string, framework: (b.framework as string | null | undefined) ?? null,
     standard: (b.standard as string | null | undefined) ?? null, stages,
   };
+}
+
+/** A written marking is kept even when unknown, so the pack counts it as the most restrictive; none written is null. */
+function markingOf(m: LoadedManifest): Marking | null {
+  const x = m.body.marking;
+  return isMarking(x) ? x : x === undefined || x === null ? null : (x as never);
 }
 
 /** A manifest as a part: Markdown after the front matter, or the body as JSON for a YAML file. */
@@ -60,16 +66,17 @@ export function partOf(registry: Registry, kind: string, id: string, fixed = fal
   const m = trustedManifest(registry, kind, id);
   const text = m.text !== null ? m.text : JSON.stringify(m.body, null, 2);
   if (text.trim() === "") throw new ContextError(`${kind} "${id}" has no text`);
-  // a marking that is written but is not a known one is kept, so the pack counts it as the most restrictive
-  const marking = isMarking(m.body.marking) ? m.body.marking : m.body.marking === undefined || m.body.marking === null ? null : (m.body.marking as never);
-  return { kind, id, title: m.title, text, marking, fixed };
+  return { kind, id, title: m.title, text, marking: markingOf(m), fixed };
 }
 
 export function stageParts(registry: Registry, profile: Profile, stage: string, opts: { schema: string | null; objective: string | null }): PackPart[] {
   const s = profile.stages[stage];
   if (s === undefined) throw new ContextError(`profile "${profile.id}" has no stage "${stage}"`);
-  const parts: PackPart[] = [partOf(registry, "rules", profile.rules, true), partOf(registry, "persona", s.persona)];
-  parts.push({ kind: "goal", id: `${stage}-goal`, title: "Goal", text: s.goal, marking: null, fixed: false });
+  // what the profile's own marking covers: its rules and its goals
+  const rules = partOf(registry, "rules", profile.rules, true);
+  if (profile.marking !== null) rules.marking = rules.marking === null ? profile.marking : strictest(rules.marking, profile.marking);
+  const parts: PackPart[] = [rules, partOf(registry, "persona", s.persona)];
+  parts.push({ kind: "goal", id: `${stage}-goal`, title: "Goal", text: s.goal, marking: profile.marking, fixed: false });
   if (s.procedure !== null) parts.push(partOf(registry, "procedure", s.procedure));
   for (const id of s.skills) parts.push(partOf(registry, "skill", id));
   if (opts.schema !== null) parts.push(partOf(registry, "schema", opts.schema, true));

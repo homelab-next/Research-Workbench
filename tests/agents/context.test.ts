@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cardPart, casePart, ContextError, loadProfile, partOf, schemaOf, stageParts } from "../../src/agents/context";
@@ -184,7 +184,27 @@ test("the likelihood scale and confidence levels are data in the standard", () =
   expect(body.confidence).toEqual(["low", "moderate", "high"]);
 });
 
+test("a marking on the profile applies to its rules and goals, and an unknown one counts as the most restrictive", () => {
+  const file = join(root, "context", "profile.yaml");
+  const orig = readFileSync(file, "utf8");
+  const stage = (m: string): Parameters<typeof stageParts> => {
+    writeFileSync(file, orig.replace("title: Investigation\n", `title: Investigation\nmarking: ${m}\n`));
+    const r = Registry.load([{ path: root, trusted: true, credentials: [] }]);
+    return [r, loadProfile(r, "investigation"), "research", { schema: null, objective: null }];
+  };
+  const amber = stageParts(...stage("TLP:AMBER"));
+  expect(amber.find((x) => x.kind === "rules")!.marking).toBe("TLP:AMBER");
+  expect(amber.find((x) => x.kind === "goal")!.marking).toBe("TLP:AMBER");
+  expect(amber.find((x) => x.kind === "persona")!.marking).toBeNull();
+  const odd = stageParts(...stage("TLP:PURPLE"));
+  expect(odd.find((x) => x.kind === "goal")!.marking as unknown).toBe("TLP:PURPLE");
+  expect(odd.find((x) => x.kind === "rules")!.marking as unknown).toBe("TLP:PURPLE");
+});
+
 test("the sample context names no real system", () => {
-  const text = ["profile.yaml", "rules.md", "objective.yaml", "framework.yaml", "standards/icd203.yaml"].map((f) => readFileSync(join(root, "context", f), "utf8")).join("\n");
+  const files = (d: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(d, e.name)) : [join(d, e.name)]));
+  const all = files(join(root, "context"));
+  expect(all.length).toBeGreaterThan(20);
+  const text = all.map((f) => readFileSync(f, "utf8")).join("\n");
   expect(text).not.toMatch(/\b(?:\d{1,3}\.){3}\d{1,3}\b/);
 });

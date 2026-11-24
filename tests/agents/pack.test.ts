@@ -84,6 +84,13 @@ test("tooStrict is true only when a limit is set and the marking is stricter", (
   expect(tooStrict("TLP:PURPLE" as never, "TLP:AMBER")).toBe(true);
 });
 
+test("a limit that is not a marking keeps out every part that is not fixed", () => {
+  const p = assemblePack([fixed("case", 5), part("a", 5, null), part("b", 5, "TLP:CLEAR")], { ...open, max_marking: "TLP:PURPLE" as never }) as Pack;
+  expect(p.items.map((i) => i.id)).toEqual(["case"]);
+  expect(p.left_out.map((i) => i.id)).toEqual(["a", "b"]);
+  expect(tooStrict(null, "TLP:PURPLE" as never)).toBe(true);
+});
+
 test("mayGo follows the policy", () => {
   expect(mayGo("TLP:AMBER", "hosted", policy)).toBe(false);
   expect(mayGo("TLP:AMBER", "machine", policy)).toBe(true);
@@ -93,11 +100,21 @@ test("mayGo refuses a marking the policy does not know", () => {
   expect(mayGo("TLP:PURPLE" as never, "machine", policy)).toBe(false);
 });
 
+test("a card left out for its marking has neither title nor text in the rendered pack", () => {
+  const secret = { kind: "card", id: "c3", title: "Payroll breach at Acme", text: "salary details", marking: "TLP:AMBER" as Marking, fixed: false };
+  const p = assemblePack([fixed("case", 5, "TLP:GREEN"), secret], { ...open, max_marking: "TLP:GREEN" }) as Pack;
+  const out = renderPack(p);
+  expect(p.marking).toBe("TLP:GREEN");
+  expect(out).toContain("Left out of this turn: card c3");
+  expect(out).not.toContain("Payroll");
+  expect(out).not.toContain("salary");
+});
+
 test("the rendered pack names what was left out", () => {
   const p = assemblePack([fixed("rules", 5), part("big", 5000), part("huge", 5000)], { budget: 100, case_marking: "TLP:CLEAR", max_marking: null }) as Pack;
   const out = renderPack(p);
   expect(out.startsWith("## T-rules\nxxxxx")).toBe(true);
-  expect(out.endsWith("Left out of this turn: T-big, T-huge")).toBe(true);
+  expect(out.endsWith("Left out of this turn: k big, k huge")).toBe(true);
   const all = renderPack(assemblePack([fixed("a", 3), part("b", 3)], open) as Pack);
   expect(all).toBe("## T-a\nxxx\n\n## T-b\nxxx");
 });
