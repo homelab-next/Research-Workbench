@@ -139,6 +139,7 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
     if (key === routeKey && view !== null) return;
     routeKey = key; route = next;
     view?.destroy?.(); view = null;
+    toasts.dropUndo();                       // an Undo belongs to the case it was made in
     handlers = {};
     if (next.screen === "case") {
       if (store === null || store.id !== next.id) {

@@ -76,7 +76,7 @@ export function makeBrief(ui: Ui, open: Open): View {
       const k = e as KeyboardEvent;
       const box = k.target as HTMLInputElement;
       if (k.key === "Escape") { k.stopPropagation(); stopping = false; box.value = ""; render(); }
-      else if (k.key === "Enter" && box.value.trim() !== "") { const reason = box.value.trim(); stopping = false; box.value = ""; render(); void ui.act("stop", { reason }); }
+      else if (k.key === "Enter" && box.value.trim() !== "") { const reason = box.value.trim(); void ui.act("stop", { reason }).then((ok) => { if (ok) { stopping = false; box.value = ""; render(); } }); }
     } },
   }) as HTMLInputElement;
 

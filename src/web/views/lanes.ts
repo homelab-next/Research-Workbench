@@ -50,8 +50,8 @@ export function makeLanes(ui: Ui, store: CaseStore, card: (id: string, state: Ca
               if (k.key === "Escape") { k.stopPropagation(); stop(); }
               else if (k.key === "Enter") {
                 const title = box.value.trim();
-                editing = false; shown = null; paint(store.shown, latest);
-                if (title !== "" && title !== l.title) void ui.act("rename_lane", { lane: l.id, title });
+                if (title === "" || title === l.title) { stop(); return; }
+                void ui.act("rename_lane", { lane: l.id, title }).then((ok) => { if (ok) stop(); });
               }
             },
             blur: () => stop(),
@@ -94,7 +94,7 @@ export function makeLanes(ui: Ui, store: CaseStore, card: (id: string, state: Ca
         const k = e as KeyboardEvent;
         const field = k.target as HTMLInputElement;
         if (k.key === "Escape") { k.stopPropagation(); adding = false; paintBox(); }
-        else if (k.key === "Enter" && field.value.trim() !== "") { const title = field.value.trim(); adding = false; paintBox(); void ui.act("add_lane", { title }); }
+        else if (k.key === "Enter" && field.value.trim() !== "") { const title = field.value.trim(); void ui.act("add_lane", { title }).then((ok) => { if (ok) { adding = false; paintBox(); } }); }
       } },
     });
     box.appendChild(h("form", { class: "new-lane-form", on: { submit: (e) => e.preventDefault() } }, input));

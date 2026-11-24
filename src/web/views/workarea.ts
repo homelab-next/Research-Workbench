@@ -69,7 +69,7 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
   };
 
   // ---------- commands, with the words each one answers in ----------
-  const undo = (target: number): { label: string; act(): void } => ({ label: "Undo", act: () => { void ui.send("undo", { target }, "that action can no longer be undone"); } });
+  const undo = (target: number): { label: string; act(): void } => ({ label: "Undo", act: () => { void ui.send("undo", { target }, "that action can no longer be undone", store.id); } });
   const laneTitle = (s: CaseState, id: string | null): string => s.lanes.find((l) => l.id === id)?.title ?? "Kept";
   const done = (message: string, r: { seq: number } | null): void => { if (r !== null) ui.toast(message, undo(r.seq)); };
   const env: CardEnv = {

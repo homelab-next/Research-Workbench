@@ -328,3 +328,34 @@ test("five hundred cards arrive without rebuilding the list", async () => {
   expect(q.all("[data-area=incoming] [data-card]").length).toBe(500);
   expect(q.q("[data-card=c1]")).toBe(firstNode);
 });
+
+test("an Undo does not outlive its case: leaving dismisses it, and a stale click sends nothing", async () => {
+  const q = await open();
+  await q.s.newCase();
+  const c = firstIncoming(q);
+  q.click(`[data-card=${c}]`); q.click(`[data-card=${c}] [data-action=keep]`); await q.settle();
+  const undo = q.q(".toast [data-action=undo]");
+  const sent: string[] = [];
+  const real = q.ui.api.command;
+  q.ui.api.command = async (id, name, args) => { sent.push(`${id} ${name}`); return real(id, name, args); };
+  q.win.location.hash = "#/case/CASE-2"; await q.settle();
+  expect(q.root.querySelector(".toast [data-action=undo]")).toBeNull();
+  q.click(undo); await q.settle();                // a click on the detached button's handler, as a late one would be
+  expect(sent).toEqual([]);
+});
+
+test("Undo bound to a case refuses when another case is open", async () => {
+  const q = await open();
+  await q.s.newCase();
+  q.win.location.hash = "#/case/CASE-2"; await q.settle();
+  expect(await q.ui.send("undo", { target: 1 }, undefined, "CASE-1")).toBeNull();
+  expect(q.toasts().at(-1)).toBe("That undo belongs to CASE-1");
+});
+
+test("the Stop reason stays typed when the server refuses it", async () => {
+  const q = await open("plan");
+  q.ui.act = async () => false;
+  q.click(".stop");
+  q.fill(q.q(".stop-reason"), "because"); q.press("Enter"); await q.settle();
+  expect((q.q(".stop-reason") as HTMLInputElement).value).toBe("because");
+});
