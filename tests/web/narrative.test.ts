@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { latestDraft } from "../../src/core/state";
-import type { Actor, Section } from "../../src/core/types";
+import type { Actor, Marking, Section } from "../../src/core/types";
 import { page } from "../helpers/dom";
 import type { Page } from "../helpers/dom";
 
@@ -38,9 +38,16 @@ async function blockerRaised(): Promise<string> {
   await settled();
   return id;
 }
-function propose(section: Section, text: string): string {
+/** Raises a narrative proposal by hand, as an agent would after its model request (at the given marking, the case's by default). */
+function propose(section: Section, text: string, opts: { marking?: Marking; request?: boolean } = {}): string {
+  const session = p.s.app.hub.read("CASE-1");
+  if (opts.request !== false) {
+    session.commit((_st, ids) => [{ type: "model.request", actor: agent, payload: {
+      request: ids.next("request"), provider: "scripted", model: "m", effort: null, where: "machine", marking: opts.marking ?? session.state.meta!.marking, pack: [], left_out: [], messages: session.blobs.put("{}"), tools: [],
+    } }]);
+  }
   let made = "";
-  p.s.app.hub.read("CASE-1").commit((_st, ids) => {
+  session.commit((_st, ids) => {
     made = ids.next("proposal");
     return [{ type: "proposal.created", actor: agent, payload: { proposal: { id: made, kind: "narrative", title: `Proposed ${section}`, by: "assistant", section, text, cites: [] } } }];
   });
@@ -338,6 +345,17 @@ test("a narrative proposal can be accepted, edited then accepted, or discarded",
   expect(latest().product.alternatives).toBe("My alternatives.");
   expect(latest().author).toEqual({ kind: "human", id: "analyst" });
   expect(p.all(".proposal").length).toBe(0);
+});
+
+test("a narrative proposal shows the marking of the text beside it, or that it is unknown", async () => {
+  await atGate();
+  // an agent's text with no request before it has no known marking; text after a request carries that request's
+  const none = propose("assessment", "Words from nowhere.", { request: false });
+  const red = propose("summary", "Red words.", { marking: "TLP:RED" });
+  await settled();
+  expect(p.q(`.proposal[data-proposal=${red}] .proposal-head`).textContent).toContain("TLP:RED");
+  expect(p.q(`.proposal[data-proposal=${none}] .proposal-head`).textContent).toContain("marking unknown");
+  expect((p.q(`[data-proposal=${none}] [data-action=accept-proposal]`) as HTMLButtonElement).disabled).toBe(true);
 });
 
 test("Copy as Markdown puts the recorded text on the clipboard; when it cannot, the text is shown selected", async () => {

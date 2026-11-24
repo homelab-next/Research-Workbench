@@ -1,7 +1,8 @@
 import type { Json } from "../core/canonical";
 import { Refused } from "../core/refused";
 import type { Schema } from "../core/schema";
-import { latestDraft } from "../core/state";
+import { latestDraft, proposalMarking } from "../core/state";
+import { strictest } from "../core/types";
 import type { Product } from "../core/types";
 import { defineCommand } from "./commands";
 
@@ -23,8 +24,11 @@ defineCommand("accept_proposal", {
     if (p.section === "key_findings") throw new Refused("key findings are edited as findings, not as text");
     const latest = latestDraft(session.state);
     if (latest === null) throw new Refused("there is no draft yet to put this in");
+    // text a model wrote is as strict as everything that model had seen: the draft takes at least the marking of the request behind the text
+    const marked = proposalMarking(session.entries(), p.seq);
+    if (marked === null) throw new Refused("the marking of this text is unknown");
     const words = a.text === undefined ? p.text : text(a, "text");
-    const product: Product = { ...latest.product, [p.section]: words };
+    const product: Product = { ...latest.product, [p.section]: words, marking: strictest(latest.product.marking, marked) };
     engine.revise({ actor, product, reason: `accepted proposal ${id}` });
     const run = session.state.run.id;
     session.commit(() => [{ type: "proposal.accepted", actor, ...(run === null ? {} : { run }), payload: { proposal: id, budget: null } }]);

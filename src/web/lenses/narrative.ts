@@ -1,4 +1,4 @@
-import { blockers, CARD_REF, latestDraft, publishable } from "../../core/state";
+import { blockers, CARD_REF, latestDraft, proposalMarking, publishable } from "../../core/state";
 import type { CaseState } from "../../core/state";
 import { CONFIDENCES } from "../../core/types";
 import type { Actor, Draft, Finding, Product } from "../../core/types";
@@ -455,26 +455,30 @@ export function makeNarrative(ui: Ui, open: Open): NarrativeView {
     return open.map((p) => {
       if (p.kind !== "narrative") return h("div");
       const editing = proposalEdit.has(p.id);
-      const kids: Child[] = [h("p", { class: "proposal-head" }, `Proposed ${TITLE.get(p.section) ?? p.section} · by ${p.by}`)];
+      // the marking of the model request that wrote the text, which the draft takes when it is accepted; unknown text cannot be accepted
+      const marked = proposalMarking(store.entries, p.seq);
+      const unknown = "The marking of this text is unknown, so it cannot be put in the draft";
+      const kids: Child[] = [h("p", { class: "proposal-head" }, `Proposed ${TITLE.get(p.section) ?? p.section} · by ${p.by}`, " ",
+        marked === null ? tag(ui, "attention", "marking unknown", unknown) : markingChip(ui, marked))];
       if (!editing) {
         kids.push(h("div", { class: "text" }, paragraphs(p.text)));
         kids.push(h("div", { class: "actions" },
           h("button", {
-            type: "button", class: "primary", data: { action: "accept-proposal" }, disabled: ro() || !canEdit(s) || inflight.has(`accept:${p.id}`),
-            title: ro() ? REPLAY_REFUSAL : latestDraft(s) === null ? "There is no draft yet to put this in" : !canEdit(s) ? "A draft can be edited while a run is in progress" : "Put this in the draft as a new revision; it goes back through review",
+            type: "button", class: "primary", data: { action: "accept-proposal" }, disabled: ro() || !canEdit(s) || inflight.has(`accept:${p.id}`) || marked === null,
+            title: ro() ? REPLAY_REFUSAL : marked === null ? unknown : latestDraft(s) === null ? "There is no draft yet to put this in" : !canEdit(s) ? "A draft can be edited while a run is in progress" : "Put this in the draft as a new revision; it goes back through review",
             on: { click: () => { guarded(`accept:${p.id}`, "accept_proposal", { proposal: p.id }); } },
           }, "Accept"),
           h("button", { type: "button", data: { action: "edit-proposal" }, disabled: ro(), on: { click: () => { proposalEdit.add(p.id); proposalText.set(p.id, p.text); sigs.delete(proposalsBox); render(); } } }, "Edit"),
           h("button", { type: "button", data: { action: "discard-proposal" }, disabled: ro(), on: { click: () => { void ui.act("reject_proposal", { proposal: p.id, reason: "discarded" }); } } }, "Discard")));
       } else {
         const accept = h("button", {
-          type: "button", class: "primary", data: { action: "accept-edited" }, disabled: ro() || !canEdit(s) || inflight.has(`accept:${p.id}`) || (proposalText.get(p.id) ?? "").trim() === "",
-          title: latestDraft(s) === null ? "There is no draft yet to put this in" : undefined,
+          type: "button", class: "primary", data: { action: "accept-edited" }, disabled: ro() || !canEdit(s) || inflight.has(`accept:${p.id}`) || marked === null || (proposalText.get(p.id) ?? "").trim() === "",
+          title: marked === null ? unknown : latestDraft(s) === null ? "There is no draft yet to put this in" : undefined,
           on: { click: () => { const t = proposalText.get(p.id) ?? ""; if (t.trim() !== "") guarded(`accept:${p.id}`, "accept_proposal", { proposal: p.id, text: t }); } },
         }, "Accept as edited") as HTMLButtonElement;
         kids.push(h("textarea", {
           name: `Text proposed in ${p.id}`, value: proposalText.get(p.id) ?? p.text, disabled: ro(),
-          on: { input: (e) => { proposalText.set(p.id, (e.target as HTMLTextAreaElement).value); accept.disabled = ro() || (proposalText.get(p.id) ?? "").trim() === ""; } },
+          on: { input: (e) => { proposalText.set(p.id, (e.target as HTMLTextAreaElement).value); accept.disabled = ro() || marked === null || (proposalText.get(p.id) ?? "").trim() === ""; } },
         }), h("div", { class: "actions" }, accept,
           h("button", { type: "button", data: { action: "cancel-proposal-edit" }, on: { click: () => { proposalEdit.delete(p.id); proposalText.delete(p.id); sigs.delete(proposalsBox); render(); } } }, "Cancel")));
       }

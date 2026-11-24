@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { blockers, latestDraft } from "../../src/core/state";
-import type { Actor, Section } from "../../src/core/types";
+import type { Actor, Marking, Section } from "../../src/core/types";
+import { agentParts } from "../../src/server/converse";
 import { served } from "../helpers/served";
 import type { Served } from "../helpers/served";
 
@@ -18,8 +19,22 @@ afterEach(async () => {
 const agent: Actor = { kind: "agent", id: "assistant", stage: "agent", profile: "investigation", model: "m", effort: null, where: "machine" };
 const state = (id: string) => s.app.hub.read(id).state;
 
-/** Raises a narrative proposal by hand, as the agent pane will, and returns its id. */
-function propose(id: string, section: Section, text: string): string {
+/** The model request an agent answers before it writes, at the given marking (the case's by default). */
+function requestAs(id: string, marking?: Marking): string {
+  const session = s.app.hub.read(id);
+  let request = "";
+  session.commit((_st, ids) => {
+    request = ids.next("request");
+    return [{ type: "model.request", actor: agent, payload: {
+      request, provider: "scripted", model: "m", effort: null, where: "machine", marking: marking ?? session.state.meta!.marking, pack: [], left_out: [], messages: session.blobs.put("{}"), tools: [],
+    } }];
+  });
+  return request;
+}
+
+/** Raises a narrative proposal by hand, as an agent would after its model request, and returns its id. */
+function propose(id: string, section: Section, text: string, opts: { marking?: Marking; request?: boolean } = {}): string {
+  if (opts.request !== false) requestAs(id, opts.marking);
   let made = "";
   s.app.hub.read(id).commit((_st, ids) => {
     made = ids.next("proposal");
@@ -149,4 +164,59 @@ test("approve without the draft it was shown, and accept_plan without the plan i
   expect(await raw("accept_plan", { budgets: { s3: 1 } })).toBe(400);
   expect(await raw("approve", {})).toBe(400);
   expect(s.entries(id).length).toBe(before);
+});
+
+test("an answer written under a stricter marking keeps that marking when accepted into the draft", async () => {
+  s = await served();
+  const id = await s.newCase();
+  cases.push(id);
+  await s.toPublishGate(id);
+  const session = s.app.hub.read(id);
+  expect(session.state.meta!.marking).toBe("TLP:GREEN");
+  let turn = "";
+  session.commit((_st, ids) => { turn = ids.next("turn"); return [{ type: "agent.asked", actor: { kind: "human", id: "analyst" }, payload: { turn, text: "Earlier?", left_out: [], added: [] } }]; });
+  const request = requestAs(id, "TLP:RED");
+  session.commit(() => [{ type: "agent.answered", actor: agent, payload: { turn, request, text: "Text a model wrote after reading RED material.", cites: [] } }]);
+  expect((await s.command(id, "propose_answer", { turn, section: "summary" })).status).toBe(200);
+  const p = Object.values(session.state.proposals).at(-1)!;
+  const before = session.state.seq;
+  expect((await s.command(id, "accept_proposal", { proposal: p.id })).status).toBe(200);
+  const d = latestDraft(session.state)!;
+  expect(d.product.summary).toBe("Text a model wrote after reading RED material.");
+  expect(d.product.marking).toBe("TLP:RED");
+  expect(agentParts(session, s.app.hub.deps, []).find((x) => x.kind === "draft")!.marking).toBe("TLP:RED");
+  await s.app.hub.idle();
+  // nothing after it goes to a model below RED
+  const later = s.entries(id).filter((e) => e.seq > before && e.type === "model.request");
+  for (const e of later) if (e.type === "model.request") expect(e.payload.marking).toBe("TLP:RED");
+});
+
+test("an agent's proposal carries the marking of the request it answered", async () => {
+  s = await served();
+  const id = await s.newCase();
+  cases.push(id);
+  await s.toPublishGate(id);
+  const p = propose(id, "alternatives", "Other readings.", { marking: "TLP:AMBER" });
+  expect((await s.command(id, "accept_proposal", { proposal: p })).status).toBe(200);
+  expect(latestDraft(state(id))!.product.marking).toBe("TLP:AMBER");
+});
+
+test("a proposal whose text has no known request is refused and stays open", async () => {
+  s = await served();
+  const id = await s.newCase();
+  cases.push(id);
+  await s.toPublishGate(id);
+  const n = state(id).drafts.length;
+  const p = propose(id, "summary", "Words from nowhere.", { request: false });
+  expect(await s.command(id, "accept_proposal", { proposal: p })).toEqual({ status: 409, body: { ok: false, refused: ["the marking of this text is unknown"] } });
+  // a person's proposal whose cause is not an answer
+  let q = "";
+  s.app.hub.read(id).commit((_st, ids) => {
+    q = ids.next("proposal");
+    return [{ type: "proposal.created", actor: { kind: "human", id: "analyst" }, payload: { proposal: { id: q, kind: "narrative", title: "t", by: "analyst", section: "summary", text: "Mine.", cites: [] } } }];
+  });
+  expect(await s.command(id, "accept_proposal", { proposal: q })).toEqual({ status: 409, body: { ok: false, refused: ["the marking of this text is unknown"] } });
+  expect(state(id).proposals[p]!.status).toBe("open");
+  expect(state(id).proposals[q]!.status).toBe("open");
+  expect(state(id).drafts.length).toBe(n);
 });

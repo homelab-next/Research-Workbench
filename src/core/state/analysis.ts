@@ -1,5 +1,5 @@
 import { ANSWER_ACTIONS, CONFIDENCES, FEEDBACK_KINDS, isMarking, SEVERITIES } from "../types";
-import type { Challenge, CheckFinding, Draft, Entry, Payloads } from "../types";
+import type { Challenge, CheckFinding, Draft, Entry, Marking, Payloads } from "../types";
 import { canonical } from "../canonical";
 import type { Json } from "../canonical";
 import { has, isBool, isNum, isObj, isOneOf, isStr, isStrList, malformed, recordSkip } from "./guards";
@@ -194,4 +194,24 @@ export function blockers(state: CaseState, draftHash: string): string[] {
  */
 export function publishable(state: CaseState, draftHash: string): boolean {
   return blockers(state, draftHash).length === 0;
+}
+
+/**
+ * The marking of a narrative proposal's text: the marking of the model request that wrote it (text a model wrote is as strict as everything that
+ * model had seen). An agent's proposal: its latest request before it, by the same agent and stage. A person's proposal of an answer: the request
+ * the answer it was caused by names. Null when no such request is recorded, so the marking is unknown.
+ */
+export function proposalMarking(entries: readonly Entry[], proposalSeq: number): Marking | null {
+  const at = entries.findLast((e) => e.seq === proposalSeq);
+  if (at === undefined || at.type !== "proposal.created") return null;
+  const marking = (e: Entry | undefined): Marking | null => (e !== undefined && e.type === "model.request" && isMarking(e.payload.marking) ? e.payload.marking : null);
+  const a = at.actor;
+  if (a.kind === "agent") {
+    return marking(entries.findLast((x) => x.seq < at.seq && x.type === "model.request" && x.actor.kind === "agent" && x.actor.id === a.id && x.actor.stage === a.stage));
+  }
+  if (at.cause === undefined || at.cause === null) return null;
+  const cause = entries.findLast((x) => x.seq === at.cause);
+  if (cause === undefined || cause.type !== "agent.answered") return null;
+  const request = cause.payload.request;
+  return marking(entries.findLast((x) => x.seq < cause.seq && x.type === "model.request" && x.payload.request === request));
 }
