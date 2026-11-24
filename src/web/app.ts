@@ -3,7 +3,7 @@ import type { Observable } from "../core/types";
 import { clear } from "./dom";
 import { CaseStore, follow } from "./store";
 import type { Ui, View } from "./ui";
-import { homeView } from "./views/home";
+import { homeView, MODES } from "./views/home";
 import { newView } from "./views/newcase";
 import { pickView, soonView } from "./views/pick";
 import { topBar } from "./views/topbar";
@@ -20,7 +20,7 @@ export function parseRoute(hash: string): Route {
   const home: Route = { screen: "home" };
   if (parts[0] === "investigate") return parts.length === 1 ? { screen: "pick" } : parts.length === 2 && parts[1] === "new" ? { screen: "new" } : home;
   if (parts[0] === "soon" && parts.length === 2 && /^[a-z0-9-]+$/.test(parts[1]!)) return { screen: "soon", mode: parts[1]! };
-  if (parts[0] === "case" && parts.length === 2 && /^CASE-[0-9]+$/.test(parts[1]!)) return { screen: "case", id: parts[1]! };
+  if (parts[0] === "case" && parts.length === 2 && /^CASE-[0-9]{1,9}$/.test(parts[1]!)) return { screen: "case", id: parts[1]! };
   return home;
 }
 
@@ -59,6 +59,8 @@ export interface AppOptions { caseScreen?: CaseScreen }
 export interface Shell {
   ui: Ui; nav: Nav;
   cases(): CaseSummaryView[];
+  /** "loading" until the first answer; "failed" when the latest read failed. */
+  casesStatus(): "loading" | "ready" | "failed";
   store(): CaseStore | null;
   route(): Route;
   focusLane(lane: string): void;
@@ -77,6 +79,7 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
   let view: Screen | null = null;
   let destroyed = false;
   let loads = 0;
+  let casesStatus: "loading" | "ready" | "failed" = "loading";
 
   const dropStore = (): void => {
     stopWatch?.(); stopFollow?.();
@@ -95,7 +98,7 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
       else if (route.screen !== "home") nav.go({ screen: "home" });
     },
   };
-  const shell: Shell = { ui, nav, cases: () => cases, store: () => store, route: () => route, focusLane: (lane) => handlers.focusLane?.(lane) };
+  const shell: Shell = { ui, nav, cases: () => cases, casesStatus: () => casesStatus, store: () => store, route: () => route, focusLane: (lane) => handlers.focusLane?.(lane) };
   // The real toasts and command sending. A toast also goes to whatever `ui.toast` was before, so a host can listen.
   const toasts = makeToasts(ui);
   const priorToast = ui.toast; const priorSend = ui.send; const priorAct = ui.act;
@@ -106,19 +109,25 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
   root.append(stage, toasts.el);
 
   const refresh = (): void => {
+    if (ui.me.role !== "analyst") return;                // only an analyst may read the case list
     const mine = ++loads;
     ui.api.cases().then((list) => {
       if (destroyed || mine !== loads) return;
-      cases = list;
+      cases = list; casesStatus = "ready";
       view?.update();
       top.update();
-    }).catch(() => { if (!destroyed && mine === loads) ui.toast("The cases could not be loaded"); });
+    }).catch(() => {
+      if (destroyed || mine !== loads) return;
+      casesStatus = "failed";
+      view?.update();
+    });
   };
 
   const render = (): void => {
     if (destroyed) return;
     let next = parseRoute(win.location.hash);
     if (next.screen !== "home" && next.screen !== "soon" && ui.me.role !== "analyst") next = { screen: "home" };
+    if (next.screen === "soon") { const wanted = next.mode; if (!MODES.some((m) => m.id === wanted)) next = { screen: "home" }; }
     const key = routeHash(next);
     if (key === routeKey && view !== null) return;
     routeKey = key; route = next;
@@ -149,17 +158,13 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
   };
 
   const onHash = (): void => render();
-  const inField = (t: EventTarget | null): boolean => {
-    const tag = (t as HTMLElement | null)?.tagName?.toLowerCase();
-    return tag === "input" || tag === "textarea" || tag === "select" || tag === "button" || tag === "a";
-  };
   const inText = (t: EventTarget | null): boolean => {
     const tag = (t as HTMLElement | null)?.tagName?.toLowerCase();
     return tag === "input" || tag === "textarea" || tag === "select";
   };
   const onKey = (e: Event): void => {
     const k = e as KeyboardEvent;
-    if (k.key === "/" && !k.ctrlKey && !k.metaKey && !k.altKey && !inField(k.target)) {
+    if (k.key === "/" && !k.ctrlKey && !k.metaKey && !k.altKey && !inText(k.target)) {
       const box = root.querySelector("[aria-label=Command]") as HTMLElement | null;
       if (box !== null) { k.preventDefault(); box.focus(); }
     } else if (k.key === "Escape" && !inText(k.target)) nav.up();

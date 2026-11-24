@@ -233,3 +233,121 @@ test("the home command input opens a case", async () => {
   p.fill(input, "investigate CASE-2"); input.focus(); p.press("Enter"); await p.settle();
   expect(p.win.location.hash).toBe("#/case/CASE-2");
 });
+
+// --- review fixes ---
+const fillNew = (p: Page): void => {
+  p.fill("[aria-label=Title]", "Odd traffic"); p.fill("[aria-label='What was asked']", "q"); p.fill("[aria-label=Why]", "w");
+  p.fill("[aria-label='Starting value 1']", "198.51.100.77");
+};
+
+test("a failure after the case exists goes to the case and says the run did not start", async () => {
+  const p = await open();
+  p.ui.act = async () => { throw new Error("network down"); };
+  p.click("[data-mode=investigate]"); await p.settle();
+  p.click(".tile.proposed"); fillNew(p);
+  p.click("button.primary"); await p.settle();
+  expect(p.win.location.hash).toBe("#/case/CASE-1");
+  expect(p.toasts().join("|")).toContain("The case was created; the run did not start: network down");
+  expect((await p.ui.api.cases()).length).toBe(1);
+});
+
+test("a second click while a create is in flight makes no second case", async () => {
+  const p = await open();
+  p.ui.act = async () => true;
+  p.click("[data-mode=investigate]"); await p.settle();
+  p.click(".tile.proposed"); fillNew(p);
+  p.click("button.primary"); p.click("button.primary");
+  expect(p.q("button.primary").hasAttribute("disabled")).toBe(true);
+  await p.settle();
+  expect((await p.ui.api.cases()).length).toBe(1);
+});
+
+test("a requester's routes never read the case list", async () => {
+  const p = await open({ role: "requester" });
+  let reads = 0;
+  p.ui.api.cases = async () => { reads++; return []; };
+  p.win.location.hash = "#/soon/ask"; await p.settle();
+  p.win.location.hash = "#/"; await p.settle();
+  expect(reads).toBe(0);
+});
+
+test("the count shows … while the list loads and an error line, not a count, when it fails", async () => {
+  const p = await open();
+  p.ui.api.cases = async () => { throw new Error("boom"); };
+  p.click("[data-mode=hunt]"); await p.settle();
+  p.click(".trail .home"); await p.settle();
+  expect(p.q("[data-mode=investigate]").textContent).toBe("Investigate");
+  expect(p.q(".load-error").textContent).toBe("The cases could not be loaded");
+});
+
+test("the count is … before the first answer", async () => {
+  p = await page();
+  expect(p.q("[data-mode=investigate]").textContent).toBe("Investigate…");
+});
+
+test("typing approve or accept plan opens the gate's lens and says so, and sends nothing", async () => {
+  const p = await open();
+  const id = await p.s.newCase();
+  const sent: string[] = [];
+  p.ui.act = async (c) => { sent.push(c); return true; };
+  const opened: string[] = [];
+  p.win.location.hash = `#/case/${id}`; await p.settle();
+  p.ui.send = async (c) => { sent.push(c); return null; };
+  const input = p.q("[aria-label=Command]") as HTMLInputElement;
+  p.fill(input, "approve"); input.focus(); p.press("Enter"); await p.settle();
+  expect(p.q(".topbar .say").textContent).toBe("Approve the draft from the Narrative lens");
+  p.fill(input, "accept plan"); p.press("Enter"); await p.settle();
+  expect(p.q(".topbar .say").textContent).toBe("Accept the plan from the Steps lens");
+  expect(sent).toEqual([]);
+  expect(opened).toEqual([]);
+});
+
+test("a case number longer than nine digits, and an unknown soon mode, are home", async () => {
+  expect(parseRoute("#/case/CASE-1234567890")).toEqual({ screen: "home" });
+  expect(parseRoute("#/case/CASE-123456789")).toEqual({ screen: "case", id: "CASE-123456789" });
+  const p = await open({ hash: "#/soon/%3Cb%3E" });
+  expect(p.root.querySelector("[data-screen=soon]")).toBeNull();
+  p.win.location.hash = "#/soon/nonesuch"; await p.settle();
+  expect(p.root.querySelector("[data-screen=soon]")).toBeNull();
+  expect(p.root.querySelector("[data-screen=home]")).not.toBeNull();
+});
+
+test("the trail shows no pill for a case that is not in the list", async () => {
+  const p = await open();
+  p.win.location.hash = "#/case/CASE-77"; await p.settle();
+  expect(p.root.querySelector(".trail .level-item .pill")).toBeNull();
+});
+
+test("/ reaches the command bar from a focused button", async () => {
+  const p = await open();
+  p.click("[data-mode=investigate]"); await p.settle();
+  (p.q(".tile.proposed") as HTMLElement).focus();
+  p.press("/");
+  expect(p.doc.activeElement).toBe(p.q("[aria-label=Command]"));
+});
+
+test("Escape from a button in a filled new-investigation form keeps the form", async () => {
+  const p = await open();
+  p.click("[data-mode=investigate]"); await p.settle();
+  p.click(".tile.proposed");
+  p.fill("[aria-label=Title]", "keep me");
+  (p.q("[aria-label='Add a value']") as HTMLElement).focus();
+  p.press("Escape");
+  expect(p.win.location.hash).toBe("#/investigate/new");
+  expect((p.q("[aria-label=Title]") as HTMLInputElement).value).toBe("keep me");
+});
+
+test("the command box is cleared only if it still holds the command that ran, and a second Enter in flight is ignored", async () => {
+  const p = await open();
+  const id = await p.s.newCase();
+  let calls = 0;
+  let release: () => void = () => {};
+  p.ui.act = () => { calls++; return new Promise<boolean>((r) => { release = () => r(true); }); };
+  p.win.location.hash = `#/case/${id}`; await p.settle();
+  const input = p.q("[aria-label=Command]") as HTMLInputElement;
+  p.fill(input, "run"); input.focus(); p.press("Enter"); p.press("Enter");
+  expect(calls).toBe(1);
+  p.fill(input, "something typed meanwhile");
+  release(); await p.settle();
+  expect(input.value).toBe("something typed meanwhile");
+});

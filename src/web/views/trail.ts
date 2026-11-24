@@ -43,8 +43,8 @@ export function trail(shell: Shell): { el: HTMLElement; update(): void } {
     if (mode === null) return;
     el.append(sep(), h("span", { class: "level level-mode" }, MODES.filter((m) => m.roles.includes(ui.me.role) || m.id === mode).map((m) => modeButton(m, m.id === mode, cases))));
     if (route.screen === "case") {
-      const ids = cases.some((c) => c.id === route.id) ? cases : [...cases, { id: route.id, title: route.id } as CaseSummaryView];
-      el.append(sep(), h("span", { class: "level level-item" }, ids.map((c) => {
+      // only cases the server listed: an id typed into the address bar gets no pill
+      el.append(sep(), h("span", { class: "level level-item" }, cases.map((c) => {
         const go = (): void => nav.go({ screen: "case", id: c.id });
         return c.id === route.id ? pill(c.id, `${c.id} · ${c.title}`, go) : dot(c.title, go);
       })));

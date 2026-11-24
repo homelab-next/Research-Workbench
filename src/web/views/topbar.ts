@@ -9,6 +9,7 @@ export function topBar(shell: Shell): View {
   const { ui, nav } = shell;
   const h = ui.h;
   const t = trail(shell);
+  let inFlight = false;
   const say = h("p", { class: "say", role: "status" });
   const input = h("input", {
     type: "text", name: "Command", placeholder: "open, run, verify c3, or ask",
@@ -20,10 +21,13 @@ export function topBar(shell: Shell): View {
         if (k.key !== "Enter" || box.value.trim() === "") return;
         const store = shell.store();
         const intent = parseCommand(box.value, { cases: shell.cases(), in_case: store !== null, cards: store ? Object.keys(store.shown.cards) : [] });
+        if (inFlight) return;
+        inFlight = true;
+        const ran = box.value;
         void perform(intent, { ui, nav, store }).then((r) => {
-          if (r.cleared) box.value = "";
+          if (r.cleared && box.value === ran) box.value = "";
           say.textContent = r.say ?? "";
-        });
+        }).finally(() => { inFlight = false; });
       },
     },
   }) as HTMLInputElement;

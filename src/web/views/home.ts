@@ -35,10 +35,15 @@ export function homeView(shell: Shell): Screen {
   const h = ui.h;
   const role = ui.me.role;
   const open = (): number => shell.cases().filter((c) => c.run_status !== "finished").length;
-  const count = (m: Mode): string => (m.live ? `${open()} open` : "soon");
+  /** Investigate's count is the server's answer: "…" until it comes, nothing when the read failed. */
+  const count = (m: Mode): string => {
+    if (!m.live) return "soon";
+    const status = shell.casesStatus();
+    return status === "loading" ? "…" : status === "failed" && shell.cases().length === 0 ? "" : `${open()} open`;
+  };
 
   const makeTile = (m: Mode): HTMLElement => h("button", {
-    type: "button", class: m.live ? "mode" : "mode soon", data: { mode: m.id }, name: `${m.label}: ${count(m)}`, title: `${m.label}: ${count(m)}`,
+    type: "button", class: m.live ? "mode" : "mode soon", data: { mode: m.id }, name: count(m) === "" ? m.label : `${m.label}: ${count(m)}`, title: count(m) === "" ? m.label : `${m.label}: ${count(m)}`,
     on: { click: () => nav.go(m.live ? { screen: "pick" } : { screen: "soon", mode: m.id }) },
   }, h("span", { class: "label" }, m.label), h("span", { class: "count" }, count(m)));
   const columns = COLUMNS.map((col) => {
@@ -50,6 +55,7 @@ export function homeView(shell: Shell): Screen {
   });
 
   const say = h("p", { class: "say", role: "status" });
+  const loadError = h("p", { class: "load-error say", role: "alert" });
   const command = role === "analyst"
     ? h("input", {
       type: "text", name: "Command", placeholder: "investigate CASE-1",
@@ -70,6 +76,7 @@ export function homeView(shell: Shell): Screen {
 
   const el = h("main", { class: "home", data: { screen: "home" }, tabindex: -1 },
     h("h1", null, "How can I help you today?"),
+    loadError,
     h("div", { class: "columns" }, columns),
     command === null ? null : h("div", { class: "home-command" }, command, say),
     h("p", { class: "hint" }, "Press ? for keys"));
@@ -78,6 +85,7 @@ export function homeView(shell: Shell): Screen {
     el,
     update() {
       // The only live count is Investigate's: replace that tile, keeping focus where it was.
+      loadError.textContent = shell.casesStatus() === "failed" ? "The cases could not be loaded" : "";
       const old = el.querySelector("[data-mode=investigate]");
       if (old === null) return;
       const had = ui.doc.activeElement === old;

@@ -33,6 +33,7 @@ export function pickView(shell: Shell): Screen {
   };
 
   const grid = h("div", { class: "grid" });
+  const loadError = h("p", { class: "load-error say", role: "alert" });
   const filter = h("input", { type: "text", name: "Filter", placeholder: "Filter by title, id, marking or status" }) as HTMLInputElement;
 
   const shown = (): CaseSummaryView[] => newestFirst(shell.cases()).filter((c) => matches(c, filter.value));
@@ -43,6 +44,7 @@ export function pickView(shell: Shell): Screen {
       h("span", { class: "chips" }, markingChip(ui, c.marking), h("span", { class: "chip" }, `${c.incoming} incoming`), h("span", { class: "chip" }, `${c.kept} kept`)));
   };
   const render = (): void => {
+    loadError.textContent = shell.casesStatus() === "failed" ? "The cases could not be loaded" : "";
     const list = shown();
     const items: Item[] = [{ k: "new" }, ...list.map((c): Item => ({ k: "case", c })), ...(list.length === 0 && shell.cases().length > 0 ? [{ k: "none" } as Item] : [])];
     syncList(grid, items, (i) => (i.k === "case" ? `${i.c.id}|${fullName(i.c)}` : i.k),
@@ -65,7 +67,7 @@ export function pickView(shell: Shell): Screen {
     }
   });
 
-  const el = h("main", { class: "top", data: { screen: "pick" }, tabindex: -1 }, h("h1", null, "Investigate: which one?"), h("div", { class: "filter" }, filter), grid);
+  const el = h("main", { class: "top", data: { screen: "pick" }, tabindex: -1 }, h("h1", null, "Investigate: which one?"), h("div", { class: "filter" }, filter), loadError, grid);
   render();
   return { el, update: render, focus() { filter.focus(); } };
 }

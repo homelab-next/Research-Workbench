@@ -59,6 +59,7 @@ export function newView(shell: Shell): Screen {
     busy = true;
     (submit as HTMLButtonElement).disabled = true;
     clear(refusals);
+    let created = false;
     try {
       const made = await ui.api.newCase({
         title: title.value.trim(), asked: asked.value.trim(), why: why.value.trim(),
@@ -71,10 +72,14 @@ export function newView(shell: Shell): Screen {
         for (const reason of made.refused) refusals.appendChild(h("li", null, reason));
         return;
       }
-      // open the case first: ui.act sends for the case on screen, and says in a toast why a refusal happened
+      // From here the case exists: whatever goes wrong next, the person goes to the case and is told, never back to a form that would make a second one.
+      created = true;
       nav.go({ screen: "case", id: made.id });
-      await ui.act("start_run");
+      let reason = "";
+      try { if (!(await ui.act("start_run"))) reason = "see the message shown"; } catch (err) { reason = err instanceof Error ? err.message : String(err); }
+      if (reason !== "") ui.toast(`The case was created; the run did not start: ${reason}`);
     } catch (err) {
+      if (created) return;
       refusals.appendChild(h("li", null, `The case could not be created: ${err instanceof Error ? err.message : String(err)}`));
     } finally {
       busy = false;
@@ -90,5 +95,11 @@ export function newView(shell: Shell): Screen {
       field("nc-from", "Window from", from), field("nc-to", "Window to", to),
       field("nc-objective", "Objective", objective), field("nc-marking", "Marking", marking),
       refusals, submit));
+  // Escape from a button keeps a form that holds anything; it only steps up when the form is empty.
+  el.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    const filled = [title, asked, why].some((f) => f.value.trim() !== "") || current().some((r) => r.value.trim() !== "");
+    if (filled) e.stopPropagation();
+  });
   return { el, update() {}, focus() { title.focus(); } };
 }
