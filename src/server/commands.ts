@@ -47,7 +47,9 @@ const str: Schema = { type: "string" };
 const obj = (properties: Record<string, Schema>, required: string[] = Object.keys(properties)): Schema => ({ type: "object", properties, required, additionalProperties: false });
 const NONE = obj({});
 const markings: unknown[] = [...MARKINGS, null];
-const then = (command: EngineCommand): "advance" | "nothing" => (THEN_ADVANCE[command] ? "advance" : "nothing");
+/** What the server does after a command that is the engine's `command`: exactly what THEN_ADVANCE says. */
+export const thenAfter = (command: EngineCommand): "advance" | "nothing" => (THEN_ADVANCE[command] ? "advance" : "nothing");
+const then = thenAfter;
 const text = (a: Record<string, Json>, key: string): string => a[key] as string;
 
 // ---------- the run and its gates ----------
@@ -56,7 +58,11 @@ defineCommand("pause", { args: NONE, then: then("pause"), perform: ({ engine, ac
 defineCommand("resume", {
   args: NONE, then: then("resume"),
   // resume drives by itself; the promise is the hub's to track
-  perform: ({ hub, engine, actor }) => { hub.background(engine.resume(actor)); },
+  perform: ({ hub, engine, session, actor }) => {
+    const { status } = session.state.run;
+    if (status !== "paused" && status !== "interrupted") throw new Refused(`there is no paused or interrupted run to resume; the run is ${status}`);
+    hub.background(engine.resume(actor));
+  },
 });
 defineCommand("stop", { args: obj({ reason: str }), then: then("stop"), perform: ({ engine, actor }, a) => { engine.stop(actor, text(a, "reason")); } });
 defineCommand("accept_plan", {

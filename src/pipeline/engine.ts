@@ -311,7 +311,8 @@ export class Engine {
 
   /** Why a blocked stage paused the run: the case itself when its own marking may not go to the stage's model, else the stricter items. */
   private blockedReason(s: Readonly<CaseState>, stageId: string, title: string, marking: Marking): string {
-    const blocked = [...this.session.entries()].reverse().find((e) => e.type === "model.blocked");
+    // this stage's own block: your agent writes model.blocked too (stage "agent"), and its model is not this stage's
+    const blocked = [...this.session.entries()].reverse().find((e) => e.type === "model.blocked" && e.payload.stage === stageId);
     const caseMarking = s.meta?.marking ?? null;
     if (blocked !== undefined && blocked.type === "model.blocked" && caseMarking !== null) {
       const limit = Object.hasOwn(s.pack_limits, stageId) ? s.pack_limits[stageId]! : null;

@@ -255,3 +255,29 @@ test("a refusal that quotes a source error is scrubbed", async () => {
   expect(JSON.stringify(r.body)).toContain("[hidden]");
   expect(JSON.stringify(r.body)).not.toContain("db.example.net");
 });
+
+test("resume is refused with the reason when nothing is paused or interrupted, and writes nothing", async () => {
+  s = await served();
+  const id = await s.newCase();
+  const n0 = s.entries(id).length;
+  expect(await s.command(id, "resume")).toEqual({ status: 409, body: { ok: false, refused: ["there is no paused or interrupted run to resume; the run is none"] } });
+  expect(s.entries(id).length).toBe(n0);
+  await s.toPlanGate(id);
+  const n1 = s.entries(id).length;
+  expect(await s.command(id, "resume")).toEqual({ status: 409, body: { ok: false, refused: ["there is no paused or interrupted run to resume; the run is waiting"] } });
+  await s.app.hub.idle();
+  expect(s.entries(id).length).toBe(n1);
+  expect((await s.command(id, "pause")).status).toBe(200);
+  expect((await s.command(id, "resume")).status).toBe(200);
+  await s.app.hub.idle();
+  expect(s.app.hub.read(id).state.run.waiting).toBe("plan");
+  expect(s.app.hub.read(id).state.skipped).toEqual([]);
+});
+
+test("a command's then is the contract's: no command file says advance as a literal", async () => {
+  const { readdirSync, readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const dir = join(import.meta.dir, "..", "..", "src", "server");
+  const literal = readdirSync(dir).filter((f) => f.endsWith(".ts")).filter((f) => /then:\s*"advance"\s*[,}]/.test(readFileSync(join(dir, f), "utf8")));
+  expect(literal).toEqual([]);
+});

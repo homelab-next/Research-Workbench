@@ -643,6 +643,25 @@ test("a case too strict for the stage's model says the case is the problem", asy
   expect(s.state.skipped).toEqual([]);
 });
 
+test("the pause reason reads the blocked stage's own model.blocked, not a later one by your agent", async () => {
+  const wb = Workbench.open(join(dir, "wb-red-agent"), { onError: () => {} });
+  extra.push(() => wb.close());
+  const s = wb.createCase({ title: "t", asked: "a", why: "w", starting: [{ type: "address", value: START }], window: WINDOW, objective: null, marking: "TLP:RED" }, person);
+  const assistant = { kind: "agent", id: "assistant", stage: "agent", profile: "investigation", model: "m", effort: null, where: "machine" } as const;
+  const r = rig({
+    frame: async () => {
+      s.commit(() => [{ type: "model.blocked", actor: planner, payload: { stage: "frame", marking: "TLP:RED", model: "m", where: "network" } }]);
+      // a question to your agent is blocked while the stage's block is being reported
+      s.commit(() => [{ type: "model.blocked", actor: assistant, payload: { stage: "agent", marking: "TLP:RED", model: "m", where: "machine" } }]);
+      return { kind: "blocked", marking: "TLP:RED" };
+    },
+  }, s);
+  r.engine.start(person);
+  await r.engine.advance();
+  expect(s.state.run.pause_reason).toBe("Frame: this case is marked TLP:RED, which this stage's model may not receive. Choose a model that may receive TLP:RED and resume.");
+  expect(s.state.skipped).toEqual([]);
+});
+
 test("a case above the stage's pack limit says the case is the problem too", async () => {
   f.s.commit(() => [{ type: "stage.pack_limit_set", actor: person, payload: { stage: "frame", max_marking: "TLP:CLEAR" } }]);
   const r = rig({

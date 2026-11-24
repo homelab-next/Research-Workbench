@@ -4,7 +4,7 @@ import type { Schema } from "../core/schema";
 import { latestDraft, proposalMarking } from "../core/state";
 import { strictest } from "../core/types";
 import type { Product } from "../core/types";
-import { defineCommand } from "./commands";
+import { defineCommand, thenAfter } from "./commands";
 
 const obj = (properties: Record<string, Schema>, required: string[] = Object.keys(properties)): Schema => ({ type: "object", properties, required, additionalProperties: false });
 const text = (a: Record<string, Json>, key: string): string => a[key] as string;
@@ -14,7 +14,7 @@ const text = (a: Record<string, Json>, key: string): string => a[key] as string;
  * through checks, evaluation and challenge like any edit. A revision the engine refuses leaves the proposal open; once it is made, the proposal is recorded accepted.
  */
 defineCommand("accept_proposal", {
-  args: obj({ proposal: { type: "string" }, text: { type: "string" } }, ["proposal"]), then: "advance",
+  args: obj({ proposal: { type: "string" }, text: { type: "string" } }, ["proposal"]), then: thenAfter("revise"),
   perform: ({ engine, session, actor }, a) => {
     const id = text(a, "proposal");
     const p = Object.hasOwn(session.state.proposals, id) ? session.state.proposals[id]! : null;
