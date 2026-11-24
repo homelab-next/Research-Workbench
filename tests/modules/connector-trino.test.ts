@@ -397,7 +397,8 @@ test("a timeout after the POST reply cancels the query", async () => {
 test("a source that echoes the credential has its result refused and the query cancelled", async () => {
   const tokenOf = btoa(`workbench:${PW}`);
   for (const echoed of [`Basic ${tokenOf}`, PW]) {
-    const s = failing(r => json({ id: "q1", columns: [{ name: "h" }], data: [[echoed ?? r.method]] }));
+    // the echoing page names a next page, so the query is still running and must be cancelled at that URI
+    const s = failing((r, base) => json({ id: "q1", columns: [{ name: "h" }], data: [[echoed ?? r.method]], nextUri: `${base}/v1/statement/q1/3` }));
     const cc = make(s.url, { credential: "LAKE_PW" }, { LAKE_PW: PW });
     try {
       await cc.run(req(TEXT, {}, win, { timeout_ms: 5000 }));
@@ -408,7 +409,7 @@ test("a source that echoes the credential has its result refused and the query c
       expect((e as Error).message).not.toContain(PW);
       expect((e as Error).message).not.toContain(tokenOf);
     }
-    expect(deletes(s.hits)).toEqual(["DELETE /v1/statement/q1/2"]);
+    expect(deletes(s.hits)).toEqual(["DELETE /v1/statement/q1/3"]);
   }
 });
 
@@ -418,4 +419,18 @@ test("a bound boolean, object or array is a ConnectorError naming the placeholde
     expect(() => renderLiteral("thing", v as unknown as string)).toThrow(/\{thing\}/);
   }
   expect(() => c.render(req("select a from iceberg.s.events where ts >= {window.from} and h = {v}", { v: true as unknown as string }))).toThrow(ConnectorError);
+});
+
+// ---------- final review finding 10: encoded echoes, and an echo on the reply that names the query ----------
+test("an echo in an encoded form is refused, and an echo on the POST reply still cancels the query it names", async () => {
+  const uEscape = (x: string): string => [...x].map((ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
+  const escaped = failing(() => new Response(`{"id":"q1","columns":[{"name":"h"}],"data":[["${uEscape(PW)}"]]}`, { headers: { "content-type": "application/json" } }));
+  await expect(make(escaped.url, { credential: "LAKE_PW" }, { LAKE_PW: PW }).run(req(TEXT, {}, win, { timeout_ms: 5000 }))).rejects.toThrow("the source echoed the credential; result refused");
+  expect(deletes(escaped.hits)).toEqual([]); // the echoing page was the last one: the query has ended, there is nothing to cancel
+  const onPost = raw((r, base) => {
+    if (r.method === "DELETE") return new Response(null, { status: 204 });
+    return json({ id: "q1", nextUri: `${base}/v1/statement/q1/1`, warning: btoa(PW) });
+  });
+  await expect(make(onPost.url, { credential: "LAKE_PW" }, { LAKE_PW: PW }).run(req(TEXT, {}, win, { timeout_ms: 5000 }))).rejects.toThrow("echoed the credential");
+  expect(deletes(onPost.hits)).toEqual(["DELETE /v1/statement/q1/1"]);
 });

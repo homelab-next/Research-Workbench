@@ -4,7 +4,7 @@ import type { SourceManifest } from "../manifests";
 import { assertReadOnly, checkGuardrails, GuardError, stripForAnalysis, tablePattern } from "../sqlguard";
 import type { TableGuard } from "../sqlguard";
 import { effectiveBound, PLACEHOLDER } from "./placeholders";
-import { CONTROL, loadCredential, parseBase, readCapped, scrub, TimedOut, TooBig } from "./shared";
+import { assertNoEcho, CONTROL, loadCredential, parseBase, readCapped, scrub, TimedOut, TooBig } from "./shared";
 import { ConnectorError } from "./types";
 import type { Connector, ConnectorContext, QueryOutcome, QueryRequest } from "./types";
 
@@ -138,7 +138,6 @@ export class TrinoConnector implements Connector {
   private async execute(sql: string, maxRows: number, timeoutMs: number): Promise<Paged> {
     const base = parseBase(this.source.location);
     const { headers, redact } = this.auth();
-    const echoes = redact.flatMap(r => (r === "" ? [] : [r, JSON.stringify(r).slice(1, -1)]));
     const ctl = new AbortController();
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; ctl.abort(); }, timeoutMs);
@@ -160,36 +159,35 @@ export class TrinoConnector implements Connector {
       overTotal = limit < MAX_PAGE_BYTES;
       const bytes = await readCapped(res, ctl.signal, limit);
       total += bytes.length;
-      if (echoes.length > 0) {
-        const seen = new TextDecoder("utf-8").decode(bytes);
-        if (echoes.some(e => seen.includes(e))) throw new ConnectorError("the source echoed the credential; result refused");
-      }
-      let page: Page;
+      let page: Page | null = null;
       try {
         const doc: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-        if (typeof doc !== "object" || doc === null || Array.isArray(doc)) throw new Error("not an object");
-        page = doc as Page;
+        if (typeof doc === "object" && doc !== null && !Array.isArray(doc)) page = doc as Page;
       } catch {
-        throw new ConnectorError("the engine sent a page that is not a JSON object");
+        page = null;
       }
-      pages.push(bytes);
-      // Learn the query's nextUri before anything else can fail or time out, so it can be cancelled.
+      // Learn the query's nextUri before anything else can fail or time out, so it can be cancelled (an echo included).
       // An unusable nextUri leaves the last good one in place; a page with none (an error page, the last page) leaves nothing to cancel.
-      let next: string | null = null;
-      if (page.nextUri !== undefined && page.nextUri !== null) {
-        if (typeof page.nextUri !== "string") throw new ConnectorError("the engine sent a malformed nextUri");
-        let u: URL;
-        try {
-          u = new URL(page.nextUri);
-        } catch {
-          throw new ConnectorError("the engine sent a nextUri that is not a URL");
+      if (page !== null) {
+        let next: string | null = null;
+        if (page.nextUri !== undefined && page.nextUri !== null) {
+          if (typeof page.nextUri !== "string") throw new ConnectorError("the engine sent a malformed nextUri");
+          let u: URL;
+          try {
+            u = new URL(page.nextUri);
+          } catch {
+            throw new ConnectorError("the engine sent a nextUri that is not a URL");
+          }
+          if (u.origin !== base.origin) {
+            throw new ConnectorError(`the engine's nextUri is on another origin (${u.origin}); it was not contacted and no credential was sent there`);
+          }
+          next = page.nextUri;
         }
-        if (u.origin !== base.origin) {
-          throw new ConnectorError(`the engine's nextUri is on another origin (${u.origin}); it was not contacted and no credential was sent there`);
-        }
-        next = page.nextUri;
+        pending = next;
       }
-      pending = next;
+      assertNoEcho(bytes, redact, page ?? undefined);
+      if (page === null) throw new ConnectorError("the engine sent a page that is not a JSON object");
+      pages.push(bytes);
       if (page.error !== undefined && page.error !== null) {
         const msg = typeof page.error === "object" && typeof (page.error as { message?: unknown }).message === "string"
           ? (page.error as { message: string }).message : "unspecified error";

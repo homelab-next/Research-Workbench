@@ -2,7 +2,7 @@ import type { Json } from "../../core/canonical";
 import type { Cost } from "../../core/types";
 import type { EndpointManifest, SourceManifest } from "../manifests";
 import { effectiveBound, PLACEHOLDER } from "./placeholders";
-import { loadCredential, parseBase, readCapped, scrub, TimedOut, TooBig } from "./shared";
+import { assertNoEcho, loadCredential, parseBase, readCapped, scrub, TimedOut, TooBig } from "./shared";
 import { ConnectorError } from "./types";
 import type { Bound, Connector, ConnectorContext, QueryOutcome, QueryRequest } from "./types";
 
@@ -103,11 +103,15 @@ export class HttpConnector implements Connector {
     }
 
     let doc: unknown;
+    let parsed = true;
     try {
       doc = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
     } catch {
-      throw new ConnectorError(`the response from endpoint ${e.name} is not valid JSON`);
+      parsed = false;
     }
+    // A result that carries the credential is refused whole, before anything of it is kept.
+    assertNoEcho(bytes, secret === null ? [] : [secret], parsed ? doc : undefined);
+    if (!parsed) throw new ConnectorError(`the response from endpoint ${e.name} is not valid JSON`);
     const list = rowsAt(doc, e);
     const more = list.length > req.max_rows;
     const rows: Json[][] = list.slice(0, req.max_rows).map(item => e.columns.map(c => (Object.hasOwn(item, c) ? (item[c] as Json) ?? null : null)));

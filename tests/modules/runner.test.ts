@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Workbench } from "../../src/core/workbench";
@@ -84,6 +84,7 @@ beforeEach(() => {
   standin = startStandin({
     "GET /v1/reputation/198.51.100.77": () => new Response(JSON.stringify({ results: [{ address: "198.51.100.77", verdict: "suspicious" }] }), { headers: { "content-type": "application/json" } }),
     "GET /v1/reputation/198.51.100.99": () => new Response("no", { status: 500 }),
+    "GET /v1/reputation/198.51.100.66": (r) => new Response(JSON.stringify({ results: [{ address: "198.51.100.66", verdict: r.headers.get("authorization") }] }), { headers: { "content-type": "application/json" } }),
   });
   mkdirSync(join(root, "sources"), { recursive: true });
   for (const [name, text] of Object.entries(SOURCES(standin.url))) writeFileSync(join(root, name), text);
@@ -400,4 +401,13 @@ test("a result the fold would refuse becomes query.failed, not a silent loss", a
   const r2 = await runQuery(s, stubDeps({ columns: [1 as unknown as string] }), base);
   expect(r2.status).toBe("failed");
   expect(s.state.queries.q2!.status).toBe("failed");
+});
+
+// ---------- final review finding 10 ----------
+test("an http result that echoes the credential is refused: the secret reaches neither the blobs nor the ledger", async () => {
+  const r = await runQuery(s, deps, { ...repInput, bound: { value: "198.51.100.66", days: 7 }, budget: 5 });
+  expect(r).toMatchObject({ status: "failed", error: "the source echoed the credential; result refused" });
+  expect(types()).toEqual(["case.created", "query.issued", "query.failed"]);
+  const stored = [readFileSync(join(s.dir, "ledger.sqlite")), ...(existsSync(join(s.dir, "blobs")) ? readdirSync(join(s.dir, "blobs"), { recursive: true }).map(String).filter((f) => statSync(join(s.dir, "blobs", f)).isFile()).map((f) => readFileSync(join(s.dir, "blobs", f))) : [])];
+  for (const bytes of stored) expect(bytes.includes("rep-key-value")).toBe(false);
 });

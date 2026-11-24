@@ -267,3 +267,22 @@ test("a body of exactly 16 MiB is accepted", async () => {
   expect(out.rows).toEqual([[1, null]]);
   expect(out.raw.length).toBe(16 * 1024 * 1024);
 });
+
+// ---------- final review finding 10: a result that echoes the credential is refused ----------
+const uEscape = (x: string): string => [...x].map((ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
+test("a response that echoes the credential, plainly or encoded, is refused whole", async () => {
+  const forms: [string, (auth: string) => string][] = [
+    ["plain", (a) => JSON.stringify({ results: [{ address: "198.51.100.77", verdict: a }] })],
+    ["\\u-escaped", (a) => `{"results":[{"address":"198.51.100.77","verdict":"${uEscape(a)}"}]}`],
+    ["base64", (a) => JSON.stringify({ results: [{ address: "198.51.100.77", verdict: btoa(a.replace(/^Bearer /, "")) }] })],
+    ["in a key", (a) => JSON.stringify({ results: [{ address: "198.51.100.77", [a]: 1 }] })],
+    ["not JSON", (a) => `oops ${a}`],
+  ];
+  for (const [name, body] of forms) {
+    s.stop();
+    s = startStandin({ "GET /v1/reputation/198.51.100.77": (r) => json(body(r.headers.get("authorization")!)) });
+    const err = await make().run(req("reputation", { value: "198.51.100.77", days: 7 })).catch((e: unknown) => e);
+    expect(err, name).toBeInstanceOf(ConnectorError);
+    expect((err as Error).message, name).toBe("the source echoed the credential; result refused");
+  }
+});

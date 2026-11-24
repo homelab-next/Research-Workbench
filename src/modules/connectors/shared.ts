@@ -83,3 +83,40 @@ export function loadCredential(secrets: Secrets, name: string): string {
   if (CONTROL.test(value)) throw new ConnectorError(`credential ${name} cannot be sent as a header value`);
   return value;
 }
+
+const ECHO_REFUSED = "the source echoed the credential; result refused";
+
+/** The ways a secret can appear in a body: as is, JSON-escaped, \u-escaped (either case), base64 (padded or not, standard or URL alphabet) and URL-encoded. */
+function encodedForms(secret: string): string[] {
+  const bytes = Buffer.from(secret, "utf8");
+  const u = (upper: boolean): string => [...secret].map((ch) => {
+    const units = ch.length === 2 ? [ch.charCodeAt(0), ch.charCodeAt(1)] : [ch.charCodeAt(0)];
+    return units.map((n) => { const h = n.toString(16).padStart(4, "0"); return `\\u${upper ? h.toUpperCase() : h}`; }).join("");
+  }).join("");
+  const b64 = bytes.toString("base64");
+  const b64url = bytes.toString("base64url");
+  return [...new Set([secret, JSON.stringify(secret).slice(1, -1), u(false), u(true), b64, b64.replace(/=+$/, ""), b64url, encodeURIComponent(secret)])];
+}
+
+/** Every string in a parsed JSON value, keys included. */
+function* stringsIn(value: unknown, depth = 0): Generator<string> {
+  if (typeof value === "string") { yield value; return; }
+  if (depth > 256 || typeof value !== "object" || value === null) return;
+  if (Array.isArray(value)) { for (const v of value) yield* stringsIn(v, depth + 1); return; }
+  for (const [k, v] of Object.entries(value)) { yield k; yield* stringsIn(v, depth + 1); }
+}
+
+/**
+ * Throws ConnectorError when a response carries a secret: in its raw bytes (as is or in an encoded form), or in any
+ * string of its parsed body once JSON escapes are decoded. `parsed` is the parsed body, or undefined if it did not parse.
+ * The one check both network connectors use; the caller cancels anything still running.
+ */
+export function assertNoEcho(raw: Uint8Array, secrets: readonly string[], parsed?: unknown): void {
+  const live = secrets.filter((x) => x !== "");
+  if (live.length === 0) return;
+  const forms = live.flatMap(encodedForms);
+  const text = new TextDecoder("utf-8").decode(raw);
+  if (forms.some((f) => text.includes(f))) throw new ConnectorError(ECHO_REFUSED);
+  if (parsed === undefined) return;
+  for (const str of stringsIn(parsed)) if (forms.some((f) => str.includes(f))) throw new ConnectorError(ECHO_REFUSED);
+}
