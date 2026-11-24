@@ -6,7 +6,7 @@ import { runPivot, yielded } from "../../modules/pivots";
 import type { PivotManifest } from "../../modules/registry";
 import { previewCell, runQuery } from "../../modules/runner";
 import type { RunQueryResult } from "../../modules/runner";
-import { cardBrief } from "./cards";
+import { cardBrief, scrubCoverage } from "./cards";
 import type { ToolContext, ToolDef, ToolResult } from "./index";
 import { idArg, json, MAX_BOUND_KEYS, MAX_BOUND_VALUE, MAX_TEXT, params, scrub, str, ToolError, VIEW_ROWS } from "./kit";
 
@@ -30,7 +30,7 @@ export function resultOf(ctx: ToolContext, r: RunQueryResult, pivot: PivotManife
       const card = r.card !== null && Object.hasOwn(ctx.session.state.cards, r.card) ? ctx.session.state.cards[r.card]! : null;
       const empty = card === null ? null : card.empty;
       const view = {
-        ...none, status: r.status, outcome: r.outcome, card: card === null ? null : [cardBrief(card)], rows: r.rows, coverage: r.coverage, empty,
+        ...none, status: r.status, outcome: r.outcome, card: card === null ? null : [cardBrief(ctx.deps.registry, card)], rows: r.rows, coverage: scrubCoverage(ctx.deps.registry, r.coverage), empty,
         columns: r.columns, data: r.data.slice(0, VIEW_ROWS).map((row) => row.map(previewCell)),
         found: pivot === null ? null : yielded(pivot, r, ctx.deps.observables).map((o) => o.value),
       };

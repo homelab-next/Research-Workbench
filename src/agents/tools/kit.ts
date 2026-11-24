@@ -1,6 +1,6 @@
 import type { Json } from "../../core/canonical";
 import { realpathSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { basename, isAbsolute, resolve } from "node:path";
 import type { Schema } from "../../core/schema";
 import type { Registry } from "../../modules/registry";
 
@@ -39,11 +39,15 @@ export const idArg: Schema = { type: "string", minLength: 1, maxLength: MAX_ID }
 
 const HIDDEN = "[hidden]";
 
+const escapeRe = (t: string): string => t.replace(/[^\w\s]/g, "\\$&");
+/** `//` (not after a colon) and `/./` collapsed, so a path spelled oddly is matched as the plain one. */
+const tidy = (t: string): string => t.replace(/(?<!:)\/{2,}/g, "/").replace(/\/\.(?=\/)/g, "");
+
 /** Every string in the registry that says where a source is or how to sign in to it. */
 function secretsOf(registry: Registry): string[] {
   const out = new Set<string>();
-  const add = (v: string | null | undefined): void => {
-    if (typeof v === "string" && v.length >= 2) out.add(v);
+  const add = (v: string | null | undefined, min = 2): void => {
+    if (typeof v === "string" && v.length >= min) out.add(v);
   };
   for (const s of registry.sources()) {
     for (const v of [s.location, s.dir, s.root, s.user, s.credential]) add(v);
@@ -51,8 +55,14 @@ function secretsOf(registry: Registry): string[] {
       const full = resolve(s.dir, s.location);
       add(full);
       try { add(realpathSync(full)); } catch { /* a missing file has no real path */ }
+      const name = basename(s.location);
+      if (name.includes(".") || s.connector === "sql") add(name, 3);
     } else {
-      try { add(new URL(s.location).host); } catch { /* not a URL */ }
+      try {
+        const u = new URL(s.location);
+        add(u.host);
+        add(u.hostname, 3);
+      } catch { /* not a URL */ }
     }
     for (const d of [s.dir, s.root]) {
       if (isAbsolute(d)) try { add(realpathSync(d)); } catch { /* gone */ }
@@ -61,9 +71,22 @@ function secretsOf(registry: Registry): string[] {
   return [...out].sort((a, b) => b.length - a.length);
 }
 
-/** Text from a runner result or a caught error, with every source's location, folders, user and credential name taken out. The ledger keeps the full text. */
-export function scrub(registry: Registry, text: string): string {
-  let out = text;
-  for (const secret of secretsOf(registry)) out = out.split(secret).join(HIDDEN);
-  return out;
+const URL_RE = /[a-z][a-z0-9+.-]*:\/\/\S+/gi;
+const POSIX_PATH_RE = /(?<![\w.\-/~:])\/[^\s'"<>)\]/]*\/[^\s'"<>)\]]*/g;
+const WINDOWS_PATH_RE = /(?<![\w])[A-Za-z]:\\[^\s'"<>]*/g;
+
+/**
+ * Text from a runner result or a caught error, with every source's location, folders, user, credential name and host taken
+ * out: each matched in any case, percent-encoded, and with `\` separators, after the text's own paths are tidied. Unless
+ * `backstop` is false, any URL and any absolute path is hidden too, whatever it names. The ledger keeps the full text.
+ */
+export function scrub(registry: Registry, text: string, opts: { backstop?: boolean } = {}): string {
+  let out = tidy(text);
+  for (const secret of secretsOf(registry)) {
+    const forms = new Set([tidy(secret), encodeURIComponent(secret), encodeURI(secret), secret.replaceAll("/", "\\"), tidy(secret).replaceAll("/", "\\")]);
+    const re = new RegExp([...forms].sort((a, b) => b.length - a.length).map(escapeRe).join("|"), "gi");
+    out = out.replace(re, HIDDEN);
+  }
+  if (opts.backstop === false) return out;
+  return out.replace(URL_RE, HIDDEN).replace(POSIX_PATH_RE, HIDDEN).replace(WINDOWS_PATH_RE, HIDDEN);
 }
