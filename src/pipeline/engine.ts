@@ -12,6 +12,10 @@ import type { RunnerDeps, RunQueryResult } from "../modules/runner";
 import type { Seeker } from "../modules/seeker";
 import type { Pipeline, Role, StageManifest } from "./manifests";
 import { nextStep } from "./next";
+import { acceptPlan, denyPlan, requestReplan } from "./plans";
+import { frameRunner } from "./stages/frame";
+import { planRunner } from "./stages/plan";
+import { researchRunner } from "./stages/research";
 import { recoverSession } from "./recover";
 
 export interface EngineDeps {
@@ -56,7 +60,7 @@ export class Engine {
   private readonly tried = new Set<string>();
 
   constructor(private readonly session: CaseSession, private readonly deps: EngineDeps, opts: { runners?: Partial<Record<Role, StageRunner>> } = {}) {
-    this.runners = opts.runners ?? {};
+    this.runners = { frame: frameRunner, plan: planRunner, research: researchRunner, ...opts.runners };
     // A case opened here that this process did not create may hold work a stopped process left half done.
     if (!recovered.has(session)) {
       recovered.add(session);
@@ -90,6 +94,20 @@ export class Engine {
     this.session.commit((state) => (state.run.status === "paused" || state.run.status === "interrupted"
       ? [{ type: "run.resumed", actor, payload: {}, run: state.run.id }] : []));
     return this.advance({ allow_capped: true });
+  }
+
+  /** A person accepts the proposed plan, whole or in part, with budgets for its costly steps. Throws PlanRefused; advances nothing. */
+  acceptPlan(input: { steps?: string[]; budgets?: Record<string, number>; actor: Actor }): void {
+    acceptPlan(this.session, input);
+  }
+
+  denyPlan(input: { reason: string; actor: Actor }): void {
+    denyPlan(this.session, input);
+  }
+
+  /** Asks the planner to plan again with the person's note. */
+  replan(input: { note: string; actor: Actor }): void {
+    requestReplan(this.session, input);
   }
 
   setModel(stage: string, choice: ModelChoice, actor: Actor): void {
