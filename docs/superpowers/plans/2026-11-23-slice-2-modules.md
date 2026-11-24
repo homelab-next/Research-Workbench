@@ -348,7 +348,7 @@ test.each([
   ["select host_id from lake.archive.events where event_time >= timestamp '2026-11-20 00:00:00'", "time zone"],
 ])("violation: %s", (sql, why) => { expect(checkGuardrails(sql, guards).join(" ")).toContain(why); });
 test("several violations are all reported", ...);                      // select * with no filter -> two entries
-test("the table name matches case-insensitively and when quoted", ...); // "ICEBERG"."wazuh_archive"."events"
+test("the table name matches case-insensitively and when quoted", ...); // "ICEBERG"."archive"."events"
 test("stripForAnalysis removes comments and empties literals", () => {
   expect(stripForAnalysis("SELECT 'a;b' -- x\n FROM t /* y */")).toBe("select '' from t");
 });
