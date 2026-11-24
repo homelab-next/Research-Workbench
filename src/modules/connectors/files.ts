@@ -12,7 +12,8 @@ import { isPlainObject } from "../../core/canonical";
 const MAX_FILE_BYTES = 64 * 1024 * 1024;
 
 type Cell = string | number | boolean | null;
-interface Loaded { columns: string[]; rows: Cell[][]; unreadable: number }
+/** `missing`: declared columns the file does not have (a CSV header without them, or JSON lines none of which has them). */
+interface Loaded { columns: string[]; rows: Cell[][]; unreadable: number; missing: string[] }
 
 const quoteIdent = (s: string): string => `"${s.replace(/"/g, '""')}"`;
 
@@ -67,7 +68,8 @@ function loadCsv(text: string, wanted: string[] | null): Loaded {
     if (r.length > (header ?? []).length) { unreadable++; continue; }
     rows.push(index.map(i => (i < 0 ? null : r[i] ?? null)));
   }
-  return { columns: names, rows, unreadable };
+  const missing = header === null || wanted === null ? [] : wanted.filter(n => !header!.includes(n));
+  return { columns: names, rows, unreadable, missing };
 }
 
 function loadJsonl(text: string, wanted: string[] | null): Loaded {
@@ -83,7 +85,8 @@ function loadJsonl(text: string, wanted: string[] | null): Loaded {
     } catch { unreadable++; }
   }
   const names = wanted ?? (objects[0] !== undefined ? Object.keys(objects[0]) : []);
-  return { columns: names, rows: objects.map(o => names.map(n => (Object.hasOwn(o, n) ? cell(o[n]) : null))), unreadable };
+  const missing = wanted === null || objects.length === 0 ? [] : wanted.filter(n => !objects.some(o => Object.hasOwn(o, n)));
+  return { columns: names, rows: objects.map(o => names.map(n => (Object.hasOwn(o, n) ? cell(o[n]) : null))), unreadable, missing };
 }
 
 function formatOf(t: TableManifest): "csv" | "jsonl" {
@@ -141,6 +144,10 @@ export class FilesConnector implements Connector {
         }
         const loaded = formatOf(f.table) === "csv" ? loadCsv(text, wanted) : loadJsonl(text, wanted);
         if (loaded.columns.length === 0) throw new ConnectorError(`file ${f.file} has no columns`);
+        // a missing column would read as nulls with full coverage, and every lookup on it as a proven negative
+        if (loaded.missing.length > 0) {
+          throw new ConnectorError(`file ${f.file} for table ${f.table.name} has no column ${loaded.missing.join(", ")}, which the manifest declares`);
+        }
         if (new Set(loaded.columns).size !== loaded.columns.length) throw new ConnectorError(`file ${f.file} has duplicate column names`);
         db.run(`create table ${quoteIdent(f.table.name)} (${loaded.columns.map(quoteIdent).join(", ")})`);
         const insert = db.prepare(`insert into ${quoteIdent(f.table.name)} values (${loaded.columns.map(() => "?").join(", ")})`);

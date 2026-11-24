@@ -121,3 +121,24 @@ test("the row cap applies", async () => {
   expect(out.coverage).toEqual({ kind: "partial", reason: "row_limit", detail: "stopped at 5 rows" });
   c.close();
 });
+
+// ---------- final review finding 5: a declared column the file lacks is an error, not a column of nulls ----------
+test("a csv header without a declared column is a ConnectorError naming the column and file", async () => {
+  writeFileSync(join(root, "data", "assets.csv"), "asset,ip\nlaptop-1,192.0.2.17\n");
+  const declared = source({ tables: [{ name: "assets", time_column: null, guarded: false, large_columns: [], file: "assets.csv", format: "csv", columns: [{ name: "asset", type: null }, { name: "address", type: null }] }] });
+  const c = makeConnector(declared, ctx);
+  const err = await c.run(req("select asset from assets where address = {v}", { v: "192.0.2.17" })).catch((e: unknown) => e);
+  expect(err).toBeInstanceOf(ConnectorError);
+  expect((err as Error).message).toBe("file assets.csv for table assets has no column address, which the manifest declares");
+});
+
+test("json lines none of which has a declared column are a ConnectorError; a key missing from some lines is not", async () => {
+  const table = (cols: string[]) => source({ tables: [{ name: "dns", time_column: "ts", guarded: false, large_columns: [], file: "dns.jsonl", format: "jsonl", columns: cols.map(name => ({ name, type: null })) }] });
+  const err = await makeConnector(table(["ts", "client", "qname"]), ctx).run(req("select ts from dns")).catch((e: unknown) => e);
+  expect(err).toBeInstanceOf(ConnectorError);
+  expect((err as Error).message).toContain("has no column qname");
+  expect((err as Error).message).toContain("dns.jsonl");
+  const ok = await makeConnector(table(["ts", "ttl"]), ctx).run(req("select ttl from dns where ttl is not null"));
+  expect(ok.rows).toEqual([[30]]);
+  expect(ok.coverage).toEqual({ kind: "full" });
+});
