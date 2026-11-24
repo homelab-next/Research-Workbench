@@ -430,7 +430,10 @@ test("a sub-goal's title and question reach the researcher as a part titled The 
   expect(task).not.toContain("Which accounts?");
   expect(task).not.toContain("Who uses it");
   expect(task).toContain('Answer the question in the part titled "The question".');
-  expect(task).toContain("- s1: address_to_asset");
+  // the accepted steps are planner-written text too: they are in the part, not the task
+  expect(system).toContain("- s1: address_to_asset");
+  expect(task).not.toContain("address_to_asset");
+  expect(task).not.toContain("198.51.100.77");
 });
 
 test("a sent-back question is a pack part, not task text", async () => {
@@ -458,4 +461,19 @@ test("Plan writes no plan after the run was stopped while the planner was answer
   expect(after).not.toContain("plan.proposed");
   expect(after).not.toContain("stage.finished");
   expect(f.s.state.plan.current).toBeNull();
+});
+
+test("the planner's refusal reasons are a marked part, not task text", async () => {
+  const bad = planOut("192.0.2.17", ["address_to_verdict"]);
+  const r = rig({ orchestrator: [say(FRAME)], planner: [say(bad), say(planOut())] });
+  await toGate(r);
+  const asks = ofType("model.request").filter((e) => e.actor.id === "planner");
+  expect(asks).toHaveLength(2);
+  const body = JSON.parse(f.s.blobs.text(asks[1]!.payload.messages.blob)) as { messages: { role: string; content: string }[] };
+  const system = body.messages.find((m) => m.role === "system")!.content;
+  const task = body.messages.find((m) => m.role === "user")!.content;
+  expect(system).toContain("Why the plan was refused");
+  expect(system).toContain("address_to_verdict is not one the route finder offers");
+  expect(task).not.toContain("address_to_verdict");
+  expect(asks[1]!.payload.pack.some((i) => i.id === "plan-refusal" && !i.fixed)).toBe(true);
 });

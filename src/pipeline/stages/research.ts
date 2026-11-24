@@ -75,8 +75,9 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
         const steps = current.steps.filter((s) => accepted(g).includes(s.id));
         units.push({
           actor_id: actorId(g.id), title: `Research: ${g.title}`, subgoal: g.id, question: null,
-          task: [`Research sub-goal ${g.id}. ${TASK}`, "Run these accepted steps with run_step, in order, then report what each returned:", ...steps.map(describeStep)].join("\n"),
-          part: questionPart(`question-${g.id}`, `Sub-goal ${g.id}: ${g.title}\n${g.question}`, planRequests),
+          task: `Research sub-goal ${g.id}. ${TASK} Run the accepted steps it lists with run_step, in order, then report what each returned.`,
+          // the steps carry the planner's values, source and pivot: they are as strict as the question
+          part: questionPart(`question-${g.id}`, [`Sub-goal ${g.id}: ${g.title}`, g.question, "Accepted steps:", ...steps.map(describeStep)].join("\n"), planRequests),
         });
       }
     }

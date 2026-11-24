@@ -72,7 +72,16 @@ export async function planRunner(env: StageEnv): Promise<StageEnd> {
       return { kind: "finished", outcome: "pass", draft_hash: null, output: end.output as Json, reason: null };
     }
     errors = built.errors;
-    task = `Your plan was refused by the route finder:\n${errors.map((e) => `- ${e}`).join("\n")}\nReply again with the whole plan, using only routes it offers.`;
+    // the reasons quote the planner's own output: text a model wrote, as strict as the request that produced it
+    const fresh = session.entries();
+    const asked = [...fresh].reverse().find((e) => e.type === "model.request" && e.stage === stage.id);
+    const reasons = packPart({
+      kind: "note", id: "plan-refusal", title: "Why the plan was refused", text: errors.map((e) => `- ${e}`).join("\n"), fixed: false,
+      entries: fresh, written_by: asked === undefined ? [] : [asked], floor: null,
+    });
+    const at = extras.findIndex((x) => x.id === "plan-refusal");
+    if (at >= 0) extras[at] = reasons; else extras.push(reasons);
+    task = 'Your plan was refused by the route finder. The reasons are in the part titled "Why the plan was refused". Reply again with the whole plan, using only routes it offers.';
   }
   return { kind: "stalled", reason: `Plan: the planner's routes were refused twice: ${errors.join("; ")}` };
 }
