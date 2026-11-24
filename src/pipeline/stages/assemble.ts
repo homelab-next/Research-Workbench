@@ -121,11 +121,15 @@ export async function assembleRunner(env: StageEnv): Promise<StageEnd> {
 
   const now = session.state;
   const objective = m.objective === null ? "" : deps.registry.get("objective", m.objective)?.title ?? m.objective;
+  // the requests of this pass wrote the text: those made in this stage since its latest start
+  const entries = session.entries();
+  const started = entries.reduce((n, e) => (e.type === "stage.started" && e.payload.stage === stage.id ? e.seq : n), 0);
+  const written_at = entries.flatMap((e) => (e.type === "model.request" && e.stage === stage.id && e.seq > started ? [e.payload.marking] : []));
   let product;
   try {
     product = buildProduct(work, {
       objective, question: m.asked, case_marking: m.marking, cards: now.cards, source: (id) => deps.registry.source(id),
-      assumptions: output.assumptions ?? [], change: output.change ?? "",
+      assumptions: output.assumptions ?? [], change: output.change ?? "", written_at,
     });
   } catch (err) {
     if (err instanceof ToolError) return { kind: "stalled", reason: `${titleOf(env)}: ${err.message}` };

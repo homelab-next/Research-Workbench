@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { readFileSync, writeFileSync } from "node:fs";
 import { blockers, latestDraft } from "../../src/core/state";
 import type { Actor, Marking, Section } from "../../src/core/types";
 import { agentParts } from "../../src/server/converse";
@@ -219,4 +220,37 @@ test("a proposal whose text has no known request is refused and stays open", asy
   expect(state(id).proposals[p]!.status).toBe("open");
   expect(state(id).proposals[q]!.status).toBe("open");
   expect(state(id).drafts.length).toBe(n);
+});
+
+test("a draft the analyst wrote after seeing AMBER material is AMBER, and so are the publisher's request and the bundle", async () => {
+  s = await served({ before: (root) => {
+    const f = `${root}/sources/reputation.yaml`;
+    const y = readFileSync(f, "utf8");
+    if (!y.includes('marking: "TLP:GREEN"')) throw new Error("reputation.yaml not changed");
+    writeFileSync(f, y.replace('marking: "TLP:GREEN"', 'marking: "TLP:AMBER"'));
+  } });
+  const id = await s.newCase();
+  cases.push(id);
+  await s.toPublishGate(id);
+  expect(state(id).meta!.marking).toBe("TLP:GREEN");
+  // the analyst was shown the AMBER verdict: its requests say so
+  const analyst = s.entries(id).filter((e) => e.type === "model.request" && e.stage === "assemble");
+  expect(analyst.length).toBeGreaterThan(0);
+  expect(analyst.every((e) => e.type === "model.request" && e.payload.marking === "TLP:AMBER")).toBe(true);
+  const drafts = s.entries(id).filter((e) => e.type === "draft.revised").map((e) => (e.type === "draft.revised" ? e.payload.draft.product.marking : ""));
+  expect(drafts.length).toBeGreaterThan(0);
+  expect(drafts.every((m) => m === "TLP:AMBER")).toBe(true);
+  const d = latestDraft(state(id))!;
+  const before = s.entries(id).length;
+  expect((await s.command(id, "approve", { draft_hash: d.hash })).status).toBe(200);
+  await s.app.hub.idle();
+  const after = s.entries(id).slice(before);
+  const publisher = after.filter((e) => e.type === "model.request");
+  for (const e of publisher) if (e.type === "model.request") expect(e.payload.marking).toBe("TLP:AMBER");
+  const published = after.find((e) => e.type === "product.published");
+  expect(published).toBeDefined();
+  if (published?.type === "product.published") {
+    const bundle = JSON.parse(s.app.hub.read(id).blobs.text(published.payload.bundle.blob)) as { manifest: { marking: string } };
+    expect(bundle.manifest.marking).toBe("TLP:AMBER");
+  }
 });

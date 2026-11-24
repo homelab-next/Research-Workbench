@@ -52,6 +52,8 @@ export class DraftWork {
 export function buildProduct(work: DraftWork, facts: {
   objective: string; question: string; case_marking: Marking; cards: Readonly<Record<string, CardState>>;
   source: (id: string) => SourceManifest | null; assumptions: string[]; change: string;
+  /** The markings of the model requests that wrote this text: text a model wrote is as strict as everything that model had seen. */
+  written_at?: readonly Marking[];
 }): Product {
   const live = (id: string, what: string): CardState | null => {
     if (!Object.hasOwn(facts.cards, id)) return null;
@@ -76,7 +78,7 @@ export function buildProduct(work: DraftWork, facts: {
   for (const x of sources) kept.set(x.source, x);
   const allSources = [...kept.values()].sort((a, b) => (a.source < b.source ? -1 : a.source > b.source ? 1 : 0));
   const product: Product = {
-    objective: facts.objective, question: facts.question, marking: strictest(facts.case_marking, ...cited.map((c) => c.marking), ...(prev === null ? [] : [prev.marking])),
+    objective: facts.objective, question: facts.question, marking: strictest(facts.case_marking, ...cited.map((c) => c.marking), ...(prev === null ? [] : [prev.marking]), ...(facts.written_at ?? [])),
     summary: work.sections.summary, key_findings: work.findings.map((f) => ({ ...f })), gaps_and_limits: work.sections.gaps_and_limits,
     alternatives: work.sections.alternatives, assessment: work.sections.assessment, sources: allSources, assumptions: [...facts.assumptions], change: facts.change,
   };
