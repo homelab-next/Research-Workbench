@@ -124,9 +124,9 @@ function gate(which: "plan" | "publish" | "paused" | "interrupted" | "running" |
 
 test.each([
   ["no run", () => gate("none"), null],
-  ["plan gate, free steps only", () => gate("plan"), { label: "Accept plan: run 3 steps", command: "accept_plan" }],
+  ["plan gate, free steps only", () => gate("plan"), { label: "Review the plan", command: "accept_plan" }],
   ["plan gate, one costly step", () => gate("plan", { costly: true }), { label: "Review plan: 1 steps need a budget", lens: "steps" }],
-  ["publish gate, publishable", () => gate("publish"), { label: "Approve: publish draft 2", command: "approve" }],
+  ["publish gate, publishable", () => gate("publish"), { label: "Review the draft", command: "approve" }],
   ["publish gate, one blocker", () => gate("publish", { blocked: true }), { label: "Review draft: 1 blockers", lens: "narrative" }],
   ["paused", () => gate("paused"), { label: "Resume the run", command: "resume" }],
   ["interrupted", () => gate("interrupted"), { label: "Resume the run", command: "resume" }],

@@ -106,7 +106,8 @@ test("the custody chip is checked again when activated and after a publish", asy
   q.ui.api.custody = async (id) => { n++; return real(id); };
   q.click(".custody"); await q.settle();
   expect(n).toBe(1);
-  q.click(".next-thing"); await q.settle();             // approve: publishes
+  q.click(".next-thing"); await q.settle();             // opens the Narrative lens at the gate
+  q.click(".lens-dock [data-action=approve]"); await q.settle();   // the gate's own button publishes
   await q.s.app.hub.idle(); await q.settle();
   expect(n).toBe(2);
   const c: Custody = await real("CASE-1");
@@ -197,14 +198,28 @@ test("a failed request is a toast that says the server did not answer", async ()
   expect(st(q).discarded).not.toContain(c);
 });
 
-test("a double click on Approve publishes once and the second answer is a toast", async () => {
+test("the brief's button at the publish gate writes nothing and takes you to Approve", async () => {
   const q = await open();
   const b = q.q(".next-thing");
-  expect(b.textContent).toMatch(/^Approve: publish draft \d+$/);
+  expect(b.textContent).toBe("Review the draft");
+  const before = q.s.entries("CASE-1").length;
   q.click(b); q.click(b);
   await q.settle(); await q.s.app.hub.idle(); await q.settle();
-  expect(st(q).published.length).toBe(1);
-  expect(q.toasts().length).toBeGreaterThan(0);
+  expect(q.s.entries("CASE-1").length).toBe(before);
+  expect(st(q).published.length).toBe(0);
+  expect(q.doc.activeElement).toBe(q.q(".lens-dock [data-action=approve]"));
+});
+
+test("the brief's button at the plan gate writes nothing and takes you to Accept", async () => {
+  const q = await open("plan");
+  const b = q.q(".next-thing");
+  // the sample's plan has a costly step: the button opens the Steps lens; with free steps only it says Review the plan and focuses Accept
+  expect(["Review the plan", "Review plan: 1 steps need a budget"]).toContain(b.textContent!);
+  const before = q.s.entries("CASE-1").length;
+  q.click(b);
+  await q.settle(); await q.s.app.hub.idle(); await q.settle();
+  expect(q.s.entries("CASE-1").length).toBe(before);
+  expect(q.all(".lens-steps").length).toBe(1);
 });
 
 test("lanes can be renamed in place, added, and removed only when empty", async () => {

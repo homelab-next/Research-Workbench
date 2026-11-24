@@ -112,13 +112,13 @@ export function nextThing(state: CaseState): NextThing | null {
   if (run.waiting === "plan" && state.plan.current !== null) {
     const steps = state.plan.current.steps;
     const costly = steps.filter((s) => !s.free).length;
-    return costly === 0 ? { label: `Accept plan: run ${steps.length} steps`, command: "accept_plan" } : { label: `Review plan: ${costly} steps need a budget`, lens: "steps" };
+    return costly === 0 ? { label: "Review the plan", command: "accept_plan" } : { label: `Review plan: ${costly} steps need a budget`, lens: "steps" };
   }
   if (run.waiting === "publish") {
     const latest = latestDraft(state);
     if (latest === null) return null;
     return publishable(state, latest.hash)
-      ? { label: `Approve: publish draft ${latest.n}`, command: "approve" }
+      ? { label: "Review the draft", command: "approve" }
       : { label: `Review draft: ${blockers(state, latest.hash).length} blockers`, lens: "narrative" };
   }
   return null;

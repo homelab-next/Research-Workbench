@@ -45,6 +45,8 @@ export interface Nav {
   cite(card: string, section?: string): void;
   pivot(card: string, values: Observable[]): void;
   ask(text: string): void;
+  /** What Shift+Enter does: resume, or take you to the gate's own button (a gate is passed only there). */
+  nextThing(): void;
   /** One step up: close what is open, else go up a level (case → which one? → home). */
   up(): void;
 }
@@ -102,6 +104,7 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
     cite: (card, section) => handlers.cite?.(card, section),
     pivot: (card, values) => handlers.pivot?.(card, values),
     ask: (text) => handlers.ask?.(text),
+    nextThing: () => actions().next_thing?.(),
     up() {
       if (route.screen === "case") { if (!(handlers.closeLens?.() ?? false)) nav.go({ screen: "pick" }); }
       else if (route.screen === "new") nav.go({ screen: "pick" });

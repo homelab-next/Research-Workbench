@@ -64,6 +64,7 @@ export function makeNarrative(ui: Ui, open: Open): NarrativeView {
   let preview: { seq: number; value: Preview | "failed" } | null = null;
   let asked = -1;
   let pickerAt: HTMLElement | null = null;
+  let focusedAtGate = false;
   /** Commands sent and not yet seen: the answer's seq once it has come (the press stays off until that entry is here), null while the answer is awaited. */
   const inflight = new Map<string, number | null>();
   let inflightVersion = 0;
@@ -507,6 +508,12 @@ export function makeNarrative(ui: Ui, open: Open): NarrativeView {
       paint(gateBox, [d.hash, s.run, s.reviews, s.challenges, s.published, preview, store.live.seq, rejecting, ro(), inflightVersion], () => gateView(s, d));
       paint(reviewBox, [d.hash, s.reviews, s.challenges, s.run, s.published, s.cards, ro()], () => reviewView(s, d));
       paint(previewBox, [wantsPreview(s), preview, store.live.seq, tab], () => (wantsPreview(s) ? previewView() : []));
+    }
+    // the first time Approve can be pressed, a person who came here for the gate is on it (Approve waits for the server's check, so this cannot be done on opening)
+    if (!focusedAtGate && el.isConnected) {
+      const ap = gateBox.querySelector("[data-action=approve]:not([disabled])") as HTMLElement | null;
+      const at = ui.doc.activeElement;
+      if (ap !== null) { focusedAtGate = true; if (at === null || at === ui.doc.body || el.contains(at) || at.closest("[data-area=lens]") !== null) ap.focus(); }
     }
     paint(copyBox, [fallback], () => (fallback === null ? [] : [h("div", { class: "copy-fallback" },
       h("p", null, "Select all and copy:"),
