@@ -197,3 +197,25 @@ test("a limit within the source's rows, an options-only explain and describe wit
   expect(checkGuardedShape("describe lake.archive.events", gs, null, 100)).toEqual([]);
   expect(checkGuardedShape("show columns from lake.archive.events", gs, null, 100)).toEqual([]);
 });
+
+// ---------- final review C-1: a number glued to a keyword ----------
+test.each([
+  `select a ${head} and a = 1.5or true`,
+  `select a ${head} and a = .5or true`,
+  `select a ${head} and a = 1.5e3or true`,
+  `select a ${head} and a = 15or true`,
+  `select a ${head} and a = 1.5e+3or true`,
+  `select a ${head} and a > 1.5order by a limit 5`,
+  `select a ${head} and a = 1.5limit 999999`,
+  "select 1.5or true",
+])("a number glued to a word is refused: %s", (sql) => {
+  expect(checkGuardedShape(sql, gs, lit, 100).join(" ")).toContain("a number must be followed by a space or punctuation");
+});
+test("numbers that are well formed still pass", () => {
+  for (const q of [
+    `select a ${head} and a = 1.5 or_x = 2`.replace(" or_x = 2", ""),
+    `select a ${head} and a = 1.5e+3 and b = .5 and c in (1, 2)`,
+    `select date_trunc('hour', event_time) h, count(*) c ${head} and a = 15 group by 1 order by 2 limit 50`,
+    `select a ${head} and t1.x = 3`.replace("t1.x", "x1"),
+  ]) expect(checkGuardedShape(q, gs, lit, 100)).toEqual([]);
+});

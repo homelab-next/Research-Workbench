@@ -227,6 +227,8 @@ function literalBody(l: string): string | null {
   return /^TIMESTAMP '(.*)'$/s.exec(l)?.[1] ?? null;
 }
 
+const NUMBER = /(?<![\w$])(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?/g;
+
 /** The only explain a source is sent: its options are a type and a format. `analyze` runs the statement, so it is never allowed. */
 const EXPLAIN_OPTIONS = /^explain(?:\s*\(\s*(?:type|format)\s+[a-z_]+(?:\s*,\s*(?:type|format)\s+[a-z_]+)*\s*\))?(?![\w$])\s*/;
 
@@ -244,6 +246,11 @@ export function checkGuardedShape(sql: string, guards: TableGuard[], window: Win
   if (marked.startsWith("explain")) {
     marked = marked.replace(EXPLAIN_OPTIONS, "");
     if (/^(?:analyze|verbose|\()/.test(marked) || scanned.marked.replace(/\s+/g, " ").startsWith("explain analyze")) add("explain is allowed only as explain (type ..., format ...), never analyze");
+  }
+  // The engine reads a number up to the first character that cannot continue it, so a keyword glued to one (1.5or) is a keyword to it
+  // and a number plus a word to a reader that splits on whitespace. A number must end at a space or punctuation.
+  for (const m of marked.matchAll(NUMBER)) {
+    if (/[a-z_$]/.test(marked[m.index + m[0].length] ?? "")) { add("a number must be followed by a space or punctuation"); break; }
   }
   const toks = tokens(marked, scanned);
   for (let i = 0; i + 1 < toks.length; i++) {
