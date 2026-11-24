@@ -33,7 +33,7 @@ export function initial(): CaseState {
       sendbacks: {}, usage: { input: 0, output: 0, reasoning: 0 }, model_calls: 0,
       usage_at_start: { input: 0, output: 0, reasoning: 0 }, calls_at_start: 0, budget_tokens: null,
     },
-    plan: { current: null, status: "none", accepted_steps: [], budgets: {}, steps: {} },
+    plan: { current: null, status: "none", accepted_steps: [], budgets: {}, estimates: {}, steps: {} },
     jobs: {},
     queries: {},
     proposals: {},

@@ -10,6 +10,7 @@ import type { EngineDeps } from "../pipeline/engine";
 import { previewBundle } from "../pipeline/publish";
 import { MAX_BODY_BYTES, refusal, secure } from "./guard";
 import { argProblems, COMMANDS } from "./commands";
+import "./plan-commands";
 import type { CommandContext } from "./commands";
 import { blobResponse, bundleFile, custodyOf } from "./evidence";
 import { CaseHub } from "./hub";

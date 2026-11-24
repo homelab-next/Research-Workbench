@@ -50,7 +50,7 @@ function applyPlan(s: CaseState, entry: Entry): CaseState {
       if (!isPlan(plan)) return malformed(s, entry);
       // fromEntries defines own properties, so a step id of "__proto__" is an ordinary key
       const steps: PlanState["steps"] = Object.fromEntries(plan.steps.map((st) => [st.id, { status: "pending" as const, cards: [], note: "" }]));
-      return { ...s, plan: { current: plan, status: "proposed", accepted_steps: [], budgets: {}, steps } };
+      return { ...s, plan: { current: plan, status: "proposed", accepted_steps: [], budgets: {}, estimates: {}, steps } };
     }
     case "plan.accepted": {
       const { plan, steps, budgets } = entry.payload;
@@ -67,6 +67,12 @@ function applyPlan(s: CaseState, entry: Entry): CaseState {
       if (!isStr(entry.payload.plan) || !isStr(entry.payload.note)) return malformed(s, entry);
       if (p.current?.id !== entry.payload.plan) return s;
       return { ...s, plan: { ...p, status: "replanning" } };
+    }
+    case "step.estimated": {
+      const { step, estimate, query } = entry.payload;
+      if (!isStr(step) || !(estimate === null || isCost(estimate)) || !isStrOrNull(query)) return malformed(s, entry);
+      if (!has(p.steps, step)) return s;
+      return { ...s, plan: { ...p, estimates: Object.fromEntries([...Object.entries(p.estimates), [step, estimate]]) } };
     }
     case "step.started": {
       const { step } = entry.payload;

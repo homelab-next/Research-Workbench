@@ -429,7 +429,7 @@ test("apply never mutates the state it is given", () => {
 const HANDLED = [
   "run.started", "run.paused", "run.resumed", "run.interrupted", "run.finished", "stage.model_set", "stage.started", "stage.finished",
   "stage.sent_back", "gate.waiting", "gate.passed", "budget.set", "job.started", "job.finished", "plan.proposed", "plan.accepted",
-  "plan.denied", "plan.replan_requested", "step.started", "step.finished", "query.issued", "query.result", "query.failed", "verify.run",
+  "plan.denied", "plan.replan_requested", "step.started", "step.finished", "step.estimated", "query.issued", "query.result", "query.failed", "verify.run",
   "model.response", "model.blocked", "tool.skipped", "card.created", "proposal.created", "proposal.accepted", "proposal.rejected",
 ] as const;
 
@@ -746,4 +746,40 @@ test("subgoalAnswered: blocked, failed and a goal with no accepted step are not 
   expect(subgoalAnswered(planned("blocked"), SG)).toBe(false);
   expect(subgoalAnswered(planned("failed"), SG)).toBe(false);
   expect(subgoalAnswered(planned("answered"), { ...SG, steps: ["nope"] })).toBe(false);
+});
+
+// ---------- step.estimated ----------
+test("step.estimated records the figure for a step of the current plan and a new plan clears it", () => {
+  const b = new EntryBuilder();
+  b.add("plan.proposed", { plan: plan() });
+  expect(fold(b.entries).plan.estimates).toEqual({});
+  b.add("step.estimated", { step: "s1", estimate: { amount: 2, unit: "lookups" }, query: "q1" });
+  b.add("step.estimated", { step: "s2", estimate: null, query: null });
+  expect(fold(b.entries).plan.estimates).toEqual({ s1: { amount: 2, unit: "lookups" }, s2: null });
+  b.add("step.estimated", { step: "s1", estimate: { amount: 3, unit: "lookups" }, query: null });
+  expect(fold(b.entries).plan.estimates.s1).toEqual({ amount: 3, unit: "lookups" });
+  b.add("plan.proposed", { plan: plan("plan-2") });
+  expect(fold(b.entries).plan.estimates).toEqual({});
+});
+
+test("step.estimated for an unknown step changes nothing, and a malformed one is skipped", () => {
+  const b = new EntryBuilder();
+  b.add("plan.proposed", { plan: plan() });
+  b.add("step.estimated", { step: "nope", estimate: null, query: null });
+  let s = fold(b.entries);
+  expect(s.plan.estimates).toEqual({});
+  expect(s.skipped).toEqual([]);
+  b.add("step.estimated", { step: "s1", estimate: { amount: "x", unit: 1 }, query: null } as never);
+  s = fold(b.entries);
+  expect(s.plan.estimates).toEqual({});
+  expect(s.skipped.map((x) => x.reason)).toEqual(["malformed step.estimated"]);
+});
+
+test("a step id of __proto__ is an ordinary estimate key", () => {
+  const p = plan();
+  p.steps = [{ ...p.steps[0]!, id: "__proto__" }];
+  const b = new EntryBuilder();
+  b.add("plan.proposed", { plan: p });
+  b.add("step.estimated", { step: "__proto__", estimate: { amount: 1, unit: "lookups" }, query: null });
+  expect(Object.hasOwn(fold(b.entries).plan.estimates, "__proto__")).toBe(true);
 });

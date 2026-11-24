@@ -1,5 +1,5 @@
 import type {
-  Actor, BlobRef, Card, Marking, Challenge, CheckFinding, Coverage, Draft, ModelChoice, Payloads,
+  Actor, BlobRef, Card, Cost, Marking, Challenge, CheckFinding, Coverage, Draft, ModelChoice, Payloads,
   Place, Plan, Proposal, QueryPurpose, StageDef, StepOutcome, TimeWindow,
 } from "../types";
 
@@ -49,6 +49,8 @@ export interface PlanState {
   status: "none" | "proposed" | "accepted" | "denied" | "replanning";
   accepted_steps: string[];
   budgets: Record<string, number>;
+  /** The price a person asked for, per step of the current plan (null: asked, and none could be given). Cleared by every plan.proposed. */
+  estimates: Record<string, Cost | null>;
   steps: Record<string, { status: "pending" | "running" | StepOutcome; cards: string[]; note: string }>;
 }
 export interface JobState {

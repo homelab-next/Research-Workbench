@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { Plan } from "../../src/core/types";
 import { loadConfig } from "../../src/modules/config";
 import { DEFAULT_LIMITS } from "../../src/modules/seeker";
-import { acceptPlan, buildPlan, denyPlan, PlanRefused, requestReplan, spendPlanBudget } from "../../src/pipeline/plans";
+import { acceptPlan, buildPlan, denyPlan, estimateStep, PlanRefused, requestReplan, spendPlanBudget } from "../../src/pipeline/plans";
 import type { PlanOutput } from "../../src/pipeline/plans";
 import { agent, fixture, PLAN, person, START, WINDOW } from "../helpers/tools-fixture";
 import type { Fixture } from "../helpers/tools-fixture";
@@ -43,6 +43,10 @@ const propose = (o: PlanOutput = out, withRun = true): Plan => {
   if ("errors" in built) throw new Error(built.errors.join("; "));
   f.s.commit((_st, ids) => [{ type: "plan.proposed", actor: agent, payload: { plan: buildPlan(ids.next("plan"), o, deps(), frame, null) as Plan } }]);
   return f.s.state.plan.current!;
+};
+/** A new proposal of the same plan in which s3 starts from an earlier step. */
+const startRun2 = (plan: Plan): void => {
+  f.s.commit((_st, ids) => [{ type: "plan.proposed", actor: agent, payload: { plan: { ...plan, id: ids.next("plan"), steps: plan.steps.map((x) => (x.id === "s3" ? { ...x, from: { ...x.from, value: "" } } : x)) } } }]);
 };
 const count = (): number => f.s.entries().length;
 const refused = (fn: () => void): void => {
@@ -292,4 +296,47 @@ test("a costly step paid under one plan is paid again under the next plan that b
   const p2 = f.s.state.proposals.p2!;
   f.s.commit((_st, ids) => [{ type: "proposal.created", actor: agent, payload: { proposal: { ...p2, id: ids.next("proposal"), status: "open" } as never } }]);
   expect(await spendPlanBudget(f.s, f.sample.deps, "p3", "s3")).toBeNull();
+});
+
+// ---------- estimateStep ----------
+test("a costly step with a starting value can be priced; the estimate is recorded and nothing else runs", async () => {
+  propose();
+  const before = count();
+  const cardsBefore = Object.keys(f.s.state.cards).length;
+  const cost = await estimateStep(f.s, f.sample.deps, { step: "s3", actor: person });
+  expect(cost).toMatchObject({ unit: "lookups" });
+  expect(f.s.state.plan.estimates).toEqual({ s3: cost });
+  const added = f.s.entries().slice(before);
+  expect(added.at(-1)!.type).toBe("step.estimated");
+  expect(added.filter((e) => e.type === "query.result" && f.s.state.queries[e.payload.query]!.purpose === "result")).toEqual([]);
+  expect(Object.values(f.s.state.queries).filter((q) => q.purpose === "result")).toEqual([]);
+  expect(Object.keys(f.s.state.cards).length).toBe(cardsBefore);
+  const e = added.at(-1)!;
+  if (e.type !== "step.estimated") throw new Error("not an estimate");
+  expect(e.actor).toEqual(person);
+  if (e.payload.query !== null) expect(f.s.state.queries[e.payload.query]).toMatchObject({ purpose: "estimate", step: "s3" });
+});
+
+test("a free step, a step fed by an earlier step, an unknown step, an agent and an accepted plan are each refused", async () => {
+  propose();
+  const refusal = async (input: { step: string; actor: typeof person }, message: string): Promise<void> => {
+    const before = count();
+    await expect(estimateStep(f.s, f.sample.deps, input)).rejects.toThrow(message);
+    await expect(estimateStep(f.s, f.sample.deps, input)).rejects.toBeInstanceOf(PlanRefused);
+    expect(count()).toBe(before);
+  };
+  await refusal({ step: "s1", actor: person }, "step s1 is free and needs no estimate");
+  await refusal({ step: "s2", actor: person }, "step s2 is free and needs no estimate");
+  await refusal({ step: "s9", actor: person }, "there is no step s9");
+  await refusal({ step: "s3", actor: agent as never }, "only a person may ask for an estimate");
+  acceptPlan(f.s, { actor: person });
+  await refusal({ step: "s3", actor: person }, "the run is not waiting at the plan gate");
+});
+
+test("a costly step that starts from an earlier step cannot be priced before that step has run", async () => {
+  const plan = propose();
+  startRun2(plan);
+  const before = count();
+  await expect(estimateStep(f.s, f.sample.deps, { step: "s3", actor: person })).rejects.toThrow("step s3 starts from what an earlier step finds; it can be priced only after that step has run");
+  expect(count()).toBe(before);
 });

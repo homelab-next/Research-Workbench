@@ -128,6 +128,8 @@ export interface Payloads {
   "plan.replan_requested": { plan: string; note: string };
   "step.started": { step: string };
   "step.finished": { step: string; outcome: StepOutcome; cards: string[]; note: string };
+  /** A person asked for the price of a costly step before accepting the plan. `query` is the estimate query the source answered, when there was one. */
+  "step.estimated": { step: string; estimate: Cost | null; query: string | null };
   // queries
   "query.issued": { query: string; source: string; source_hash: string; pivot: string | null; pivot_hash: string | null; connector: string; text: string; bound: Record<string, Json>; window: TimeWindow; why: string; estimate: Cost | null; step: string | null; verifies: string | null; purpose: QueryPurpose };
   "query.result": { query: string; result: BlobRef; rows: number; rows_hash: string; coverage: Coverage; duration_ms: number; cost: Cost | null };
@@ -275,7 +277,7 @@ export const ENTRY_TYPES = listOf<EntryType>({
   "run.interrupted": true, "run.finished": true, "stage.model_set": true, "stage.pack_limit_set": true, "stage.started": true,
   "stage.finished": true, "stage.sent_back": true, "gate.waiting": true, "gate.passed": true, "budget.set": true,
   "job.started": true, "job.finished": true, "plan.proposed": true, "plan.accepted": true, "plan.denied": true,
-  "plan.replan_requested": true, "step.started": true, "step.finished": true, "query.issued": true,
+  "plan.replan_requested": true, "step.started": true, "step.finished": true, "step.estimated": true, "query.issued": true,
   "query.result": true, "query.failed": true, "verify.run": true, "model.request": true, "model.response": true,
   "model.declined": true, "model.blocked": true, "tool.called": true, "tool.returned": true, "tool.skipped": true, "card.created": true,
   "card.kept": true, "card.moved": true, "card.discarded": true, "card.restored": true, "card.sent_back": true,
