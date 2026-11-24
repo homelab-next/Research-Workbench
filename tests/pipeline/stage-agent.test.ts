@@ -151,3 +151,35 @@ test("a model call that fails twice for the same reason pauses with a plain reas
   expect(end).toEqual({ kind: "stalled", reason: "Frame: the model did not answer within 300 s twice. Try a lower effort or another model, and resume." });
   expect(ofType("model.request")).toHaveLength(2);
 });
+
+test("a model list that cannot be read is told apart from one that does not list the model", async () => {
+  const r = rig(script(say(FRAME)));
+  const inner = r.deps.providers.get("scripted")!;
+  const down: Provider = { id: inner.id, kind: inner.kind, where: inner.where, models: () => Promise.reject(new Error("no answer within 300000 ms")), body: (q) => inner.body(q), turn: (q) => inner.turn(q) };
+  r.deps.providers = new Providers([down]);
+  r.engine.start(person);
+  const end = await stageAgent(r.env(), { actor_id: "orchestrator", task: "t", extras: [] });
+  expect(end).toEqual({ kind: "stalled", reason: 'Frame: the model list of the provider "scripted" could not be read (no answer within 300000 ms). Check that the endpoint answers and resume.' });
+  expect(ofType("model.request")).toEqual([]);
+});
+
+test("a failed model-list read does not stop the call when this process saw the model listed earlier", async () => {
+  const r = rig(script(say(FRAME), say(FRAME)));
+  const inner = r.deps.providers.get("scripted")!;
+  let reads = 0;
+  const flaky: Provider = {
+    id: inner.id, kind: inner.kind, where: inner.where, body: (q) => inner.body(q), turn: (q) => inner.turn(q),
+    models: () => (reads++ === 0 ? inner.models() : Promise.reject(new Error("busy"))),
+  };
+  r.deps.providers = new Providers([flaky]);
+  r.engine.start(person);
+  expect(await stageAgent(r.env(), { actor_id: "orchestrator", task: "t", extras: [] })).toMatchObject({ kind: "output", output: FRAME });
+  expect(await stageAgent(r.env(), { actor_id: "orchestrator", task: "t", extras: [] })).toMatchObject({ kind: "output", output: FRAME });
+  expect(reads).toBe(2);
+  expect(ofType("model.request")).toHaveLength(2);
+  // a model it never listed is not attempted on a failed read
+  r.engine.setModel("frame", { provider: "scripted", model: "ghost-model", effort: null }, person);
+  const ghost = await stageAgent(r.env(), { actor_id: "orchestrator", task: "t", extras: [] });
+  expect((ghost as { reason: string }).reason).toContain("could not be read (busy)");
+  expect(ofType("model.request")).toHaveLength(2);
+});

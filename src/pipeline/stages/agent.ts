@@ -9,7 +9,7 @@ import type { CallRecord } from "../../agents/loop";
 import { runAgent } from "../../agents/loop";
 import { assemblePack, packBudget } from "../../agents/pack";
 import { DEFAULT_CONTEXT } from "../../agents/providers/local";
-import type { Provider } from "../../agents/providers/types";
+import type { ModelInfo, Provider } from "../../agents/providers/types";
 import type { DraftWork } from "../../agents/draft";
 import type { ToolContext, ToolName } from "../../agents/tools";
 import type { SeekLimits } from "../../modules/seeker";
@@ -27,6 +27,9 @@ const firstLine = (t: string): string => t.split("\n")[0]!.slice(0, 300);
 /** The stage's title as the run knows it. */
 export const titleOf = (env: StageEnv): string => env.session.state.run.stages.find((s) => s.id === env.stage.id)?.title ?? env.stage.title;
 
+/** The models each provider listed in this process, the latest listing of each kept: a failed list read falls back on it. */
+const listedBefore = new WeakMap<Provider, Map<string, ModelInfo>>();
+
 /** The agent's actor and its provider and model, from the stage's chosen model; or why there is none. */
 export async function resolveAgent(env: StageEnv, actorId: string): Promise<{ actor: AgentActor; provider: Provider; model: string; effort: string | null; context: number } | { stalled: string }> {
   const { state } = env.session;
@@ -35,9 +38,22 @@ export async function resolveAgent(env: StageEnv, actorId: string): Promise<{ ac
   if (choice === null) return { stalled: `${title}: no model is chosen for this stage. Choose one and resume.` };
   const provider = env.deps.providers.get(choice.provider);
   if (provider === null) return { stalled: `${title}: the provider "${choice.provider}" is not available. Choose another model and resume.` };
-  const listed = await provider.models().catch(() => []);
-  const info = listed.find((m) => m.id === choice.model);
-  if (info === undefined) return { stalled: `${title}: the provider "${choice.provider}" does not list the model "${choice.model}". Choose another model and resume.` };
+  let info: ModelInfo | undefined;
+  try {
+    const listed = await provider.models();
+    const seen = listedBefore.get(provider) ?? new Map<string, ModelInfo>();
+    for (const m of listed) seen.set(m.id, m);
+    listedBefore.set(provider, seen);
+    info = listed.find((m) => m.id === choice.model);
+    if (info === undefined) return { stalled: `${title}: the provider "${choice.provider}" does not list the model "${choice.model}". Choose another model and resume.` };
+  } catch (err) {
+    // a busy endpoint may not answer a model list; a model this process saw listed is called all the same, and the call says what it finds
+    info = listedBefore.get(provider)?.get(choice.model);
+    if (info === undefined) {
+      const why = firstLine(err instanceof Error ? err.message : String(err));
+      return { stalled: `${title}: the model list of the provider "${choice.provider}" could not be read (${why}). Check that the endpoint answers and resume.` };
+    }
+  }
   const actor: AgentActor = { kind: "agent", id: actorId, stage: env.stage.id, profile: env.deps.profile.id, model: choice.model, effort: choice.effort, where: provider.where };
   return { actor, provider, model: choice.model, effort: choice.effort, context: info.context ?? DEFAULT_CONTEXT };
 }
