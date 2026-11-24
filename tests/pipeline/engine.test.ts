@@ -560,3 +560,36 @@ test("an engine built on a case writes nothing to it; Engine.open recovers it, o
   Engine.open(f.s, depsOf(f.sample)).recover();
   expect(f.s.state.queries.q2!.status).toBe("running");
 });
+
+test("a very long reason is clipped, so the run pauses saying why instead of failing to record it", async () => {
+  const long = "x".repeat(300 * 1024);
+  const r = rig({ frame: async () => ({ kind: "finished", outcome: "fail", draft_hash: null, output: null, reason: long }) });
+  r.engine.start(person);
+  const sum = await r.engine.advance();
+  expect(sum.status).toBe("paused");
+  const fin = f.s.entries().filter((e) => e.type === "stage.finished");
+  expect(fin.length).toBeGreaterThan(0);
+  for (const e of fin) if (e.type === "stage.finished") expect(e.payload.reason!.length).toBeLessThanOrEqual(4000);
+  expect(sum.pause_reason!.length).toBeLessThanOrEqual(4000);
+  const stalled = rig({ frame: async () => ({ kind: "stalled", reason: long }) });
+  stalled.engine.stop(person, "again");
+  stalled.engine.start(person);
+  const again = await stalled.engine.advance();
+  expect(again).toMatchObject({ status: "paused" });
+  expect(again.pause_reason!.length).toBe(4000);
+});
+
+test("a resume that resumed nothing grants no extra send-back", async () => {
+  const r: Rig = rig({ checks: failingChecks(() => r) });
+  r.engine.start(person);
+  await r.engine.advance();
+  acceptPlan(f.s);
+  expect((await r.engine.advance()).status).toBe("paused");
+  // the run is set going again by another hand, so a person's resume finds nothing to resume
+  f.s.commit((st) => [{ type: "run.resumed", actor: person, payload: {}, run: st.run.id }]);
+  const before = f.s.entries().filter((e) => e.type === "run.resumed").length;
+  const sum = await r.engine.resume(person);
+  expect(f.s.entries().filter((e) => e.type === "run.resumed").length).toBe(before);
+  expect(f.s.state.run.sendbacks).toEqual({ "checks>assemble": 3 });
+  expect(sum.status).toBe("paused");
+});

@@ -64,6 +64,9 @@ const MAX_STEPS = 500;
 const recovered = new WeakSet<CaseSession>();
 
 const firstLine = (text: string): string => text.split("\n")[0]!.slice(0, 300);
+/** The most of a reason a stage.finished or run.paused keeps: a stage's reason can be a model's text, and an entry has a size limit. */
+export const REASON_CHARS = 4000;
+const clipReason = (reason: string): string => (reason.length > REASON_CHARS ? `${reason.slice(0, REASON_CHARS - 1)}…` : reason);
 
 export class Engine {
   private inflight: Promise<RunSummary> | null = null;
@@ -116,11 +119,13 @@ export class Engine {
 
   async resume(actor: Actor): Promise<RunSummary> {
     if (actor.kind !== "human") throw new RunRefused("only a person may resume a run");
-    this.session.commit((state) => (state.run.status === "paused" || state.run.status === "interrupted"
+    const written = this.session.commit((state) => (state.run.status === "paused" || state.run.status === "interrupted"
       ? [{ type: "run.resumed", actor, payload: {}, run: state.run.id }] : []));
+    // the one more send-back is the person's resume of a stopped run; a resume that resumed nothing grants none
+    const allow_capped = written.length > 0;
     // a drive still in flight ends on the stop it saw; the run is driven again once it has
     const running = this.inflight;
-    return running === null ? this.advance({ allow_capped: true }) : running.then(() => this.advance({ allow_capped: true }));
+    return running === null ? this.advance({ allow_capped }) : running.then(() => this.advance({ allow_capped }));
   }
 
   /**
@@ -196,7 +201,7 @@ export class Engine {
   }
 
   private paused(actor: Actor, reason: string): EntryInput {
-    return { type: "run.paused", actor, payload: { reason }, run: this.session.state.run.id };
+    return { type: "run.paused", actor, payload: { reason: clipReason(reason) }, run: this.session.state.run.id };
   }
 
   /** The hash of the pipeline the current run started with. */
@@ -258,7 +263,7 @@ export class Engine {
     const link = { run: state.run.id, stage: stageId };
     const finish = (outcome: "pass" | "fail" | "declined", draft_hash: string | null, output: Json | null, reason: string | null): EntryInput => ({
       type: "stage.finished", actor: ENGINE, ...link,
-      payload: { stage: stageId, attempt, outcome, draft_hash, output: output === null ? null : this.session.blobs.put(canonical(output)), reason },
+      payload: { stage: stageId, attempt, outcome, draft_hash, output: output === null ? null : this.session.blobs.put(canonical(output)), reason: reason === null ? null : clipReason(reason) },
     });
     // a review that does not name the draft it reviewed has reviewed nothing: it fails, rather than being run again for ever
     let supersededBy: string | null = null;
