@@ -52,10 +52,10 @@ test("a check result is recorded against its draft, and a re-run replaces it", (
   const b = run();
   revise(b, 1, "h1");
   const input = { blob: "b", bytes: 1 };
-  b.add("check.run", { check: "c1", script_hash: "x", input, draft_hash: "h1", pass: false, findings: [{ check: "c1", where: "w", message: "m" }] });
-  b.add("check.run", { check: "c2", script_hash: "x", input, draft_hash: "h1", pass: true, findings: [] });
+  b.add("check.run", { check: "c1", script_hash: "x", input, output: input, draft_hash: "h1", pass: false, findings: [{ check: "c1", where: "w", message: "m" }] });
+  b.add("check.run", { check: "c2", script_hash: "x", input, output: input, draft_hash: "h1", pass: true, findings: [] });
   expect(fold(b.entries).reviews.h1!.checks.map((c) => [c.check, c.pass])).toEqual([["c1", false], ["c2", true]]);
-  b.add("check.run", { check: "c1", script_hash: "x", input, draft_hash: "h1", pass: true, findings: [] });
+  b.add("check.run", { check: "c1", script_hash: "x", input, output: input, draft_hash: "h1", pass: true, findings: [] });
   const s = fold(b.entries);
   expect(s.reviews.h1!.checks).toEqual([{ check: "c1", pass: true, findings: [] }, { check: "c2", pass: true, findings: [] }]);
 });
@@ -176,7 +176,7 @@ test("the latest verdict wins: a later failure on the same hash removes the pass
 test("a new run reviews afresh", () => {
   const b = run();
   revise(b, 1, "h1");
-  b.add("check.run", { check: "c", script_hash: "x", input: { blob: "b", bytes: 1 }, draft_hash: "h1", pass: true, findings: [] });
+  b.add("check.run", { check: "c", script_hash: "x", input: { blob: "b", bytes: 1 }, output: { blob: "b", bytes: 1 }, draft_hash: "h1", pass: true, findings: [] });
   passAll(b, "h1");
   expect(publishable(fold(b.entries), "h1")).toBe(true);
   b.add("run.started", { run: "run-2", pipeline: "p", pipeline_hash: "h", stages });
@@ -262,7 +262,7 @@ test("analysis entries for an unknown draft hash change only seq", () => {
   const more = new EntryBuilder();
   more.entries.push(...b.entries);
   pass(more, "checks", "zz");
-  more.add("check.run", { check: "c", script_hash: "x", input, draft_hash: "zz", pass: true, findings: [] });
+  more.add("check.run", { check: "c", script_hash: "x", input, output: input, draft_hash: "zz", pass: true, findings: [] });
   more.add("evaluation.made", { draft_hash: "zz", pass: true, findings: [] });
   more.add("challenge.raised", { challenge: chal("x1", "zz") });
   more.add("challenge.answered", { challenge: "x9", answer: "a", action: "revised" });
@@ -300,7 +300,7 @@ test("apply never mutates the state it is given", () => {
   next.entries.push(...b.entries);
   revise(next, 2, "h2");
   pass(next, "checks", "h1");
-  next.add("check.run", { check: "c", script_hash: "x", input, draft_hash: "h1", pass: true, findings: [] });
+  next.add("check.run", { check: "c", script_hash: "x", input, output: input, draft_hash: "h1", pass: true, findings: [] });
   next.add("evaluation.made", { draft_hash: "h1", pass: true, findings: [] });
   next.add("challenge.answered", { challenge: "x1", answer: "a", action: "revised" });
   next.add("agent.answered", { turn: "u1", request: "r", text: "t", cites: [] });
@@ -409,7 +409,7 @@ test("a new review record has no rejection", () => {
 
 // ---------- final review, finding 20: failing results on record block publishing ----------
 const checkRun = (b: EntryBuilder, check: string, hash: string, pass: boolean) =>
-  b.add("check.run", { check, script_hash: "x", input: { blob: "b", bytes: 1 }, draft_hash: hash, pass, findings: [] });
+  b.add("check.run", { check, script_hash: "x", input: { blob: "b", bytes: 1 }, output: { blob: "b", bytes: 1 }, draft_hash: hash, pass, findings: [] });
 
 test("a failing check or evaluation on record for the hash blocks publishing even with every stage passed", () => {
   const b = run();
@@ -456,4 +456,14 @@ test("a revision that reuses a reviewed hash with a different product is refused
   // the same bytes under the same hash are still a new revision
   revise(b, 3, "h1");
   expect(fold(b.entries).drafts.map((d) => d.n)).toEqual([1, 3]);
+});
+
+test("check.run without an output reference is malformed", () => {
+  const b = run();
+  revise(b, 1, "h1");
+  const before = fold(b.entries);
+  const e = b.add("check.run", { check: "c", script_hash: "x", input: { blob: "b", bytes: 1 }, draft_hash: "h1", pass: true, findings: [] } as never);
+  const s = fold(b.entries);
+  expect(s.skipped.at(-1)).toEqual({ seq: e.seq, type: "check.run", reason: "malformed check.run" });
+  expect(s.reviews).toEqual(before.reviews);
 });

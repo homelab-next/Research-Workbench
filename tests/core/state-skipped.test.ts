@@ -61,7 +61,7 @@ test("query.result coverage is checked as strictly as a plan", () => {
 test("a well-formed entry that names something missing changes nothing and is not recorded", () => {
   const b = started();
   b.add("card.kept", { card: "c9", lane: "l9", index: null });
-  b.add("check.run", { check: "c", script_hash: "x", input: { blob: "b", bytes: 1 }, draft_hash: "zz", pass: true, findings: [] });
+  b.add("check.run", { check: "c", script_hash: "x", input: { blob: "b", bytes: 1 }, output: { blob: "b", bytes: 1 }, draft_hash: "zz", pass: true, findings: [] });
   b.add("step.started", { step: "s9" });
   b.add("proposal.accepted", { proposal: "p9", budget: null });
   b.add("challenge.answered", { challenge: "x9", answer: "a", action: "revised" });

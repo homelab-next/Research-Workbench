@@ -44,8 +44,8 @@ function applyDrafts(s: CaseState, entry: Entry): CaseState {
       return { ...s, drafts: [...s.drafts, d], reviews: { ...s.reviews, [d.hash]: review } };
     }
     case "check.run": {
-      const { check, script_hash, input, draft_hash, pass, findings } = entry.payload;
-      if (!isStr(check) || !isStr(script_hash) || !isBlobRefShape(input) || !isStr(draft_hash) || !isBool(pass) || !isFindings(findings)) {
+      const { check, script_hash, input, output, draft_hash, pass, findings } = entry.payload;
+      if (!isStr(check) || !isStr(script_hash) || !isBlobRefShape(input) || !isBlobRefShape(output) || !isStr(draft_hash) || !isBool(pass) || !isFindings(findings)) {
         return malformed(s, entry);
       }
       return withReview(s, draft_hash, (r) => {

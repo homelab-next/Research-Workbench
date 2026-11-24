@@ -666,3 +666,40 @@ test("before any run the baseline is zero", () => {
   expect(initial().run.usage_at_start).toEqual({ input: 0, output: 0, reasoning: 0 });
   expect(initial().run.calls_at_start).toBe(0);
 });
+
+test("stage.pack_limit_set records the limit and null removes it", () => {
+  const b = new EntryBuilder();
+  b.add("stage.pack_limit_set", { stage: "assemble", max_marking: "TLP:GREEN" });
+  expect(fold(b.entries).pack_limits).toEqual({ assemble: "TLP:GREEN" });
+  b.add("stage.pack_limit_set", { stage: "assemble", max_marking: null });
+  expect(fold(b.entries).pack_limits).toEqual({});
+  expect(fold(b.entries).skipped).toEqual([]);
+});
+
+test("stage.pack_limit_set applies during a run too, and does not change the stage list", () => {
+  const b = started();
+  b.add("stage.pack_limit_set", { stage: "plan", max_marking: "TLP:AMBER" });
+  const s = fold(b.entries);
+  expect(s.pack_limits).toEqual({ plan: "TLP:AMBER" });
+  expect(s.run.stages.map((x) => x.id)).toEqual(["plan", "checks"]);
+});
+
+test("an unknown marking in stage.pack_limit_set is malformed", () => {
+  const b = new EntryBuilder();
+  const e = b.add("stage.pack_limit_set", { stage: "assemble", max_marking: "TLP:PURPLE" } as never);
+  const s = fold(b.entries);
+  expect(s.pack_limits).toEqual({});
+  expect(s.skipped).toEqual([{ seq: e.seq, type: "stage.pack_limit_set", reason: "malformed stage.pack_limit_set" }]);
+  const f = new EntryBuilder();
+  f.add("stage.pack_limit_set", { stage: 5, max_marking: null } as never);
+  expect(fold(f.entries).skipped).toHaveLength(1);
+});
+
+test("case.anchored changes nothing but seq in a case fold", () => {
+  const b = started();
+  const before = fold(b.entries);
+  b.add("case.anchored", { case: "case-1", seq: 3, hash: "a".repeat(64), why: "published" });
+  const after = fold(b.entries);
+  expect(after).toEqual({ ...before, seq: after.seq, head_ts: after.head_ts });
+  expect(after.seq).toBe(before.seq + 1);
+});

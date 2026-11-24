@@ -304,7 +304,7 @@ test("ENTRY_TYPES lists every entry type once", () => {
   expect(new Set(ENTRY_TYPES).size).toBe(ENTRY_TYPES.length);
   expect(ENTRY_TYPES).toContain("case.created");
   expect(ENTRY_TYPES).toContain("setting.changed");
-  expect(ENTRY_TYPES.length).toBe(62);
+  expect(ENTRY_TYPES.length).toBe(64);
 });
 
 const agent = { kind: "agent", id: "a1", stage: "plan", profile: "p", model: "m", effort: null, where: "machine" } as const;
@@ -456,5 +456,18 @@ test("a required blob position that is absent or null is refused; a nullable one
   expect(l.head().seq).toBe(0);
   const { output: _output, ...noOutput } = { stage: "plan", attempt: 1, outcome: "pass" as const, draft_hash: "h1", output: null, reason: null };
   expect(l.append({ type: "stage.finished", actor: human, payload: noOutput as never }).seq).toBe(1);
+  l.close();
+});
+
+test("check.run with no output is refused at append", () => {
+  const l = open(tmp());
+  const ref = { blob: "a".repeat(64), bytes: 1 };
+  const payload = { check: "c", script_hash: "x", input: ref, draft_hash: "h", pass: true, findings: [] };
+  expect(() => l.append({ type: "check.run", actor: runner, payload: payload as never })).toThrow(TypeError);
+  expect(() => l.append({ type: "check.run", actor: runner, payload: payload as never })).toThrow(/check\.run.*output/);
+  expect(() => l.append({ type: "check.run", actor: runner, payload: { ...payload, output: null } as never })).toThrow(/check\.run.*output/);
+  expect(l.head().seq).toBe(0);
+  l.append({ type: "check.run", actor: runner, payload: { ...payload, output: ref } });
+  expect(l.head().seq).toBe(1);
   l.close();
 });

@@ -107,6 +107,7 @@ export interface Payloads {
   "run.interrupted": Record<string, never>;
   "run.finished": { outcome: "published" | "stopped" };
   "stage.model_set": { stage: string; choice: ModelChoice };
+  "stage.pack_limit_set": { stage: string; max_marking: Marking | null };
   "stage.started": { stage: string; attempt: number };
   "stage.finished": { stage: string; attempt: number; outcome: "pass" | "fail" | "declined"; draft_hash: string | null; output: BlobRef | null; reason: string | null };
   "stage.sent_back": { from: string; to: string; reason: string; count: number };
@@ -155,7 +156,7 @@ export interface Payloads {
   "assessment.made": { finding: Finding; draft_hash: string };
   "research.requested": { question: string; why: string };
   "draft.revised": { draft: Draft };
-  "check.run": { check: string; script_hash: string; input: BlobRef; draft_hash: string; pass: boolean; findings: CheckFinding[] };
+  "check.run": { check: string; script_hash: string; input: BlobRef; output: BlobRef; draft_hash: string; pass: boolean; findings: CheckFinding[] };
   "evaluation.made": { draft_hash: string; pass: boolean; findings: CheckFinding[] };
   "challenge.raised": { challenge: Challenge };
   "challenge.answered": { challenge: string; answer: string; action: "revised" | "rebutted" };
@@ -170,6 +171,8 @@ export interface Payloads {
   "module.loaded": { kind: string; id: string; hash: string; root: string; path: string };
   "module.rejected": { root: string; path: string; error: string };
   "setting.changed": { key: string; value: Json };
+  /** Written on the workbench chain only: the head of a case when it was published or closed. A case fold ignores it. */
+  "case.anchored": { case: string; seq: number; hash: string; why: "published" | "closed" };
 }
 export type EntryType = keyof Payloads;
 
@@ -187,7 +190,7 @@ export const BLOB_FIELDS: { readonly [T in EntryType as BlobField<Payloads[T]> e
   "model.request": ["messages"],
   "model.response": ["response", "reasoning"],
   "tool.returned": ["result"],
-  "check.run": ["input"],
+  "check.run": ["input", "output"],
   "stage.finished": ["output"],
   "product.published": ["bundle"],
 };
@@ -206,7 +209,7 @@ export const BLOB_NULLABLE: { readonly [T in keyof typeof BLOB_FIELDS]: { readon
   "model.request": { messages: false },
   "model.response": { response: false, reasoning: true },
   "tool.returned": { result: true },
-  "check.run": { input: false },
+  "check.run": { input: false, output: false },
   "stage.finished": { output: true },
   "product.published": { bundle: false },
 };
@@ -262,7 +265,7 @@ export const FEEDBACK_KINDS = listOf<Payloads["feedback.recorded"]["kind"]>({ mo
 /** Every entry type, as a runtime list. Built from an object keyed by EntryType, so a name missing from Payloads or extra to it is a type error. */
 export const ENTRY_TYPES = listOf<EntryType>({
   "case.created": true, "case.phase_changed": true, "run.started": true, "run.paused": true, "run.resumed": true,
-  "run.interrupted": true, "run.finished": true, "stage.model_set": true, "stage.started": true,
+  "run.interrupted": true, "run.finished": true, "stage.model_set": true, "stage.pack_limit_set": true, "stage.started": true,
   "stage.finished": true, "stage.sent_back": true, "gate.waiting": true, "gate.passed": true, "budget.set": true,
   "job.started": true, "job.finished": true, "plan.proposed": true, "plan.accepted": true, "plan.denied": true,
   "plan.replan_requested": true, "step.started": true, "step.finished": true, "query.issued": true,
@@ -274,7 +277,7 @@ export const ENTRY_TYPES = listOf<EntryType>({
   "assessment.made": true, "research.requested": true, "draft.revised": true, "check.run": true,
   "evaluation.made": true, "challenge.raised": true, "challenge.answered": true, "publish.rejected": true,
   "product.published": true, "feedback.recorded": true, "agent.asked": true, "agent.answered": true,
-  "module.loaded": true, "module.rejected": true, "setting.changed": true,
+  "module.loaded": true, "module.rejected": true, "setting.changed": true, "case.anchored": true,
 });
 const ENTRY_TYPE_SET: ReadonlySet<string> = new Set(ENTRY_TYPES);
 export const isEntryType = (x: unknown): x is EntryType => typeof x === "string" && ENTRY_TYPE_SET.has(x);

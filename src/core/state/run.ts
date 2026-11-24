@@ -1,4 +1,4 @@
-import { EMPTY_MEANS, GATES, JOB_KINDS, JOB_OUTCOMES, QUERY_PURPOSES, RUN_OUTCOMES, SECTIONS, STAGE_RUNS, STEP_OUTCOMES, VERIFY_OUTCOMES } from "../types";
+import { EMPTY_MEANS, isMarking, GATES, JOB_KINDS, JOB_OUTCOMES, QUERY_PURPOSES, RUN_OUTCOMES, SECTIONS, STAGE_RUNS, STEP_OUTCOMES, VERIFY_OUTCOMES } from "../types";
 import type { Cost, Entry, ModelChoice, Plan, PlanStep, Proposal, StageDef } from "../types";
 import { has, isBool, isNum, isObj, isOneOf, isStr, isStrList, isStrOrNull, malformed } from "./guards";
 import { isBlobRefShape, isCard, isCount, isCoverage, isObservable, isStageFinishedShape, isTimeWindow } from "./shapes";
@@ -216,6 +216,13 @@ function applyPipeline(s: CaseState, entry: Entry): CaseState {
       if (!isStr(stage) || !isModel(choice)) return malformed(s, entry);
       const next = { ...s, stage_models: { ...s.stage_models, [stage]: choice } };
       return withStage(next, stage, (st) => ({ ...st, model: choice }));
+    }
+    case "stage.pack_limit_set": {
+      const { stage, max_marking } = entry.payload;
+      if (!isStr(stage) || !(max_marking === null || isMarking(max_marking))) return malformed(s, entry);
+      const { [stage]: _removed, ...rest } = s.pack_limits;
+      // a computed key defines an own property, so a stage id of "__proto__" is an ordinary key
+      return { ...s, pack_limits: max_marking === null ? rest : { ...rest, [stage]: max_marking } };
     }
     case "stage.started": {
       const { stage, attempt } = entry.payload;

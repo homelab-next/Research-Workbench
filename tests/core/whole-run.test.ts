@@ -153,7 +153,7 @@ test("a whole run, live, equals its replay at every entry", () => {
   one({ type: "draft.revised", payload: { draft: d1 }, actor: planner });
   stage("assemble", "pass", d1.hash);
   start("checks");
-  one({ type: "check.run", payload: { check: "citations", script_hash: "e".repeat(64), input: s.blobs.put(canonical(baseProduct as never)), draft_hash: d1.hash, pass: true, findings: [] }, actor: system });
+  one({ type: "check.run", payload: { check: "citations", script_hash: "e".repeat(64), input: s.blobs.put(canonical(baseProduct as never)), output: s.blobs.put("ok"), draft_hash: d1.hash, pass: true, findings: [] }, actor: system });
   stage("checks", "pass", d1.hash);
   start("evaluate");
   one({ type: "evaluation.made", payload: { draft_hash: d1.hash, pass: true, findings: [] }, actor: planner });
@@ -217,6 +217,6 @@ test("a whole run, live, equals its replay at every entry", () => {
   const report = verifyCase(s.dir);
   expect(report).toMatchObject({ ok: true, entries: all.length, firstBad: null, blobs: { bad: [], lookalikes: 0 } });
   // pre-run response, plan prompt, plan text, its reasoning, the result rows, the check input, the bundle
-  expect(report.blobs.referenced).toBe(7);
+  expect(report.blobs.referenced).toBe(8);
   expect(errors).toEqual([]);
 });

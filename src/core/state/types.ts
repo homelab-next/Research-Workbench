@@ -1,5 +1,5 @@
 import type {
-  Actor, BlobRef, Card, Challenge, CheckFinding, Coverage, Draft, ModelChoice, Payloads,
+  Actor, BlobRef, Card, Marking, Challenge, CheckFinding, Coverage, Draft, ModelChoice, Payloads,
   Place, Plan, Proposal, QueryPurpose, StageDef, StepOutcome, TimeWindow,
 } from "../types";
 
@@ -92,6 +92,8 @@ export interface CaseState {
   undoable: UndoItem[];
   // run (Task 6)
   stage_models: Record<string, ModelChoice>;
+  /** The strictest marking a stage may put in front of its model; a stage with no entry has no limit. */
+  pack_limits: Record<string, Marking>;
   run: RunState;
   plan: PlanState;
   jobs: Record<string, JobState>;

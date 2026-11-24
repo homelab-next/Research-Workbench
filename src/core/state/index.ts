@@ -27,6 +27,7 @@ export function initial(): CaseState {
     discarded: [],
     undoable: [],
     stage_models: {},
+    pack_limits: {},
     run: {
       id: null, status: "none", outcome: null, pause_reason: null, waiting: null, stages: [], current: null,
       sendbacks: {}, usage: { input: 0, output: 0, reasoning: 0 }, model_calls: 0,
