@@ -3,13 +3,23 @@ import type { Json } from "../../core/canonical";
 import type { ToolContext, ToolDef, ToolResult } from "./index";
 import { idArg, json, MAX_HAVE, MAX_ID, params, str, ToolError } from "./kit";
 
+/** A name from an untrusted root that is safe to show a model: a plain identifier, nothing a sentence could hide in. */
+const PLAIN_NAME = /^[A-Za-z_][\w$.]{0,127}$/;
+const plain = (x: string): boolean => PLAIN_NAME.test(x);
+
+/** Whether the source's manifest came from a trusted root; only then is its free text shown to a model. */
+const trusted = (ctx: ToolContext, dir: string): boolean => ctx.deps.registry.rootOf(dir)?.trusted === true;
+
 const ok = (summary: string, view: Json): ToolResult => ({ ok: true, summary, view, marking: null });
 
 async function listSources(ctx: ToolContext): Promise<ToolResult> {
-  const sources = ctx.deps.registry.sources().map((s) => ({
-    id: s.id, title: s.title, connector: s.connector, marking: s.marking, where: s.where, confirmed: s.confirmed, adhoc: s.adhoc,
-    free: s.cost.weight === 0, unit: s.cost.unit, quality: s.quality,
-  }));
+  const sources = ctx.deps.registry.sources().map((s) => {
+    const t = trusted(ctx, s.dir);
+    return {
+      id: s.id, title: t ? s.title : s.id, connector: s.connector, marking: s.marking, where: s.where, confirmed: s.confirmed, adhoc: s.adhoc,
+      free: s.cost.weight === 0, unit: t || plain(s.cost.unit) ? s.cost.unit : "", quality: t ? s.quality : "", text_withheld: !t,
+    };
+  });
   return ok(`${sources.length} sources`, json({ sources }));
 }
 
@@ -17,14 +27,20 @@ async function describeSource(ctx: ToolContext, args: Record<string, Json>): Pro
   const id = str(args.source);
   const s = ctx.deps.registry.source(id);
   if (s === null) throw new ToolError(`unknown source: ${id}`);
+  const t = trusted(ctx, s.dir);
+  // a pivot may use only its own root's source unless both roots are trusted, so the source's root is the pivot's
   const pivots = ctx.deps.registry.pivots().filter((p) => p.source === s.id).map((p) => ({
-    id: p.id, title: p.title, from: p.from, to: p.to, free: pivotWeight(p, s) === 0, needs_window: p.needs_window, empty_means: p.empty_means,
+    id: p.id, title: t ? p.title : p.id, from: p.from, to: p.to, free: pivotWeight(p, s) === 0, needs_window: p.needs_window, empty_means: p.empty_means,
   }));
   const view = {
-    id: s.id, title: s.title, marking: s.marking, confirmed: s.confirmed, adhoc: s.adhoc, cost: s.cost, limits: s.limits,
-    quality: s.quality, quality_notes: s.quality_notes.map((n) => ({ id: n.id, text: n.text, from: n.from, to: n.to })),
-    tables: s.tables.map((t) => ({ name: t.name, time_column: t.time_column, columns: t.columns.map((c) => ({ name: c.name, type: c.type })) })),
-    pivots,
+    id: s.id, title: t ? s.title : s.id, marking: s.marking, confirmed: s.confirmed, adhoc: s.adhoc,
+    cost: t ? s.cost : { weight: s.cost.weight, unit: plain(s.cost.unit) ? s.cost.unit : "" }, limits: s.limits,
+    quality: t ? s.quality : "", quality_notes: t ? s.quality_notes.map((n) => ({ id: n.id, text: n.text, from: n.from, to: n.to })) : [],
+    tables: s.tables.filter((x) => t || plain(x.name)).map((x) => ({
+      name: x.name, time_column: t || x.time_column === null || plain(x.time_column) ? x.time_column : null,
+      columns: x.columns.filter((c) => t || plain(c.name)).map((c) => ({ name: c.name, type: c.type })),
+    })),
+    pivots, text_withheld: !t,
   };
   return ok(`${s.title}: ${view.tables.length} tables, ${pivots.length} pivots`, json(view));
 }
