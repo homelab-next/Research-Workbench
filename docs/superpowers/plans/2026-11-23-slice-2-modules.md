@@ -335,17 +335,17 @@ test.each([
   try { assertReadOnly(sql); } catch (e) { expect((e as GuardError).violations.join(" ")).toContain(why); }
 });
 
-const guards: TableGuard[] = [{ table: "iceberg.wazuh_archive.events", time_column: "event_timestamp", large_columns: ["full_log"] }];
-const ok = "select rule_id, count(*) c from iceberg.wazuh_archive.events where event_timestamp >= timestamp '2026-11-20 00:00:00 UTC' group by rule_id order by c desc limit 50";
+const guards: TableGuard[] = [{ table: "lake.archive.events", time_column: "event_time", large_columns: ["raw_line"] }];
+const ok = "select host_id, count(*) c from lake.archive.events where event_time >= timestamp '2026-11-20 00:00:00 UTC' group by host_id order by c desc limit 50";
 test("a bounded, projected, limited query passes", () => { expect(checkGuardrails(ok, guards)).toEqual([]); });
 test("a query on an unguarded table is not checked", () => { expect(checkGuardrails("select * from other", guards)).toEqual([]); });
 test.each([
-  ["select rule_id from iceberg.wazuh_archive.events", "time filter"],
-  ["select * from iceberg.wazuh_archive.events where event_timestamp > now() - interval '1' day", "select *"],
-  ["select e.* from iceberg.wazuh_archive.events e where event_timestamp > now() - interval '1' day", "select *"],
-  ["select count(distinct agent_id) from iceberg.wazuh_archive.events where event_timestamp > now() - interval '1' day", "approx_distinct"],
-  ["select rule_id from iceberg.wazuh_archive.events where event_timestamp > now() - interval '1' day order by rule_id", "limit"],
-  ["select rule_id from iceberg.wazuh_archive.events where event_timestamp >= timestamp '2026-11-20 00:00:00'", "time zone"],
+  ["select host_id from lake.archive.events", "time filter"],
+  ["select * from lake.archive.events where event_time > now() - interval '1' day", "select *"],
+  ["select e.* from lake.archive.events e where event_time > now() - interval '1' day", "select *"],
+  ["select count(distinct agent_id) from lake.archive.events where event_time > now() - interval '1' day", "approx_distinct"],
+  ["select host_id from lake.archive.events where event_time > now() - interval '1' day order by host_id", "limit"],
+  ["select host_id from lake.archive.events where event_time >= timestamp '2026-11-20 00:00:00'", "time zone"],
 ])("violation: %s", (sql, why) => { expect(checkGuardrails(sql, guards).join(" ")).toContain(why); });
 test("several violations are all reported", ...);                      // select * with no filter -> two entries
 test("the table name matches case-insensitively and when quoted", ...); // "ICEBERG"."wazuh_archive"."events"
