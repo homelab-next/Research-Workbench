@@ -30,7 +30,7 @@ export type AgentEnd =
   | { kind: "invalid"; errors: string[]; calls: CallRecord[] }
   | { kind: "declined"; reason: string }
   | { kind: "blocked"; marking: Marking }
-  | { kind: "error"; message: string }
+  | { kind: "error"; message: string; retried?: true }
   | { kind: "stopped"; why: "paused" | "budget" | "turns" };
 
 const enc = new TextEncoder();
@@ -83,6 +83,19 @@ const count = (n: unknown): number => (typeof n === "number" && Number.isFinite(
 const ranPast = (provider: Provider): string => (provider.max_output_tokens === undefined
   ? "the model ran past its output limit" : `the model ran past ${provider.max_output_tokens} output tokens`);
 
+/** A failed call that is made once more for the same turn: no answer in time, the endpoint not reached, or the output limit reached. */
+type Attempt = { kind: "timeout"; ms: number } | { kind: "transport"; message: string } | { kind: "length" };
+const seconds = (ms: number): string => (ms % 1000 === 0 ? `${ms / 1000} s` : `${ms} ms`);
+const subject = (a: Attempt): string => (a.kind === "transport" ? "the model endpoint" : "the model");
+const verb = (a: Attempt, provider: Provider): string => (a.kind === "timeout" ? `did not answer within ${seconds(a.ms)}`
+  : a.kind === "transport" ? "could not be reached" : ranPast(provider).slice("the model ".length));
+/** What two failed calls for one turn did, in plain words: "the model did not answer within 300 s twice". */
+function twice(first: Attempt, second: Attempt, provider: Provider): string {
+  const same = first.kind === second.kind;
+  const said = same ? `${subject(first)} ${verb(first, provider)} twice` : `${subject(first)} ${verb(first, provider)}, then ${verb(second, provider)}`;
+  return second.kind === "transport" ? `${said} (${second.message})` : said;
+}
+
 /**
  * One agent's conversation. Every model call and tool call is in the ledger before it happens and its outcome after.
  * Nothing but the ledger decides where a scripted provider is (the request's ordinal), so a replay cannot differ.
@@ -96,6 +109,9 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
   const calls: CallRecord[] = [];
   let marking: Marking = spec.pack.marking;
   let failures = 0;
+  // the failed attempt of this turn that is being made once more, and the seq of its response, which causes the new request
+  let failedOnce: Attempt | null = null;
+  let retryCause: number | null = null;
   const maxTurns = spec.max_turns ?? MAX_TURNS;
   const put = (data: Uint8Array | string): BlobRef => session.blobs.put(data);
 
@@ -122,7 +138,7 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     const [requested] = session.commit((_s, ids) => {
       requestId = ids.next("request");
       return [{
-        type: "model.request", actor, ...link, ...because,
+        type: "model.request", actor, ...link, ...(retryCause === null ? because : { cause: retryCause }),
         payload: { request: requestId, provider: provider.id, model: spec.model, effort: spec.effort, where: provider.where, marking, pack: spec.pack.items, left_out: spec.pack.left_out, messages: messagesBlob, tools: [...spec.tools] },
       }];
     });
@@ -148,9 +164,10 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
       }
       return { kind: "error", message: clip(message, 500) };
     };
-    const guarded = (build: () => EntryInput[]): boolean => {
+    const guarded = (build: () => EntryInput[], wrote?: (firstSeq: number) => void): boolean => {
       try {
-        session.commit(build);
+        const out = session.commit(build);
+        if (out.length > 0) wrote?.(out[0]!.seq);
         return true;
       } catch {
         return false;
@@ -161,14 +178,30 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
       if (!guarded(() => [{ type: "model.declined", actor, ...link, cause: requested!.seq, payload: { request: requestId, reason } }])) return failed("the ledger refused the declined entry");
       return { kind: "declined", reason };
     }
+    retryCause = null;
+    /** A failed attempt: made once more for the same turn (the stop checks come first), else the end, saying what happened twice. */
+    const again = (attempt: Attempt, responseSeq: number, message: string): AgentEnd | null => {
+      if (failedOnce !== null) return { kind: "error", message: clip(twice(failedOnce, attempt, provider), 500), retried: true };
+      if (spec.outside_run) return { kind: "error", message };
+      failedOnce = attempt;
+      retryCause = responseSeq;
+      return null;
+    };
     if (result.kind === "error") {
       const message = clip(result.message, 500);
       const raw = put(result.raw ?? JSON.stringify({ error: message }));
+      let seq = -1;
       const wrote = guarded(() => [{
         type: "model.response", actor, ...link, cause: requested!.seq,
         payload: { request: requestId, response: raw, stop: "error", usage: { input: 0, output: 0, reasoning: 0 }, served_by: clip(spec.model, NAME_CHARS), reasoning: null },
-      }]);
-      return wrote ? { kind: "error", message } : failed(message);
+      }], (s) => { seq = s; });
+      if (!wrote) return failed(message);
+      const t = result.transient;
+      if (t === undefined) return { kind: "error", message };
+      const end = again(t.kind === "timeout" ? t : { kind: "transport", message }, seq, message);
+      if (end !== null) return end;
+      turn--;
+      continue;
     }
     const response = put(result.raw);
     const reasoning = result.reasoning === null ? null : put(result.reasoning);
@@ -182,17 +215,24 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     const extra = result.tool_calls.length - toRun.length;
     const skippedNote = cut ? `${extra} tool calls were not run: the reply was cut off at the output limit`
       : noTools ? `${extra} tool calls were not run: this agent has no tools` : `${extra} further tool calls were not run`;
+    let responseSeq = -1;
     if (!guarded(() => [
       {
         type: "model.response", actor, ...link, cause: requested!.seq,
         payload: { request: requestId, response, stop, usage, served_by: clip(String(result.served_by), NAME_CHARS), reasoning },
       },
       ...(extra > 0 ? [{ type: "tool.skipped" as const, actor, ...link, cause: requested!.seq, payload: { request: requestId, count: extra, note: skippedNote } }] : []),
-    ])) return failed("the ledger refused the model response");
+    ], (s) => { responseSeq = s; })) return failed("the ledger refused the model response");
     responded = true;
 
     // a reply cut off at the output limit is a failed attempt: neither its text nor its calls are used
-    if (cut) return { kind: "error", message: ranPast(provider) };
+    if (cut) {
+      const end = again({ kind: "length" }, responseSeq, ranPast(provider));
+      if (end !== null) return end;
+      turn--;
+      continue;
+    }
+    failedOnce = null;
 
     // 6. the tool calls that are present decide, not the finish label
     if (toRun.length > 0) {

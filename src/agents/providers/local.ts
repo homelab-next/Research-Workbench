@@ -4,7 +4,7 @@ import type { Usage } from "../../core/state";
 import type { Where } from "../../core/types";
 import { assertNoEcho, CONTROL, LOOPBACK, loadCredential, NUMERIC_LOOPBACK, parseBase, readCapped, refuseOwnServer, scrub, TimedOut, TooBig } from "../../modules/connectors/shared";
 import type { Secrets } from "../../modules/secrets";
-import type { ModelInfo, Provider, ToolCall, TurnRequest, TurnResult } from "./types";
+import type { ModelInfo, Provider, ToolCall, Transient, TurnRequest, TurnResult } from "./types";
 
 export const DEFAULT_CONTEXT = 8192;
 /** The most tokens a reply may hold (reasoning included) when the manifest names no max_output_tokens; sent as max_tokens on every chat request. */
@@ -34,7 +34,7 @@ const dec = new TextDecoder();
 const ECHOED = "the endpoint echoed the credential; response refused";
 
 class Failure extends Error {
-  constructor(message: string, readonly raw: Uint8Array | null = null) { super(message); }
+  constructor(message: string, readonly raw: Uint8Array | null = null, readonly transient: Transient | null = null) { super(message); }
 }
 
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
@@ -116,10 +116,12 @@ export class LocalProvider implements Provider {
       return { status: res.status, raw, parsed };
     } catch (err) {
       if (err instanceof Failure) throw err;
-      if (timedOut || err instanceof TimedOut) throw new Failure(`no answer within ${this.#timeout} ms`);
+      if (timedOut || err instanceof TimedOut) throw new Failure(`no answer within ${this.#timeout} ms`, null, { kind: "timeout", ms: this.#timeout });
       if (err instanceof TooBig) throw new Failure(`the reply was larger than ${this.#max} bytes; refused`);
       const e = err as Error;
-      throw new Failure(this.#redact(`the endpoint could not be reached: ${e.message ?? String(err)}`));
+      // a redirect is refused here too; it is not transient, as asking again meets it again
+      const transient: Transient | null = (e.message ?? "").toLowerCase().includes("redirect") ? null : { kind: "transport" };
+      throw new Failure(this.#redact(`the endpoint could not be reached: ${e.message ?? String(err)}`), null, transient);
     } finally {
       clearTimeout(timer);
     }
@@ -172,7 +174,7 @@ export class LocalProvider implements Provider {
     try {
       return await this.#turn(req);
     } catch (err) {
-      if (err instanceof Failure) return { kind: "error", message: err.message, raw: err.raw };
+      if (err instanceof Failure) return { kind: "error", message: err.message, raw: err.raw, ...(err.transient === null ? {} : { transient: err.transient }) };
       return { kind: "error", message: this.#redact(`the reply could not be read: ${(err as Error).message ?? String(err)}`), raw: null };
     }
   }

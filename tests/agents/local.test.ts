@@ -255,3 +255,16 @@ test("a reply cut off at the output limit is a length stop even when it holds to
   const m = standin([ok({ content: "", tool_calls: [call("a")] }, "length")]);
   expect(await provider(m.url).turn(req())).toMatchObject({ kind: "answer", stop: "length" });
 });
+
+test("a timeout and an unreachable endpoint are marked transient; other failures are not", async () => {
+  const slow = standin([{ delayMs: 2000, json: {} }]);
+  expect(await provider(slow.url, { timeout_ms: 200 }).turn(req())).toMatchObject({ kind: "error", transient: { kind: "timeout", ms: 200 } });
+  const gone = standin([]);
+  gone.stop();
+  expect(await provider(gone.url).turn(req())).toMatchObject({ kind: "error", transient: { kind: "transport" } });
+  const bad = standin([{ text: "not json" }, { status: 500, text: "boom" }]);
+  for (let i = 0; i < 2; i++) {
+    const r = await provider(bad.url).turn(req());
+    expect(r.kind === "error" && "transient" in r).toBe(false);
+  }
+}, 5000);

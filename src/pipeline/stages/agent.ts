@@ -81,7 +81,9 @@ export async function stageAgent(env: StageEnv, opts: {
     case "invalid": return { kind: "stalled", reason: `${title}'s output failed its schema twice: ${end.errors.join("; ")}` };
     case "declined": return { kind: "declined", reason: end.reason };
     case "blocked": return { kind: "blocked", marking: end.marking };
-    case "error": return { kind: "stalled", reason: `${title}: the model call failed: ${end.message}` };
+    case "error": return { kind: "stalled", reason: end.retried === true
+      ? `${title}: ${end.message}. Try a lower effort or another model, and resume.`
+      : `${title}: the model call failed: ${end.message}` };
     case "stopped":
       if (end.why === "paused") return { kind: "stopped" };
       if (end.why === "budget") {

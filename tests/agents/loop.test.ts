@@ -196,10 +196,11 @@ test("a reply that is cut off counts as a failure", async () => {
     return n++ === 0 && t.kind === "answer" ? { ...t, stop: "length" } : t;
   } };
   const end = await runAgent(f.s, spec(p, { schema: SCHEMA }));
-  // the cut-off reply is never parsed: its valid-looking JSON is not the answer
-  expect(end.kind).toBe("error");
-  expect(n).toBe(1);
-  expect(ofType("model.response").map((e) => e.payload.stop)).toEqual(["length"]);
+  // the cut-off reply is never parsed: its valid-looking JSON is not the answer; the same turn is asked once more
+  expect(end.kind).toBe("done");
+  expect(n).toBe(2);
+  expect(inner.seen[1]!.messages).toEqual(inner.seen[0]!.messages);
+  expect(ofType("model.response").map((e) => e.payload.stop)).toEqual(["length", "end"]);
 });
 
 /** A spy whose answers all stop at the output limit, holding a tool call; `limit` is the provider's max_output_tokens. */
@@ -501,5 +502,88 @@ test("a card read raises the marking when there is no limit", async () => {
   const p = spy([{ tool_calls: [{ tool: "list_cards", args: { why: "w" } }] }, { content: "a" }], "hosted");
   const end = await runAgent(f.s, spec(p));
   expect(end).toEqual({ kind: "blocked", marking: "TLP:RED" });
+  expect(p.turns).toBe(1);
+});
+
+/** A spy whose turns, in order, are replaced by these failures (null keeps the scripted reply). */
+type Fail = "timeout" | "transport" | "length" | "plain" | null;
+// a scripted reply is chosen by the actor's request ordinal, which continues across runs in one case: enough replies for several runs
+const failing = (fails: Fail[], replies: ScriptReply[] = Array.from({ length: 12 }, () => ({ content: "ok" }))): Spy => {
+  const inner = spy(replies);
+  const turn = inner.turn;
+  let i = 0;
+  Object.assign(inner, { max_output_tokens: 8192 });
+  inner.turn = async (r) => {
+    const t = await turn(r);
+    const fail = fails[i++] ?? null;
+    if (fail === "timeout") return { kind: "error", message: "no answer within 300000 ms", raw: null, transient: { kind: "timeout", ms: 300000 } };
+    if (fail === "transport") return { kind: "error", message: "the endpoint could not be reached: reset", raw: null, transient: { kind: "transport" } };
+    if (fail === "plain") return { kind: "error", message: "the reply is not JSON", raw: null };
+    if (fail === "length" && t.kind === "answer") return { ...t, stop: "length" };
+    return t;
+  };
+  return inner;
+};
+
+test("a call that times out, cannot reach the endpoint or runs past the output limit is made once more for the same turn", async () => {
+  for (const fail of ["timeout", "transport", "length"] as const) {
+    const head = f.s.head().seq;
+    const p = failing([fail]);
+    const end = await runAgent(f.s, spec(p));
+    expect(end).toEqual({ kind: "done", content: "ok", output: null, calls: [] });
+    const mine = f.s.entries().filter((e) => e.seq > head);
+    expect(mine.map((e) => e.type)).toEqual(["model.request", "model.response", "model.request", "model.response"]);
+    // the retry is caused by the failed response, and asks exactly what the failed request asked
+    expect(mine[2]!.cause).toBe(mine[1]!.seq);
+    expect(p.seen[1]!.messages).toEqual(p.seen[0]!.messages);
+    expect((mine[1]!.payload as { stop: string }).stop).toBe(fail === "length" ? "length" : "error");
+  }
+});
+
+test("a second failure ends the agent, saying plainly what happened twice", async () => {
+  const cases: [Fail[], string][] = [
+    [["timeout", "timeout"], "the model did not answer within 300 s twice"],
+    [["length", "length"], "the model ran past 8192 output tokens twice"],
+    [["timeout", "length"], "the model did not answer within 300 s, then ran past 8192 output tokens"],
+    [["transport", "transport"], "the model endpoint could not be reached twice"],
+  ];
+  for (const [fails, said] of cases) {
+    const p = failing(fails);
+    const end = await runAgent(f.s, spec(p));
+    expect(end).toMatchObject({ kind: "error", retried: true });
+    expect(end.kind === "error" && end.message).toStartWith(said);
+    expect(p.turns).toBe(2);
+  }
+});
+
+test("a failure of another kind is not retried, and each turn has its own one retry", async () => {
+  // turn one fails once then calls a tool; turn two fails once then answers
+  const p = failing(["timeout", null, "length", null], [{ content: "x" }, { tool_calls: [{ tool: "list_sources", args: { why: "w" } }] }, { content: "y" }, { content: "done" }, { content: "z" }]);
+  expect(await runAgent(f.s, spec(p))).toMatchObject({ kind: "done", content: "done" });
+  expect(p.turns).toBe(4);
+  const plain = failing(["plain"], Array.from({ length: 6 }, () => ({ content: "ok" })));
+  expect(await runAgent(f.s, spec(plain))).toEqual({ kind: "error", message: "the reply is not JSON" });
+  expect(plain.turns).toBe(1);
+});
+
+test("a stop or pause during the failed wait wins: no retry is made", async () => {
+  startRun();
+  const p = failing(["timeout"]);
+  const turn = p.turn;
+  p.turn = async (r) => {
+    const out = await turn(r);
+    f.s.commit(() => [{ type: "run.paused", actor: human, payload: { reason: "person asked" } }]);
+    return out;
+  };
+  expect(await runAgent(f.s, spec(p))).toEqual({ kind: "stopped", why: "paused" });
+  expect(p.turns).toBe(1);
+  expect(ofType("model.request").length).toBe(1);
+  expect(ofType("model.response").map((e) => e.payload.stop)).toEqual(["error"]);
+});
+
+test("the conversational agent, which works beside the run, is not retried", async () => {
+  const p = failing(["timeout"]);
+  const end = await runAgent(f.s, spec(p, { outside_run: true, tools: [] }));
+  expect(end).toEqual({ kind: "error", message: "no answer within 300000 ms" });
   expect(p.turns).toBe(1);
 });

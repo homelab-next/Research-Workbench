@@ -6,6 +6,7 @@ import type { Entry } from "../../src/core/types";
 import { loadProfile } from "../../src/agents/context";
 import type { PackPart } from "../../src/agents/context";
 import { Providers } from "../../src/agents/providers";
+import type { Provider } from "../../src/agents/providers";
 import { ScriptedProvider } from "../../src/agents/providers/scripted";
 import type { Script, ScriptReply } from "../../src/agents/providers/scripted";
 import { loadConfig } from "../../src/modules/config";
@@ -135,4 +136,18 @@ test("lastOutput and frameOf read Frame's passed output, and fall back to the ca
   finish("fail", { other: 1 });
   expect(lastOutput(f.s, "frame")).toEqual(narrow);
   expect(frameOf(r.env("plan"))).toEqual({ window: { from: "2026-11-18T00:00:00.000Z", to: "2026-11-19T00:00:00.000Z" }, limits: { allow_unconfirmed: true, max_weight: 3, max_hops: 4 } });
+});
+
+test("a model call that fails twice for the same reason pauses with a plain reason and a suggestion", async () => {
+  const r = rig(script(say(FRAME), say(FRAME)));
+  const inner = r.deps.providers.get("scripted")!;
+  const timedOut: Provider = {
+    id: inner.id, kind: inner.kind, where: inner.where, max_output_tokens: 8192, models: () => inner.models(), body: (q) => inner.body(q),
+    turn: async (q) => { await inner.turn(q); return { kind: "error", message: "no answer within 300000 ms", raw: null, transient: { kind: "timeout", ms: 300000 } }; },
+  };
+  r.deps.providers = new Providers([timedOut]);
+  r.engine.start(person);
+  const end = await stageAgent(r.env(), { actor_id: "orchestrator", task: "t", extras: [] });
+  expect(end).toEqual({ kind: "stalled", reason: "Frame: the model did not answer within 300 s twice. Try a lower effort or another model, and resume." });
+  expect(ofType("model.request")).toHaveLength(2);
 });
