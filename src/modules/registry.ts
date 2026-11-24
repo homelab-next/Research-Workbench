@@ -234,6 +234,9 @@ export class Registry {
       } else if (credential !== null && !root.credentials.includes(credential)) {
         throw new ManifestError(`source names credential "${credential}", which the configuration does not grant to this root`);
       }
+      for (const t of (body.tables ?? []) as { name: string; guarded?: boolean; time_column?: string | null }[]) {
+        if (t.guarded === true && (t.time_column ?? null) === null) throw new ManifestError(`guarded table ${t.name} needs a time_column`);
+      }
       // the runner compares a trino estimate, which is in rows, with a budget in the source's unit
       const unit = isPlainObject(body.cost) && typeof body.cost.unit === "string" ? body.cost.unit : "seconds";
       if (connector === "trino" && unit !== "rows") throw new ManifestError(`a trino source's cost unit must be rows (the engine estimates in rows), not ${unit}`);

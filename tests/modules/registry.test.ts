@@ -441,6 +441,17 @@ test("a trino source's cost unit must be rows", () => {
   ]);
 });
 
+test("a guarded table needs a time_column, or its source does not load", () => {
+  const tables = (t: string): string => `tables:\n  - { name: lake.archive.events, ${t}guarded: true, columns: [] }\n`;
+  const r = Registry.load([root({
+    "sources/ok.yaml": trinoSource("ok", tables("time_column: event_time, ")),
+    "sources/bad.yaml": trinoSource("bad", tables("")),
+    "sources/free.yaml": trinoSource("free", "tables:\n  - { name: lake.archive.events, columns: [] }\n"),
+  })]);
+  expect(r.sources().map(x => x.id).sort()).toEqual(["free", "ok"]);
+  expect(r.problems.map(p => p.error)).toEqual(["guarded table lake.archive.events needs a time_column"]);
+});
+
 // ---------- plan 3 task 0: a pivot may not borrow a source; an id from two roots loads from neither ----------
 const REP_SOURCE = httpSource("rep", "cost: { weight: 5, unit: lookups }\n");
 const pivotFor = (id: string, source: string, extra = ""): string =>
