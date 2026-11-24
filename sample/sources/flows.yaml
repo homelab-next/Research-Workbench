@@ -1,0 +1,13 @@
+kind: source
+id: flows
+title: Network flows
+connector: sql
+location: ../data/flows.sqlite
+marking: "TLP:GREEN"
+where: machine
+limits: { max_rows: 200 }
+quality: Flow records are complete for the window but carry no payload, only byte counts.
+tables:
+  - name: flows
+    time_column: ts
+    columns: [{ name: src, type: address }, { name: dst, type: address }]

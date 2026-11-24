@@ -5,7 +5,9 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "verify": "bun run src/cli/verify.ts"
+    "verify": "bun run src/cli/verify.ts",
+    "sample:data": "bun run scripts/make-sample-data.ts",
+    "sample:fixture": "bun run sample/fixture/reputation-server.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.4.5",

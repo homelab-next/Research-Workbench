@@ -1,0 +1,15 @@
+kind: source
+id: assets
+title: Asset list
+connector: files
+location: ../data
+marking: "TLP:GREEN"
+where: machine
+
+quality: The asset list is complete for internal hosts, so an address absent from it is not internal.
+tables:
+  - name: assets
+    file: assets.csv
+    format: csv
+    time_column: null
+    columns: [{ name: asset, type: asset }, { name: address, type: address }]

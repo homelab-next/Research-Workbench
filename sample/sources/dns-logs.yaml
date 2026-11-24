@@ -1,0 +1,16 @@
+kind: source
+id: dns-logs
+title: DNS resolver logs
+connector: files
+location: ../data
+marking: "TLP:GREEN"
+where: machine
+quality_notes:
+  - { id: duplicated-logging, text: resolver logging was duplicated, from: '2026-11-18', to: '2026-11-20' }
+quality: Resolver logs list every lookup the resolver served, but not lookups made over other paths.
+tables:
+  - name: dns
+    file: dns.jsonl
+    format: jsonl
+    time_column: ts
+    columns: [{ name: ts }, { name: client, type: address }, { name: name, type: domain }, { name: answer, type: address }]

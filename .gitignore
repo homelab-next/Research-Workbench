@@ -4,3 +4,4 @@ data/
 *.sqlite
 *.sqlite-journal
 .env*
+sample/data/

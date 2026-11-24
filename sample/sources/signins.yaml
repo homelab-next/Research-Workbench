@@ -1,0 +1,15 @@
+kind: source
+id: signins
+title: Account sign-ins
+connector: files
+location: ../data
+marking: "TLP:GREEN"
+where: machine
+
+quality: Sign-ins are recorded by the directory service for every managed host.
+tables:
+  - name: signins
+    file: signins.jsonl
+    format: jsonl
+    time_column: ts
+    columns: [{ name: ts }, { name: account, type: account }, { name: host, type: asset }, { name: from_address, type: address }]

@@ -1,0 +1,15 @@
+kind: source
+id: leases
+title: Address leases
+connector: files
+location: ../data
+marking: "TLP:GREEN"
+where: machine
+confirmed: false
+quality: Lease records are incomplete and have not been confirmed against the address plan.
+tables:
+  - name: leases
+    file: leases.csv
+    format: csv
+    time_column: null
+    columns: [{ name: address, type: address }, { name: asset, type: asset }]

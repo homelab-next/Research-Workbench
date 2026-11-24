@@ -1,0 +1,15 @@
+kind: source
+id: reputation
+title: Reputation service
+connector: http
+location: http://127.0.0.1:4801
+marking: "TLP:GREEN"
+where: machine
+cost: { weight: 5, unit: lookups }
+quality: Verdicts come from a third-party feed and say what was known, not what is true.
+endpoints:
+  - name: lookup
+    method: GET
+    path: /v1/reputation/{value}
+    rows: results
+    columns: [address, verdict, first_seen]
