@@ -85,11 +85,29 @@ async function raiseChallenge(ctx: ToolContext, a: Record<string, Json>): Promis
   return done(`challenge ${id}`, { challenge: id });
 }
 
+const OPEN_LISTED = 20;
+const QUESTION_CHARS = 200;
+/** A text on one line and at most `n` characters, for a refusal the model reads. */
+const oneLine = (t: string, n: number): string => {
+  const flat = t.replace(/\s+/g, " ").trim();
+  return flat.length > n ? `${flat.slice(0, n)}…` : flat;
+};
+
 async function answerChallenge(ctx: ToolContext, a: Record<string, Json>): Promise<ToolResult> {
   reviewing(ctx);
-  const id = str(a.challenge);
-  const c = Object.hasOwn(ctx.session.state.challenges, id) ? ctx.session.state.challenges[id]! : null;
-  if (c === null || c.status !== "open") throw new ToolError(`challenge ${id} is not open`);
+  const given = str(a.challenge);
+  const open = Object.values(ctx.session.state.challenges).filter((c) => c.status === "open");
+  // the challenge's id, or else its exact text (a model often answers a challenge by its question)
+  const byId = open.find((c) => c.id === given);
+  const byText = byId === undefined ? open.filter((c) => c.text.trim() === given.trim()) : [];
+  const c = byId ?? (byText.length === 1 ? byText[0]! : null);
+  if (c === null) {
+    const listed = open.slice(0, OPEN_LISTED).map((o) => `${o.id}: ${oneLine(o.text, QUESTION_CHARS)}`);
+    const more = open.length > OPEN_LISTED ? `, and ${open.length - OPEN_LISTED} more` : "";
+    const why = byText.length > 1 ? "; several open challenges have that text: answer by id" : "";
+    throw new ToolError(`${oneLine(given, QUESTION_CHARS)} is not an open challenge${why}; ${open.length === 0 ? "there is no open challenge" : `open challenges: ${listed.join(", ")}${more}`}`);
+  }
+  const id = c.id;
   ctx.session.commit(() => [{ type: "challenge.answered", actor: ctx.actor, payload: { challenge: id, answer: str(a.answer), action: str(a.action) as "revised" | "rebutted" } }]);
   return done(`answered ${id}`, { answered: id });
 }
@@ -127,7 +145,7 @@ export const ANALYSIS_TOOLS: ToolDef[] = [
     parameters: params({ severity: { type: "string", enum: [...SEVERITIES] }, text, cites }, ["severity", "text", "cites"]), call: raiseChallenge,
   },
   {
-    name: "answer_challenge", description: "Answer an open challenge: say it was revised in the draft or rebut it.",
-    parameters: params({ challenge: card, answer: text, action: { type: "string", enum: [...ANSWER_ACTIONS] } }, ["challenge", "answer", "action"]), call: answerChallenge,
+    name: "answer_challenge", description: "Answer an open challenge, named by its id (or its exact text): say it was revised in the draft or rebut it.",
+    parameters: params({ challenge: { ...text, description: "the challenge's id, or its exact text" }, answer: text, action: { type: "string", enum: [...ANSWER_ACTIONS] } }, ["challenge", "answer", "action"]), call: answerChallenge,
   },
 ];

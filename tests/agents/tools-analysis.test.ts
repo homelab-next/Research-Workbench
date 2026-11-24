@@ -120,9 +120,9 @@ test("answer_challenge closes an open challenge and refuses a closed one", async
   expect(view(r)).toEqual({ answered: id });
   expect(f.s.state.challenges[id]).toMatchObject({ status: "answered", answer: "fixed", action: "revised" });
   const again = await f.call("answer_challenge", { why: "w", challenge: id, answer: "x", action: "rebutted" });
-  expect(view(again).error).toBe(`challenge ${id} is not open`);
+  expect(view(again).error).toBe(`${id} is not an open challenge; there is no open challenge`);
   const nope = await f.call("answer_challenge", { why: "w", challenge: "x99", answer: "x", action: "rebutted" });
-  expect(view(nope).error).toBe("challenge x99 is not open");
+  expect(view(nope).error).toBe("x99 is not an open challenge; there is no open challenge");
 });
 
 test("a discarded card cannot be cited", async () => {
@@ -155,7 +155,7 @@ test("answer_challenge answers an open challenge from any draft of the run, once
   f.ctx.draft_hash = "1".repeat(64);
   expect((await f.call("answer_challenge", { why: "w", challenge: id, answer: "a", action: "revised" })).ok).toBe(true);
   expect(f.s.state.challenges[id]!.status).toBe("answered");
-  expect(view(await f.call("answer_challenge", { why: "w", challenge: id, answer: "a", action: "revised" })).error).toBe(`challenge ${id} is not open`);
+  expect(view(await f.call("answer_challenge", { why: "w", challenge: id, answer: "a", action: "revised" })).error).toBe(`${id} is not an open challenge; there is no open challenge`);
   f.ctx.draft_hash = null;
   expect((await f.call("answer_challenge", { why: "w", challenge: id, answer: "a", action: "revised" })).ok).toBe(false);
 });
@@ -256,4 +256,35 @@ test("a finding that cites an unknown or a discarded card is refused, and nothin
   f.s.commit(() => [{ type: "card.discarded", actor: person, payload: { card: id } }]);
   expect(view(await f.call("propose_assessment", assess({ cites: [id] }))).error).toBe(`card ${id} was discarded`);
   expect(f.ctx.draft.findings).toEqual([]);
+});
+
+// ---- the turn budget (task 12 item 3) ----
+
+test("answer_challenge takes a challenge's id or its exact text, and a miss names the open challenges", async () => {
+  f.ctx.draft_hash = reviewable();
+  const raise = async (text: string): Promise<string> => view(await f.call("raise_challenge", { why: "w", severity: "must_address", text, cites: [] })).challenge as string;
+  const a = await raise("Why is the peer unexplained?");
+  const b = await raise("Is the asset record current?");
+  const c = await raise("Was the\nwindow wide enough?");
+  // by its exact text
+  const byText = await f.call("answer_challenge", { why: "w", challenge: "Is the asset record current?", answer: "it is", action: "rebutted" });
+  expect(byText.ok).toBe(true);
+  expect(view(byText)).toEqual({ answered: b });
+  expect(f.s.state.challenges[b]).toMatchObject({ status: "answered", answer: "it is", action: "rebutted" });
+  // neither an id nor the text of an open challenge: the open ones are named, each on the one line
+  const miss = await f.call("answer_challenge", { why: "w", challenge: "Why is the peer unexplained", answer: "x", action: "revised" });
+  expect(miss.ok).toBe(false);
+  expect(view(miss).error).toBe(`Why is the peer unexplained is not an open challenge; open challenges: ${a}: Why is the peer unexplained?, ${c}: Was the window wide enough?`);
+  // an answered challenge's text no longer matches
+  const closed = await f.call("answer_challenge", { why: "w", challenge: "Is the asset record current?", answer: "x", action: "revised" });
+  expect(view(closed).error).toStartWith("Is the asset record current? is not an open challenge; open challenges: ");
+  // by id, as before
+  expect((await f.call("answer_challenge", { why: "w", challenge: a, answer: "explained", action: "revised" })).ok).toBe(true);
+});
+
+test("answer_challenge's challenge parameter takes text as long as a challenge's", () => {
+  const spec = toolSpecs(["answer_challenge"])[0]!;
+  const p = (spec.parameters.properties as Record<string, { maxLength?: number; description?: string }>).challenge!;
+  expect(p.maxLength).toBe(4000);
+  expect(p.description).toContain("exact text");
 });
