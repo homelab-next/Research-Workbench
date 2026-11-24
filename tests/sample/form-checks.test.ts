@@ -224,3 +224,29 @@ test("a composed draft passes checks 2, 6 and 10 by construction, for every like
     }
   }
 });
+
+test("check 8 accepts a not-seen card cited in gaps_and_limits, and refuses it in a finding, the summary or the assessment", async () => {
+  const notSeen = (i: CheckInput): void => {
+    i.cards.c4 = { id: "c4", title: "c4", source: "flows", marking: "TLP:AMBER", coverage: { kind: "full" }, empty: "not-seen", row_count: 0, quality_notes: [] };
+    i.cited = ["c1", "c2", "c3", "c4"];
+  };
+  const gaps = good();
+  notSeen(gaps);
+  gaps.draft.product.gaps_and_limits += " The proxy lookup for the address returned nothing [c4]; that is not proof of absence.";
+  expect(await run("gaps-and-negatives", gaps)).toMatchObject({ pass: true, findings: [] });
+  // a gaps cite is still a real cite: the card's marking floors the draft, and check 11 sees it
+  gaps.cards.c4!.marking = "TLP:RED";
+  expect(await run("marking", gaps)).toMatchObject({ pass: false });
+  const finding = good();
+  notSeen(finding);
+  finding.draft.product.gaps_and_limits += " Nothing was seen [c4].";
+  finding.draft.product.key_findings[0]!.cites.push("c4");
+  expect(await run("gaps-and-negatives", finding)).toMatchObject({ pass: false, findings: [{ where: "f1", message: expect.stringContaining("f1 cites c4, which has no rows") }] });
+  for (const k of ["summary", "assessment"] as const) {
+    const i = good();
+    notSeen(i);
+    i.draft.product.gaps_and_limits += " Nothing was seen [c4].";
+    i.draft.product[k] += " The address is absent [c4].";
+    expect(await run("gaps-and-negatives", i)).toMatchObject({ pass: false, findings: [{ where: k, message: expect.stringContaining(`the ${k} cites c4, which has no rows`) }] });
+  }
+});
