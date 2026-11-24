@@ -15,9 +15,9 @@ async function main(): Promise<void> {
   const [me, ref] = await Promise.all([api.me(), api.reference().catch((): Reference => NO_REFERENCE)]);
   const ui: Ui = {
     doc: document, win: window, h: makeH(document), api, prefs: makePrefs(storage), me, ref,
-    toast: () => {},                              // Task 6 replaces this
+    toast: () => {},                              // startApp puts the real toasts in
     reducedMotion: () => matchMedia("(prefers-reduced-motion: reduce)").matches,
-    act: async () => false,                       // Task 6 replaces this
+    act: async () => false, send: async () => null,   // startApp puts the real sending in
   };
   const root = document.getElementById("app");
   if (root === null) throw new Error("the page has no #app");

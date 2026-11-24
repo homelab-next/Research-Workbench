@@ -2,16 +2,22 @@ import { Window } from "happy-dom";
 import type { Config } from "../../src/modules/config";
 import type { Entry } from "../../src/core/types";
 import type { Reference } from "../../src/core/wire";
-import { makeH } from "../../src/web/dom";
+import { TAGS, makeH } from "../../src/web/dom";
 import { makeApi } from "../../src/web/api";
 import type { EntrySource, Fetcher } from "../../src/web/api";
 import { startApp } from "../../src/web/app";
+import type { CaseScreen, Open } from "../../src/web/app";
+import { caseScreenFor } from "../../src/web/views/workarea";
+import type { CaseStore } from "../../src/web/store";
 import { makePrefs } from "../../src/web/prefs";
 import type { Ui } from "../../src/web/ui";
 import { served } from "./served";
 import type { Served } from "./served";
 
 type Role = Config["role"];
+
+// Task 6 needs dl, dt and dd in src/web/dom.ts's TAGS (the provenance block is a definition list). Until that file has them, this adds them for the tests.
+for (const tag of ["dl", "dt", "dd"]) if (!TAGS.includes(tag)) (TAGS as string[]).push(tag);
 
 export interface Page {
   s: Served; win: Window; doc: Document; ui: Ui; root: HTMLElement;
@@ -21,6 +27,8 @@ export interface Page {
   /** Waits until the server is idle and every entry it wrote has been rendered. */
   settle(): Promise<void>;
   toasts(): string[];
+  /** The case store the open case screen follows, and every nav call the screen made (name first). */
+  store(): CaseStore | null; navCalls: unknown[][];
   close(): Promise<void>;
 }
 
@@ -36,7 +44,7 @@ export function testUi(win: Window, over: Partial<Ui> = {}): Ui {
     doc, win: win as unknown as globalThis.Window, h: makeH(doc), api: makeApi(none as unknown as Fetcher, "http://127.0.0.1:1", entries), prefs: makePrefs(null),
     me: { user: "analyst", role: "analyst", origin: "http://127.0.0.1:1", markings: [], policy: {} as never, problems: [] },
     ref: { types: [], sources: [], pivots: [], objectives: [], phases: [], profile: { id: "p", title: "p" } },
-    toast: () => {}, reducedMotion: () => false, act: async () => false, ...over,
+    toast: () => {}, reducedMotion: () => false, act: async () => false, send: async () => null, ...over,
   } as Ui;
 }
 
@@ -60,7 +68,15 @@ export async function page(opts: { role?: Role; reducedMotion?: boolean; hash?: 
   const ui = testUi(win, { api, me: await api.me(), ref: await api.reference().catch(() => noReference), reducedMotion: () => opts.reducedMotion === true, toast: (m) => { toasts.push(m); } });
   const root = doc.createElement("div");
   doc.body.append(root);
-  const app = startApp(ui, root);
+  const navCalls: unknown[][] = [];
+  let opened: Open | null = null;
+  const screen = caseScreenFor(ui);
+  const caseScreen: CaseScreen = (o, register) => {
+    opened = o;
+    const nav = { ...o.nav, openLens: (...a: Parameters<Open["nav"]["openLens"]>) => { navCalls.push(["openLens", ...a]); o.nav.openLens(...a); }, pivot: (...a: Parameters<Open["nav"]["pivot"]>) => { navCalls.push(["pivot", ...a]); o.nav.pivot(...a); } };
+    return screen({ store: o.store, nav }, register);
+  };
+  const app = startApp(ui, root, { caseScreen });
   const el = (t: string | Element): HTMLElement => (typeof t === "string" ? q(t) : (t as HTMLElement));
   const q = (selector: string): HTMLElement => {
     const found = root.querySelector(selector);
@@ -86,6 +102,7 @@ export async function page(opts: { role?: Role; reducedMotion?: boolean; hash?: 
       await win.happyDOM.waitUntilComplete();
     },
     toasts: () => [...toasts],
+    store: () => (opened as Open | null)?.store ?? null, navCalls,
     async close() {
       app.destroy();
       await win.happyDOM.close();

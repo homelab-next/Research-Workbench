@@ -71,9 +71,9 @@ export function newView(shell: Shell): Screen {
         for (const reason of made.refused) refusals.appendChild(h("li", null, reason));
         return;
       }
-      const started = await ui.api.command(made.id, "start_run", {});
-      if (!started.ok) ui.toast(`The case was created, but the run did not start: ${started.refused.join("; ")}`);
+      // open the case first: ui.act sends for the case on screen, and says in a toast why a refusal happened
       nav.go({ screen: "case", id: made.id });
+      await ui.act("start_run");
     } catch (err) {
       refusals.appendChild(h("li", null, `The case could not be created: ${err instanceof Error ? err.message : String(err)}`));
     } finally {

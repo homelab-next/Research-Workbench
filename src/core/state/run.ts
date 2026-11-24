@@ -1,5 +1,5 @@
 import { EMPTY_MEANS, isMarking, GATES, JOB_KINDS, JOB_OUTCOMES, QUERY_PURPOSES, RUN_OUTCOMES, SECTIONS, STAGE_RUNS, STEP_OUTCOMES, VERIFY_OUTCOMES } from "../types";
-import type { Cost, Entry, ModelChoice, Plan, PlanStep, Proposal, StageDef } from "../types";
+import type { Cost, Entry, ModelChoice, Plan, PlanStep, Proposal, StageDef, SubGoal } from "../types";
 import { has, isBool, isNum, isObj, isOneOf, isStr, isStrList, isStrOrNull, malformed } from "./guards";
 import { isBlobRefShape, isCard, isCount, isCoverage, isObservable, isStageFinishedShape, isTimeWindow } from "./shapes";
 import type { CaseState, JobState, PlanState, ProposalState, QueryState, RunState, StageState, Usage } from "./types";
@@ -310,4 +310,22 @@ export function runUsage(s: CaseState): { usage: Usage; model_calls: number } {
 /** Run, plan, queries, jobs and proposals. A payload of the wrong shape is recorded in `skipped`; one pointing at something missing changes nothing. */
 export function applyRun(s: CaseState, entry: Entry): CaseState {
   return applyPipeline(applyPlan(applyQuery(applyJobsAndProposals(s, entry), entry), entry), entry);
+}
+
+/**
+ * True when the sub-goal's last accepted step finished answered or partial, or came back empty as a proven negative with full coverage on
+ * every card (the answer is "no"). A partial or not-seen empty result is not an answer, and a sub-goal with no accepted step is not answered.
+ */
+export function subgoalAnswered(state: Readonly<CaseState>, subgoal: SubGoal): boolean {
+  const steps = subgoal.steps.filter((id) => state.plan.accepted_steps.includes(id));
+  const last = steps[steps.length - 1];
+  if (last === undefined) return false;
+  const st = Object.hasOwn(state.plan.steps, last) ? state.plan.steps[last]! : null;
+  if (st === null) return false;
+  if (st.status === "answered" || st.status === "partial") return true;
+  if (st.status !== "empty" || st.cards.length === 0) return false;
+  return st.cards.every((id) => {
+    const c = Object.hasOwn(state.cards, id) ? state.cards[id]! : null;
+    return c !== null && c.row_count === 0 && c.empty === "proven-negative" && c.coverage !== null && c.coverage.kind === "full";
+  });
 }

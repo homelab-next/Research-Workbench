@@ -7,6 +7,9 @@ import { homeView } from "./views/home";
 import { newView } from "./views/newcase";
 import { pickView, soonView } from "./views/pick";
 import { topBar } from "./views/topbar";
+import { caseScreenFor } from "./views/workarea";
+import { makeSend } from "./ui";
+import { makeToasts } from "./views/toasts";
 
 export type LensId = "agent" | "steps" | "timeline" | "narrative" | "worklog" | "discarded" | "jobs" | "pipeline" | "replay";
 export type Route = { screen: "home" } | { screen: "pick" } | { screen: "new" } | { screen: "soon"; mode: string } | { screen: "case"; id: string };
@@ -64,16 +67,6 @@ export type Screen = View & { focus?(): void };
 
 export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { destroy(): void } {
   const { h, win, doc } = ui;
-  /** The stand-in case screen until Task 6 builds the real one: the case's id and, once the stream has it, its title. */
-  const placeholderCase: CaseScreen = ({ store: s }) => {
-    const title = h("p", null);
-    const head = h("h1", null, s.id);
-    const el = h("main", { data: { screen: "case" }, tabindex: -1 }, head, title);
-    const update = (): void => { title.textContent = s.shown.meta?.title ?? ""; };
-    const stop = s.subscribe(update);
-    update();
-    return { el, update, destroy: stop };
-  };
   let cases: CaseSummaryView[] = [];
   let store: CaseStore | null = null;
   let stopFollow: (() => void) | null = null;
@@ -103,9 +96,14 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
     },
   };
   const shell: Shell = { ui, nav, cases: () => cases, store: () => store, route: () => route, focusLane: (lane) => handlers.focusLane?.(lane) };
+  // The real toasts and command sending. A toast also goes to whatever `ui.toast` was before, so a host can listen.
+  const toasts = makeToasts(ui);
+  const priorToast = ui.toast; const priorSend = ui.send; const priorAct = ui.act;
+  ui.toast = (message, undo) => { priorToast(message, undo); toasts.toast(message, undo); };
+  Object.assign(ui, makeSend(ui, () => store));
   const top = topBar(shell);
   const stage = h("div", { class: "stage" });
-  root.append(stage);
+  root.append(stage, toasts.el);
 
   const refresh = (): void => {
     const mine = ++loads;
@@ -140,7 +138,7 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
       case "pick": view = pickView(shell); break;
       case "new": view = newView(shell); break;
       case "soon": view = soonView(shell, next.mode); break;
-      case "case": view = (opts.caseScreen ?? placeholderCase)({ store: store!, nav }, (hs) => { handlers = hs; }); break;
+      case "case": view = (opts.caseScreen ?? caseScreenFor(ui))({ store: store!, nav }, (hs) => { handlers = hs; }); break;
     }
     clear(stage);
     stage.appendChild(view.el);
@@ -177,6 +175,8 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
       doc.removeEventListener("keydown", onKey);
       view?.destroy?.(); view = null;
       dropStore();
+      toasts.destroy();
+      ui.toast = priorToast; ui.send = priorSend; ui.act = priorAct;
       clear(root);
     },
   };

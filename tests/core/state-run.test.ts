@@ -718,3 +718,32 @@ test("a run finished at a gate waits for nothing; a stop's reason is kept in the
   expect(fold(bad.entries).skipped).toEqual([{ seq: e.seq, type: "run.finished", reason: "malformed run.finished" }]);
   expect(fold(bad.entries).run.status).toBe("running");
 });
+
+// ---------- subgoalAnswered (the rule research.ts and the brief share) ----------
+import { subgoalAnswered } from "../../src/core/state";
+
+function planned(first: "answered" | "partial" | "empty" | "blocked" | "failed", over: Partial<ReturnType<typeof card>> = {}): CaseState {
+  const b = started();
+  b.add("plan.proposed", { plan: plan() });
+  b.add("plan.accepted", { plan: "plan-1", steps: ["s1", "s2"], budgets: {} });
+  b.add("card.created", { card: card("c1", { row_count: 0, rows: [], ...over }) });
+  b.add("step.finished", { step: "s1", outcome: "failed", cards: [], note: "" });
+  b.add("step.finished", { step: "s2", outcome: first, cards: ["c1"], note: "" });
+  return fold(b.entries);
+}
+const SG = { id: "sg1", title: "T", question: "Q", steps: ["s1", "s2"] };
+
+test("subgoalAnswered: the last accepted step answered or partial counts", () => {
+  expect(subgoalAnswered(planned("answered"), SG)).toBe(true);
+  expect(subgoalAnswered(planned("partial"), SG)).toBe(true);
+});
+test("subgoalAnswered: empty counts only as a proven negative with full coverage on every card", () => {
+  expect(subgoalAnswered(planned("empty", { empty: "proven-negative", coverage: { kind: "full" } }), SG)).toBe(true);
+  expect(subgoalAnswered(planned("empty", { empty: "not-seen", coverage: { kind: "full" } }), SG)).toBe(false);
+  expect(subgoalAnswered(planned("empty", { empty: "proven-negative", coverage: { kind: "partial", reason: "timeout" } }), SG)).toBe(false);
+});
+test("subgoalAnswered: blocked, failed and a goal with no accepted step are not answered", () => {
+  expect(subgoalAnswered(planned("blocked"), SG)).toBe(false);
+  expect(subgoalAnswered(planned("failed"), SG)).toBe(false);
+  expect(subgoalAnswered(planned("answered"), { ...SG, steps: ["nope"] })).toBe(false);
+});
