@@ -61,11 +61,14 @@ export async function planRunner(env: StageEnv): Promise<StageEnd> {
     const built = buildPlan("", out, deps, frame, research);
     if (!("errors" in built)) {
       session.commit((s, ids) => {
+        // a person stopped the run while the planner was answering: nothing is proposed
+        if (s.run.id !== state.run.id || s.run.status === "finished") return [];
         const plan = buildPlan(ids.next("plan"), out, deps, frame, research);
         if ("errors" in plan) throw new Error(`the plan could not be built: ${plan.errors.join("; ")}`);
         const actor = lastAgentActor(session, actorId);
         return [{ type: "plan.proposed", actor, run: s.run.id, stage: stage.id, payload: { plan } }];
       });
+      if (session.state.run.id !== state.run.id || session.state.run.status === "finished") return { kind: "stopped" };
       return { kind: "finished", outcome: "pass", draft_hash: null, output: end.output as Json, reason: null };
     }
     errors = built.errors;

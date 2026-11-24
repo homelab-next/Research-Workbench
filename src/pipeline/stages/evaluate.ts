@@ -22,7 +22,10 @@ export async function evaluateRunner(env: StageEnv): Promise<StageEnd> {
   if (end.kind !== "output") return end;
   const { pass, findings } = end.output as unknown as { pass: boolean; findings: CheckFinding[] };
   const actor = agentActor(session, actorId);
-  session.commit((s) => [{ type: "evaluation.made", actor, run: s.run.id, stage: stage.id, payload: { draft_hash: d.hash, pass, findings } }]);
+  const run = session.state.run.id;
+  // a person stopped the run while the model was answering: no verdict is recorded
+  const written = session.commit((s) => (s.run.id !== run || s.run.status === "finished" ? [] : [{ type: "evaluation.made", actor, run: s.run.id, stage: stage.id, payload: { draft_hash: d.hash, pass, findings } }]));
+  if (written.length === 0) return { kind: "stopped" };
   if (pass) return { kind: "finished", outcome: "pass", draft_hash: d.hash, output: end.output as Json, reason: null };
   if (findings.length === 0) return { kind: "stalled", reason: "Evaluate failed the draft without saying why" };
   return { kind: "finished", outcome: "fail", draft_hash: d.hash, output: end.output as Json, reason: findings[0]!.message };

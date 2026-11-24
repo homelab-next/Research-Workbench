@@ -525,3 +525,15 @@ test("Assemble writes no draft after the run was stopped while its model was ans
   expect(after).not.toContain("stage.finished");
   expect(f.s.state.drafts).toEqual([]);
 });
+
+test("Evaluate writes no verdict after the run was stopped while its model was answering", async () => {
+  const r = rig({ analyst: FIRST, evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
+  let stopSeq = 0;
+  afterTurn = (_n, actor) => { if (actor === "evaluator") { r.engine.stop(person, "enough"); stopSeq = f.s.head().seq; } };
+  const sum = await go(r);
+  expect(stopSeq).toBeGreaterThan(0);
+  expect(sum).toMatchObject({ status: "finished", outcome: "stopped" });
+  const after = f.s.entries().filter((e) => e.seq > stopSeq).map((e) => e.type);
+  expect(after).not.toContain("evaluation.made");
+  expect(after).not.toContain("stage.finished");
+});

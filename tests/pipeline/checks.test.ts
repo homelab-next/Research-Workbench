@@ -411,3 +411,19 @@ test("the sample with one check's script gone loads ten checks and names the ele
   expect(r.checks).toHaveLength(10);
   expect(r.broken).toEqual([{ id: "gaps-and-negatives", problem: `script "08-gaps-and-negatives.ts" is missing` }]);
 });
+
+test("Checks writes no check run after the run was stopped while a check was running", async () => {
+  const { env, close } = stageRig({ slow: [`await Bun.stdin.text(); await Bun.sleep(300); console.log(JSON.stringify({ pass: true, findings: [] }));`, { order: 1 }] });
+  try {
+    const s = env.session;
+    s.commit((_st, ids) => [{ type: "run.started", actor: person, payload: { run: ids.next("run"), pipeline: "p", pipeline_hash: "h", stages: [] } }]);
+    const going = checksRunner(env);
+    await Bun.sleep(100);
+    s.commit((st) => [{ type: "run.finished", actor: person, run: st.run.id, payload: { outcome: "stopped", reason: "enough" } }]);
+    const stopSeq = s.head().seq;
+    const end = await going;
+    expect(end).toEqual({ kind: "stopped" });
+    expect(s.entries().filter((e) => e.seq > stopSeq)).toEqual([]);
+    expect(s.state.skipped).toEqual([]);
+  } finally { close(); }
+});

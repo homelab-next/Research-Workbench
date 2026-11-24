@@ -23,7 +23,7 @@ import type { Fixture } from "../helpers/tools-fixture";
 
 let f: Fixture;
 let dir: string;
-beforeEach(() => { f = fixture(false); dir = mkdtempSync(join(tmpdir(), "front-")); });
+beforeEach(() => { afterTurn = null; f = fixture(false); dir = mkdtempSync(join(tmpdir(), "front-")); });
 afterEach(() => {
   expect(f.s.state.skipped).toEqual([]);
   f.close();
@@ -51,11 +51,18 @@ const answered = (note = "done"): ScriptReply => say({ outcome: "answered", foun
 const G1: ScriptReply[] = [calls(call("run_step", { step: "s1" }), call("run_step", { step: "s2", value: ASSET })), answered("accounts found")];
 const G2: ScriptReply[] = [calls(call("run_step", { step: "s3" })), answered("verdict asked for")];
 
+const hooked = (p: ScriptedProvider): ScriptedProvider => {
+  const real = p.turn.bind(p);
+  p.turn = async (req) => { const got = await real(req); afterTurn?.(req.key); return got; };
+  return p;
+};
 interface Rig { engine: Engine; deps: EngineDeps }
 /** A scripted provider that says it is on the network, as a model a person could choose for a stage. */
 class NetworkProvider extends ScriptedProvider {
   override readonly where = "network" as const;
 }
+/** Called after each answer the scripted provider gives, with the asking actor; a test uses it to act while a model is answering. */
+let afterTurn: ((actor: string) => void) | null = null;
 function rig(replies: Record<string, ScriptReply[]>, opts: { parallel?: number; runners?: Partial<Record<Role, StageRunner>>; network?: boolean } = {}): Rig {
   const registry = f.sample.registry;
   const { pipeline, problems } = loadPipeline(registry);
@@ -64,7 +71,7 @@ function rig(replies: Record<string, ScriptReply[]>, opts: { parallel?: number; 
   const base = loadConfig({ env: {}, home: dir, repoRoot: dir });
   const deps: EngineDeps = {
     config: { ...base, research: { parallel: opts.parallel ?? base.research.parallel } }, registry, runner: f.sample.deps, seeker: f.sample.seeker,
-    providers: new Providers([new ScriptedProvider({ id: "scripted", scripts: [{ id: "sample-run", turns }] }), ...(opts.network === true ? [new NetworkProvider({ id: "net", scripts: [{ id: "sample-run", turns }] })] : [])]),
+    providers: new Providers([hooked(new ScriptedProvider({ id: "scripted", scripts: [{ id: "sample-run", turns }] })), ...(opts.network === true ? [new NetworkProvider({ id: "net", scripts: [{ id: "sample-run", turns }] })] : [])]),
     pipeline, profile: loadProfile(registry, "investigation"),
   };
   return { engine: new Engine(f.s, deps, opts.runners === undefined ? {} : { runners: opts.runners }), deps };
@@ -437,4 +444,18 @@ test("a sent-back question is a pack part, not task text", async () => {
   const body = JSON.parse(requestText("researcher-r1")[0]!) as { messages: { role: string; content: string }[] };
   expect(body.messages.find((m) => m.role === "system")!.content).toContain("Who owns the asset?");
   expect(body.messages.find((m) => m.role === "user")!.content).not.toContain("Who owns the asset?");
+});
+
+test("Plan writes no plan after the run was stopped while the planner was answering", async () => {
+  const r = rig({ orchestrator: [say(FRAME)], planner: [say(planOut())] });
+  let stopSeq = 0;
+  afterTurn = (actor) => { if (actor === "planner") { r.engine.stop(person, "enough"); stopSeq = f.s.head().seq; } };
+  r.engine.start(person);
+  await r.engine.advance();
+  expect(stopSeq).toBeGreaterThan(0);
+  expect(f.s.state.run).toMatchObject({ status: "finished", outcome: "stopped" });
+  const after = f.s.entries().filter((e) => e.seq > stopSeq).map((e) => e.type);
+  expect(after).not.toContain("plan.proposed");
+  expect(after).not.toContain("stage.finished");
+  expect(f.s.state.plan.current).toBeNull();
 });

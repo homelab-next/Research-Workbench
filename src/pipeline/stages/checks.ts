@@ -31,14 +31,17 @@ export async function checksRunner(env: StageEnv): Promise<StageEnd> {
     } catch (err) {
       return { kind: "stalled", reason: `Checks cannot be given its input: ${(err as Error).message.split("\n")[0]}` };
     }
+    const run = session.state.run.id;
     const o = await runCheck(check, input);
-    session.commit((s) => [{
-      type: "check.run", actor: CHECKS, run: s.run.id, stage: stage.id,
+    // a person stopped the run while the check ran: nothing is recorded
+    const written = session.commit((s) => (s.run.id !== run || s.run.status === "finished" ? [] : [{
+      type: "check.run" as const, actor: CHECKS, run: s.run.id, stage: stage.id,
       payload: {
         check: check.id, script_hash: o.script_hash, input: session.blobs.put(o.input), output: session.blobs.put(o.output),
         draft_hash: d.hash, pass: o.pass, findings: o.findings,
       },
-    }]);
+    }]));
+    if (written.length === 0) return { kind: "stopped" };
     done.push({ check: check.id, pass: o.pass, first: o.findings[0]?.message ?? "" });
   }
   const output = { checks: done.map(({ check, pass }) => ({ check, pass })) } as unknown as Json;
