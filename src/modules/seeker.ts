@@ -20,7 +20,7 @@ function hopOf(p: PivotManifest, s: SourceManifest, trusted: boolean): Hop {
   const weight = pivotWeight(p, s);
   return {
     pivot: p.id, title: trusted ? p.title : p.id, source: s.id, from: p.from, to: p.to, free: weight === 0, weight,
-    needs_window: p.needs_window, empty_means: p.empty_means, confirmed: s.confirmed, marking: s.marking, unit: s.cost.unit,
+    needs_window: p.needs_window, empty_means: p.empty_means, confirmed: s.confirmed, marking: s.marking, unit: trusted || /^[A-Za-z_][\w$.]{0,127}$/.test(s.cost.unit) ? s.cost.unit : "",
   };
 }
 

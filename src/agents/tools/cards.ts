@@ -49,7 +49,7 @@ async function readCard(ctx: ToolContext, args: Record<string, Json>): Promise<T
     if (entry !== undefined && entry.type === "query.issued") {
       const p = entry.payload as Payloads["query.issued"];
       provenance = json({
-        query: p.query, source: p.source, source_hash: p.source_hash, text: scrub(ctx.deps.registry, p.connector === "http" ? withoutLocation(p.text, ctx.deps.registry.source(p.source)?.location ?? null) : p.text, { backstop: false }), bound: p.bound,
+        query: p.query, source: p.source, source_hash: p.source_hash, text: !trusted ? "query text withheld: untrusted root" : scrub(ctx.deps.registry, p.connector === "http" ? withoutLocation(p.text, ctx.deps.registry.source(p.source)?.location ?? null) : p.text, { backstop: false }), bound: p.bound,
         window: p.window, why: p.why, by: entry.actor.id, issued: entry.ts, result_sha256: q.result === null ? null : q.result.blob, rows_hash: q.rows_hash,
       });
     }
