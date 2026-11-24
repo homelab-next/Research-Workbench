@@ -230,7 +230,8 @@ function applyPipeline(s: CaseState, entry: Entry): CaseState {
       if (finished) return s;
       const next = withStage(s, stage, (st) => ({ ...st, status: "running", attempts: attempt }));
       if (next === s) return s;
-      const leaving = s.run.status === "waiting";
+      // starting any stage but the gate's own takes the run out of its gate, waiting or paused there
+      const leaving = s.run.waiting !== null && s.run.stages.find((x) => x.id === stage)?.gate !== s.run.waiting;
       return withRun(next, { current: stage, status: s.run.status === "paused" ? "paused" : "running", waiting: leaving ? null : s.run.waiting });
     }
     case "stage.finished": {

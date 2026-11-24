@@ -73,7 +73,8 @@ export interface ReviewState {
   /** The latest publish.rejected for this hash: the person's verdict, shown in the Narrative lens. It clears passed_stages. */
   rejected: { reason: string; stop: boolean; seq: number; ts: string } | null;
 }
-export type ChallengeState = Challenge & { status: "open" | "answered"; answer: string | null; action: "revised" | "rebutted" | null };
+/** `run` is the run in progress when the challenge was raised (null when none). */
+export type ChallengeState = Challenge & { run: string | null; status: "open" | "answered"; answer: string | null; action: "revised" | "rebutted" | null };
 
 export interface CaseState {
   seq: number;

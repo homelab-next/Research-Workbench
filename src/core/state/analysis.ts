@@ -95,7 +95,7 @@ function applyChallenges(s: CaseState, entry: Entry): CaseState {
       if (!isChallenge(c)) return malformed(s, entry);
       if (Object.hasOwn(s.challenges, c.id) || !Object.hasOwn(s.reviews, c.draft_hash)) return s;
       const { id, draft_hash, severity, text, cites } = c;
-      const opened: ChallengeState = { id, draft_hash, severity, text, cites, status: "open", answer: null, action: null };
+      const opened: ChallengeState = { id, draft_hash, severity, text, cites, run: s.run.id, status: "open", answer: null, action: null };
       const next = withReview(s, draft_hash, (r) => ({ ...r, challenges: [...r.challenges, id] }));
       return { ...next, challenges: { ...s.challenges, [id]: opened } };
     }
@@ -154,6 +154,14 @@ export function latestDraft(state: CaseState): Draft | null {
   return state.drafts.length ? state.drafts[state.drafts.length - 1]! : null;
 }
 
+/**
+ * Must-address challenges still open that bear on `draftHash`: those raised against it, and those raised in the current run against any
+ * earlier draft (a revision that ignores a challenge does not close it). With no hash, only the current run's.
+ */
+export function openMustAddress(state: CaseState, draftHash: string | null = null): ChallengeState[] {
+  return Object.values(state.challenges).filter((c) => c.severity === "must_address" && c.status === "open" && (c.draft_hash === draftHash || (state.run.status !== "none" && c.run === state.run.id)));
+}
+
 /** Why `draftHash` may not be published yet, in plain language; empty when it may. */
 export function blockers(state: CaseState, draftHash: string): string[] {
   if (latestDraft(state)?.hash !== draftHash) return ["This is not the latest revision"];
@@ -169,9 +177,7 @@ export function blockers(state: CaseState, draftHash: string): string[] {
     if (!c.pass) out.push(`${c.check} failed on this revision`);
   }
   if (review?.evaluation?.pass === false) out.push("Evaluation failed on this revision");
-  for (const c of Object.values(state.challenges)) {
-    if (c.draft_hash === draftHash && c.severity === "must_address" && c.status === "open") out.push(`Challenge ${c.id} must be addressed`);
-  }
+  for (const c of openMustAddress(state, draftHash)) out.push(`Challenge ${c.id} must be addressed`);
   return out;
 }
 

@@ -167,3 +167,28 @@ test("an edit with no run, or a product the fold would not accept, is refused", 
   expect(() => r.engine.revise({ product: { ...base, summary: undefined as never }, reason: "r", actor: person })).toThrow(ReviseRefused);
   expect(f.s.state.drafts).toHaveLength(1);
 });
+
+test("an edit while the run is paused at the publish gate leaves the gate and restarts review from Checks", async () => {
+  const r = rig();
+  await toGate(r);
+  r.engine.pause(person);
+  expect(f.s.state.run).toMatchObject({ status: "paused", waiting: "publish" });
+  const d = edit(r);
+  expect(f.s.state.run).toMatchObject({ status: "paused", waiting: null, current: "checks" });
+  expect(blockers(f.s.state, d.hash)).toContain("Checks has not passed this revision");
+  const sum = await r.engine.resume(person);
+  expect(sum).toMatchObject({ status: "waiting", waiting: "publish" });
+  expect(r.log.slice(-3)).toEqual(["checks", "evaluate", "challenge"]);
+  expect(f.s.state.run.sendbacks).toEqual({});
+});
+
+test("a product with unknown keys, and an edit with an empty reason, are refused", async () => {
+  const r = rig();
+  await toGate(r);
+  const cur = latestDraft(f.s.state)!.product;
+  expect(() => r.engine.revise({ product: { ...cur, summary: "x", extra: 1 } as unknown as Product, reason: "r", actor: person })).toThrow(ReviseRefused);
+  expect(() => r.engine.revise({ product: { ...cur, summary: "x", key_findings: [{ id: "f1", statement: "s", likelihood: "l", confidence: "high", confidence_basis: "b", cites: [], assumptions: [], reasoning: "r", note: "n" }] } as unknown as Product, reason: "r", actor: person })).toThrow(ReviseRefused);
+  expect(() => r.engine.revise({ product: { ...cur, summary: "x" }, reason: "", actor: person })).toThrow(ReviseRefused);
+  expect(() => r.engine.revise({ product: { ...cur, summary: "x" }, reason: "   ", actor: person })).toThrow(ReviseRefused);
+  expect(f.s.state.drafts).toHaveLength(1);
+});

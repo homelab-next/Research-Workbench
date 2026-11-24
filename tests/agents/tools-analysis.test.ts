@@ -145,14 +145,16 @@ test("raise_challenge refuses a hash with no review, and the state holds what wa
   expect(Object.keys(f.s.state.challenges)).toEqual([]);
 });
 
-test("answer_challenge answers only a challenge against the draft under review", async () => {
+test("answer_challenge answers an open challenge from any draft of the run, once, and needs a draft in the stage", async () => {
   const hash = reviewable();
   f.ctx.draft_hash = hash;
   const id = view(await f.call("raise_challenge", { why: "w", severity: "consider", text: "t", cites: [] })).challenge as string;
   f.ctx.draft_hash = "1".repeat(64);
-  const r = await f.call("answer_challenge", { why: "w", challenge: id, answer: "a", action: "revised" });
-  expect(view(r).error).toBe(`challenge ${id} is not open`);
-  expect(f.s.state.challenges[id]!.status).toBe("open");
+  expect((await f.call("answer_challenge", { why: "w", challenge: id, answer: "a", action: "revised" })).ok).toBe(true);
+  expect(f.s.state.challenges[id]!.status).toBe("answered");
+  expect(view(await f.call("answer_challenge", { why: "w", challenge: id, answer: "a", action: "revised" })).error).toBe(`challenge ${id} is not open`);
+  f.ctx.draft_hash = null;
+  expect((await f.call("answer_challenge", { why: "w", challenge: id, answer: "a", action: "revised" })).ok).toBe(false);
 });
 
 test("text fields need a non-blank character", async () => {

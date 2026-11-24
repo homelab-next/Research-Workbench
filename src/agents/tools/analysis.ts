@@ -66,10 +66,10 @@ async function raiseChallenge(ctx: ToolContext, a: Record<string, Json>): Promis
 }
 
 async function answerChallenge(ctx: ToolContext, a: Record<string, Json>): Promise<ToolResult> {
-  const hash = reviewing(ctx);
+  reviewing(ctx);
   const id = str(a.challenge);
   const c = Object.hasOwn(ctx.session.state.challenges, id) ? ctx.session.state.challenges[id]! : null;
-  if (c === null || c.status !== "open" || c.draft_hash !== hash) throw new ToolError(`challenge ${id} is not open`);
+  if (c === null || c.status !== "open") throw new ToolError(`challenge ${id} is not open`);
   ctx.session.commit(() => [{ type: "challenge.answered", actor: ctx.actor, payload: { challenge: id, answer: str(a.answer), action: str(a.action) as "revised" | "rebutted" } }]);
   return done(`answered ${id}`, { answered: id });
 }

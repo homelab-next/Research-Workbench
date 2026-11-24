@@ -12,10 +12,10 @@ export async function challengeRunner(env: StageEnv): Promise<StageEnd> {
   if (d === null) return { kind: "stalled", reason: "Challenge: there is no draft to challenge" };
   const { session, deps, stage } = env;
   const extras: PackPart[] = [draftPart(d), ...citedCardParts(session, d)];
-  const earlier = Object.values(session.state.challenges).filter((c) => c.draft_hash === d.hash);
+  const earlier = Object.values(session.state.challenges).filter((c) => c.draft_hash === d.hash || c.run === session.state.run.id);
   if (earlier.length > 0) {
-    const text = earlier.map((c) => `- ${c.id} (${c.severity}, ${c.status === "open" ? "open" : `answered: ${c.action}`}): ${c.text}${c.answer === null ? "" : ` Answer: ${c.answer}`}`).join("\n");
-    extras.push({ kind: "challenges", id: "earlier-challenges", title: "Earlier challenges on this draft", text, marking: null, fixed: true });
+    const text = earlier.map((c) => `- ${c.id} (on draft ${session.state.drafts.find((x) => x.hash === c.draft_hash)?.n ?? "?"}, ${c.severity}, ${c.status === "open" ? "open" : `answered: ${c.action}`}): ${c.text}${c.answer === null ? "" : ` Answer: ${c.answer}`}`).join("\n");
+    extras.push({ kind: "challenges", id: "earlier-challenges", title: "Challenges raised in this run", text, marking: null, fixed: true });
   }
   const task = [
     `Challenge draft ${d.n}.`,

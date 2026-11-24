@@ -14,7 +14,7 @@ import type { Seeker } from "../modules/seeker";
 import type { Pipeline, Role, StageManifest } from "./manifests";
 import { firstUnpassedReview, nextStep } from "./next";
 import { acceptPlan, denyPlan, requestReplan, spendPlanBudget } from "./plans";
-import { reviseDraft } from "./revise";
+import { answerChallenge, reviseDraft } from "./revise";
 import { assembleRunner } from "./stages/assemble";
 import { challengeRunner } from "./stages/challenge";
 import { checksRunner } from "./stages/checks";
@@ -120,6 +120,11 @@ export class Engine {
   /** A person edits the draft: a new revision in their name, and review starts again. Throws ReviseRefused; advances nothing. */
   revise(input: { product: Product; reason: string; actor: Actor }): Draft {
     return reviseDraft(this.session, this.deps.pipeline, input);
+  }
+
+  /** A person answers an open challenge. Throws ReviseRefused. */
+  answerChallenge(actor: Actor, id: string, answer: string, action: "revised" | "rebutted"): void {
+    answerChallenge(this.session, actor, id, answer, action);
   }
 
   setModel(stage: string, choice: ModelChoice, actor: Actor): void {

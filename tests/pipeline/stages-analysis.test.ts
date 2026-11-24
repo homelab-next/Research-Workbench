@@ -7,6 +7,7 @@ import { canonical } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
 import type { CaseSession } from "../../src/core/session";
 import { blockers, latestDraft, publishable } from "../../src/core/state";
+import { ReviseRefused } from "../../src/pipeline/revise";
 import type { Entry } from "../../src/core/types";
 import { loadProfile } from "../../src/agents/context";
 import { Providers } from "../../src/agents/providers";
@@ -46,6 +47,10 @@ const out = (change: string) => say({ done: true, change, assumptions: ["the rec
 const FIRST: ScriptReply[] = [calls(finding("it is internal", ["c1"]), finding("it talks to the proxy", ["c2"]), section("summary", "all clear", ["c1"])), out("first")];
 /** Draft 2: only f1 is proposed again. */
 const SECOND: ScriptReply[] = [calls(finding("it is internal and managed", ["c1"], { replaces: "f1" })), out("second")];
+/** Draft 2 that also answers challenge x1 (revised). */
+const SECOND_ANSWERING: ScriptReply[] = [
+  calls(finding("it is internal and managed", ["c1"], { replaces: "f1" }), call("answer_challenge", { challenge: "x1", answer: "f1 now says the record is managed", action: "revised" })), out("second"),
+];
 const EVAL_PASS = say({ pass: true, findings: [] });
 const CHALLENGE_PASS = say({ done: true, summary: "nothing to add" });
 
@@ -240,7 +245,7 @@ test("a must-address challenge sends the draft back; a consider challenge does n
 
 test("a must-address challenge fails the stage on that draft", async () => {
   const must = calls(call("raise_challenge", { severity: "must_address", text: "the asset record may be stale", cites: ["c1"] }));
-  const r = rig({ analyst: [...FIRST, ...SECOND], evaluator: [EVAL_PASS, EVAL_PASS], adversary: [must, CHALLENGE_PASS, CHALLENGE_PASS] });
+  const r = rig({ analyst: [...FIRST, ...SECOND_ANSWERING], evaluator: [EVAL_PASS, EVAL_PASS], adversary: [must, CHALLENGE_PASS, CHALLENGE_PASS] });
   await go(r);
   expect(finished("challenge")[0]!.payload).toMatchObject({ outcome: "fail", draft_hash: f.s.state.drafts[0]!.hash, reason: "challenge x1 must be addressed: the asset record may be stale" });
   expect(ofType("stage.sent_back")[0]!.payload).toMatchObject({ from: "challenge", to: "assemble" });
@@ -295,6 +300,32 @@ test("an edit made while Evaluate is running is reviewed from Checks, and the ol
   expect(ofType("stage.sent_back")).toEqual([]);
 });
 
+test("an edit made while Evaluate is failing the draft sends the run to Checks, not back to Assemble, and the failed verdict stays on the old hash", async () => {
+  let edited = false;
+  let engine: Engine | null = null;
+  const evaluate: StageRunner = async (env) => {
+    r.log.push("evaluate");
+    const running = evaluateRunner(env);
+    if (!edited) {
+      edited = true;
+      engine!.revise({ product: { ...latestDraft(f.s.state)!.product, summary: "edited meanwhile" }, reason: "wording", actor: person });
+    }
+    return running;
+  };
+  const bad = say({ pass: false, findings: [{ check: "support", where: "f1", message: "f1 is not supported by c1" }] });
+  const r = rig({ analyst: FIRST, evaluator: [bad, EVAL_PASS], adversary: [CHALLENGE_PASS] }, { evaluate: (env) => evaluate(env) });
+  engine = r.engine;
+  const sum = await go(r);
+  const [d1, d2] = f.s.state.drafts;
+  expect(f.s.state.drafts).toHaveLength(2);
+  expect(f.s.state.reviews[d1!.hash]!.evaluation!.pass).toBe(false);
+  expect(finished("evaluate")[0]!.payload).toMatchObject({ outcome: "fail", draft_hash: d1!.hash });
+  expect(ofType("stage.sent_back")).toEqual([]);
+  expect(r.log).toEqual(["frame", "plan", "research", "assemble", "checks", "evaluate", "checks", "evaluate", "challenge", "publish"]);
+  expect(sum).toMatchObject({ status: "waiting", waiting: "publish" });
+  expect(f.s.state.reviews[d2!.hash]!.evaluation!.pass).toBe(true);
+});
+
 test("Assemble, Evaluate and Challenge stall without a schema", async () => {
   const { pipeline } = loadPipeline(f.sample.registry);
   for (const [role, run] of [["assemble", assembleRunner], ["evaluate", evaluateRunner], ["challenge", challengeRunner]] as const) {
@@ -323,4 +354,63 @@ test("a loop of Challenge failing back to Assemble ends at the send-back cap or 
   expect(sum.pause_reason).toMatch(/has sent work back to Assemble 3 times|has run 5 times/);
   // 20 stage runs after the first three stages
   expect(ofType("stage.started").length - 3).toBeLessThanOrEqual(20);
+});
+
+const MUST = calls(call("raise_challenge", { severity: "must_address", text: "the asset record may be stale", cites: ["c1"] }));
+
+test("Assemble fails when a must-address challenge is still open after its loop, and writes no draft", async () => {
+  const r = rig({ analyst: [...FIRST, ...SECOND, ...SECOND_ANSWERING], evaluator: [EVAL_PASS, EVAL_PASS], adversary: [MUST, CHALLENGE_PASS, CHALLENGE_PASS] });
+  const sum = await go(r);
+  expect(finished("assemble").map((e) => e.payload.outcome)).toEqual(["pass", "fail", "pass"]);
+  expect(finished("assemble")[1]!.payload).toMatchObject({ draft_hash: null, reason: "challenge x1 is still open" });
+  expect(sum).toMatchObject({ status: "waiting", waiting: "publish" });
+  expect(f.s.state.drafts).toHaveLength(2);
+  expect(f.s.state.challenges.x1!.status).toBe("answered");
+});
+
+test("a revision that ignores an open must-address challenge on an earlier draft is not publishable, and the run does not reach the gate", async () => {
+  const r = rig({ analyst: FIRST, evaluator: [EVAL_PASS, EVAL_PASS], adversary: [CHALLENGE_PASS, CHALLENGE_PASS] });
+  await go(r);
+  const d1 = latestDraft(f.s.state)!;
+  f.s.commit((_s, ids) => [{ type: "challenge.raised", actor: { kind: "agent", id: "adversary", stage: "challenge", profile: "investigation", model: "m", effort: null, where: "machine" }, payload: { challenge: { id: ids.next("challenge"), draft_hash: d1.hash, severity: "must_address", text: "stale record", cites: [] } } }]);
+  const d2 = r.engine.revise({ product: { ...d1.product, summary: "edited" }, reason: "wording", actor: person });
+  expect(blockers(f.s.state, d2.hash)).toContain("Challenge x1 must be addressed");
+  expect(publishable(f.s.state, d2.hash)).toBe(false);
+  const sum = await r.engine.advance();
+  expect(sum.status).toBe("paused");
+  expect(sum.pause_reason).toContain("Challenge x1 must be addressed");
+  expect(sum.waiting).toBeNull();
+});
+
+test("the adversary is shown every challenge raised in this run, with its status and answer", async () => {
+  const r = rig({ analyst: [...FIRST, ...SECOND_ANSWERING], evaluator: [EVAL_PASS, EVAL_PASS], adversary: [MUST, CHALLENGE_PASS, CHALLENGE_PASS] });
+  await go(r);
+  expect(f.s.state.drafts).toHaveLength(2);
+  const second = requestText("adversary", 2);
+  expect(second).toContain("x1");
+  expect(second).toContain("the asset record may be stale");
+  expect(second).toContain("f1 now says the record is managed");
+  expect(second).toContain("answered");
+});
+
+test("a person answers a challenge through the engine; an agent or a closed challenge is refused", async () => {
+  const r = rig({ analyst: FIRST, evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
+  await go(r);
+  const d1 = latestDraft(f.s.state)!;
+  f.s.commit((_s, ids) => [{ type: "challenge.raised", actor: planner, payload: { challenge: { id: ids.next("challenge"), draft_hash: d1.hash, severity: "must_address", text: "t", cites: [] } } }]);
+  expect(() => r.engine.answerChallenge(planner, "x1", "a", "rebutted")).toThrow(ReviseRefused);
+  expect(() => r.engine.answerChallenge(person, "x9", "a", "rebutted")).toThrow(ReviseRefused);
+  r.engine.answerChallenge(person, "x1", "the record is current", "rebutted");
+  expect(f.s.state.challenges.x1).toMatchObject({ status: "answered", answer: "the record is current", action: "rebutted" });
+  expect(f.s.entries().filter((e) => e.type === "challenge.answered").at(-1)!.actor).toEqual(person);
+  expect(() => r.engine.answerChallenge(person, "x1", "again", "rebutted")).toThrow(ReviseRefused);
+});
+
+test("a person's edit does not close an open challenge", async () => {
+  const r = rig({ analyst: FIRST, evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
+  await go(r);
+  const d1 = latestDraft(f.s.state)!;
+  f.s.commit((_s, ids) => [{ type: "challenge.raised", actor: planner, payload: { challenge: { id: ids.next("challenge"), draft_hash: d1.hash, severity: "consider", text: "t", cites: [] } } }]);
+  r.engine.revise({ product: { ...d1.product, summary: "edited" }, reason: "wording", actor: person });
+  expect(f.s.state.challenges.x1!.status).toBe("open");
 });

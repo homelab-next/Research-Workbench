@@ -1,5 +1,5 @@
 import type { Json } from "../../core/canonical";
-import { latestDraft } from "../../core/state";
+import { latestDraft, openMustAddress } from "../../core/state";
 import type { CaseState } from "../../core/state";
 import type { Actor, EntryInput } from "../../core/types";
 import { cardPart } from "../../agents/context";
@@ -23,9 +23,8 @@ function mustFix(state: Readonly<CaseState>): string[] {
     for (const x of c.findings) out.push(`Check ${x.check} failed at ${x.where}: ${x.message}`);
   }
   if (r.evaluation !== null && !r.evaluation.pass) for (const x of r.evaluation.findings) out.push(`Evaluation found at ${x.where}: ${x.message}`);
-  for (const id of r.challenges) {
-    const c = state.challenges[id];
-    if (c !== undefined && c.status === "open") out.push(`Open challenge ${c.id} (${c.severity}): ${c.text}`);
+  for (const c of Object.values(state.challenges)) {
+    if (c.status === "open" && (c.draft_hash === d.hash || (c.run === state.run.id && c.severity === "must_address"))) out.push(`Open challenge ${c.id} (${c.severity}): ${c.text}`);
   }
   if (r.rejected !== null) out.push(`The person rejected this revision: ${r.rejected.reason}`);
   return out;
@@ -81,6 +80,9 @@ export async function assembleRunner(env: StageEnv): Promise<StageEnd> {
   if (work.research.length > 0) {
     return { kind: "finished", outcome: "fail", draft_hash: null, output: end.output, reason: `more research is needed: ${work.research.map((r) => r.question).join("; ")}` };
   }
+  // a must-address challenge left open would be lost in the new revision: the work is not accepted until it is answered
+  const open = openMustAddress(session.state);
+  if (open.length > 0) return { kind: "finished", outcome: "fail", draft_hash: null, output: end.output, reason: `challenge ${open[0]!.id} is still open` };
   // a person edited the draft while the analyst worked from the one before; theirs is not overwritten
   if ((latestDraft(session.state)?.hash ?? null) !== (latest?.hash ?? null)) {
     return { kind: "stalled", reason: `${titleOf(env)}: the draft was edited while it was being assembled. Resume to assemble again.` };
