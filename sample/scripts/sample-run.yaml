@@ -91,7 +91,7 @@ turns:
         - tool: propose_assessment
           args:
             why: "The account is the answer to the first goal."
-            statement: "We assess that the account j.doe is very likely behind the regular connections from ws-17.example.net to 198.51.100.77, and we have moderate confidence in this."
+            claim: "the account j.doe is behind the regular connections from ws-17.example.net to 198.51.100.77, and we have moderate confidence in this"
             likelihood: very likely
             confidence: moderate
             confidence_basis: "Flow records were truncated, but the sign-in and asset records agree."
@@ -101,7 +101,7 @@ turns:
         - tool: propose_assessment
           args:
             why: "The address is not one of ours."
-            statement: "We assess that 198.51.100.77 is almost certainly not an internal host."
+            claim: "198.51.100.77 is not an internal host"
             likelihood: almost certain
             confidence: high
             confidence_basis: "The asset list is complete for internal hosts and had no row for the address."
@@ -135,7 +135,7 @@ turns:
   - actor: analyst
     reply:
       content: |
-        {"done": true, "change": "First judgment on this question.", "assumptions": ["The asset list is current."], "note": "First draft."}
+        {"done": true, "change_kind": "first judgment", "change_detail": "on this question", "assumptions": ["The asset list is current."], "note": "First draft."}
 
   # draft 2: the planted fault is fixed by keeping the first sentence only
   - actor: analyst
@@ -149,7 +149,7 @@ turns:
           args:
             why: "Check 3 failed: one sentence held a confidence and a likelihood."
             replaces: f1
-            statement: "We assess that the account j.doe is very likely behind the regular connections from ws-17.example.net to 198.51.100.77."
+            claim: "the account j.doe is behind the regular connections from ws-17.example.net to 198.51.100.77"
             likelihood: very likely
             confidence: moderate
             confidence_basis: "Flow records were truncated, but the sign-in and asset records agree."
@@ -159,7 +159,7 @@ turns:
   - actor: analyst
     reply:
       content: |
-        {"done": true, "change": "First judgment on this question, with the first finding reworded so that its confidence is not stated inside its likelihood sentence.", "assumptions": ["The asset list is current."], "note": "Second draft."}
+        {"done": true, "change_kind": "first judgment", "change_detail": "on this question, with the first finding reworded so that its confidence is not stated inside its likelihood sentence", "assumptions": ["The asset list is current."], "note": "Second draft."}
 
   - actor: evaluator
     reply:

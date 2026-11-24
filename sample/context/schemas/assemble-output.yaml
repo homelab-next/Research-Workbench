@@ -1,4 +1,4 @@
 kind: schema
 id: assemble-output
 title: Assemble output
-schema: {"type": "object", "additionalProperties": false, "required": ["done", "change", "assumptions", "note"], "properties": {"done": {"type": "boolean"}, "change": {"type": "string"}, "assumptions": {"type": "array", "items": {"type": "string"}}, "note": {"type": "string"}}}
+schema: {"type": "object", "additionalProperties": false, "required": ["done", "change_kind", "change_detail", "assumptions", "note"], "properties": {"done": {"type": "boolean"}, "change_kind": {"type": "string", "enum": ["first judgment", "consistent with", "changes"], "description": "how this judgment stands to earlier published ones: first judgment when none was published"}, "change_detail": {"type": "string", "description": "the rest of the sentence after the change kind; the change is worded from both"}, "assumptions": {"type": "array", "items": {"type": "string"}}, "note": {"type": "string"}}}

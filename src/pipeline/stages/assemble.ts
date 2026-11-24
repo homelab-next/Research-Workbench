@@ -4,7 +4,7 @@ import type { Actor, Entry, EntryInput } from "../../core/types";
 import type { CaseSession } from "../../core/session";
 import { ContextError, packPart } from "../../agents/context";
 import type { PackPart } from "../../agents/context";
-import { buildProduct, carriedCites, DraftWork, draftOf } from "../../agents/draft";
+import { buildProduct, carriedCites, composeChange, DraftWork, draftOf, termsOf } from "../../agents/draft";
 import { ToolError } from "../../agents/tools/kit";
 import type { StageEnd, StageEnv } from "../engine";
 import { agentActor, lastPass, noSchema, requestsOfPass, stageAgent, stageOfRole, titleOf } from "./agent";
@@ -72,7 +72,9 @@ export async function assembleRunner(env: StageEnv): Promise<StageEnd> {
   const m = state.meta;
   if (m === null) return { kind: "stalled", reason: "Assemble: the case has no record yet" };
   const latest = latestDraft(state);
-  const work = new DraftWork(latest?.product ?? null);
+  // a finding's wording is composed from the profile standard's terms, read from the standard: one place
+  const standard = deps.profile.standard === null ? null : deps.registry.get("standard", deps.profile.standard);
+  const work = new DraftWork(latest?.product ?? null, termsOf(standard?.body ?? null));
 
   const extras: PackPart[] = [];
   let fixes: PackPart | null;
@@ -102,11 +104,12 @@ export async function assembleRunner(env: StageEnv): Promise<StageEnd> {
     `The question asked: ${m.asked}`,
     latest === null ? "There is no draft yet." : `Start from draft ${latest.n}; change only what needs changing.`,
     "Propose one finding at a time, set each section, answer each open challenge, then reply with the output.",
+    "A finding's claim is the plain assertion; its likelihood is one of the standard's terms; the statement is worded from them by code. The change from earlier judgments is a change_kind and a change_detail.",
   ].join("\n");
   const actorId = deps.profile.stages[stage.id]?.agent ?? "analyst";
   const end = await stageAgent(env, { actor_id: actorId, task, extras, draft: work, draft_hash: latest?.hash ?? null });
   if (end.kind !== "output") return end;
-  const output = end.output as { change?: string; assumptions?: string[] };
+  const output = end.output as { change_kind?: string; change_detail?: string; assumptions?: string[] };
 
   if (work.research.length > 0) {
     return { kind: "finished", outcome: "fail", draft_hash: null, output: end.output, reason: `more research is needed: ${work.research.map((r) => r.question).join("; ")}` };
@@ -130,7 +133,7 @@ export async function assembleRunner(env: StageEnv): Promise<StageEnd> {
     product = buildProduct(work, {
       objective, question: m.asked, case_marking: m.marking, cards: now.cards, source: (id) => deps.registry.source(id),
       untrusted: (id) => { const src = deps.registry.source(id); return src === null || deps.registry.rootOf(src.dir)?.trusted !== true; },
-      assumptions: output.assumptions ?? [], change: output.change ?? "", written_at,
+      assumptions: output.assumptions ?? [], change: output.change_kind === undefined ? "" : composeChange(output.change_kind, output.change_detail ?? ""), written_at,
     });
   } catch (err) {
     if (err instanceof ToolError) return { kind: "stalled", reason: `${titleOf(env)}: ${err.message}` };

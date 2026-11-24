@@ -1,5 +1,7 @@
 import type { Json } from "../../core/canonical";
 import { ANSWER_ACTIONS, CONFIDENCES, SECTIONS, SEVERITIES } from "../../core/types";
+import type { Schema } from "../../core/schema";
+import { composeStatement, likelihoodMatches } from "../draft";
 import type { DraftWork, TextSection } from "../draft";
 import type { ToolContext, ToolDef, ToolResult } from "./index";
 import { idArg, MAX_TEXT, params, str, ToolError } from "./kit";
@@ -24,10 +26,21 @@ function cardsExist(ctx: ToolContext, ids: string[]): void {
 
 async function proposeAssessment(ctx: ToolContext, a: Record<string, Json>): Promise<ToolResult> {
   const work = drafting(ctx);
+  const terms = work.terms;
+  if (terms === null) throw new ToolError("the profile names no standard with likelihood terms, so a finding cannot be worded");
+  const likelihood = str(a.likelihood);
+  if (!terms.likelihood.includes(likelihood)) throw new ToolError(`"${likelihood}" is not a likelihood term of the standard: give one of ${terms.likelihood.join(", ")}`);
+  const claim = str(a.claim);
+  // the likelihood is said once, in the composed sentence: a claim with a term of its own would hold two
+  const held = likelihoodMatches(claim, terms);
+  if (held.length > 0) {
+    const m = held[0]!;
+    throw new ToolError(`the claim holds the likelihood term "${m.term}"${m.text === m.term ? "" : ` (as "${m.text}")`}: state the claim plainly and give how likely it is only in likelihood`);
+  }
   const cites = strings(a.cites);
   cardsExist(ctx, cites);
   const id = work.setFinding({
-    statement: str(a.statement), likelihood: str(a.likelihood), confidence: str(a.confidence) as "low" | "moderate" | "high",
+    statement: composeStatement(likelihood, claim, terms), likelihood, confidence: str(a.confidence) as "low" | "moderate" | "high",
     confidence_basis: str(a.confidence_basis), cites, assumptions: strings(a.assumptions), reasoning: str(a.reasoning),
   }, typeof a.replaces === "string" ? a.replaces : null);
   return done(`finding ${id}`, { finding: id });
@@ -78,13 +91,22 @@ const text = { type: "string", minLength: 1, maxLength: MAX_TEXT, pattern: "\\S"
 const card = idArg;
 const cites = { type: "array", items: card, description: "ids of cards" } as const;
 const citesOne = { ...cites, minItems: 1 } as const;
+
+/** propose_assessment's parameters. While a draft is assembled the likelihood is an enum of the profile standard's terms, read from the standard. */
+function assessmentParameters(likelihood: readonly string[] | null): Schema {
+  return params({
+    claim: { ...text, description: "the plain assertion, without how likely it is (that goes in likelihood); it is worded as \"We assess it is <likelihood> that <claim>.\"" },
+    likelihood: likelihood === null ? text : { type: "string", enum: [...likelihood] },
+    confidence: { type: "string", enum: [...CONFIDENCES] }, confidence_basis: text, cites: citesOne,
+    assumptions: { type: "array", items: text }, reasoning: text, replaces: card,
+  }, ["claim", "likelihood", "confidence", "confidence_basis", "cites", "assumptions", "reasoning"]);
+}
 export const ANALYSIS_TOOLS: ToolDef[] = [
   {
-    name: "propose_assessment", description: "Propose a finding in the draft, citing the cards that support it. Say how likely it is and how confident you are, and why. Name `replaces` to change one you already proposed.",
-    parameters: params({
-      statement: text, likelihood: text, confidence: { type: "string", enum: [...CONFIDENCES] }, confidence_basis: text, cites: citesOne,
-      assumptions: { type: "array", items: text }, reasoning: text, replaces: card,
-    }, ["statement", "likelihood", "confidence", "confidence_basis", "cites", "assumptions", "reasoning"]),
+    name: "propose_assessment",
+    description: "Propose a finding in the draft, citing the cards that support it. Write the claim plainly, give how likely it is as one of the standard's likelihood terms, and say how confident you are and why; the statement is worded from them. Name `replaces` to change one you already proposed.",
+    parameters: assessmentParameters(null),
+    parametersFor: (ctx) => assessmentParameters(ctx.draft?.terms?.likelihood ?? null),
     call: proposeAssessment,
   },
   {

@@ -144,7 +144,8 @@ export function assertReadOnly(sql: string): void {
   if (violations.length > 0) throw new GuardError(violations);
 }
 
-const escapeRe = (x: string): string => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** The one regex escape (a test holds it to one place). */
+export const escapeRe = (x: string): string => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** Matches a mention of `table` (dotted parts may be spaced) in text from stripForAnalysis. The one pattern for a guarded table. */
 export function tablePattern(table: string, metadata = false): RegExp {

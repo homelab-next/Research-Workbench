@@ -6,9 +6,88 @@ import type { CardState } from "../core/state/types";
 import type { Actor, Draft, Finding, Marking, Product, Section } from "../core/types";
 import { SECTIONS, strictest } from "../core/types";
 import type { SourceManifest } from "../modules/manifests";
+import { escapeRe } from "../modules/sqlguard";
 import { ToolError } from "./tools/kit";
 
 export type TextSection = Exclude<Section, "key_findings">;
+
+/** What the draft builder takes from the profile's standard (context/standards): the one place the terms are listed. */
+export interface StandardTerms {
+  /** The likelihood terms, in the standard's order. */
+  likelihood: string[];
+  /** Every term and variant, lower-cased and longest first, with the term each stands for. */
+  names: { text: string; term: string }[];
+  judgment_markers: string[];
+  change_terms: string[];
+}
+
+const strList = (x: unknown): string[] | null => (Array.isArray(x) && x.every((v) => typeof v === "string") ? [...x] as string[] : null);
+
+/** The terms of a standard's body; null when it does not list likelihood terms, judgment markers and change terms. */
+export function termsOf(body: unknown): StandardTerms | null {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return null;
+  const b = body as Record<string, unknown>;
+  const markers = strList(b.judgment_markers);
+  const change = strList(b.change_terms);
+  if (!Array.isArray(b.likelihood) || b.likelihood.length === 0 || markers === null || change === null) return null;
+  const likelihood: string[] = [];
+  const names: StandardTerms["names"] = [];
+  for (const l of b.likelihood as unknown[]) {
+    if (typeof l !== "object" || l === null || typeof (l as { term?: unknown }).term !== "string") return null;
+    const term = (l as { term: string }).term;
+    const also = strList((l as { also?: unknown }).also ?? []);
+    if (also === null) return null;
+    likelihood.push(term);
+    for (const t of [term, ...also]) names.push({ text: t.toLowerCase(), term });
+  }
+  names.sort((a, b2) => b2.text.length - a.text.length);
+  return { likelihood, names, judgment_markers: markers, change_terms: change };
+}
+
+
+/** The likelihood terms a text holds, longest match first, so "very likely" is not also "likely", each with the words that matched. A match is a whole phrase, as check 2 reads it. */
+export function likelihoodMatches(text: string, terms: StandardTerms): { term: string; text: string }[] {
+  let rest = text.toLowerCase();
+  const found: { term: string; text: string; at: number }[] = [];
+  for (const n of terms.names) {
+    const re = new RegExp(`(?<![\\w])${escapeRe(n.text)}(?![\\w])`, "g");
+    rest = rest.replace(re, (m: string, at: number) => { found.push({ term: n.term, text: m, at }); return " ".repeat(m.length); });
+  }
+  return found.sort((a, b) => a.at - b.at).map(({ term, text: t }) => ({ term, text: t }));
+}
+export const likelihoodTermsIn = (text: string, terms: StandardTerms): string[] => likelihoodMatches(text, terms).map((m) => m.term);
+
+/** Words that may start a claim and are lower-cased inside the composed sentence; any other first word (a name, an address) is kept as written. */
+const LEADING = new Set(["the", "a", "an", "this", "that", "these", "those", "it", "its", "there", "one", "some", "no", "all", "each", "every", "both", "neither", "none"]);
+
+/**
+ * A finding's statement, composed by code from the likelihood and the analyst's plain claim: "We assess it is <likelihood> that <claim>." A claim
+ * that already begins with a judgment marker of the standard ("we assess/judge/estimate", with or without "that") is not doubled.
+ */
+export function composeStatement(likelihood: string, claim: string, terms: StandardTerms): string {
+  let c = claim.trim();
+  for (const m of [...terms.judgment_markers].sort((a, b) => b.length - a.length)) {
+    const re = new RegExp(`^${escapeRe(m)}(?![\\w])[\\s,:]*(?:that(?![\\w])[\\s,]*)?`, "i");
+    if (re.test(c)) { c = c.replace(re, ""); break; }
+  }
+  c = c.replace(/[\s.]+$/, "");
+  const first = /^[A-Za-z]+/.exec(c)?.[0] ?? "";
+  if (LEADING.has(first.toLowerCase())) c = first.toLowerCase() + c.slice(first.length);
+  return `We assess it is ${likelihood} that ${c}.`;
+}
+
+/**
+ * The product's change from earlier judgments, composed by code from its kind (a change term of the standard) and the analyst's detail, so that
+ * it always starts with the term. A detail that repeats the kind is not doubled.
+ */
+export function composeChange(kind: string, detail: string): string {
+  let d = detail.trim();
+  if (d.toLowerCase().startsWith(kind.toLowerCase())) d = d.slice(kind.length).replace(/^[\s,:]+/, "");
+  d = d.replace(/[\s.]+$/, "");
+  const head = kind.charAt(0).toUpperCase() + kind.slice(1);
+  if (kind.toLowerCase() === "first judgment") return d === "" ? `${head}.` : `${head}: ${d}.`;
+  return `${head} ${d === "" ? "the earlier judgment" : d}.`;
+}
 
 /** The draft an analyst is assembling. Nothing here is a revision until the engine builds one from it. */
 export class DraftWork {
@@ -20,9 +99,12 @@ export class DraftWork {
 
   /** The revision this one starts from: its marking is a floor and its sources are kept (narrative cites are not stored in a product). */
   readonly previous: Product | null;
+  /** The profile standard's terms, which a finding's wording is composed from; null when the profile names none. */
+  readonly terms: StandardTerms | null;
 
-  constructor(previous: Product | null) {
+  constructor(previous: Product | null, terms: StandardTerms | null = null) {
     this.previous = previous;
+    this.terms = terms;
     this.findings = previous === null ? [] : previous.key_findings.map((f) => ({ ...f, cites: [...f.cites], assumptions: [...f.assumptions] }));
     this.sections = previous === null
       ? { summary: "", gaps_and_limits: "", alternatives: "", assessment: "" }

@@ -156,7 +156,7 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     }
     // 3. request, written before the provider is contacted
     const ordinal = session.entries().filter((e) => e.type === "model.request" && e.actor.kind === "agent" && e.actor.id === actor.id).length;
-    const req: TurnRequest = { model: spec.model, effort: spec.effort, messages: [...messages], tools: toolSpecs(spec.tools), key: actor.id, ordinal };
+    const req: TurnRequest = { model: spec.model, effort: spec.effort, messages: [...messages], tools: toolSpecs(spec.tools, ctx), key: actor.id, ordinal };
     if (spec.sampling !== undefined) req.sampling = spec.sampling;
     if (spec.max_output_tokens !== undefined) req.max_output_tokens = spec.max_output_tokens;
     if (reasked && spec.schema !== null && provider.structured_output === true) req.response_format = { name: spec.schema_id ?? "output", schema: spec.schema };
@@ -269,7 +269,7 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
         // checked before every call, the first included: a reply that arrives after a stop runs nothing
         if (!spec.outside_run && (session.state.run.status === "paused" || session.state.run.status === "finished")) return { kind: "stopped", why: "paused" };
         const name = clip(String(tc.name), NAME_CHARS);
-        const parsed = parseCall(spec.tools, name, tc.arguments);
+        const parsed = parseCall(spec.tools, name, tc.arguments, ctx);
         const why = clip(parsed.why, WHY_CHARS);
         let args: Json = parsed.args;
         if (Buffer.byteLength(JSON.stringify(parsed.args), "utf8") > ARGS_INLINE_BYTES) args = put(JSON.stringify(parsed.args)) as unknown as Json;

@@ -6,7 +6,7 @@ import type { CardState } from "../../src/core/state/types";
 import type { Actor, Finding, Product } from "../../src/core/types";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildProduct, CARD_REF, cardRefs, citedBy, DraftWork, draftOf } from "../../src/agents/draft";
+import { buildProduct, CARD_REF, cardRefs, citedBy, composeChange, composeStatement, DraftWork, draftOf, likelihoodTermsIn, termsOf } from "../../src/agents/draft";
 import { ToolError } from "../../src/agents/tools";
 import type { SourceManifest } from "../../src/modules/manifests";
 
@@ -189,4 +189,55 @@ test("a source from an untrusted root contributes no free text to the product's 
   expect(p.sources).toEqual([{ source: "dns", quality: "quality text withheld: untrusted root" }]);
   const trusted = buildProduct(w, facts(cards));
   expect(trusted.sources[0]!.quality).toContain("good");
+});
+
+// ---- composed wording (task 11 item 1) ----
+
+const ICD203 = (): NonNullable<ReturnType<typeof termsOf>> => {
+  const body = Bun.YAML.parse(readFileSync(join(import.meta.dir, "..", "..", "sample", "context", "standards", "icd203.yaml"), "utf8"));
+  const t = termsOf(body);
+  if (t === null) throw new Error("the sample standard gives no terms");
+  return t;
+};
+
+test("the standard's terms are read from the standard itself: the likelihood terms, their variants, the judgment markers and the change terms", () => {
+  const t = ICD203();
+  expect(t.likelihood).toEqual(["almost no chance", "very unlikely", "unlikely", "roughly even chance", "likely", "very likely", "almost certain"]);
+  expect(t.judgment_markers).toEqual(["we assess", "we judge", "we estimate"]);
+  expect(t.change_terms).toEqual(["first judgment", "consistent with", "changes"]);
+  expect(termsOf(null)).toBeNull();
+  expect(termsOf({ likelihood: "x" })).toBeNull();
+});
+
+test("a statement is composed from the likelihood and the claim", () => {
+  const t = ICD203();
+  expect(composeStatement("very likely", "the address belongs to ws-17", t)).toBe("We assess it is very likely that the address belongs to ws-17.");
+  expect(composeStatement("likely", "The host was used by j.doe.", t)).toBe("We assess it is likely that the host was used by j.doe.");
+  expect(composeStatement("unlikely", "198.51.100.77 is internal ", t)).toBe("We assess it is unlikely that 198.51.100.77 is internal.");
+});
+
+test("a claim already beginning with a judgment marker is not doubled", () => {
+  const t = ICD203();
+  expect(composeStatement("likely", "We assess that the address is external.", t)).toBe("We assess it is likely that the address is external.");
+  expect(composeStatement("likely", "we judge the address is external", t)).toBe("We assess it is likely that the address is external.");
+  expect(composeStatement("likely", "We estimate, that the address is external", t)).toBe("We assess it is likely that the address is external.");
+});
+
+test("the likelihood terms a claim holds are found as whole phrases, longest first", () => {
+  const t = ICD203();
+  expect(likelihoodTermsIn("the host is probably compromised", t)).toEqual(["likely"]);
+  expect(likelihoodTermsIn("it is very likely, not unlikely", t)).toEqual(["very likely", "unlikely"]);
+  expect(likelihoodTermsIn("the address belongs to ws-17", t)).toEqual([]);
+});
+
+test("the change is composed from its kind and its detail", () => {
+  expect(composeChange("first judgment", "on this question")).toBe("First judgment: on this question.");
+  expect(composeChange("first judgment", "")).toBe("First judgment.");
+  expect(composeChange("consistent with", "the judgment published as product 1")).toBe("Consistent with the judgment published as product 1.");
+  expect(composeChange("changes", "the earlier judgment: the account is now named.")).toBe("Changes the earlier judgment: the account is now named.");
+  expect(composeChange("changes", "")).toBe("Changes the earlier judgment.");
+  expect(composeChange("consistent with", "")).toBe("Consistent with the earlier judgment.");
+  // a detail that repeats its kind is not doubled
+  expect(composeChange("consistent with", "Consistent with product 1")).toBe("Consistent with product 1.");
+  expect(composeChange("first judgment", "First judgment on this question.")).toBe("First judgment: on this question.");
 });

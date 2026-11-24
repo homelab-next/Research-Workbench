@@ -40,10 +40,10 @@ const PASS: Extract<StageEnd, { kind: "finished" }> = { kind: "finished", outcom
 const say = (x: unknown): ScriptReply => ({ content: JSON.stringify(x) });
 const call = (tool: string, args: Record<string, Json>): { tool: string; args: Record<string, Json> } => ({ tool, args: { why: "w", ...args } });
 const calls = (...c: { tool: string; args: Record<string, Json> }[]): ScriptReply => ({ tool_calls: c });
-const finding = (statement: string, cites: string[], extra: Record<string, Json> = {}) =>
-  call("propose_assessment", { statement, likelihood: "likely", confidence: "high", confidence_basis: "the record", cites, assumptions: [], reasoning: "matches", ...extra });
+const finding = (claim: string, cites: string[], extra: Record<string, Json> = {}) =>
+  call("propose_assessment", { claim, likelihood: "likely", confidence: "high", confidence_basis: "the record", cites, assumptions: [], reasoning: "matches", ...extra });
 const section = (s: string, text: string, cites: string[] = []) => call("propose_narrative", { section: s, text, cites });
-const out = (change: string) => say({ done: true, change, assumptions: ["the records are current"], note: "n" });
+const out = (detail: string) => say({ done: true, change_kind: "first judgment", change_detail: detail, assumptions: ["the records are current"], note: "n" });
 /** Draft 1: two findings and a summary. */
 const FIRST: ScriptReply[] = [calls(finding("it is internal", ["c1"]), finding("it talks to the proxy", ["c2"]), section("summary", "all clear", ["c1"])), out("first")];
 /** Draft 2: only f1 is proposed again. */
@@ -158,7 +158,18 @@ test("objective, question, marking and source quality are filled in by code, not
   expect(p.sources.map((x) => x.source)).toEqual(["assets", "flows"]);
   expect(p.sources[0]!.quality).toBe(f.sample.registry.source("assets")!.quality);
   expect(p.assumptions).toEqual(["the records are current"]);
-  expect(p.change).toBe("first");
+  expect(p.change).toBe("First judgment: first.");
+});
+
+test("Assemble composes the change from the analyst's change_kind and change_detail, and a statement from its likelihood and claim", async () => {
+  const r = rig({ analyst: FIRST, evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
+  await go(r);
+  const p = f.s.state.drafts[0]!.product;
+  expect(p.change).toBe("First judgment: first.");
+  expect(p.key_findings.map((x) => x.statement)).toEqual(["We assess it is likely that it is internal.", "We assess it is likely that it talks to the proxy."]);
+  // the analyst's own words stay in the ledger: the reply and the tool calls are recorded as they were
+  const called = ofType("tool.called").filter((e) => e.payload.tool === "propose_assessment").map((e) => (e.payload.args as Record<string, Json>).claim);
+  expect(called).toEqual(["it is internal", "it talks to the proxy"]);
 });
 
 test("a revision starts from the previous draft and changes only what was proposed again", async () => {
@@ -168,10 +179,10 @@ test("a revision starts from the previous draft and changes only what was propos
   const [d1, d2] = f.s.state.drafts;
   expect(f.s.state.drafts).toHaveLength(2);
   expect(d2!.n).toBe(2);
-  expect(d2!.product.key_findings[0]!.statement).toBe("it is internal and managed");
+  expect(d2!.product.key_findings[0]!.statement).toBe("We assess it is likely that it is internal and managed.");
   expect(d2!.product.key_findings[1]).toEqual(d1!.product.key_findings[1]!);
   expect(d2!.product.summary).toBe("all clear");
-  expect(d2!.product.change).toBe("second");
+  expect(d2!.product.change).toBe("First judgment: second.");
   expect(d2!.reason).toBe("revised after Checks: f1 cites too little");
   expect(ofType("assessment.made").map((e) => e.payload.draft_hash)).toEqual([d1!.hash, d1!.hash, d2!.hash, d2!.hash]);
 });

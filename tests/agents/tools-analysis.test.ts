@@ -2,7 +2,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { Json } from "../../src/core/canonical";
 import { canonical } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
-import { buildProduct, DraftWork, draftOf } from "../../src/agents/draft";
+import { buildProduct, DraftWork, draftOf, termsOf } from "../../src/agents/draft";
+import { toolSpecs } from "../../src/agents/tools";
 import { agent, person } from "../helpers/tools-fixture";
 import { fixture } from "../helpers/tools-fixture";
 import type { Fixture } from "../helpers/tools-fixture";
@@ -17,30 +18,32 @@ afterEach(() => {
   expect(f.s.state.skipped).toEqual([]);
   f.close();
 });
+/** A work copy that knows the sample standard's terms, as Assemble makes one. */
+const drafting = (): DraftWork => new DraftWork(null, termsOf(f.sample.registry.get("standard", "icd203")!.body));
 const view = (r: { view: Json }): Record<string, Json> => r.view as Record<string, Json>;
 const assess = (extra: Record<string, Json> = {}): Record<string, Json> => ({
-  why: "w", statement: "it is internal", likelihood: "likely", confidence: "high", confidence_basis: "asset record", cites: ["c1"], assumptions: ["the record is current"], reasoning: "matches", ...extra,
+  why: "w", claim: "it is internal", likelihood: "likely", confidence: "high", confidence_basis: "asset record", cites: ["c1"], assumptions: ["the record is current"], reasoning: "matches", ...extra,
 });
 
 test("propose_assessment adds a finding and refuses a card that does not exist", async () => {
-  f.ctx.draft = new DraftWork(null);
+  f.ctx.draft = drafting();
   const ok = await f.call("propose_assessment", assess());
   expect(ok).toMatchObject({ ok: true, marking: null });
   expect(view(ok)).toEqual({ finding: "f1" });
-  expect(f.ctx.draft.findings[0]).toMatchObject({ id: "f1", statement: "it is internal", cites: ["c1"] });
+  expect(f.ctx.draft.findings[0]).toMatchObject({ id: "f1", statement: "We assess it is likely that it is internal.", likelihood: "likely", cites: ["c1"] });
   const bad = await f.call("propose_assessment", assess({ cites: ["c1", "c99"] }));
   expect(bad.ok).toBe(false);
   expect(view(bad).error).toBe("unknown card: c99");
   expect(f.ctx.draft.findings).toHaveLength(1);
-  const again = await f.call("propose_assessment", assess({ statement: "revised", replaces: "f1" }));
+  const again = await f.call("propose_assessment", assess({ claim: "it is revised", replaces: "f1" }));
   expect(view(again)).toEqual({ finding: "f1" });
-  expect(f.ctx.draft.findings.map((x) => x.statement)).toEqual(["revised"]);
+  expect(f.ctx.draft.findings.map((x) => x.statement)).toEqual(["We assess it is likely that it is revised."]);
   const none = await f.call("propose_assessment", assess({ replaces: "f7" }));
   expect(none.ok).toBe(false);
 });
 
 test("propose_assessment with no citation is a schema error", async () => {
-  f.ctx.draft = new DraftWork(null);
+  f.ctx.draft = drafting();
   const r = await f.call("propose_assessment", assess({ cites: [] }));
   expect(r.ok).toBe(false);
   expect(view(r).error).toContain("invalid arguments");
@@ -123,7 +126,7 @@ test("answer_challenge closes an open challenge and refuses a closed one", async
 });
 
 test("a discarded card cannot be cited", async () => {
-  f.ctx.draft = new DraftWork(null);
+  f.ctx.draft = drafting();
   f.s.commit(() => [{ type: "card.discarded", actor: person, payload: { card: "c1" } }]);
   const a = await f.call("propose_assessment", assess());
   expect(view(a).error).toBe("card c1 was discarded");
@@ -158,12 +161,56 @@ test("answer_challenge answers an open challenge from any draft of the run, once
 });
 
 test("text fields need a non-blank character", async () => {
-  f.ctx.draft = new DraftWork(null);
-  expect((await f.call("propose_assessment", assess({ statement: "   " }))).ok).toBe(false);
+  f.ctx.draft = drafting();
+  expect((await f.call("propose_assessment", assess({ claim: "   " }))).ok).toBe(false);
   expect((await f.call("propose_assessment", assess({ reasoning: "\n\t" }))).ok).toBe(false);
   expect((await f.call("propose_narrative", { why: "w", section: "summary", text: " ", cites: [] })).ok).toBe(false);
   expect((await f.call("request_research", { why: "w", question: "  " })).ok).toBe(false);
   expect((await f.call("raise_challenge", { why: "w", severity: "consider", text: " ", cites: [] })).ok).toBe(false);
   expect((await f.call("answer_challenge", { why: "w", challenge: "x1", answer: " ", action: "revised" })).ok).toBe(false);
   expect(f.ctx.draft.findings).toEqual([]);
+});
+
+// ---- composed wording (task 11 item 1) ----
+
+test("propose_assessment takes a claim, not a statement: the statement is composed from the likelihood and the claim", async () => {
+  f.ctx.draft = drafting();
+  const old = await f.call("propose_assessment", { ...assess(), statement: "We assess it is likely that it is internal." });
+  expect(old.ok).toBe(false);
+  expect(view(old).error).toContain("invalid arguments");
+  const ok = await f.call("propose_assessment", assess({ claim: "We judge that the host is internal.", likelihood: "very likely" }));
+  expect(ok.ok).toBe(true);
+  expect(f.ctx.draft.findings[0]!.statement).toBe("We assess it is very likely that the host is internal.");
+});
+
+test("a likelihood that is not one of the standard's terms is refused, naming the terms", async () => {
+  f.ctx.draft = drafting();
+  const r = await f.call("propose_assessment", assess({ likelihood: "probable" }));
+  expect(r.ok).toBe(false);
+  expect(view(r).error).toBe('"probable" is not a likelihood term of the standard: give one of almost no chance, very unlikely, unlikely, roughly even chance, likely, very likely, almost certain');
+  expect(f.ctx.draft.findings).toEqual([]);
+});
+
+test("a claim that holds a likelihood term of its own is refused: the likelihood is said once, by the likelihood field", async () => {
+  f.ctx.draft = drafting();
+  const r = await f.call("propose_assessment", assess({ claim: "the host was probably compromised" }));
+  expect(r.ok).toBe(false);
+  expect(view(r).error).toBe('the claim holds the likelihood term "likely" (as "probably"): state the claim plainly and give how likely it is only in likelihood');
+  expect(f.ctx.draft.findings).toEqual([]);
+});
+
+test("with no standard's terms the drafting tool refuses a finding rather than guess its wording", async () => {
+  f.ctx.draft = new DraftWork(null);
+  const r = await f.call("propose_assessment", assess());
+  expect(view(r).error).toBe("the profile names no standard with likelihood terms, so a finding cannot be worded");
+});
+
+test("while a draft is assembled, the tool's likelihood parameter is the standard's terms as an enum, read from the standard", () => {
+  f.ctx.draft = drafting();
+  const [spec] = toolSpecs(["propose_assessment"], f.ctx);
+  const props = spec!.parameters.properties!;
+  expect(props.likelihood).toMatchObject({ type: "string", enum: ["almost no chance", "very unlikely", "unlikely", "roughly even chance", "likely", "very likely", "almost certain"] });
+  expect(props.claim).toBeDefined();
+  expect(props.statement).toBeUndefined();
+  expect(spec!.parameters.required).toContain("claim");
 });

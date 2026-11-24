@@ -31,7 +31,13 @@ export interface ToolContext {
 }
 /** `view` is what the model is given; `marking` is the marking of any source data in it. */
 export interface ToolResult { ok: boolean; summary: string; view: Json; marking: Marking | null }
-export interface ToolDef { name: ToolName; description: string; parameters: Schema; call(ctx: ToolContext, args: Record<string, Json>): Promise<ToolResult> }
+export interface ToolDef {
+  name: ToolName; description: string; parameters: Schema;
+  /** The parameters in this context, when they depend on it (an enum read from the profile's standard); `parameters` otherwise. */
+  parametersFor?(ctx: ToolContext): Schema;
+  call(ctx: ToolContext, args: Record<string, Json>): Promise<ToolResult>;
+}
+const parametersOf = (tool: ToolDef, ctx: ToolContext | undefined): Schema => (ctx !== undefined && tool.parametersFor !== undefined ? tool.parametersFor(ctx) : tool.parameters);
 
 const unavailable = (name: ToolName): ToolDef => ({
   name, description: "Not available yet.", parameters: params(),
@@ -41,13 +47,14 @@ const unavailable = (name: ToolName): ToolDef => ({
 const defs = new Map<string, ToolDef>([...SOURCE_TOOLS, ...RESEARCH_TOOLS, ...CARD_TOOLS, ...ANALYSIS_TOOLS].map((t) => [t.name, t]));
 export const TOOLS = Object.fromEntries(TOOL_NAMES.map((n) => [n, defs.get(n) ?? unavailable(n)])) as Record<ToolName, ToolDef>;
 
-export function toolSpecs(names: readonly ToolName[]): ToolSpec[] {
-  return names.map((n) => ({ name: n, description: TOOLS[n].description, parameters: TOOLS[n].parameters }));
+/** The specs a model is given; with the agent's context, each tool's parameters as they are in it. */
+export function toolSpecs(names: readonly ToolName[], ctx?: ToolContext): ToolSpec[] {
+  return names.map((n) => ({ name: n, description: TOOLS[n].description, parameters: parametersOf(TOOLS[n], ctx) }));
 }
 
 export interface ParsedCall { tool: ToolDef | null; name: string; args: Json; why: string; error: string | null }
 
-export function parseCall(allowed: readonly ToolName[], name: string, argumentsText: string): ParsedCall {
+export function parseCall(allowed: readonly ToolName[], name: string, argumentsText: string, ctx?: ToolContext): ParsedCall {
   const parsed = parseJson(argumentsText);
   const args: Json = parsed === null ? { _raw: argumentsText.slice(0, 2000) } : parsed.value;
   const why = isPlainObject(args) && typeof args.why === "string" && args.why !== "" ? args.why : "";
@@ -57,7 +64,7 @@ export function parseCall(allowed: readonly ToolName[], name: string, argumentsT
   const tool = TOOLS[name as ToolName];
   if (!(allowed as readonly string[]).includes(name)) return fail(tool, `this stage may not use ${name}`);
   if (parsed === null) return fail(tool, "the arguments were not valid JSON");
-  const errors = validate(tool.parameters, args);
+  const errors = validate(parametersOf(tool, ctx), args);
   if (errors.length > 0) {
     const text = errors.slice(0, 3).map((e) => `${e.path.replace(/^\$\.?/, "") || "arguments"} ${e.message}`).join("; ");
     return fail(tool, `invalid arguments: ${text}`);

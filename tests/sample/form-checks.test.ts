@@ -9,6 +9,7 @@ import { Registry } from "../../src/modules/registry";
 import type { CheckInput } from "../../src/pipeline/checks";
 import { runCheck } from "../../src/pipeline/checks";
 import { loadChecks } from "../../src/pipeline/manifests";
+import { composeChange, composeStatement, termsOf } from "../../src/agents/draft";
 import type { CheckManifest } from "../../src/pipeline/manifests";
 
 const SAMPLE = join(import.meta.dir, "..", "..", "sample");
@@ -200,4 +201,24 @@ test("check 8 examines the cards the narrative cites, not only the findings' cit
   negative.cards.c4 = card({ row_count: 0, empty: "proven-negative" });
   negative.cited = ["c1", "c2", "c3", "c4"];
   expect(await run("gaps-and-negatives", negative)).toMatchObject({ pass: true });
+});
+
+test("a composed draft passes checks 2, 6 and 10 by construction, for every likelihood term and every kind of change", async () => {
+  const terms = termsOf(registry.get("standard", "icd203")!.body)!;
+  const claims = ["the address belongs to ws-17", "We judge that the host is managed.", "198.51.100.77 is not an internal host"];
+  for (const likelihood of terms.likelihood) {
+    for (const claim of claims) {
+      const i = good();
+      i.draft.product.key_findings = [{ ...i.draft.product.key_findings[0]!, likelihood, statement: composeStatement(likelihood, claim, terms) }];
+      for (const id of ["likelihood-term", "assumptions-and-judgments"]) expect({ likelihood, claim, r: await run(id, i) }).toMatchObject({ r: { pass: true, findings: [] } });
+    }
+  }
+  for (const kind of terms.change_terms) {
+    for (const detail of ["", "the earlier judgment, with the account now named", `${kind} draft 1`]) {
+      const i = good();
+      i.draft.product.change = composeChange(kind, detail);
+      if (kind !== "first judgment") i.earlier = [{ n: 1, hash: "a".repeat(64) }];
+      expect({ kind, detail, r: await run("change", i) }).toMatchObject({ r: { pass: true, findings: [] } });
+    }
+  }
 });
