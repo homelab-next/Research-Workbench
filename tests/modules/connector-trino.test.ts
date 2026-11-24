@@ -501,3 +501,12 @@ test.each([
   expect(() => c.render(req(q))).toThrow(GuardError);
   expect(t.statements).toEqual([]);
 });
+
+test("describe and show columns on a guarded table render end to end, with or without a window", () => {
+  const open = { from: null, to: null };
+  for (const q of ["describe iceberg.s.events", "desc iceberg.s.events", "show columns from iceberg.s.events"]) {
+    expect(c.render(req(q))).toBe(q);
+    expect(c.render(req(q, {}, open))).toBe(q);
+  }
+  expect(() => c.render(req("describe iceberg.s.events; select 1"))).toThrow(GuardError);
+});

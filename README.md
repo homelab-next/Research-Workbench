@@ -107,7 +107,7 @@ What the fields mean:
 - `guarded: true` marks a big table that only a narrow query may touch. The workbench checks every statement against a fixed shape before it is sent (the rules below). A guarded table needs a `time_column`. Guard every event table.
 - `adhoc: false` keeps agents from writing their own queries to the source. They may only run the pivots you wrote.
 - `marking` and `where` say how sensitive the data is and where it lives. See "Markings" below.
-- `cost` is what a query on this source costs. With `unit: rows` the cost is the engine's own estimate of rows, so a query that would read too much is stopped before it runs. `weight` is the cost used when a pivot does not set its own.
+- `cost` is what a query on this source costs. With `unit: rows` the cost is the engine's own estimate of the rows a query returns, and a budget in rows is checked against it before the query runs. It bounds the rows returned, not the rows scanned; the required time window is what bounds the scan. `weight` is the cost used when a pivot does not set its own.
 - `quality` and `quality_notes` travel with every card from this source. Write down known faults, with the exact UTC window they cover.
 - `tls_verify: false` is allowed for a self-signed certificate. Preflight notes it, because the certificate is then not checked.
 
@@ -122,7 +122,7 @@ A statement that names a guarded table must be one plain query. The rules, in pl
 5. The `where` clause must begin with the time column `>=` the window's start and the time column `<` the window's end, using the request's own window. Other conditions follow with `and`. A limit, if any, must stay under the source's `max_rows`.
 6. The window must have both ends. An open window is refused.
 
-Control characters in a statement are refused as well.
+Control characters in a statement are refused as well, and so is a number written straight into a word (`1.5or`).
 
 A good pivot. It asks about one value, bounds the window, names its columns, aggregates and keeps a small limit:
 
@@ -214,9 +214,8 @@ It prints the address and any `problem:` lines. Fix those first.
 - The entry stream has no backpressure limit, and each read opens the case again.
 - There is no sign-in. The server answers on `127.0.0.1` only, for one person on one machine. See [docs/security-notes.md](docs/security-notes.md) for what is and is not guaranteed.
 - Source text is untrusted. Rows, notes and manifest text from a source are shown as text and treated as data, but a source can still say something misleading.
-- A source's own words can reach a model. Text from an untrusted root is withheld from the model's source lists, but a source from a trusted root can still say something misleading.
+- A source's own words can reach a model. Text from an untrusted root (source and pivot titles, quality notes, the titles of cards made from its sources) is withheld from what a model is shown, but a source from a trusted root can still say something misleading.
 - The lake guard is strict, and it is written for one query engine's rules. It has been tested against a stand-in, not against every way an engine can read a statement. Treat it as one safeguard among several (read-only access, `adhoc: false`, the row estimate and the budget), not the only one.
-- A fresh row estimate that is above the budget stops the query and leaves no ledger record of the estimate.
 - A card that a published product cites can be discarded afterwards. The published bundle is unchanged, but the case no longer shows the card as live.
 - A server error from a case ledger that cannot be read shows as a generic 500.
 - Run one researcher at a time against a real lake (`research.parallel: 1`, which `new-root` sets).

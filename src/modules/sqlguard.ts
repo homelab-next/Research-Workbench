@@ -175,6 +175,11 @@ function blankWindows(s: string): string {
   return out + s.slice(last);
 }
 
+/** True for `describe T`, `desc T` and `show columns from T`, and nothing else: metadata about the table, with no rows read. */
+function isDescribe(text: string, table: string): boolean {
+  return new RegExp(`^(?:describe|desc|show\\s+columns\\s+from)\\s+${tablePattern(table).source}\\s*;?$`).test(text);
+}
+
 /** Plain-language guardrail violations for queries touching guarded tables; empty means allowed. */
 export function checkGuardrails(sql: string, guards: TableGuard[]): string[] {
   const { stripped: s, kept, marked } = scan(sql);
@@ -187,6 +192,7 @@ export function checkGuardrails(sql: string, guards: TableGuard[]): string[] {
   for (const g of guards) {
     const table = g.table.toLowerCase();
     if (!tablePattern(table).test(s)) continue;
+    if (isDescribe(s, table)) continue;
 
     if (g.time_column !== null) {
       const col = escapeRe(g.time_column.toLowerCase());
@@ -264,7 +270,7 @@ export function checkGuardedShape(sql: string, guards: TableGuard[], window: Win
     const meta = tablePattern(table, true);
     if (!re.test(seen) && !meta.test(seen)) continue;
     const body = seen.replace(/[\s;]+$/, "");
-    if (new RegExp(`^(?:describe|desc|show\\s+columns\\s+from)\\s+${re.source}$`).test(body)) continue;
+    if (isDescribe(body, table)) continue;
     if (window === null) { add("a guarded table needs a bounded window"); continue; }
     if (meta.test(seen)) { add("metadata tables of a guarded table are not queried"); continue; }
     const words = (w: string): number => toks.filter(t => t.k === "w" && t.v === w).length;
