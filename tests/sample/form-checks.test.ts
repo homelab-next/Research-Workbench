@@ -182,3 +182,22 @@ test.each(["We have confidence is low in this, and it is likely.", "Confidence: 
   expect(o.pass).toBe(false);
   expect(o.findings[0]!.where).toBe("summary");
 });
+
+test("check 8 examines the cards the narrative cites, not only the findings' cites", async () => {
+  const card = (over: Partial<CheckInput["cards"][string]>): CheckInput["cards"][string] => ({
+    id: "c4", title: "c4", source: "flows", marking: "TLP:GREEN", coverage: { kind: "full" }, empty: null, row_count: 3, quality_notes: [], ...over,
+  });
+  const partial = good();
+  partial.cards.c4 = card({ coverage: { kind: "partial", reason: "timeout" } });
+  partial.cited = ["c1", "c2", "c3", "c4"];
+  expect(await run("gaps-and-negatives", partial)).toMatchObject({ pass: false, findings: [{ where: "gaps_and_limits", message: expect.stringContaining("c4 has partial coverage (timeout)") }] });
+  const empty = good();
+  empty.cards.c4 = card({ row_count: 0, empty: "not-seen" });
+  empty.cited = ["c1", "c2", "c3", "c4"];
+  expect(await run("gaps-and-negatives", empty)).toMatchObject({ pass: false, findings: [{ where: "narrative", message: expect.stringContaining("the narrative cites c4, which has no rows") }] });
+  // a full-coverage proven negative is a fine thing for a narrative to cite
+  const negative = good();
+  negative.cards.c4 = card({ row_count: 0, empty: "proven-negative" });
+  negative.cited = ["c1", "c2", "c3", "c4"];
+  expect(await run("gaps-and-negatives", negative)).toMatchObject({ pass: true });
+});
