@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { canonical } from "../../src/core/canonical";
+import { latestDraft, publishable } from "../../src/core/state";
 import { verifyCase } from "../../src/core/verify";
 import { SAMPLE_START, SAMPLE_WINDOW } from "../../scripts/make-sample-data";
 import { page } from "../helpers/dom";
@@ -36,6 +37,9 @@ function onPage(key: string, mods: { shift?: boolean } = {}): void {
   p!.press(key, mods);
 }
 const nameOf = (stage: string): string => p!.q(`.stage-button[data-stage=${stage}]`).textContent ?? "";
+/** The ledger's entries of these types: what has been written, not what the screen says. */
+const written = (...kinds: string[]): string[] => p!.s.entries("CASE-1").filter((e) => kinds.includes(e.type)).map((e) => e.type);
+const GATE_ENTRIES = ["plan.accepted", "gate.passed", "product.published"];
 
 test("the whole sample investigation, driven through the interface alone", async () => {
   p = await page();
@@ -61,6 +65,13 @@ test("the whole sample investigation, driven through the interface alone", async
   expect(nameOf("plan")).toContain("◌ waiting");
   assertAccessible("step 1: the plan gate");
 
+  // the brief's "Review plan …" button takes the person to the gate and passes nothing
+  expect(p.q(".next-thing").textContent).toBe("Review plan: 1 steps need a budget");
+  p.click(".next-thing");
+  await flush();
+  expect(written(...GATE_ENTRIES)).toEqual([]);
+  expect(nameOf("plan")).toContain("◌ waiting");
+
   // 2. Shift+Enter opens Steps (one step is costly); Estimate s3; budget 1; Accept
   onPage("Enter", { shift: true });
   await flush();
@@ -71,6 +82,7 @@ test("the whole sample investigation, driven through the interface alone", async
   p.click("[data-step=s3] [data-action=estimate]");
   await until("the estimate is on screen", () => p!.root.querySelector("[data-step=s3] .estimate") !== null);
   expect(p.q("[data-step=s3] .estimate").textContent).toBe("1 lookups");
+  expect(accept().disabled).toBe(true);                                  // an estimate is not a budget
   p.fill("[aria-label='Budget for s3, in lookups']", "1");
   expect(accept().disabled).toBe(false);
   expect(accept().textContent).toBe("Accept: run 3 steps");
@@ -82,10 +94,28 @@ test("the whole sample investigation, driven through the interface alone", async
     if (n > most) most = n;
   });
   watch.observe(p.root as never, { subtree: true, childList: true, characterData: true });
+  expect(written(...GATE_ENTRIES)).toEqual([]);                          // nothing is accepted before the click
   p.click(accept());
+  // the Narrative lens is open while the run goes on: Approve is shown disabled first, until the server has checked the draft, and is never
+  // enabled while the draft is not publishable at the gate
+  onPage("r");
+  const early: string[] = [];
+  const disabledFor = new Set<string>();
+  const approveWatch = new p.win.MutationObserver(() => {
+    const b = p!.root.querySelector("[data-action=approve]") as HTMLButtonElement | null;
+    if (b === null) return;
+    const live = p!.store()!.live;
+    const d = latestDraft(live);
+    if (b.disabled) { if (d !== null) disabledFor.add(d.hash); return; }
+    if (live.run.waiting !== "publish" || d === null || !publishable(live, d.hash) || !disabledFor.has(d.hash)) early.push(`seq ${live.seq}: ${b.textContent}`);
+  });
+  approveWatch.observe(p.root as never, { subtree: true, childList: true, attributes: true, attributeFilter: ["disabled"] });
   await until("the run reaches the publish gate", () => p!.root.querySelector(".stage-button[data-stage=publish]")?.textContent?.includes("◌ waiting") === true);
   watch.disconnect();
+  approveWatch.disconnect();
   expect(most).toBeGreaterThan(0);
+  expect(early).toEqual([]);
+  expect(written("product.published")).toEqual([]);
 
   // 4. triage at the publish gate: J, Space, U, Space, X, D, Restore
   assertAccessible("step 4: the publish gate");
@@ -167,6 +197,13 @@ test("the whole sample investigation, driven through the interface alone", async
   expect(p.all(".preview [data-tab]").length).toBe(5);
   assertAccessible("step 8: the review");
   const draft = p.store()!.live.drafts.at(-1)!;
+  // the brief's "Review the draft" button takes the person to Approve and leaves the gate pending
+  const gates = written(...GATE_ENTRIES);
+  expect(p.q(".next-thing").textContent).toBe("Review the draft");
+  p.click(".next-thing");
+  await flush();
+  expect(written(...GATE_ENTRIES)).toEqual(gates);
+  expect(nameOf("publish")).toContain("◌ waiting");
   onPage("Enter", { shift: true });
   await flush();
   // the lens asks the server to check this exact draft first, then enables the button and puts the focus on it
@@ -174,6 +211,7 @@ test("the whole sample investigation, driven through the interface alone", async
   const approve = p.doc.activeElement as HTMLButtonElement;
   expect(approve.textContent).toBe(`Approve: publish draft ${draft.n}`);
   expect(approve.disabled).toBe(false);
+  expect(written("product.published")).toEqual([]);                      // nothing is published before the click
   p.click(approve);
   await until("the bundle is published", () => (p!.root.querySelector(".lens .draft-head")?.textContent ?? "").includes("Published as product 1"));
 

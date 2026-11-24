@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,6 +53,16 @@ async function theRun(path: string): Promise<void> {
   };
   const choose = (selector: string, value: string): Promise<unknown> =>
     tab.evaluate(`(() => { const s = document.querySelector(${JSON.stringify(selector)}); s.value = ${JSON.stringify(value)}; s.dispatchEvent(new Event("change", { bubbles: true })); })()`);
+  /** The ledger's entries of these types, read from the case's own file: what has been written, not what the screen says. */
+  const written = (...kinds: string[]): string[] => {
+    const db = new Database(join(data, "cases", "CASE-1", "ledger.sqlite"), { readonly: true });
+    try {
+      db.exec("PRAGMA busy_timeout = 5000");
+      return (db.query("SELECT type FROM entries ORDER BY seq").all() as { type: string }[]).map((r) => r.type).filter((t) => kinds.includes(t));
+    } finally { db.close(); }
+  };
+  const GATE_ENTRIES = ["plan.accepted", "gate.passed", "product.published"];
+  const settleServer = (): Promise<unknown> => tab.evaluate(`new Promise((r) => setTimeout(r, 300))`);
   const inLane = (lane: string, card: string): string => `document.querySelector('[data-lane=${lane}] [data-card=${card}]') !== null`;
 
   // 1. Home -> Investigate -> + New investigation, the form, Create and frame the run
@@ -71,17 +82,50 @@ async function theRun(path: string): Promise<void> {
   await tab.click(".primary");
   await tab.waitFor(`(document.querySelector(".stage-button[data-stage=plan]")?.textContent ?? "").includes("◌ waiting")`);
 
+  // the brief's "Review plan …" button takes the person to the gate and passes nothing
+  expect(await text(".next-thing")).toBe("Review plan: 1 steps need a budget");
+  await tab.click(".next-thing");
+  await ready(".lens-steps .plan");
+  await settleServer();
+  expect(written(...GATE_ENTRIES)).toEqual([]);
+  expect(await text(".stage-button[data-stage=plan]")).toContain("◌ waiting");
+
   // 2. Shift+Enter opens Steps; Estimate s3; a budget of 1; Accept
+  await tab.evaluate(`document.activeElement.blur()`);
   await tab.press("Enter", { shift: true });
   await ready(".lens-steps .plan");
+  expect(await tab.evaluate<boolean>(`document.querySelector("[data-action=accept_plan]").disabled`)).toBe(true);
   await tab.click("[data-step=s3] [data-action=estimate]");
   await ready("[data-step=s3] .estimate");
+  expect(await tab.evaluate<boolean>(`document.querySelector("[data-action=accept_plan]").disabled`)).toBe(true);   // an estimate is not a budget
   await tab.click("[aria-label='Budget for s3, in lookups']");
   await tab.type("1");
   await tab.waitFor(`!document.querySelector("[data-action=accept_plan]").disabled`);
   expect(await text("[data-action=accept_plan]")).toBe("Accept: run 3 steps");
+  expect(written(...GATE_ENTRIES)).toEqual([]);                                    // nothing is accepted before the click
   await tab.click("[data-action=accept_plan]");
+  // the Narrative lens is open while the run goes on: Approve is shown disabled first and is never enabled before the publish gate
+  await tab.waitFor(`document.querySelector("[data-action=accept_plan]") === null || document.querySelector("[data-action=accept_plan]").disabled`);
+  await tab.evaluate(`document.activeElement.blur()`);
+  await tab.press("r");
+  await tab.evaluate(`(() => {
+    window.__approve = [];
+    const look = () => {
+      const b = document.querySelector("[data-action=approve]");
+      if (b === null) return;
+      const at = (document.querySelector(".stage-button[data-stage=publish]")?.textContent ?? "").includes("◌ waiting");
+      const now = (b.disabled ? "disabled" : "enabled") + (at ? " at the gate" : " before the gate");
+      if (window.__approve.at(-1) !== now) window.__approve.push(now);
+    };
+    new MutationObserver(look).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["disabled"] });
+    look();
+  })()`);
   await tab.waitFor(`(document.querySelector(".stage-button[data-stage=publish]")?.textContent ?? "").includes("◌ waiting")`);
+  await tab.waitFor(`window.__approve.at(-1) === "enabled at the gate"`);
+  const seen = await tab.evaluate<string[]>("window.__approve");
+  expect(seen.filter((x) => x === "enabled before the gate")).toEqual([]);
+  expect(seen[0]?.startsWith("disabled")).toBe(true);
+  expect(written("product.published")).toEqual([]);
 
   // 4. a real drag of a card onto the second lane
   await tab.evaluate(`(() => { window.__animations = 0; const run = Element.prototype.animate; Element.prototype.animate = function (...a) { window.__animations++; return run.apply(this, a); }; window.__marker = "first page"; })()`);
@@ -119,9 +163,18 @@ async function theRun(path: string): Promise<void> {
   await ready(".review .check-row");
   expect(await tab.evaluate<number>(`document.querySelectorAll(".review .check-row").length`)).toBe(11);
   expect(await tab.evaluate<boolean>(`[...document.querySelectorAll(".review .check-row")].every((r) => r.textContent.startsWith("✓ "))`)).toBe(true);
+  // the brief's "Review the draft" button takes the person to Approve and leaves the gate pending
+  const gates = written(...GATE_ENTRIES);
+  expect(await text(".next-thing")).toBe("Review the draft");
+  await tab.click(".next-thing");
+  await settleServer();
+  expect(written(...GATE_ENTRIES)).toEqual(gates);
+  expect(await text(".stage-button[data-stage=publish]")).toContain("◌ waiting");
+  await tab.evaluate(`document.activeElement.blur()`);
   await tab.press("Enter", { shift: true });
   await tab.waitFor(`document.activeElement?.dataset?.action === "approve"`);
   expect(await tab.evaluate<string>("document.activeElement.textContent")).toMatch(/^Approve: publish draft \d+$/);
+  expect(written("product.published")).toEqual([]);                                // nothing is published before the click
   await tab.click(".lens-dock [data-action=approve]");
   await tab.waitFor(`(document.querySelector(".lens .draft-head")?.textContent ?? "").includes("Published as product 1")`);
 
