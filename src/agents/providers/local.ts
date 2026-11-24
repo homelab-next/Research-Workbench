@@ -130,15 +130,17 @@ export class LocalProvider implements Provider {
       throw new Error(err instanceof Failure ? err.message : this.#redact((err as Error).message));
     }
     const loaded = new Map<string, number>();
+    let details = false;
     try {
       const d = await this.#send("GET", `${this.#origin}/api/v0/models`, null);
       if (d.status === 200 && isPlainObject(d.parsed) && Array.isArray(d.parsed.data)) {
+        details = true;
         for (const m of d.parsed.data as unknown[]) {
           if (isPlainObject(m) && typeof m.id === "string" && typeof m.loaded_context_length === "number") loaded.set(m.id, m.loaded_context_length);
         }
       }
     } catch { /* not LM Studio, or it did not answer: the manifest's context applies */ }
-    return listed.map((id) => ({ id, context: loaded.get(id) ?? this.#context ?? DEFAULT_CONTEXT, efforts: [...this.#efforts] }));
+    return listed.map((id) => ({ id, context: loaded.get(id) ?? this.#context ?? DEFAULT_CONTEXT, efforts: [...this.#efforts], loaded: loaded.has(id) ? true : details ? false : null }));
   }
 
   body(req: TurnRequest): Uint8Array {

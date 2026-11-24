@@ -139,7 +139,7 @@ export class ScriptedProvider implements Provider {
   }
 
   async models(): Promise<ModelInfo[]> {
-    return [...this.#scripts.keys()].map(id => ({ id, context: null, efforts: [] }));
+    return [...this.#scripts.keys()].map(id => ({ id, context: null, efforts: [], loaded: true }));
   }
 
   body(req: TurnRequest): Uint8Array {

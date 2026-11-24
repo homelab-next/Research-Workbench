@@ -117,3 +117,7 @@ test("a placeholder left unresolved (a title with a newline) is an error", async
   const r = await ask(citing("two\nlines"), cardsMsg({ cards: [{ id: "c1", title: "two\nlines" }] }));
   expect(r).toMatchObject({ kind: "error", message: "script s has a card placeholder that could not be resolved" });
 });
+
+test("every model a script provider lists counts as loaded", async () => {
+  expect(await make([{ actor: "planner", reply: { content: "x" } }]).models()).toEqual([{ id: "s", context: null, efforts: [], loaded: true }]);
+});
