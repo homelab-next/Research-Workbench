@@ -223,6 +223,21 @@ test("a claim already beginning with a judgment marker is not doubled", () => {
   expect(composeStatement("likely", "We estimate, that the address is external", t)).toBe("We assess it is likely that the address is external.");
 });
 
+test("composition always carries exactly one likelihood term: a leading marker and a leading \"it is <term> that\" are removed, in any case", () => {
+  const t = ICD203();
+  // the f1 shape from the real run: the claim begins with the marker and holds no term
+  expect(composeStatement("likely", "We assess that the device 192.0.2.10 connected to the address", t)).toBe("We assess it is likely that the device 192.0.2.10 connected to the address.");
+  expect(composeStatement("likely", "WE ASSESS THAT the device connected", t)).toBe("We assess it is likely that the device connected.");
+  // the "it is likely that" shape, alone and after a marker, with a variant and in any case
+  expect(composeStatement("very likely", "it is likely that the device connected", t)).toBe("We assess it is very likely that the device connected.");
+  expect(composeStatement("likely", "We assess that it is likely that the device connected", t)).toBe("We assess it is likely that the device connected.");
+  expect(composeStatement("likely", "We judge it is probable that the device connected.", t)).toBe("We assess it is likely that the device connected.");
+  expect(composeStatement("unlikely", "It Is Very Likely That the device connected", t)).toBe("We assess it is unlikely that the device connected.");
+  for (const claim of ["We assess that the device connected", "it is likely that the device connected", "We estimate that it is almost certain that the device connected"]) {
+    for (const term of t.likelihood) expect(likelihoodTermsIn(composeStatement(term, claim, t), t)).toEqual([term]);
+  }
+});
+
 test("the likelihood terms a claim holds are found as whole phrases, longest first", () => {
   const t = ICD203();
   expect(likelihoodTermsIn("the host is probably compromised", t)).toEqual(["likely"]);

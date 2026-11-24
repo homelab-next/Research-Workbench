@@ -61,14 +61,19 @@ export const likelihoodTermsIn = (text: string, terms: StandardTerms): string[] 
 const LEADING = new Set(["the", "a", "an", "this", "that", "these", "those", "it", "its", "there", "one", "some", "no", "all", "each", "every", "both", "neither", "none"]);
 
 /**
- * A finding's statement, composed by code from the likelihood and the analyst's plain claim: "We assess it is <likelihood> that <claim>." A claim
- * that already begins with a judgment marker of the standard ("we assess/judge/estimate", with or without "that") is not doubled.
+ * A finding's statement, composed by code from the likelihood and the analyst's plain claim: "We assess it is <likelihood> that <claim>.", which
+ * always carries exactly the one term. The claim is normalised first: a leading judgment marker of the standard ("we assess/judge/estimate", with
+ * or without "that") and a leading "it is <term> that" (any term or variant of the standard) are removed, in any case and as often as they lead.
  */
 export function composeStatement(likelihood: string, claim: string, terms: StandardTerms): string {
+  const leads = [
+    ...[...terms.judgment_markers].sort((a, b) => b.length - a.length).map((m) => new RegExp(`^${escapeRe(m)}(?![\\w])[\\s,:]*(?:that(?![\\w])[\\s,]*)?`, "i")),
+    ...terms.names.map((n) => new RegExp(`^it\\s+is\\s+${escapeRe(n.text).replace(/ /g, "\\s+")}\\s+that(?![\\w])[\\s,]*`, "i")),
+  ];
   let c = claim.trim();
-  for (const m of [...terms.judgment_markers].sort((a, b) => b.length - a.length)) {
-    const re = new RegExp(`^${escapeRe(m)}(?![\\w])[\\s,:]*(?:that(?![\\w])[\\s,]*)?`, "i");
-    if (re.test(c)) { c = c.replace(re, ""); break; }
+  for (let again = true; again;) {
+    again = false;
+    for (const re of leads) if (re.test(c)) { c = c.replace(re, ""); again = true; break; }
   }
   c = c.replace(/[\s.]+$/, "");
   const first = /^[A-Za-z]+/.exec(c)?.[0] ?? "";
