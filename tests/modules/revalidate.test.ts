@@ -444,3 +444,11 @@ test("a stored result that cannot be read back row by row gives that reason", as
   const gone = { ...registry, source: () => null } as unknown as typeof registry;
   expect(difference(s, { ...deps, registry: gone }, "c1")).toEqual({ reason: "the stored result cannot be read back row by row" });
 });
+
+test("a reader that throws gives the unreadable reason, never an error", async () => {
+  await runQuery(s, deps, flows);
+  edit("insert into flows values (?, ?, ?, ?)", "2026-01-09T00:00:00.000Z", "192.0.2.17", "198.51.100.9", 5);
+  await v();
+  const broken = { ...registry, source: () => ({ limits: null }) } as unknown as typeof registry;
+  expect(difference(s, { ...deps, registry: broken }, "c1")).toEqual({ reason: "the stored result cannot be read back row by row" });
+});

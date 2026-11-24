@@ -21,7 +21,7 @@ export interface CommandDef {
   /** Whether the server calls engine.advance() in the background once perform has returned. */
   then: "advance" | "nothing";
   /** Slow checks, made before the case's queue is entered so nothing slow ever holds it. What it returns is perform's third argument; a Refused it throws refuses the command. */
-  prepare?(ctx: { case: string; session: CaseSession; deps: EngineDeps }, args: Record<string, Json>): Promise<unknown>;
+  prepare?(ctx: { case: string; session: CaseSession; deps: EngineDeps; hub: CaseHub }, args: Record<string, Json>): Promise<unknown>;
   perform(ctx: CommandContext, args: Record<string, Json>, prepared: unknown): void | Promise<void>;
 }
 

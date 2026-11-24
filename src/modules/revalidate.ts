@@ -151,7 +151,12 @@ export function difference(session: CaseSession, deps: RunnerDeps, card: string)
     const back = rowsOfBlob(source, was, bytes);
     return back !== null && rowsHash(back.columns, back.rows) === q.rows_hash ? back : null;
   };
-  const a = side(run.original), b = side(run.rerun);
+  let a: ReturnType<typeof side>, b: ReturnType<typeof side>;
+  try {
+    a = side(run.original); b = side(run.rerun);
+  } catch {
+    return { reason: UNREADABLE };
+  }
   if (a === null || b === null) return { reason: UNREADABLE };
   if (canonical(a.columns) !== canonical(b.columns)) return { reason: UNREADABLE };
   const count = (rows: Json[][]): Map<string, number> => {

@@ -206,3 +206,21 @@ test("the other views may read neither routes nor a difference, and do no pivot,
   expect((await s.get("/api/cases/CASE-1/cards/c1/difference")).status).toBe(403);
   for (const name of ["run_route", "run_pivot", "verify_card"]) expect([name, (await s.command("CASE-1", name, {})).status]).toEqual([name, 403]);
 });
+
+test("run_pivot recovers the case before it asks the source", async () => {
+  const id = await open();
+  const hub = s.app.hub;
+  const real = hub.engine.bind(hub);
+  const seen: boolean[] = [];
+  hub.engine = (c: string) => { seen.push(s.entries(id).some((e) => e.type === "query.issued")); return real(c); };
+  const r = await s.command(id, "run_pivot", { pivot: "address_to_internal_peers", value: SAMPLE_START.value, window: SAMPLE_WINDOW, why: "first command" });
+  hub.engine = real;
+  expect(r.status).toBe(200);
+  expect(seen[0]).toBe(false);                      // the engine (and so recovery) was opened before any query was issued
+  expect(s.entries(id).some((e) => e.type === "query.issued")).toBe(true);
+});
+
+test("the difference route answers 400 for a malformed escape", async () => {
+  const id = await open();
+  expect((await s.get(`/api/cases/${id}/cards/%E0%A4%A/difference`)).status).toBe(400);
+});

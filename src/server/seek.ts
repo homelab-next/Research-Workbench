@@ -129,10 +129,11 @@ defineCommand("run_pivot", {
   args: obj({ pivot: str, value: str, window: windowSchema, why: str, budget: { type: "number" }, subgoal: str }, ["pivot", "value", "window", "why"]),
   then: "nothing",
   // One lookup, waited for: the source is asked here, before the case's queue is entered, so nothing slow ever holds it.
-  async prepare({ session, deps }, a) {
+  async prepare({ case: id, session, deps, hub }, a) {
     const why = whyOf(a);
     const budget = a.budget === undefined ? null : (a.budget as number);
     if (budget !== null && (!Number.isFinite(budget) || budget <= 0)) throw new Refused("the budget must be a number above zero");
+    hub.engine(id);                                  // recovers the case, once, before anything is written for it
     const r = await runPivot(session, deps.runner, {
       pivot: text(a, "pivot"), value: text(a, "value"), window: windowOf(a.window as Json), why, actor: { kind: "human", id: deps.config.user }, budget,
       ...(a.subgoal === undefined ? {} : { subgoal: text(a, "subgoal") }),

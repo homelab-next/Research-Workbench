@@ -161,7 +161,15 @@ export function createApp(opts: AppOptions): App {
     },
     {
       method: "GET", path: /^\/api\/cases\/([^/]+)\/cards\/([^/]+)\/difference$/, needs: { read: "difference" }, kind: "api",
-      handle: ({ params }) => json(200, difference(hub.read(params[0]!), deps.runner, decodeURIComponent(params[1]!))),
+      handle: ({ params }) => {
+        let card: string;
+        try {
+          card = decodeURIComponent(params[1]!);
+        } catch {
+          return refused(400, "the card name is not valid");
+        }
+        return json(200, difference(hub.read(params[0]!), deps.runner, card));
+      },
     },
     {
       method: "GET", path: /^\/api\/cases\/([^/]+)\/entries$/, needs: { read: "entries" }, kind: "api",
@@ -229,7 +237,7 @@ export function createApp(opts: AppOptions): App {
         const known = hub.read(id); // an unknown case is 404 before anything is recovered
         try {
           // slow checks happen here, outside the case's queue
-          const prepared = def.prepare === undefined ? undefined : await def.prepare({ case: id, session: known, deps }, args as Record<string, never>);
+          const prepared = def.prepare === undefined ? undefined : await def.prepare({ case: id, session: known, deps, hub }, args as Record<string, never>);
           // one at a time per case: a command never interleaves with another, and the drive it asks for starts after it has written
           const result = await hub.serial(id, async (): Promise<CommandResult> => {
             const engine = hub.engine(id);

@@ -34,6 +34,8 @@ export function makePivotPanel(ui: Ui, store: CaseStore, nav: Pick<Nav, "focusCa
   let whyEdited = false;
   let job: string | null = null;
   let after: number | null = null;
+  let upTo = 0;
+  let routeWindow: TimeWindow | null = null;
   let trailSig = "";
   let wasReadonly = false;
   const budgets = new Map<string, { value: string; budget: string }>();
@@ -161,17 +163,21 @@ export function makePivotPanel(ui: Ui, store: CaseStore, nav: Pick<Nav, "focusCa
     const sent = await ui.send("run_route", { have: values, want, window, why: why.trim(), max_weight: cost === "bad" ? null : cost, allow_unconfirmed: unconfirmed });
     void route;
     if (sent === null) return;
-    after = before; job = null; trailSig = "";
+    // a new route starts a new trail: nothing of the last one (budgets typed, lookups run) carries over
+    after = before; upTo = sent.seq; job = null; trailSig = ""; routeWindow = window;
+    budgets.clear(); ran.clear();
     paintTrail();
   }
 
   // ---------- the trail of the newest route started here ----------
+  /** The job the `run_route` command started: the newest job.started between the seq before the command and the seq it answered. */
   function findJob(): void {
-    if (after === null) return;
-    for (let i = after; i < store.entries.length; i++) {
-      const e = store.entries[i]!;
-      if (e.type === "job.started" && e.payload.kind === "query" && e.payload.title.startsWith("Route to ")) { job = e.payload.job; after = null; return; }
+    if (after === null || store.entries.length < upTo) return;
+    for (let i = upTo - 1; i >= after; i--) {
+      const e = store.entries[i];
+      if (e !== undefined && e.type === "job.started" && e.payload.kind === "query") { job = e.payload.job; after = null; return; }
     }
+    after = null;
   }
   const unit = (pivot: string): string => {
     const source = ui.ref.pivots.find((x) => x.id === pivot)?.source;
@@ -189,12 +195,12 @@ export function makePivotPanel(ui: Ui, store: CaseStore, nav: Pick<Nav, "focusCa
     };
     label();
     return h("div", { class: "needs-budget", data: { pivot } },
-      h("p", null, `${pivotTitle(pivot)} needs a budget: costly (${info?.weight ?? 0} per ${unit(pivot)}). Nothing costly runs until you set one.`),
+      h("p", null, `${pivotTitle(pivot)} needs a budget: rate: ${info?.weight ?? 0} per ${unit(pivot)}. Nothing costly runs until you set one.`),
       h("label", null, "Value "), h("input", { type: "text", name: "Value", value: mem.value, on: { input: (e) => { mem.value = (e.target as HTMLInputElement).value; label(); } } }), " ",
       h("label", null, "Budget "), h("input", { type: "text", name: "Budget", placeholder: unit(pivot), value: mem.budget, on: { input: (e) => { mem.budget = (e.target as HTMLInputElement).value; label(); } } }), " ", go);
   };
   async function lookup(pivot: string, mem: { value: string; budget: string }, go: HTMLButtonElement): Promise<void> {
-    const window = windowValue();
+    const window = routeWindow;
     if (window === null || ro()) return;
     go.disabled = true;
     const sent = await ui.send("run_pivot", { pivot, value: mem.value.trim(), window, why: why.trim() === "" ? suggested() : why.trim(), budget: Number(mem.budget) });

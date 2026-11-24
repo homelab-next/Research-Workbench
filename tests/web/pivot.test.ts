@@ -157,7 +157,7 @@ test("a costly hop waits for a budget and shows its estimate first", async () =>
   expect(state(q).queries.q2 === undefined || state(q).queries.q2!.status !== "running").toBe(true);
   expect(Object.values(state(q).queries).some((x) => x.source === "reputation")).toBe(false);
   const wait = q.q(".trail .needs-budget");
-  expect(wait.textContent).toContain("costly (5 per lookups)");
+  expect(wait.textContent).toContain("rate: 5 per lookups");
   const run = q.q(".trail .needs-budget [data-action=run-lookup]") as HTMLButtonElement;
   expect(run.disabled).toBe(true);
   q.fill(".trail .needs-budget [aria-label='Budget']", "3");
@@ -272,4 +272,46 @@ test("routeTrail lists the job's lookups with their status, and the finish", () 
   expect(routeTrail(trailEntries(), "job-2").lookups.map((l) => l.query)).toEqual(["q7"]);
   expect(routeTrail(trailEntries(), "job-2").finished).toBeNull();
   expect(routeTrail([], "job-1")).toEqual({ lookups: [], finished: null });
+});
+
+async function costlyRoute(q: Page): Promise<void> {
+  q.click("[data-route='0'] [data-action=run]");
+  await until(q, () => q.all(".trail .finished").length > 0 && q.all(".trail .needs-budget").length > 0, "a budget is asked for");
+}
+
+test("two costly routes in one open card both offer a budget", async () => {
+  const q = await open();
+  q.click("[data-card=c1] button.value");
+  await q.settle();
+  choose(q, `${panel} [aria-label='What do you want?']`, "verdict");
+  await until(q, () => q.all(`${panel} [data-route]`).length > 0, "routes listed");
+  await costlyRoute(q);
+  q.fill(".trail .needs-budget [aria-label='Budget']", "3");
+  q.click(".trail .needs-budget [data-action=run-lookup]");
+  await until(q, () => Object.values(state(q).queries).some((x) => x.source === "reputation" && x.status === "done"), "the lookup ran");
+  expect(q.all(".trail .needs-budget").length).toBe(0);
+  await costlyRoute(q);
+  expect((q.q(".trail .needs-budget [aria-label='Budget']") as HTMLInputElement).value).toBe("");   // nothing carries over from the first route
+});
+
+test("a lookup from the budget block uses the window the route ran with", async () => {
+  const q = await open();
+  q.click("[data-card=c1] button.value");
+  await q.settle();
+  choose(q, `${panel} [aria-label='What do you want?']`, "verdict");
+  await until(q, () => q.all(`${panel} [data-route]`).length > 0, "routes listed");
+  choose(q, `${panel} [aria-label='Window']`, "7d");
+  await q.settle();
+  await costlyRoute(q);
+  const sent: Record<string, unknown>[] = [];
+  const real = q.ui.api.command;
+  q.ui.api.command = async (id, name, args) => { sent.push({ name, ...args }); return real(id, name, args); };
+  choose(q, `${panel} [aria-label='Window']`, "all");
+  await q.settle();
+  q.fill(".trail .needs-budget [aria-label='Budget']", "3");
+  q.click(".trail .needs-budget [data-action=run-lookup]");
+  await until(q, () => sent.length > 0, "the lookup was sent");
+  const w = sent[0]!.window as { from: string; to: string };
+  expect(w.to).toBe(SAMPLE_WINDOW.to!);
+  expect(Date.parse(w.to) - Date.parse(w.from)).toBe(7 * 86_400_000);
 });
