@@ -131,13 +131,33 @@ function secretsOf(registry: Registry): string[] {
 const PATH_END = `[^\\s'"<>)\\]]`;
 /** A folder name in a path: no separator, and spaces only between other characters, so `/srv/my lake/x.db` is one path. */
 const SEGMENT = `[^\\s'"<>)\\]/]+(?: [^\\s'"<>)\\]/]+)*`;
-const URL_RE = /(?<![a-z0-9+.-])[a-z][a-z0-9+.-]*:\/\/\S+/gi;
+/**
+ * Each URL in `text`, as [start, end): a run of scheme characters, then `://`, then everything up to white space. Found by the `://` and
+ * a walk back, so it is linear whatever the text holds, and a URL is hidden wherever its scheme starts (after `-`, a digit, `+` or `.` too).
+ */
+function urlSpans(text: string): [number, number][] {
+  const out: [number, number][] = [];
+  const schemeChar = /[A-Za-z0-9+.-]/;
+  let floor = 0;
+  for (let i = text.indexOf("://"); i !== -1; i = text.indexOf("://", i + 3)) {
+    if (i < floor) continue;
+    let start = i;
+    while (start > floor && schemeChar.test(text[start - 1]!)) start--;
+    if (start === i) continue;
+    let end = i + 3;
+    while (end < text.length && !/\s/.test(text[end]!)) end++;
+    if (end === i + 3) continue;
+    out.push([start, end]);
+    floor = end;
+  }
+  return out;
+}
 /** An absolute path of two parts or more, also after a colon (`path:/srv/x`); a UNC path reads as one once its separators are. */
 const POSIX_PATH_RE = new RegExp(`(?<![\\w.\\-/~])\\/(?:${SEGMENT}\\/)+${PATH_END}*`, "g");
 const WINDOWS_PATH_RE = /(?<![\w])[A-Za-z]:\/[^\s'"<>]*/g;
 const HOME_PATH_RE = new RegExp(`(?<![\\w.\\-/~])~[\\w.\\-]*\\/${PATH_END}*`, "g");
 const UP_PATH_RE = new RegExp(`(?<![\\w.\\-/~])(?:\\.\\.\\/)+${PATH_END}*`, "g");
-const BACKSTOP = [URL_RE, POSIX_PATH_RE, WINDOWS_PATH_RE, HOME_PATH_RE, UP_PATH_RE];
+const BACKSTOP = [POSIX_PATH_RE, WINDOWS_PATH_RE, HOME_PATH_RE, UP_PATH_RE];
 
 /**
  * Text from a runner result or a caught error, with every source's location, folders, user, credential name and host taken out: each matched in
@@ -156,7 +176,10 @@ export function scrub(registry: Registry, text: string, opts: { backstop?: boole
   };
   const forms = new Set(secretsOf(registry).map((x) => matchable(x).text).filter((x) => x.length > 0));
   if (forms.size > 0) collect(new RegExp([...forms].sort((a, b) => b.length - a.length).map(escapeRe).join("|"), "gi"));
-  if (opts.backstop !== false) for (const re of BACKSTOP) collect(re);
+  if (opts.backstop !== false) {
+    for (const [a, b] of urlSpans(m.text)) spans.push([m.from[a]!, m.to[b - 1]!]);
+    for (const re of BACKSTOP) collect(re);
+  }
   if (spans.length === 0) return text;
   spans.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
   let out = "";

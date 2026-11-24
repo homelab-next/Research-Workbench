@@ -167,3 +167,19 @@ test("scrub is linear on a long token with no URL in it", () => {
 test("a URL is still hidden", () => {
   expect(scrub(f.sample.registry, "see https://example.net/x now")).toBe("see [hidden] now");
 });
+
+test("a URL is hidden wherever its scheme starts, after a dash, a digit, a plus or a dot too", () => {
+  expect(scrub(f.sample.registry, "see -https://h.example/x now")).toBe("see [hidden] now");
+  expect(scrub(f.sample.registry, "1https://h.example/x")).toBe("[hidden]");
+  expect(scrub(f.sample.registry, "+http://h.example")).toBe("[hidden]");
+  expect(scrub(f.sample.registry, ".https://h.example")).toBe("[hidden]");
+  expect(scrub(f.sample.registry, "x=https://h.example/y z")).toBe("x=[hidden] z");
+});
+
+test("scrub stays linear on 2 MB of one letter, of a: pairs and of letters and digits with a stray colon", () => {
+  const t0 = performance.now();
+  scrub(f.sample.registry, "a".repeat(2_000_000));
+  scrub(f.sample.registry, "a:".repeat(1_000_000));
+  scrub(f.sample.registry, "a1".repeat(1_000_000) + ":/");
+  expect(performance.now() - t0).toBeLessThan(3000);
+});
