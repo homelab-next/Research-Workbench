@@ -1,11 +1,12 @@
 import { Database } from "bun:sqlite";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { BlobStore, collectBlobRefs, isBlobRef } from "./blobs";
-import { parseJson } from "./canonical";
+import { canonical, parseJson } from "./canonical";
 import type { Json } from "./canonical";
-import { GENESIS } from "./hash";
+import { GENESIS, sha256Hex } from "./hash";
 import { checkRow } from "./ledger";
+import { isObj } from "./state/guards";
 import type { LedgerRow, RowFault } from "./ledger";
 import { BLOB_FIELDS, blobFieldNullable } from "./types";
 
@@ -23,6 +24,16 @@ export interface VerifyReport {
     /** Values shaped like a blob reference anywhere else (source rows, tool arguments...). Counted, never checked, never a failure. */
     lookalikes: number;
   };
+  /** Present when the report was made for a case folder (`verifyCase`). */
+  published?: PublishedReport;
+}
+
+export interface PublishedReport {
+  ok: boolean;
+  /** One per product.published entry, in order. "missing": no folder (the bundle is still in the blob). "differs": a file or the manifest is not what the blob holds. "bad_head": the head the manifest names is not an entry of this ledger. "bad_blob": the bundle blob is missing, corrupt or unreadable. */
+  bundles: { n: number; seq: number; state: "ok" | "missing" | "differs" | "bad_head" | "bad_blob"; detail: string }[];
+  /** Folders under published/ that no entry records (names starting ".tmp-" are leftovers and are listed too). */
+  unrecorded: string[];
 }
 
 /** The payload fields of an entry type that hold blob references. */
@@ -158,12 +169,113 @@ function reasonOf(err: unknown): string {
   return (err instanceof Error ? err.message : String(err)).split("\n")[0]!;
 }
 
-export function verifyCase(caseDir: string): VerifyReport {
-  return verifyLedger(join(caseDir, "ledger.sqlite"), join(caseDir, "blobs"));
+export function verifyCase(caseDir: string): VerifyReport & { published: PublishedReport } {
+  const report = verifyLedger(join(caseDir, "ledger.sqlite"), join(caseDir, "blobs"));
+  const published = verifyPublished(caseDir);
+  return { ...report, ok: report.ok && published.ok, published };
+}
+
+/** The manifest a bundle carries; declared here because src/core/ does not import src/pipeline/. */
+interface BundleManifestShape { head: { seq: number; hash: string }; files: { name: string; sha256: string }[] }
+
+const isHead = (x: unknown): x is { seq: number; hash: string } => isObj(x) && typeof x.seq === "number" && typeof x.hash === "string";
+
+/** Why a head is not an entry of the ledger; null when it is, and its hash is the one the entry has. */
+function headProblem(head: unknown, hashes: ReadonlyMap<number, string>): string | null {
+  if (!isHead(head)) return "the manifest names no head";
+  const actual = hashes.get(head.seq);
+  if (actual === undefined) return `the head the manifest names, entry ${head.seq}, is not an entry of this ledger`;
+  if (actual !== head.hash) return `the head hash the manifest names is not the hash of entry ${head.seq}`;
+  return null;
+}
+
+/**
+ * Compares each `published/<n>/` folder with the bundle blob the ledger's product.published entry names. A bundle is ok when the folder holds
+ * exactly manifest.json and the files its manifest lists, each file hashes to the manifest's sha256, manifest.json is the blob's manifest,
+ * product.json hashes to the entry's draft_hash, and the head the manifest names is an entry of this ledger with the hash the manifest and
+ * the entry give. Reads only; a folder no entry records is listed, so a stray or half-made one is seen.
+ */
+export function verifyPublished(caseDir: string): PublishedReport {
+  const db = new Database(join(caseDir, "ledger.sqlite"), { readonly: true });
+  const hashes = new Map<number, string>();
+  const recorded: { seq: number; n: number; draft_hash: string; head_hash: string; blob: string }[] = [];
+  try {
+    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    for (const row of db.query("SELECT seq, type, hash, payload FROM entries ORDER BY seq ASC").iterate() as Iterable<{ seq: number; type: string; hash: string; payload: string }>) {
+      hashes.set(row.seq, row.hash);
+      if (row.type !== "product.published") continue;
+      const p = parseJson(row.payload)?.value;
+      if (!isObj(p) || typeof p.n !== "number" || typeof p.draft_hash !== "string" || typeof p.head_hash !== "string" || !isObj(p.bundle) || typeof p.bundle.blob !== "string") continue;
+      recorded.push({ seq: row.seq, n: p.n, draft_hash: p.draft_hash, head_hash: p.head_hash, blob: p.bundle.blob });
+    }
+  } finally {
+    db.close();
+  }
+  const store = new BlobStore(join(caseDir, "blobs"));
+  const root = join(caseDir, "published");
+  const bundles: PublishedReport["bundles"] = recorded.map((r) => {
+    const out = (state: PublishedReport["bundles"][number]["state"], detail: string): PublishedReport["bundles"][number] => ({ n: r.n, seq: r.seq, state, detail });
+    // the bundle blob: canonical { manifest, files }
+    let manifest: BundleManifestShape;
+    let manifestBytes: string;
+    try {
+      const body = parseJson(new TextDecoder().decode(store.get(r.blob)))?.value;
+      if (!isObj(body) || !isObj(body.manifest) || !Array.isArray(body.manifest.files)) return out("bad_blob", "the bundle blob is not a bundle");
+      manifest = body.manifest as unknown as BundleManifestShape;
+      manifestBytes = canonical(body.manifest as Json);
+    } catch (err) {
+      return out("bad_blob", `the bundle blob is ${err instanceof Error && err.name === "BlobMissingError" ? "missing" : "corrupt or unreadable"}`);
+    }
+    const folder = join(root, String(r.n));
+    let names: string[];
+    try {
+      if (!statSync(folder).isDirectory()) return out("missing", `published/${r.n} is not a folder`);
+      names = readdirSync(folder);
+    } catch {
+      return out("missing", `there is no folder published/${r.n}; the bundle is still in the ledger's blob`);
+    }
+    const head = headProblem(manifest.head, hashes) ?? (isHead(manifest.head) && manifest.head.hash !== r.head_hash ? "the head hash the manifest names is not the one the entry records" : null);
+    if (head !== null) return out("bad_head", head);
+    let onDisk: string | null = null;
+    try { onDisk = readFileSync(join(folder, "manifest.json"), "utf8"); } catch { /* reported below */ }
+    if (onDisk === null) return out("differs", "manifest.json is missing");
+    const shown = parseJson(onDisk)?.value;
+    if (isObj(shown) && isObj(shown.head)) {
+      const shownHead = headProblem(shown.head, hashes) ?? (isHead(shown.head) && shown.head.hash !== r.head_hash ? "the head hash the folder's manifest names is not the one the entry records" : null);
+      if (shownHead !== null) return out("bad_head", `manifest.json: ${shownHead}`);
+    }
+    if (onDisk !== manifestBytes) return out("differs", "manifest.json is not the bundle's manifest");
+    const listed = manifest.files.map((f) => f.name);
+    for (const name of names) if (name !== "manifest.json" && !listed.includes(name)) return out("differs", `${name} is not a file of the bundle`);
+    for (const f of manifest.files) {
+      if (typeof f.name !== "string" || f.name !== f.name.split(/[\\/]/).pop() || f.name === "") return out("differs", "the manifest lists a file name that is not a plain name");
+      if (!names.includes(f.name)) return out("differs", `${f.name} is missing`);
+      let bytes: Buffer;
+      try { bytes = readFileSync(join(folder, f.name)); } catch { return out("differs", `${f.name} cannot be read`); }
+      if (sha256Hex(bytes) !== f.sha256) return out("differs", `${f.name} is not what the manifest lists`);
+    }
+    if (!listed.includes("product.json")) return out("differs", "the bundle has no product.json");
+    if (sha256Hex(readFileSync(join(folder, "product.json"))) !== r.draft_hash) return out("differs", "product.json is not the draft the entry names");
+    return out("ok", "");
+  });
+  let unrecorded: string[] = [];
+  try {
+    const known = new Set(recorded.map((r) => String(r.n)));
+    unrecorded = readdirSync(root).filter((name) => !known.has(name)).sort();
+  } catch { /* nothing was published */ }
+  return { ok: bundles.every((b) => b.state === "ok") && unrecorded.length === 0, bundles, unrecorded };
 }
 
 export function hasLedger(caseDir: string): boolean {
   return existsSync(join(caseDir, "ledger.sqlite"));
+}
+
+/** One line per published bundle that is not ok, and one per folder no entry records. */
+export function publishedLines(p: PublishedReport): string[] {
+  return [
+    ...p.bundles.filter((b) => b.state !== "ok").map((b) => `published/${b.n}: ${b.state} (entry ${b.seq}): ${b.detail}`),
+    ...p.unrecorded.map((name) => `published/${name}: no entry records this folder`),
+  ];
 }
 
 const TRUNCATION_NOTE = "compare the head with one recorded elsewhere: removing the newest entries cannot be detected from this file alone";
@@ -180,6 +292,8 @@ export function formatReport(r: VerifyReport): string {
   const intact = `chain intact · ${r.entries} entries · head ${r.head}`;
   const first = r.firstBad
     ? `case ${r.case}: BROKEN at entry ${r.firstBad.seq} (${r.firstBad.reason})`
+    : r.published !== undefined && !r.published.ok && r.blobs.bad.length === 0
+      ? `case ${r.case}: BROKEN · ${r.published.bundles.filter((b) => b.state !== "ok").length + r.published.unrecorded.length} published item${r.published.bundles.filter((b) => b.state !== "ok").length + r.published.unrecorded.length === 1 ? "" : "s"} not as recorded · ${intact}`
     : r.blobs.bad.length > 0
       ? `case ${r.case}: BROKEN · ${r.blobs.bad.length} blob${r.blobs.bad.length === 1 ? "" : "s"} ${malformed > 0 ? "missing, corrupt or malformed" : "missing or corrupt"} · ${intact}`
       : `case ${r.case}: ${intact}`;
@@ -187,6 +301,7 @@ export function formatReport(r: VerifyReport): string {
   if (malformed > 0) blobLine += ` · ${malformed} malformed reference${malformed === 1 ? "" : "s"}`;
   if (r.blobs.lookalikes > 0) blobLine += ` · ${r.blobs.lookalikes} look-alike${r.blobs.lookalikes === 1 ? "" : "s"} outside reference fields, not checked`;
   const lines = [first, blobLine, ...r.blobs.bad.map((b) => `  ${b.state} blob ${b.blob}, referenced by entry ${b.seq}`)];
+  if (r.published !== undefined) lines.push(...publishedLines(r.published));
   if (r.firstBad === null) lines.push(TRUNCATION_NOTE);
   return lines.join("\n");
 }

@@ -211,14 +211,14 @@ async function gateWithNarrativeCite(): Promise<{ engine: Engine }> {
   return r;
 }
 
-test("an edit that leaves the summary as it was keeps the card the summary cited, so its marking cannot be lowered below that card", async () => {
+test("an edit that leaves the summary as it was keeps the card the summary cited, and the previous marking is its floor", async () => {
   const r = await gateWithNarrativeCite();
-  const d = r.engine.revise({ product: { ...latestDraft(f.s.state)!.product, marking: "TLP:GREEN" }, reason: "lower it", actor: person });
+  // an edit that only lowers the marking changes nothing once the floor is applied
+  expect(() => r.engine.revise({ product: { ...latestDraft(f.s.state)!.product, marking: "TLP:GREEN" }, reason: "lower it", actor: person })).toThrow(/changes nothing/);
+  const d = r.engine.revise({ product: { ...latestDraft(f.s.state)!.product, marking: "TLP:GREEN", gaps_and_limits: "more" }, reason: "lower it", actor: person });
+  expect(d.product.marking).toBe("TLP:AMBER");
   expect(d.cited).toContain("c1");
-  expect(markingProblem(f.s, d)).toContain("c1 (TLP:AMBER)");
-  // review of the edit passes in this rig; approval still refuses the lowered marking
-  await r.engine.advance();
-  expect(() => r.engine.approve({ actor: person })).toThrow(/less restrictive than c1/);
+  expect(markingProblem(f.s, d)).toBeNull();
 });
 
 test("an edit that rewrites every section carries no tool-only cite over, but keeps every card its text names", async () => {
@@ -231,4 +231,22 @@ test("an edit that rewrites every section carries no tool-only cite over, but ke
     expect(e.cited).toContain("c1");
   }
   expect(latestDraft(f.s.state)!.cited).toEqual(["c1"]);
+});
+
+test("a person's edit cannot lower the marking below the previous draft's", async () => {
+  const amber: Product = { ...base, marking: "TLP:AMBER", summary: "amber" };
+  const r = rig({
+    assemble: async () => {
+      const hash = sha256Hex(canonical(amber as unknown as Json));
+      f.s.commit((st) => [{ type: "draft.revised", actor: planner, payload: { draft: { n: st.drafts.length + 1, hash, author: planner, product: amber, reason: "r" } } }]);
+      return { ...PASS, draft_hash: hash };
+    },
+  });
+  await toGate(r);
+  const latest = latestDraft(f.s.state)!;
+  expect(latest.product.marking).toBe("TLP:AMBER");
+  const d = r.engine.revise({ product: { ...latest.product, marking: "TLP:CLEAR", summary: "edited" }, reason: "tidy", actor: person });
+  expect(d.product.marking).toBe("TLP:AMBER");
+  expect(d.hash).toBe(sha256Hex(canonical(d.product as unknown as Json)));
+  expect(latestDraft(f.s.state)).toEqual(d);
 });

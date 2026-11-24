@@ -157,3 +157,13 @@ test("read_card shows an http query without its location and with the source's o
   const text = (r.view as { provenance: { text: string } }).provenance.text;
   expect(text).toBe("GET /v1/reputation/198.51.100.77?as=[hidden]");
 });
+
+test("scrub is linear on a long token with no URL in it", () => {
+  const t0 = performance.now();
+  scrub(f.sample.registry, "a".repeat(200_000));
+  expect(performance.now() - t0).toBeLessThan(500);
+});
+
+test("a URL is still hidden", () => {
+  expect(scrub(f.sample.registry, "see https://example.net/x now")).toBe("see [hidden] now");
+});

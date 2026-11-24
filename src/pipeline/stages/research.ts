@@ -1,15 +1,17 @@
 import type { Json } from "../../core/canonical";
-import type { Actor } from "../../core/types";
+import type { Actor, Entry } from "../../core/types";
 import type { PlanStep } from "../../core/types";
+import { ContextError, packPart } from "../../agents/context";
+import type { PackPart } from "../../agents/context";
 import { spendPlanBudget } from "../plans";
 import type { StageEnd, StageEnv } from "../engine";
-import { noSchema, stageAgent } from "./agent";
+import { lastPass, noSchema, requestsOfPass, stageAgent, stageOfRole, titleOf } from "./agent";
 import type { AgentStageEnd } from "./agent";
 
 const ENGINE: Actor = { kind: "system", id: "engine" };
 const DONE = new Set(["answered", "empty", "partial"]);
 
-interface Unit { sent_back?: boolean; actor_id: string; title: string; task: string; subgoal: string | null; question: string | null }
+interface Unit { sent_back?: boolean; actor_id: string; title: string; task: string; part: PackPart; subgoal: string | null; question: string | null }
 interface SubResult { id: string; title: string; outcome: "answered" | "blocked"; cards: string[]; note: string }
 
 const noteOf = (end: AgentStageEnd | undefined): string => {
@@ -45,29 +47,42 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
   const actorId = (suffix: string): string => `${deps.profile.stages[stage.id]?.agent ?? "researcher"}-${suffix}`;
 
   const units: Unit[] = [];
+  /** The question a researcher answers. It is text a model wrote, so it is a pack part carrying the marking of the request that produced it, never task text. */
+  const questionPart = (id: string, text: string, written_by: Entry[]): PackPart =>
+    packPart({ kind: "question", id, title: "The question", text, fixed: false, entries, written_by, floor: null });
+  const TASK = 'Answer the question in the part titled "The question".';
+  const planStage = stageOfRole(env, "plan");
+  const planPass = planStage === null ? null : lastPass(session, planStage);
+  const planRequests = planPass === null ? [] : requestsOfPass(entries, planPass.entry);
   /** Questions asked for whose researcher already finished in this pass: not asked again. */
   const answeredBefore: { question: string }[] = [];
   const doneJobs = new Set(entries.filter((e) => e.type === "job.finished" && e.payload.outcome === "done").map((e) => (e.type === "job.finished" ? e.payload.job : "")));
   const doneTitles = new Set(entries.filter((e) => e.type === "job.started" && e.seq > lastFinished && doneJobs.has(e.payload.job)).map((e) => (e.type === "job.started" ? e.payload.title : "")));
-  if (sentBack) {
-    let n = 0;
-    for (const e of entries) {
-      if (e.type !== "research.requested") continue;
-      n++;
-      if (e.seq > lastFinished && doneTitles.has(`Research: ${e.payload.question}`)) answeredBefore.push({ question: e.payload.question });
-      else if (e.seq > lastFinished) {
-        units.push({ sent_back: true, actor_id: actorId(`r${n}`), title: `Research: ${e.payload.question}`, subgoal: null, question: e.payload.question, task: e.payload.question });
+  try {
+    if (sentBack) {
+      let n = 0;
+      for (const e of entries) {
+        if (e.type !== "research.requested") continue;
+        n++;
+        if (e.seq > lastFinished && doneTitles.has(`Research: ${e.payload.question}`)) answeredBefore.push({ question: e.payload.question });
+        else if (e.seq > lastFinished) {
+          units.push({ sent_back: true, actor_id: actorId(`r${n}`), title: `Research: ${e.payload.question}`, subgoal: null, question: e.payload.question, task: TASK, part: questionPart(`question-r${n}`, e.payload.question, [e]) });
+        }
+      }
+    } else {
+      for (const g of goals) {
+        if (accepted(g).every((s) => DONE.has(statusOf(s)))) continue;
+        const steps = current.steps.filter((s) => accepted(g).includes(s.id));
+        units.push({
+          actor_id: actorId(g.id), title: `Research: ${g.title}`, subgoal: g.id, question: null,
+          task: [`Research sub-goal ${g.id}. ${TASK}`, "Run these accepted steps with run_step, in order, then report what each returned:", ...steps.map(describeStep)].join("\n"),
+          part: questionPart(`question-${g.id}`, `Sub-goal ${g.id}: ${g.title}\n${g.question}`, planRequests),
+        });
       }
     }
-  } else {
-    for (const g of goals) {
-      if (accepted(g).every((s) => DONE.has(statusOf(s)))) continue;
-      const steps = current.steps.filter((s) => accepted(g).includes(s.id));
-      units.push({
-        actor_id: actorId(g.id), title: `Research: ${g.title}`, subgoal: g.id, question: null,
-        task: [`Research sub-goal ${g.id}: ${g.title}`, `Question: ${g.question}`, "Run these accepted steps with run_step, in order, then report what each returned:", ...steps.map(describeStep)].join("\n"),
-      });
-    }
+  } catch (err) {
+    if (err instanceof ContextError) return { kind: "stalled", reason: `${titleOf(env)}: ${err.message}` };
+    throw err;
   }
 
   const results: (AgentStageEnd | undefined)[] = units.map(() => undefined);
@@ -83,7 +98,7 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
     let end: AgentStageEnd;
     try {
       end = await stageAgent(env, {
-        actor_id: u.actor_id, task: u.task, extras: [], subgoal: u.subgoal, job,
+        actor_id: u.actor_id, task: u.task, extras: [u.part], subgoal: u.subgoal, job,
         // a researcher sent back for a question has no sub-goal: it may not run plan steps or spend a plan budget
         ...(u.sent_back === true ? { omit_tools: ["run_step"] as const } : { onNeedsBudget: (p: string, step: string | null) => spendPlanBudget(session, deps.runner, p, step) }),
       });

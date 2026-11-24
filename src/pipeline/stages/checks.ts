@@ -17,17 +17,13 @@ export async function checksRunner(env: StageEnv): Promise<StageEnd> {
   if (d === null) return { kind: "stalled", reason: "Checks: there is no draft to check" };
   const { checks, problems, broken } = loadChecks(deps.registry);
   if (checks.length === 0 && broken.length === 0) return { kind: "stalled", reason: `Checks has nothing to run: ${problems.length === 0 ? "no check is installed" : problems.join("; ")}` };
-  const done: { check: string; pass: boolean; first: string }[] = [];
-  // a check that is declared but cannot be loaded is a failed check on this draft, like one whose script cannot be read when it runs
-  for (const b of broken) {
-    const message = `check ${b.id} could not be loaded: ${b.problem}`;
-    const nothing = session.blobs.put(new Uint8Array(0));
-    session.commit((s) => [{
-      type: "check.run", actor: CHECKS, run: s.run.id, stage: stage.id,
-      payload: { check: b.id, script_hash: "", input: nothing, output: nothing, draft_hash: d.hash, pass: false, findings: [{ check: b.id, where: "check", message }] },
-    }]);
-    done.push({ check: b.id, pass: false, first: message });
+  // a check that is declared but cannot be loaded stalls the run before anything runs: it is for a person to repair, not for the analyst to answer
+  if (broken.length > 0) {
+    const first = broken[0]!;
+    const more = broken.length > 1 ? ` and ${broken.length - 1} more` : "";
+    return { kind: "stalled", reason: `Checks cannot run: check ${first.id} could not be loaded: ${first.problem}${more}` };
   }
+  const done: { check: string; pass: boolean; first: string }[] = [];
   for (const check of checks) {
     let input: ReturnType<typeof checkInput>;
     try {
@@ -50,6 +46,5 @@ export async function checksRunner(env: StageEnv): Promise<StageEnd> {
   if (failing.length === 0) return { kind: "finished", outcome: "pass", draft_hash: d.hash, output, reason: null };
   const more = failing.length > 1 ? ` and ${failing.length - 1} more` : "";
   const first = failing[0]!;
-  const why = broken.some((b) => b.id === first.check) ? first.first : `${first.check} failed: ${first.first}`;
-  return { kind: "finished", outcome: "fail", draft_hash: d.hash, output, reason: `${why}${more}` };
+  return { kind: "finished", outcome: "fail", draft_hash: d.hash, output, reason: `${first.check} failed: ${first.first}${more}` };
 }

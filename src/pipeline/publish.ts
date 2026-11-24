@@ -1,3 +1,4 @@
+import { Refused } from "../core/refused";
 import { mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
@@ -13,12 +14,10 @@ import { citedOf } from "../agents/draft";
 import type { EngineDeps } from "./engine";
 import type { Pipeline } from "./manifests";
 
-export class PublishRefused extends Error {
-  readonly reasons: string[];
+export class PublishRefused extends Refused {
   constructor(reasons: string[]) {
-    super(reasons.join(". "));
+    super(reasons.join(". "), reasons);
     this.name = "PublishRefused";
-    this.reasons = reasons;
   }
 }
 

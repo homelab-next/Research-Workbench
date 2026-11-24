@@ -4,6 +4,7 @@ import { basename, extname, resolve } from "node:path";
 import type { SourceManifest, TableManifest } from "../manifests";
 import { staysInside } from "../registry";
 import { renderSql, runOnDatabase } from "./sqlite";
+import { LocalQueryHost } from "./local-host";
 import { ConnectorError } from "./types";
 import type { Connector, ConnectorContext, QueryOutcome, QueryRequest } from "./types";
 import type { Coverage } from "../../core/types";
@@ -97,15 +98,74 @@ function formatOf(t: TableManifest): "csv" | "jsonl" {
   throw new ConnectorError(`table ${t.name} has no format and its file extension does not say`);
 }
 
+export type LocalFile = { table: TableManifest; path: string; file: string };
+
+/** Reads each file's size and modified time: a change in either is a change of the data. Throws ConnectorError when a file is missing, not a file or over the size limit. */
+export function statFiles(files: readonly LocalFile[]): string {
+  return files.map(f => {
+    try {
+      const s = statSync(f.path);
+      if (!s.isFile()) throw new Error("not a regular file");
+      if (s.size > MAX_FILE_BYTES) throw new ConnectorError(`file ${f.file} is larger than ${MAX_FILE_BYTES} bytes`);
+      return `${f.path}:${s.size}:${s.mtimeMs}`;
+    } catch (err) {
+      if (err instanceof ConnectorError) throw err;
+      throw new ConnectorError(`file ${f.file} for table ${f.table.name} cannot be read: ${(err as Error).message}`);
+    }
+  }).join("\n");
+}
+
+/** The in-memory, query-only database of the files, with a note for each file that had unreadable lines. */
+export function buildFilesDatabase(files: readonly LocalFile[]): { db: Database; notes: string[] } {
+  const db = new Database(":memory:");
+  const notes: string[] = [];
+  try {
+    for (const f of files) {
+      const wanted = f.table.columns.length > 0 ? f.table.columns.map(c => c.name) : null;
+      let text: string;
+      try {
+        text = readFileSync(f.path, "utf8");
+      } catch (err) {
+        throw new ConnectorError(`file ${f.file} for table ${f.table.name} cannot be read: ${(err as Error).message}`);
+      }
+      const loaded = formatOf(f.table) === "csv" ? loadCsv(text, wanted) : loadJsonl(text, wanted);
+      if (loaded.columns.length === 0) throw new ConnectorError(`file ${f.file} has no columns`);
+      // a missing column would read as nulls with full coverage, and every lookup on it as a proven negative
+      if (loaded.missing.length > 0) {
+        throw new ConnectorError(`file ${f.file} for table ${f.table.name} has no column ${loaded.missing.join(", ")}, which the manifest declares`);
+      }
+      if (new Set(loaded.columns).size !== loaded.columns.length) throw new ConnectorError(`file ${f.file} has duplicate column names`);
+      db.run(`create table ${quoteIdent(f.table.name)} (${loaded.columns.map(quoteIdent).join(", ")})`);
+      const insert = db.prepare(`insert into ${quoteIdent(f.table.name)} values (${loaded.columns.map(() => "?").join(", ")})`);
+      db.transaction(() => { for (const r of loaded.rows) insert.run(...r); })();
+      if (loaded.unreadable > 0) notes.push(`${loaded.unreadable} unreadable line${loaded.unreadable === 1 ? "" : "s"} in ${basename(f.file)}`);
+    }
+    db.run("pragma query_only = on");
+  } catch (err) {
+    db.close();
+    throw err;
+  }
+  return { db, notes };
+}
+
+/** An outcome with the notes about unreadable lines added to its coverage: full becomes partial, and a partial one keeps its reason. */
+export function withNotes(out: QueryOutcome, notes: readonly string[]): QueryOutcome {
+  if (notes.length === 0) return out;
+  const detail = [out.coverage.kind === "partial" ? out.coverage.detail : undefined, ...notes].filter(x => x !== undefined).join("; ");
+  const coverage: Coverage = out.coverage.kind === "partial"
+    ? { ...out.coverage, detail }
+    : { kind: "partial", reason: "source_error", detail };
+  return { ...out, coverage };
+}
+
 export class FilesConnector implements Connector {
   readonly kind = "files" as const;
-  private db: Database | null = null;
-  private stamp = "";
-  private notes: string[] = [];
+  private host: LocalQueryHost | null = null;
 
   constructor(private readonly source: SourceManifest, _ctx: ConnectorContext) {}
 
-  private files(): { table: TableManifest; path: string; file: string }[] {
+  /** The files of the source's tables, each checked to be inside the module root. */
+  private files(): LocalFile[] {
     const folder = resolve(this.source.dir, this.source.location);
     return this.source.tables.map(table => {
       if (table.file === null) throw new ConnectorError(`table ${table.name} names no file`);
@@ -113,57 +173,6 @@ export class FilesConnector implements Connector {
       if (!staysInside(this.source.root, path)) throw new ConnectorError(`file ${table.file} is outside the module root`);
       return { table, path, file: table.file };
     });
-  }
-
-  private refresh(): Database {
-    const files = this.files();
-    const stats = files.map(f => {
-      try {
-        const s = statSync(f.path);
-        if (!s.isFile()) throw new Error("not a regular file");
-        if (s.size > MAX_FILE_BYTES) throw new ConnectorError(`file ${f.file} is larger than ${MAX_FILE_BYTES} bytes`);
-        return `${f.path}:${s.size}:${s.mtimeMs}`;
-      } catch (err) {
-        if (err instanceof ConnectorError) throw err;
-        throw new ConnectorError(`file ${f.file} for table ${f.table.name} cannot be read: ${(err as Error).message}`);
-      }
-    });
-    const stamp = stats.join("\n");
-    if (this.db !== null && stamp === this.stamp) return this.db;
-
-    const db = new Database(":memory:");
-    const notes: string[] = [];
-    try {
-      for (const f of files) {
-        const wanted = f.table.columns.length > 0 ? f.table.columns.map(c => c.name) : null;
-        let text: string;
-        try {
-          text = readFileSync(f.path, "utf8");
-        } catch (err) {
-          throw new ConnectorError(`file ${f.file} for table ${f.table.name} cannot be read: ${(err as Error).message}`);
-        }
-        const loaded = formatOf(f.table) === "csv" ? loadCsv(text, wanted) : loadJsonl(text, wanted);
-        if (loaded.columns.length === 0) throw new ConnectorError(`file ${f.file} has no columns`);
-        // a missing column would read as nulls with full coverage, and every lookup on it as a proven negative
-        if (loaded.missing.length > 0) {
-          throw new ConnectorError(`file ${f.file} for table ${f.table.name} has no column ${loaded.missing.join(", ")}, which the manifest declares`);
-        }
-        if (new Set(loaded.columns).size !== loaded.columns.length) throw new ConnectorError(`file ${f.file} has duplicate column names`);
-        db.run(`create table ${quoteIdent(f.table.name)} (${loaded.columns.map(quoteIdent).join(", ")})`);
-        const insert = db.prepare(`insert into ${quoteIdent(f.table.name)} values (${loaded.columns.map(() => "?").join(", ")})`);
-        db.transaction(() => { for (const r of loaded.rows) insert.run(...r); })();
-        if (loaded.unreadable > 0) notes.push(`${loaded.unreadable} unreadable line${loaded.unreadable === 1 ? "" : "s"} in ${basename(f.file)}`);
-      }
-      db.run("pragma query_only = on");
-    } catch (err) {
-      db.close();
-      throw err;
-    }
-    this.db?.close();
-    this.db = db;
-    this.stamp = stamp;
-    this.notes = notes;
-    return db;
   }
 
   render(req: QueryRequest): string {
@@ -183,18 +192,17 @@ export class FilesConnector implements Connector {
   }
 
   async run(req: QueryRequest): Promise<QueryOutcome> {
-    const out = runOnDatabase(this.refresh(), req);
-    if (this.notes.length === 0) return out;
-    const detail = [out.coverage.kind === "partial" ? out.coverage.detail : undefined, ...this.notes].filter(x => x !== undefined).join("; ");
-    const coverage: Coverage = out.coverage.kind === "partial"
-      ? { ...out.coverage, detail }
-      : { kind: "partial", reason: "source_error", detail };
-    return { ...out, coverage };
+    // everything that can be refused before the data is touched is refused here, on this thread; the worker does the rest
+    renderSql(req);
+    const files = this.files();
+    statFiles(files);
+    for (const f of files) formatOf(f.table);
+    this.host ??= new LocalQueryHost({ kind: "files", files });
+    return this.host.query(req);
   }
 
   close(): void {
-    this.db?.close();
-    this.db = null;
-    this.stamp = "";
+    this.host?.close();
+    this.host = null;
   }
 }

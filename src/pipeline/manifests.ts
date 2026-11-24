@@ -7,7 +7,7 @@ import type { Schema } from "../core/schema";
 import { validate } from "../core/schema";
 import { GATES, STAGE_RUNS } from "../core/types";
 import type { StageDef } from "../core/types";
-import { describeErrors } from "../modules/manifests";
+import { describeErrors, parseManifestFile } from "../modules/manifests";
 import type { LoadedManifest } from "../modules/manifests";
 import type { Registry } from "../modules/registry";
 import { staysInside } from "../modules/registry";
@@ -159,14 +159,35 @@ export function loadChecks(registry: Registry): { checks: CheckManifest[]; probl
     if (!existsSync(file) || !statSync(file).isFile()) { bad(`script "${b.script}" is missing`); continue; }
     checks.push({ id: m.id, title: b.title ?? m.title, order: b.order, hash: m.hash, path: m.path, script: b.script, runner: b.runner, timeout_ms: b.timeout_ms });
   }
-  // a check manifest in a trusted root that the registry itself refused (it does not parse, or its id is taken) is broken too
+  // a check manifest in a trusted root that the registry itself refused (its id is taken, its body is invalid) is broken too, recognised by its
+  // parsed kind. A file that cannot be parsed at all counts when its folder holds another check manifest, so an unreadable check cannot drop out.
+  const checkDirs = new Set(registry.all("check").map((m) => dirname(m.path)));
+  const unparsed: { p: (typeof registry.problems)[number]; text: string | null }[] = [];
+  const idsBroken = new Set(broken.map((x) => x.id));
   for (const p of registry.problems) {
     if (registry.rootOf(p.path)?.trusted !== true) continue;
-    let text: string;
-    try { text = readFileSync(p.path, "utf8"); } catch { continue; }
-    if (!/^kind:\s*["']?check["']?\s*$/m.test(text)) continue;
-    const id = /^id:\s*["']?([^"'\s]+)/m.exec(text)?.[1] ?? basename(p.path);
-    if (broken.some((x) => x.id === id)) continue;
+    let bytes: Uint8Array;
+    try { bytes = readFileSync(p.path); } catch { continue; }
+    const what = `${relative(p.root, p.path)}: ${p.error.split(p.root).join("")}`;
+    let parsed: ReturnType<typeof parseManifestFile>;
+    try {
+      parsed = parseManifestFile(p.path, bytes);
+    } catch {
+      unparsed.push({ p, text: new TextDecoder().decode(bytes) });
+      continue;
+    }
+    if (parsed.kind !== "check") continue;
+    checkDirs.add(dirname(p.path));
+    const id = typeof parsed.body.id === "string" && parsed.body.id !== "" ? parsed.body.id : basename(p.path).replace(/\.[^.]*$/, "");
+    if (idsBroken.has(id)) continue;
+    idsBroken.add(id);
+    broken.push({ id, problem: what });
+  }
+  for (const { p, text } of unparsed) {
+    if (!checkDirs.has(dirname(p.path))) continue;
+    const id = /^id:\s*["']?([^"'\s]+)/m.exec(text ?? "")?.[1] ?? basename(p.path).replace(/\.[^.]*$/, "");
+    if (idsBroken.has(id)) continue;
+    idsBroken.add(id);
     broken.push({ id, problem: `${relative(p.root, p.path)}: ${p.error.split(p.root).join("")}` });
   }
   checks.sort((a, b) => a.order - b.order);

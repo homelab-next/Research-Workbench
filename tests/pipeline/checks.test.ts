@@ -342,18 +342,52 @@ test("checkInput carries the cards the narrative cites too", () => {
   } finally { close(); }
 });
 
-test("a declared check that cannot be loaded fails the Checks stage, though every other check passed", async () => {
+test("a check that cannot be loaded stalls the stage and records no check run", async () => {
   const { env, close } = stageRig({ a: [PRINT("{ pass: true, findings: [] }"), { order: 1 }], b: [PRINT("{ pass: true, findings: [] }"), { order: 2 }] });
   try {
     rmSync(join(dir, "stage-root", "checks", "b.ts"));
-    const d = latestDraft(env.session.state)!;
     const end = await checksRunner(env);
-    expect(end).toMatchObject({ kind: "finished", outcome: "fail", draft_hash: d.hash, reason: `check b could not be loaded: script "b.ts" is missing` });
-    const es = runs(env);
-    expect(es.map((e) => e.type === "check.run" && [e.payload.check, e.payload.pass])).toEqual([["b", false], ["a", true]]);
-    expect(env.session.state.reviews[d.hash]!.checks.find((c) => c.check === "b")).toMatchObject({ pass: false });
+    expect(end).toEqual({ kind: "stalled", reason: `Checks cannot run: check b could not be loaded: script "b.ts" is missing` });
+    expect(runs(env)).toEqual([]);
+    expect(env.session.entries().some((e) => e.type === "check.run")).toBe(false);
     expect(env.session.state.skipped).toEqual([]);
   } finally { close(); }
+});
+
+test("two broken checks stall the stage naming the first and the count of the rest", async () => {
+  const { env, close } = stageRig({ a: [PRINT("{ pass: true, findings: [] }"), { order: 1 }], b: [PRINT("{ pass: true, findings: [] }"), { order: 2 }], c: [PRINT("{ pass: true, findings: [] }"), { order: 3 }] });
+  try {
+    rmSync(join(dir, "stage-root", "checks", "b.ts"));
+    rmSync(join(dir, "stage-root", "checks", "c.ts"));
+    const end = await checksRunner(env);
+    expect(end).toEqual({ kind: "stalled", reason: `Checks cannot run: check b could not be loaded: script "b.ts" is missing and 1 more` });
+    expect(runs(env)).toEqual([]);
+  } finally { close(); }
+});
+
+test("a refused check manifest is recognised by its parsed kind", () => {
+  const root = join(dir, "dup-root");
+  mkdirSync(root, { recursive: true });
+  const other = join(dir, "dup-other");
+  mkdirSync(other, { recursive: true });
+  // flow YAML on one line: a text match for `kind: check` on a line of its own does not see it; the id is taken by both roots, so both are refused
+  writeFileSync(join(root, "first.yaml"), '{ kind: check, id: dup, title: first, order: 1, script: dup.ts, runner: bun, timeout_ms: 1000 }\n');
+  writeFileSync(join(other, "again.yaml"), '{ kind: check, id: dup, title: again, order: 2, script: dup.ts, runner: bun, timeout_ms: 1000 }\n');
+  const r = loadChecks(Registry.load([{ path: root, trusted: true, credentials: [] }, { path: other, trusted: true, credentials: [] }]));
+  expect(r.broken.map((b) => b.id)).toContain("dup");
+});
+
+test("an unparseable file beside a check manifest counts as a broken check", () => {
+  const root = join(dir, "unreadable-root");
+  write(root, "fine", PRINT("{ pass: true, findings: [] }"));
+  writeFileSync(join(root, "mangled.yaml"), "{ kind: check, id: [");
+  const lone = join(dir, "lone-root");
+  mkdirSync(lone, { recursive: true });
+  writeFileSync(join(lone, "mangled.yaml"), "{ kind: check, id: [");
+  const r = loadChecks(Registry.load([{ path: root, trusted: true, credentials: [] }, { path: lone, trusted: true, credentials: [] }]));
+  expect(r.checks.map((c) => c.id)).toEqual(["fine"]);
+  expect(r.broken).toHaveLength(1);
+  expect(r.broken[0]!.problem).toContain("mangled.yaml");
 });
 
 test("a check manifest the registry refused, or one that is not valid, is broken; one from an untrusted root is not", () => {

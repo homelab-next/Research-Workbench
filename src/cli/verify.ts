@@ -2,7 +2,7 @@
 // bun run src/cli/verify.ts --ledger <ledger.sqlite> --blobs <blob-dir>   (for example the workbench chain)
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { formatReport, UnreadableLedgerError, verifyLedger } from "../core/verify";
+import { formatReport, UnreadableLedgerError, verifyLedger, verifyPublished } from "../core/verify";
 
 const USAGE = [
   "usage: bun run src/cli/verify.ts <case-dir>                          (the directory must contain ledger.sqlite)",
@@ -14,8 +14,8 @@ function usage(): never {
   process.exit(2);
 }
 
-function parseArgs(args: string[]): { ledger: string; blobs: string } {
-  if (args.length === 1 && !args[0]!.startsWith("--")) return { ledger: join(args[0]!, "ledger.sqlite"), blobs: join(args[0]!, "blobs") };
+function parseArgs(args: string[]): { ledger: string; blobs: string; caseDir: string | null } {
+  if (args.length === 1 && !args[0]!.startsWith("--")) return { ledger: join(args[0]!, "ledger.sqlite"), blobs: join(args[0]!, "blobs"), caseDir: args[0]! };
   const named: Record<string, string> = {};
   for (let i = 0; i < args.length; i += 2) {
     const flag = args[i]!, value = args[i + 1];
@@ -23,13 +23,15 @@ function parseArgs(args: string[]): { ledger: string; blobs: string } {
     named[flag] = value;
   }
   if (named["--ledger"] === undefined || named["--blobs"] === undefined) usage();
-  return { ledger: named["--ledger"], blobs: named["--blobs"] };
+  return { ledger: named["--ledger"], blobs: named["--blobs"], caseDir: null };
 }
 
 const target = parseArgs(process.argv.slice(2));
 if (!existsSync(target.ledger) || !statSync(target.ledger).isFile()) usage();
 try {
-  const report = verifyLedger(target.ledger, target.blobs);
+  const chain = verifyLedger(target.ledger, target.blobs);
+  // a case folder has published bundles to check too; the workbench chain, given by file, has none
+  const report = target.caseDir === null ? chain : (() => { const published = verifyPublished(target.caseDir); return { ...chain, ok: chain.ok && published.ok, published }; })();
   console.log(formatReport(report));
   process.exit(report.ok ? 0 : 1);
 } catch (err) {

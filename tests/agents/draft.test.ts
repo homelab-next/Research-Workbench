@@ -160,11 +160,16 @@ test("a card is named in text as [c1], [c1, c2], [Card c1] or a bare c1, the sam
   expect(cardRefs("see [c1, c2]")).toEqual(["c1", "c2"]);
   expect(cardRefs("see [Card c3]")).toEqual(["c3"]);
   expect(cardRefs("c4 shows it")).toEqual(["c4"]);
-  expect(cardRefs("(see C2)")).toEqual(["c2"]);
+  expect(cardRefs("(see C2)")).toEqual([]);
   expect(cardRefs("abc1, c1x, 0c1 and c12345abc are not cards")).toEqual([]);
   const product = { summary: "[c1, c2]", gaps_and_limits: "[Card c3]", alternatives: "c4", assessment: "none", key_findings: [] } as unknown as Product;
   expect(citedBy(product)).toEqual(["c1", "c2", "c3", "c4"]);
   // check 6 runs alone and cannot import the helper: its source spells the same pattern
   const check6 = readFileSync(join(import.meta.dir, "../../sample/checks/06-assumptions-and-judgments.ts"), "utf8");
-  expect(check6).toContain(`/${CARD_REF.source}/i`);
+  expect(check6).toContain(`/${CARD_REF.source}/.test(`);
+  expect(CARD_REF.flags).not.toContain("i");
+});
+
+test("only lower-case card ids are citations", () => {
+  expect(cardRefs("C2 traffic to c3, [c1, c2] and [Card c4]; C5.")).toEqual(["c3", "c1", "c2", "c4"]);
 });

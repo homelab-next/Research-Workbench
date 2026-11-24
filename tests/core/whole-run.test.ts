@@ -215,7 +215,9 @@ test("a whole run, live, equals its replay at every entry", () => {
   wb = Workbench.open(dir, { onError });
   expect(wb.session(s.id).state).toEqual(final);
   const report = verifyCase(s.dir);
-  expect(report).toMatchObject({ ok: true, entries: all.length, firstBad: null, blobs: { bad: [], lookalikes: 0 } });
+  // the chain and every blob are intact; the one published entry here names a stand-in blob, not a real bundle, which the published check says
+  expect(report).toMatchObject({ entries: all.length, firstBad: null, blobs: { bad: [], lookalikes: 0 } });
+  expect(report.published.bundles.map((b) => b.state)).toEqual(["bad_blob"]);
   // pre-run response, plan prompt, plan text, its reasoning, the result rows, the check input, the bundle
   expect(report.blobs.referenced).toBe(8);
   expect(errors).toEqual([]);

@@ -28,7 +28,7 @@ import type { Fixture } from "../helpers/tools-fixture";
 
 let f: Fixture;
 let dir: string;
-beforeEach(() => { f = fixture(false); dir = mkdtempSync(join(tmpdir(), "analysis-")); });
+beforeEach(() => { afterTurn = null; f = fixture(false); dir = mkdtempSync(join(tmpdir(), "analysis-")); });
 afterEach(() => {
   expect(f.s.state.skipped).toEqual([]);
   f.close();
@@ -55,6 +55,8 @@ const SECOND_ANSWERING: ScriptReply[] = [
 const EVAL_PASS = say({ pass: true, findings: [] });
 const CHALLENGE_PASS = say({ done: true, summary: "nothing to add" });
 
+/** Called after each model answer the scripted provider gives, with its running count and the asking actor; a test uses it to act while a model is answering. */
+let afterTurn: ((n: number, actor: string) => void) | null = null;
 interface Rig { engine: Engine; log: string[]; checks: { fail: number } }
 /** Real Assemble, Evaluate and Challenge; stubs for the rest. `checks.fail` is how many times the Checks stub fails before it passes. */
 function rig(replies: Record<string, ScriptReply[]>, over: Partial<Record<Role, StageRunner>> = {}, s: CaseSession = f.s): Rig {
@@ -62,9 +64,13 @@ function rig(replies: Record<string, ScriptReply[]>, over: Partial<Record<Role, 
   const { pipeline, problems } = loadPipeline(registry);
   if (pipeline === null) throw new Error(problems.join("; "));
   const turns = Object.entries(replies).flatMap(([actor, rs]) => rs.map((reply) => ({ actor, reply })));
+  const scripted = new ScriptedProvider({ id: "scripted", scripts: [{ id: "sample-run", turns }] });
+  const real = scripted.turn.bind(scripted);
+  let turns_ = 0;
+  scripted.turn = async (req) => { const got = await real(req); afterTurn?.(++turns_, req.key); return got; };
   const deps: EngineDeps = {
     config: loadConfig({ env: {}, home: dir, repoRoot: dir }), registry, runner: f.sample.deps, seeker: f.sample.seeker,
-    providers: new Providers([new ScriptedProvider({ id: "scripted", scripts: [{ id: "sample-run", turns }] })]), pipeline, profile: loadProfile(registry, "investigation"),
+    providers: new Providers([scripted]), pipeline, profile: loadProfile(registry, "investigation"),
   };
   const log: string[] = [];
   const checks = { fail: 0 };
@@ -500,4 +506,22 @@ test("Research's output is as strict as the requests its researchers made: under
   const first = ofType("model.request").find((e) => e.actor.id === "analyst")!;
   expect(first.payload.left_out.map((i) => i.id)).toContain("research-output");
   expect(f.s.blobs.text(first.payload.messages.blob)).not.toContain("the red detail says so");
+});
+
+test("Assemble writes no draft after the run was stopped while its model was answering", async () => {
+  const r = rig({ analyst: FIRST, evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
+  let stopSeq = 0;
+  afterTurn = (n, actor) => {
+    if (actor !== "analyst" || n !== 2) return;
+    r.engine.stop(person, "enough");
+    stopSeq = f.s.head().seq;
+  };
+  const sum = await go(r);
+  expect(stopSeq).toBeGreaterThan(0);
+  expect(sum).toMatchObject({ status: "finished", outcome: "stopped" });
+  // the model's answer is still recorded as what happened; nothing it led to is
+  const after = f.s.entries().filter((e) => e.seq > stopSeq).map((e) => e.type);
+  expect(after.filter((t) => t === "draft.revised" || t === "assessment.made")).toEqual([]);
+  expect(after).not.toContain("stage.finished");
+  expect(f.s.state.drafts).toEqual([]);
 });

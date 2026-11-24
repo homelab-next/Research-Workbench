@@ -36,7 +36,8 @@ function configFor(dir: string, sample: ReturnType<typeof sampleRoot>, parallel 
 }
 
 /** The sample as a workbench, a case, and an engine built the way the command builds one. */
-function begin(parallel = 3, keep = false): Run {
+/** `parallel` is 1 unless a test is about concurrency: with more, which researcher finishes first, and so which card gets which id, depends on timing. */
+function begin(parallel = 1, keep = false): Run {
   const dir = mkdtempSync(join(tmpdir(), "full-run-"));
   dirs.push(dir);
   const sample = sampleRoot(dir);
@@ -89,7 +90,7 @@ let secretBefore: string | undefined;
 beforeAll(async () => {
   secretBefore = process.env.SAMPLE_PLANTED_SECRET;
   process.env.SAMPLE_PLANTED_SECRET = SECRET;
-  shared = begin(3, true);
+  shared = begin(1, true);
 });
 afterAll(() => {
   if (secretBefore === undefined) delete process.env.SAMPLE_PLANTED_SECRET;
@@ -314,8 +315,11 @@ test("with three researchers at once the script still resolves every card", asyn
   await throughPlan(r);
   r.engine.acceptPlan({ budgets: { s3: 1 }, actor: human });
   expect(await r.engine.advance()).toMatchObject({ status: "waiting", waiting: "publish" });
-  expect(r.s.state.drafts[1]!.hash).toBe(approved.draft_hash);
-  expect(r.s.state.reviews[r.s.state.drafts[1]!.hash]!.checks.every((c) => c.pass)).toBe(true);
+  // card ids follow whichever researcher finished first, so the draft's hash is not the one-at-a-time run's; what it cites is all real
+  const draft = r.s.state.drafts[1]!;
+  expect(Object.keys(r.s.state.cards)).toHaveLength(Object.keys(shared.s.state.cards).length);
+  for (const id of draft.cited ?? []) expect(Object.hasOwn(r.s.state.cards, id)).toBe(true);
+  expect(r.s.state.reviews[draft.hash]!.checks.every((c) => c.pass)).toBe(true);
 });
 
 test("the planted credential's value is in no entry, blob, bundle file or prompt of the finished run, nor anywhere in the data folder", () => {

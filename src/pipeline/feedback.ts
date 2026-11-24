@@ -1,3 +1,4 @@
+import { Refused } from "../core/refused";
 import type { CaseSession } from "../core/session";
 import { runUsage } from "../core/state";
 import type { CaseState } from "../core/state";
@@ -63,7 +64,7 @@ export function recordMops(session: CaseSession, registry: Registry, onError: (e
   });
 }
 
-export class FeedbackRefused extends Error {
+export class FeedbackRefused extends Refused {
   constructor(message: string) {
     super(message);
     this.name = "FeedbackRefused";

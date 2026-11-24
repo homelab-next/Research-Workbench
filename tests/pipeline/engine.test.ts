@@ -593,3 +593,65 @@ test("a resume that resumed nothing grants no extra send-back", async () => {
   expect(f.s.state.run.sendbacks).toEqual({ "checks>assemble": 3 });
   expect(sum.status).toBe("paused");
 });
+
+test("a stage that ends after the person stopped the run writes nothing", async () => {
+  let r!: Rig;
+  let stopSeq = 0;
+  r = rig({
+    frame: async () => {
+      r.engine.stop(person, "enough");
+      stopSeq = f.s.head().seq;
+      return PASS;
+    },
+  });
+  r.engine.start(person);
+  await r.engine.advance();
+  expect(stopSeq).toBeGreaterThan(0);
+  const after = f.s.entries().filter((e) => e.seq > stopSeq).map((e) => e.type);
+  expect(after).toEqual([]);
+  expect(f.s.state.run).toMatchObject({ status: "finished", outcome: "stopped" });
+});
+
+test("a declined, blocked or stalled stage that ends after the person stopped the run writes nothing either", async () => {
+  for (const end of [{ kind: "declined", reason: "policy" }, { kind: "blocked", marking: "TLP:RED" }, { kind: "stalled", reason: "x" }] as const) {
+    const g = fixture(false);
+    try {
+      const deps = depsOf(g.sample);
+      let stopSeq = 0;
+      const r = rig({ frame: async () => { r.engine.stop(person, "enough"); stopSeq = g.s.head().seq; return end; } }, g.s, deps);
+      r.engine.start(person);
+      await r.engine.advance();
+      expect(g.s.entries().filter((e) => e.seq > stopSeq).map((e) => e.type)).toEqual([]);
+      expect(g.s.state.skipped).toEqual([]);
+    } finally { g.close(); }
+  }
+});
+
+test("a case too strict for the stage's model says the case is the problem", async () => {
+  const wb = Workbench.open(join(dir, "wb-red"), { onError: () => {} });
+  extra.push(() => wb.close());
+  const s = wb.createCase({ title: "t", asked: "a", why: "w", starting: [{ type: "address", value: START }], window: WINDOW, objective: null, marking: "TLP:RED" }, person);
+  const r = rig({
+    frame: async () => {
+      s.commit(() => [{ type: "model.blocked", actor: planner, payload: { stage: "frame", marking: "TLP:RED", model: "m", where: "network" } }]);
+      return { kind: "blocked", marking: "TLP:RED" };
+    },
+  }, s);
+  r.engine.start(person);
+  await r.engine.advance();
+  expect(s.state.run.pause_reason).toBe("Frame: this case is marked TLP:RED, which this stage's model may not receive. Choose a model that may receive TLP:RED and resume.");
+  expect(s.state.skipped).toEqual([]);
+});
+
+test("a case above the stage's pack limit says the case is the problem too", async () => {
+  f.s.commit(() => [{ type: "stage.pack_limit_set", actor: person, payload: { stage: "frame", max_marking: "TLP:CLEAR" } }]);
+  const r = rig({
+    frame: async () => {
+      f.s.commit(() => [{ type: "model.blocked", actor: planner, payload: { stage: "frame", marking: "TLP:GREEN", model: "m", where: "machine" } }]);
+      return { kind: "blocked", marking: "TLP:GREEN" };
+    },
+  });
+  r.engine.start(person);
+  await r.engine.advance();
+  expect(f.s.state.run.pause_reason).toBe("Frame: this case is marked TLP:GREEN, which this stage's model may not receive. Choose a model that may receive TLP:GREEN and resume.");
+});

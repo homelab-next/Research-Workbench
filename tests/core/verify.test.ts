@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { Database, Statement } from "bun:sqlite";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BlobStore } from "../../src/core/blobs";
@@ -8,7 +8,7 @@ import { GENESIS } from "../../src/core/hash";
 import { canonical } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
 import { entryHash, InvalidEntryError, Ledger } from "../../src/core/ledger";
-import { formatReport, UnreadableLedgerError, verifyCase, verifyLedger } from "../../src/core/verify";
+import { formatReport, UnreadableLedgerError, verifyCase, verifyLedger, verifyPublished } from "../../src/core/verify";
 import type { BlobRef, Product } from "../../src/core/types";
 import { card } from "../helpers/entries";
 
@@ -347,7 +347,8 @@ test("rows are iterated, not loaded all at once", () => {
   } finally {
     spy.mockRestore();
   }
-  expect(calls.filter((c) => c.includes("FROM entries"))).toEqual(["iterate SELECT * FROM entries ORDER BY seq ASC"]);
+  // the chain check, then the published-bundle check: each walks the entries one at a time
+  expect(calls.filter((c) => c.includes("FROM entries"))).toEqual(["iterate SELECT * FROM entries ORDER BY seq ASC", "iterate SELECT seq, type, hash, payload FROM entries ORDER BY seq ASC"]);
 });
 
 test("the command verifies any ledger file and blob folder with --ledger and --blobs", () => {
@@ -417,4 +418,121 @@ test("a query.result with no result reference is reported as malformed", () => {
   expect(r.ok).toBe(false);
   expect(r.firstBad).toBeNull();
   expect(r.blobs.bad).toEqual([{ blob: "result: absent", state: "malformed", seq: 6 }]);
+});
+
+// ---------- published bundles ----------
+const PRODUCT_JSON = canonical({ summary: "s" } as never);
+interface Made { seq: number; folder: string; manifest: Record<string, unknown>; files: Record<string, string> }
+/** A bundle as the Publish step makes one: files, a manifest that lists them, the bundle blob, the entry that records it, and the folder. */
+function publishByHand(n: number, over: { head?: { seq: number; hash: string }; draftHash?: string; headHash?: string } = {}): Made {
+  const files: Record<string, string> = { "product.json": PRODUCT_JSON, "product.md": "# Product\n\nsummary\n" };
+  const head = over.head ?? { seq: 2, hash: ledger.get(2)!.hash };
+  const draft_hash = over.draftHash ?? sha256Hex(PRODUCT_JSON);
+  const manifest = {
+    case: "CASE-1", n, draft: 1, draft_hash, head, marking: "TLP:GREEN", title: "T", note: "N",
+    files: Object.entries(files).map(([name, text]) => ({ name, sha256: sha256Hex(text), bytes: new TextEncoder().encode(text).byteLength })),
+  };
+  const bundle = blobs.put(canonical({ manifest, files } as never));
+  const entry = ledger.append({ type: "product.published", payload: { n, draft_hash, head_hash: over.headHash ?? head.hash, dir: `published/${n}`, bundle }, actor: human });
+  const folder = join(dir, "published", String(n));
+  mkdirSync(folder, { recursive: true });
+  for (const [name, text] of Object.entries(files)) writeFileSync(join(folder, name), text);
+  writeFileSync(join(folder, "manifest.json"), canonical(manifest as never));
+  return { seq: entry.seq, folder, manifest, files };
+}
+
+test("an untouched published folder is ok", () => {
+  const m = publishByHand(1);
+  expect(verifyPublished(dir)).toEqual({ ok: true, bundles: [{ n: 1, seq: m.seq, state: "ok", detail: "" }], unrecorded: [] });
+  expect(verifyCase(dir).published.ok).toBe(true);
+  expect(verifyCase(dir).ok).toBe(true);
+});
+
+test("a case that published nothing has nothing to report", () => {
+  expect(verifyPublished(dir)).toEqual({ ok: true, bundles: [], unrecorded: [] });
+});
+
+test("an edited product.md is reported as differs", () => {
+  const m = publishByHand(1);
+  writeFileSync(join(m.folder, "product.md"), "# Product\n\nsummary, but better\n");
+  const r = verifyPublished(dir);
+  expect(r.ok).toBe(false);
+  expect(r.bundles[0]).toMatchObject({ n: 1, state: "differs" });
+  expect(r.bundles[0]!.detail).toContain("product.md");
+});
+
+test("a product.json that is not the draft's is reported as differs", () => {
+  const first = publishByHand(1);
+  // the entry names another draft than the product.json the bundle holds
+  publishByHand(2, { draftHash: sha256Hex(canonical({ summary: "not the draft" } as never)) });
+  const r = verifyPublished(dir);
+  expect(first.seq).toBeGreaterThan(0);
+  expect(r.bundles.map((b) => b.state)).toEqual(["ok", "differs"]);
+  expect(r.bundles[1]!.detail).toContain("product.json");
+});
+
+test("an extra file, a missing file and an edited manifest are each reported as differs", () => {
+  const a = publishByHand(1);
+  writeFileSync(join(a.folder, "notes.txt"), "extra");
+  const b = publishByHand(2);
+  rmSync(join(b.folder, "product.md"));
+  const c = publishByHand(3);
+  writeFileSync(join(c.folder, "manifest.json"), canonical({ ...c.manifest, note: "changed" } as never));
+  const r = verifyPublished(dir);
+  expect(r.bundles.map((x) => x.state)).toEqual(["differs", "differs", "differs"]);
+  expect(r.bundles[0]!.detail).toContain("notes.txt");
+  expect(r.bundles[1]!.detail).toContain("product.md");
+  expect(r.bundles[2]!.detail).toContain("manifest.json");
+});
+
+test("a deleted folder is reported as missing", () => {
+  const m = publishByHand(1);
+  rmSync(m.folder, { recursive: true });
+  expect(verifyPublished(dir)).toMatchObject({ ok: false, bundles: [{ n: 1, state: "missing" }] });
+});
+
+test("a manifest head that is not an entry is reported as bad_head", () => {
+  publishByHand(1, { head: { seq: 999, hash: "f".repeat(64) }, headHash: "f".repeat(64) });
+  const r = verifyPublished(dir);
+  expect(r.ok).toBe(false);
+  expect(r.bundles[0]).toMatchObject({ n: 1, state: "bad_head" });
+});
+
+test("a head whose hash is not the entry's, or not the one the entry records, is reported as bad_head", () => {
+  publishByHand(1, { head: { seq: 2, hash: "e".repeat(64) }, headHash: "e".repeat(64) });
+  publishByHand(2, { headHash: "d".repeat(64) });
+  expect(verifyPublished(dir).bundles.map((b) => b.state)).toEqual(["bad_head", "bad_head"]);
+});
+
+test("a bundle blob that is gone or corrupt is reported as bad_blob", () => {
+  const m = publishByHand(1);
+  const entry = ledger.get(m.seq)!;
+  const hash = (entry.payload as { bundle: { blob: string } }).bundle.blob;
+  rmSync(join(dir, "blobs", hash), { force: true });
+  const r = verifyPublished(dir);
+  expect(r.bundles[0]).toMatchObject({ n: 1, state: "bad_blob" });
+});
+
+test("a folder no entry records is listed as unrecorded", () => {
+  publishByHand(1);
+  mkdirSync(join(dir, "published", "7"), { recursive: true });
+  mkdirSync(join(dir, "published", ".tmp-2-abc"), { recursive: true });
+  const r = verifyPublished(dir);
+  expect(r.unrecorded).toEqual([".tmp-2-abc", "7"]);
+  expect(r.ok).toBe(false);
+});
+
+test("verifyCase is not ok when a bundle differs, and the command exits 1", () => {
+  const m = publishByHand(1);
+  expect(run(dir).exitCode).toBe(0);
+  writeFileSync(join(m.folder, "product.md"), "edited");
+  const r = verifyCase(dir);
+  expect(r.ok).toBe(false);
+  expect(r.published.ok).toBe(false);
+  const out = run(dir);
+  expect(out.exitCode).toBe(1);
+  expect(out.stdout.toString()).toContain("published/1: differs");
+  expect(out.stdout.toString()).toContain("BROKEN");
+  mkdirSync(join(dir, "published", "9"), { recursive: true });
+  expect(run(dir).stdout.toString()).toContain("published/9: no entry records this folder");
 });

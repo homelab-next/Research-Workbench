@@ -142,3 +142,31 @@ test("json lines none of which has a declared column are a ConnectorError; a key
   expect(ok.rows).toEqual([[30]]);
   expect(ok.coverage).toEqual({ kind: "full" });
 });
+
+test("a query that never ends is stopped at timeout_ms and does not block the thread", async () => {
+  const c = makeConnector(source(), ctx);
+  let ticks = 0;
+  const timer = setInterval(() => { ticks++; }, 20);
+  let out;
+  try {
+    out = await c.run({ ...req("with recursive n(x) as (select 1 union all select x + 1 from n) select count(*) as c from n"), timeout_ms: 300, max_rows: 10 });
+  } finally {
+    clearInterval(timer);
+  }
+  expect(out.coverage).toEqual({ kind: "partial", reason: "timeout", detail: "no complete result within 300 ms" });
+  expect(out.rows).toEqual([]);
+  expect(ticks).toBeGreaterThan(5);
+  // the next query starts a new worker, which loads the files again
+  expect((await c.run(req("select count(*) from dns"))).rows).toEqual([[6]]);
+  c.close();
+});
+
+test("a file changed after a timeout is read afresh by the new worker, and notes about unreadable lines survive the worker", async () => {
+  const c = makeConnector(source(), ctx);
+  const p = join(root, "data", "dns.jsonl");
+  writeFileSync(p, dnsText() + "not json\n");
+  const out = await c.run(req("select count(*) from dns"));
+  expect(out.rows).toEqual([[6]]);
+  expect(out.coverage).toEqual({ kind: "partial", reason: "source_error", detail: "1 unreadable line in dns.jsonl" });
+  c.close();
+});

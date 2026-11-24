@@ -1,10 +1,12 @@
+import { Refused } from "../core/refused";
 import type { Json } from "../core/canonical";
 import { canonical } from "../core/canonical";
 import type { CaseSession } from "../core/session";
-import type { RunState } from "../core/state";
+import type { CaseState, RunState } from "../core/state";
 import { latestDraft } from "../core/state";
 import type { Actor, Draft, EntryInput, Marking, ModelChoice, Product } from "../core/types";
-import type { Providers, } from "../agents/providers";
+import { mayGo, tooStrict } from "../agents/pack";
+import type { Providers } from "../agents/providers";
 import type { Profile } from "../agents/context";
 import type { Config } from "../modules/config";
 import type { Registry } from "../modules/registry";
@@ -50,7 +52,7 @@ export type StageEnd =
   | { kind: "stopped" };
 export type StageRunner = (env: StageEnv) => Promise<StageEnd>;
 export interface RunSummary { status: RunState["status"]; waiting: "plan" | "publish" | null; current: string | null; pause_reason: string | null; outcome: "published" | "stopped" | null }
-export class RunRefused extends Error {
+export class RunRefused extends Refused {
   constructor(message: string) {
     super(message);
     this.name = "RunRefused";
@@ -280,32 +282,44 @@ export class Engine {
       const named = end.draft_hash;
       if (latestD !== null && latestD.author.kind === "human" && named !== null && named !== latestD.hash && this.session.state.drafts.some((d) => d.hash === named)) supersededBy = latestD.hash;
     }
+    // a stage that ends after a person stopped the run (or after another run began) writes nothing
+    const gone = (s: Readonly<CaseState>): boolean => s.run.id !== state.run.id || s.run.status === "finished";
     switch (end.kind) {
       case "finished":
-        this.session.commit((s) => {
+        return this.session.commit((s) => {
+          if (gone(s)) return [];
           const out = [finish(end.outcome, end.draft_hash, end.output, end.reason)];
           if (supersededBy !== null) {
             const first = firstUnpassedReview(s, this.deps.pipeline);
             if (first !== null) out.push({ type: "stage.started", actor: ENGINE, ...link, stage: first, payload: { stage: first, attempt: (s.run.stages.find((x) => x.id === first)?.attempts ?? 0) + 1 } });
           }
           return out;
-        });
-        return true;
+        }).length > 0;
       case "declined":
-        this.session.commit(() => [
+        return this.session.commit((s) => (gone(s) ? [] : [
           finish("declined", null, null, end.reason),
           this.paused(ENGINE, `The model declined at ${title}: ${end.reason}. Choose another model and resume.`),
-        ]);
-        return true;
+        ])).length > 0;
       case "blocked":
-        this.session.commit(() => [this.paused(ENGINE, `${title}: the chosen model may not receive data marked ${end.marking}. Choose an allowed model, or leave the stricter items out, and resume.`)]);
-        return true;
+        return this.session.commit((s) => (gone(s) ? [] : [this.paused(ENGINE, this.blockedReason(s, stageId, title, end.marking))])).length > 0;
       case "stalled":
-        this.session.commit(() => [this.paused(ENGINE, end.reason)]);
-        return true;
+        return this.session.commit((s) => (gone(s) ? [] : [this.paused(ENGINE, end.reason)])).length > 0;
       case "stopped":
         return false;
     }
+  }
+
+  /** Why a blocked stage paused the run: the case itself when its own marking may not go to the stage's model, else the stricter items. */
+  private blockedReason(s: Readonly<CaseState>, stageId: string, title: string, marking: Marking): string {
+    const blocked = [...this.session.entries()].reverse().find((e) => e.type === "model.blocked");
+    const caseMarking = s.meta?.marking ?? null;
+    if (blocked !== undefined && blocked.type === "model.blocked" && caseMarking !== null) {
+      const limit = Object.hasOwn(s.pack_limits, stageId) ? s.pack_limits[stageId]! : null;
+      if (!mayGo(caseMarking, blocked.payload.where, this.deps.config.marking_policy) || tooStrict(caseMarking, limit)) {
+        return `${title}: this case is marked ${caseMarking}, which this stage's model may not receive. Choose a model that may receive ${caseMarking} and resume.`;
+      }
+    }
+    return `${title}: the chosen model may not receive data marked ${marking}. Choose an allowed model, or leave the stricter items out, and resume.`;
   }
 
   private finish(outcome: "published" | "stopped"): void {

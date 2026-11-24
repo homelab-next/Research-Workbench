@@ -137,11 +137,14 @@ export async function assembleRunner(env: StageEnv): Promise<StageEnd> {
   const carried = carriedCites(latest, product, now.cards);
   let hash = "";
   session.commit((s) => {
+    // a person stopped the run while the model was answering: the work is not recorded
+    if (s.run.id !== state.run.id || s.run.status === "finished") return [];
     const draft = draftOf(product, s.drafts.length + 1, actor as Actor, reason, carried);
     hash = draft.hash;
     const entries: EntryInput[] = [{ type: "draft.revised", actor, run: s.run.id, stage: stage.id, payload: { draft } }];
     for (const finding of product.key_findings) entries.push({ type: "assessment.made", actor, run: s.run.id, stage: stage.id, payload: { finding, draft_hash: draft.hash } });
     return entries;
   });
+  if (hash === "") return { kind: "stopped" };
   return { kind: "finished", outcome: "pass", draft_hash: hash, output: end.output as Json, reason: null };
 }

@@ -6,6 +6,7 @@ import { assertReadOnly } from "../sqlguard";
 import { staysInside } from "../registry";
 import type { SourceManifest } from "../manifests";
 import { effectiveBound, PLACEHOLDER, placeholders } from "./placeholders";
+import { LocalQueryHost } from "./local-host";
 import { ConnectorError } from "./types";
 import type { Connector, ConnectorContext, QueryOutcome, QueryRequest } from "./types";
 
@@ -72,15 +73,22 @@ export function runOnDatabase(db: Database, req: QueryRequest): QueryOutcome {
 export class SqliteConnector implements Connector {
   readonly kind = "sql" as const;
   private db: Database | null = null;
+  private host: LocalQueryHost | null = null;
 
   constructor(private readonly source: SourceManifest, _ctx: ConnectorContext) {}
 
-  /** The open read-only handle, opened on first use. */
-  get handle(): Database {
-    if (this.db !== null) return this.db;
+  /** The database file, checked to be inside the module root and to exist. */
+  private path(): string {
     const path = resolve(this.source.dir, this.source.location);
     if (!staysInside(this.source.root, path)) throw new ConnectorError(`database ${this.source.location} is outside the module root`);
     if (!existsSync(path)) throw new ConnectorError(`database file not found: ${this.source.location}`);
+    return path;
+  }
+
+  /** A read-only handle on this thread, opened on first use. Queries do not use it: they run in a worker. */
+  get handle(): Database {
+    if (this.db !== null) return this.db;
+    const path = this.path();
     try {
       this.db = new Database(path, { readonly: true });
     } catch (err) {
@@ -106,10 +114,16 @@ export class SqliteConnector implements Connector {
   }
 
   async run(req: QueryRequest): Promise<QueryOutcome> {
-    return runOnDatabase(this.handle, req);
+    // the guard and the path checks stay on this thread, before anything is posted
+    renderSql(req);
+    const path = this.path();
+    this.host ??= new LocalQueryHost({ kind: "sql", path });
+    return this.host.query(req);
   }
 
   close(): void {
+    this.host?.close();
+    this.host = null;
     this.db?.close();
     this.db = null;
   }

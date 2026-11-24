@@ -160,3 +160,65 @@ test("makeConnector refuses a kind it does not know, and the pool rebuilds on a 
   expect(b).not.toBe(a);
   pool.closeAll();
 });
+
+// ---------- local queries run in a worker and stop at their timeout ----------
+const FOREVER = "with recursive n(x) as (select 1 union all select x + 1 from n) select count(*) as c from n";
+const forever = (timeout_ms: number): QueryRequest => ({ text: FOREVER, bound: {}, window: { from: null, to: null }, max_rows: 10, timeout_ms, budget: null });
+
+test("a query that never ends is stopped at timeout_ms and does not block the thread", async () => {
+  const c = make();
+  let ticks = 0;
+  const timer = setInterval(() => { ticks++; }, 20);
+  let out;
+  try {
+    out = await c.run(forever(300));
+  } finally {
+    clearInterval(timer);
+    c.close();
+  }
+  expect(out.coverage).toEqual({ kind: "partial", reason: "timeout", detail: "no complete result within 300 ms" });
+  expect(out.rows).toEqual([]);
+  expect(out.columns).toEqual([]);
+  expect(out.media).toBe("application/json");
+  expect(out.cost).toBeNull();
+  expect(new TextDecoder().decode(out.raw)).toBe('{"columns":[],"rows":[]}');
+  expect(ticks).toBeGreaterThan(5);
+});
+
+test("the next query on the same connector runs in a new worker", async () => {
+  const c = make();
+  try {
+    expect((await c.run(forever(200))).coverage).toMatchObject({ kind: "partial", reason: "timeout" });
+    const out = await c.run(req("select src from flows where dst = {v}", { v: "198.51.100.1" }));
+    expect(out.coverage).toEqual({ kind: "full" });
+    expect(out.rows).toEqual([["192.0.2.17"]]);
+  } finally { c.close(); }
+});
+
+test("queries on one connector run one at a time, in order", async () => {
+  const c = make();
+  try {
+    const [a, b, d] = await Promise.all([
+      c.run(req("select 1 as one")), c.run(req("select 2 as two")), c.run(req("select 3 as three")),
+    ]);
+    expect([a.rows, b.rows, d.rows]).toEqual([[[1]], [[2]], [[3]]]);
+  } finally { c.close(); }
+});
+
+test("a query the database refuses is a ConnectorError, and a write is still refused before it is posted", async () => {
+  const c = make();
+  try {
+    await expect(c.run(req("select * from nosuchtable"))).rejects.toBeInstanceOf(ConnectorError);
+    await expect(c.run(req("delete from flows"))).rejects.toThrow(GuardError);
+    expect((await c.run(req("select count(*) from flows"))).rows).toEqual([[10]]);
+  } finally { c.close(); }
+});
+
+test("closing the connector ends its worker", async () => {
+  const c = make();
+  await c.run(req("select 1"));
+  c.close();
+  // a closed connector starts a new worker when it is used again
+  expect((await c.run(req("select 2 as two"))).rows).toEqual([[2]]);
+  c.close();
+});

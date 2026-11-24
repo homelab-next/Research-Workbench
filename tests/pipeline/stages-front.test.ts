@@ -16,7 +16,8 @@ import type { Role } from "../../src/pipeline/manifests";
 import { frameRunner } from "../../src/pipeline/stages/frame";
 import { planRunner } from "../../src/pipeline/stages/plan";
 import { researchRunner } from "../../src/pipeline/stages/research";
-import { lastOutput } from "../../src/pipeline/stages/agent";
+import { buildPlan } from "../../src/pipeline/plans";
+import { frameOf, lastOutput } from "../../src/pipeline/stages/agent";
 import { fixture, person } from "../helpers/tools-fixture";
 import type { Fixture } from "../helpers/tools-fixture";
 
@@ -51,7 +52,11 @@ const G1: ScriptReply[] = [calls(call("run_step", { step: "s1" }), call("run_ste
 const G2: ScriptReply[] = [calls(call("run_step", { step: "s3" })), answered("verdict asked for")];
 
 interface Rig { engine: Engine; deps: EngineDeps }
-function rig(replies: Record<string, ScriptReply[]>, opts: { parallel?: number; runners?: Partial<Record<Role, StageRunner>> } = {}): Rig {
+/** A scripted provider that says it is on the network, as a model a person could choose for a stage. */
+class NetworkProvider extends ScriptedProvider {
+  override readonly where = "network" as const;
+}
+function rig(replies: Record<string, ScriptReply[]>, opts: { parallel?: number; runners?: Partial<Record<Role, StageRunner>>; network?: boolean } = {}): Rig {
   const registry = f.sample.registry;
   const { pipeline, problems } = loadPipeline(registry);
   if (pipeline === null) throw new Error(problems.join("; "));
@@ -59,9 +64,18 @@ function rig(replies: Record<string, ScriptReply[]>, opts: { parallel?: number; 
   const base = loadConfig({ env: {}, home: dir, repoRoot: dir });
   const deps: EngineDeps = {
     config: { ...base, research: { parallel: opts.parallel ?? base.research.parallel } }, registry, runner: f.sample.deps, seeker: f.sample.seeker,
-    providers: new Providers([new ScriptedProvider({ id: "scripted", scripts: [{ id: "sample-run", turns }] })]), pipeline, profile: loadProfile(registry, "investigation"),
+    providers: new Providers([new ScriptedProvider({ id: "scripted", scripts: [{ id: "sample-run", turns }] }), ...(opts.network === true ? [new NetworkProvider({ id: "net", scripts: [{ id: "sample-run", turns }] })] : [])]),
+    pipeline, profile: loadProfile(registry, "investigation"),
   };
   return { engine: new Engine(f.s, deps, opts.runners === undefined ? {} : { runners: opts.runners }), deps };
+}
+const analyst = { kind: "agent", id: "analyst", stage: "assemble", profile: "investigation", model: "m", effort: null, where: "machine" } as const;
+/** What Assemble's analyst does when it asks for research: a model request at `marking`, then the requests it made while answering it. */
+function analystAsks(env: Parameters<StageRunner>[0], questions: string[], marking: "TLP:GREEN" | "TLP:RED" = "TLP:GREEN"): void {
+  env.session.commit((st, ids) => [
+    { type: "model.request", actor: analyst, run: st.run.id, stage: "assemble", payload: { request: ids.next("request"), provider: "scripted", model: "sample-run", effort: null, where: "machine", marking, pack: [], left_out: [], messages: env.session.blobs.put("{}"), tools: [] } },
+    ...questions.map((question) => ({ type: "research.requested" as const, actor: analyst, payload: { question, why: "gap" } })),
+  ]);
 }
 const ofType = <T extends Entry["type"]>(t: T): Extract<Entry, { type: T }>[] => f.s.entries().filter((e): e is Extract<Entry, { type: T }> => e.type === t);
 const finished = (stage: string) => ofType("stage.finished").filter((e) => e.payload.stage === stage);
@@ -251,11 +265,7 @@ test("research asked for by the analyst runs one researcher per question", async
   let assembled = 0;
   const assemble: StageRunner = async (env): Promise<StageEnd> => {
     if (assembled++ > 0) return { kind: "stopped" };
-    const actor = { kind: "agent", id: "analyst", stage: "assemble", profile: "investigation", model: "m", effort: null, where: "machine" } as const;
-    env.session.commit(() => [
-      { type: "research.requested", actor, payload: { question: "Who owns the asset?", why: "gap" } },
-      { type: "research.requested", actor, payload: { question: "Was the address seen before?", why: "gap" } },
-    ]);
+    analystAsks(env, ["Who owns the asset?", "Was the address seen before?"]);
     return { kind: "finished", outcome: "fail", draft_hash: null, output: null, reason: "needs more research" };
   };
   await researched({
@@ -303,11 +313,7 @@ test("a sent-back rerun does not redo a requested question whose researcher fini
   let assembled = 0;
   const assemble: StageRunner = async (env): Promise<StageEnd> => {
     if (assembled++ > 0) return { kind: "stopped" };
-    const actor = { kind: "agent", id: "analyst", stage: "assemble", profile: "investigation", model: "m", effort: null, where: "machine" } as const;
-    env.session.commit(() => [
-      { type: "research.requested", actor, payload: { question: "Q one?", why: "gap" } },
-      { type: "research.requested", actor, payload: { question: "Q two?", why: "gap" } },
-    ]);
+    analystAsks(env, ["Q one?", "Q two?"]);
     return { kind: "finished", outcome: "fail", draft_hash: null, output: null, reason: "more" };
   };
   const r = await researched({
@@ -376,4 +382,59 @@ test("Frame's output in the planner's pack is as strict as Frame's requests: und
   const planner = ofType("model.request").find((e) => e.actor.id === "planner")!;
   expect(planner.payload.left_out.map((i) => i.id)).toContain("frame-output");
   expect(f.s.blobs.text(planner.payload.messages.blob)).not.toContain("the red detail");
+});
+
+/** Plan is a stub: the planner's one model request is recorded at `marking`, as it would be had the planner read a card that strict. */
+const planAt = (marking: "TLP:GREEN" | "TLP:RED"): StageRunner => async (env): Promise<StageEnd> => {
+  const planner = { kind: "agent", id: "planner", stage: "plan", profile: "investigation", model: "m", effort: null, where: "machine" } as const;
+  env.session.commit((st, ids) => [
+    { type: "model.request", actor: planner, run: st.run.id, stage: "plan", payload: { request: ids.next("request"), provider: "scripted", model: "sample-run", effort: null, where: "machine", marking, pack: [], left_out: [], messages: env.session.blobs.put("{}"), tools: [] } },
+  ]);
+  env.session.commit((st, ids) => {
+    const plan = buildPlan(ids.next("plan"), planOut(), env.deps, frameOf(env), null);
+    if ("errors" in plan) throw new Error(plan.errors.join("; "));
+    return [{ type: "plan.proposed", actor: planner, run: st.run.id, stage: "plan", payload: { plan } }];
+  });
+  return { kind: "finished", outcome: "pass", draft_hash: null, output: planOut() as unknown as Json, reason: null };
+};
+const frameStub: StageRunner = async () => ({ kind: "finished", outcome: "pass", draft_hash: null, output: FRAME as unknown as Json, reason: null });
+const requestText = (actor: string): string[] => ofType("model.request").filter((e) => e.actor.id === actor).map((e) => f.s.blobs.text(e.payload.messages.blob));
+
+test("a researcher's question from a model that saw TLP:RED is a TLP:RED pack part, not task text", async () => {
+  const r = rig({}, { network: true, runners: { frame: frameStub, plan: planAt("TLP:RED") } });
+  await toGate(r);
+  r.engine.setModel("research", { provider: "net", model: "sample-run", effort: null }, person);
+  r.engine.acceptPlan({ actor: person, budgets: { s3: 1 } });
+  const sum = await r.engine.advance();
+  expect(ofType("model.blocked").some((e) => e.payload.marking === "TLP:RED" && e.payload.where === "network")).toBe(true);
+  // no researcher was given the question: the part is RED, the model is on the network
+  expect(ofType("model.request").filter((e) => e.stage === "research")).toEqual([]);
+  expect(sum.status).toBe("paused");
+});
+
+test("a sub-goal's title and question reach the researcher as a part titled The question, not in the task", async () => {
+  const r = await researched({ "researcher-g1": G1, "researcher-g2": G2 }, { budgets: { s3: 1 } });
+  const [first] = requestText("researcher-g1");
+  const body = JSON.parse(first!) as { messages: { role: string; content: string }[] };
+  const system = body.messages.find((m) => m.role === "system")!.content;
+  const task = body.messages.find((m) => m.role === "user")!.content;
+  expect(system).toContain("The question");
+  expect(system).toContain("Which accounts?");
+  expect(task).not.toContain("Which accounts?");
+  expect(task).not.toContain("Who uses it");
+  expect(task).toContain('Answer the question in the part titled "The question".');
+  expect(task).toContain("- s1: address_to_asset");
+});
+
+test("a sent-back question is a pack part, not task text", async () => {
+  let assembled = 0;
+  const assemble: StageRunner = async (env): Promise<StageEnd> => {
+    if (assembled++ > 0) return { kind: "stopped" };
+    analystAsks(env, ["Who owns the asset?"]);
+    return { kind: "finished", outcome: "fail", draft_hash: null, output: null, reason: "needs more research" };
+  };
+  await researched({ "researcher-g1": G1, "researcher-g2": G2, "researcher-r1": [answered("owner found")] }, { steps: ["s1", "s2"] }, { runners: { assemble } });
+  const body = JSON.parse(requestText("researcher-r1")[0]!) as { messages: { role: string; content: string }[] };
+  expect(body.messages.find((m) => m.role === "system")!.content).toContain("Who owns the asset?");
+  expect(body.messages.find((m) => m.role === "user")!.content).not.toContain("Who owns the asset?");
 });

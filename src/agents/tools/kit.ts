@@ -131,7 +131,7 @@ function secretsOf(registry: Registry): string[] {
 const PATH_END = `[^\\s'"<>)\\]]`;
 /** A folder name in a path: no separator, and spaces only between other characters, so `/srv/my lake/x.db` is one path. */
 const SEGMENT = `[^\\s'"<>)\\]/]+(?: [^\\s'"<>)\\]/]+)*`;
-const URL_RE = /[a-z][a-z0-9+.-]*:\/\/\S+/gi;
+const URL_RE = /(?<![a-z0-9+.-])[a-z][a-z0-9+.-]*:\/\/\S+/gi;
 /** An absolute path of two parts or more, also after a colon (`path:/srv/x`); a UNC path reads as one once its separators are. */
 const POSIX_PATH_RE = new RegExp(`(?<![\\w.\\-/~])\\/(?:${SEGMENT}\\/)+${PATH_END}*`, "g");
 const WINDOWS_PATH_RE = /(?<![\w])[A-Za-z]:\/[^\s'"<>]*/g;

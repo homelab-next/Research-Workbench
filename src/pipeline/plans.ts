@@ -1,3 +1,4 @@
+import { Refused } from "../core/refused";
 import type { CaseSession } from "../core/session";
 import type { Actor, EntryInput, Plan, PlanStep, TimeWindow, Where } from "../core/types";
 import { mayGo } from "../agents/pack";
@@ -12,7 +13,7 @@ export interface PlanOutput {
   subgoals: { title: string; question: string; have: { type: string; value: string }[]; want: string; route: string[] }[];
 }
 
-export class PlanRefused extends Error {
+export class PlanRefused extends Refused {
   constructor(message: string) {
     super(message);
     this.name = "PlanRefused";
