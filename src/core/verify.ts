@@ -9,6 +9,7 @@ import { checkRow } from "./ledger";
 import { isObj } from "./state/guards";
 import type { LedgerRow, RowFault } from "./ledger";
 import { BLOB_FIELDS, blobFieldNullable } from "./types";
+import type { PublishedReport } from "./wire";
 
 export interface VerifyReport {
   ok: boolean;
@@ -28,13 +29,7 @@ export interface VerifyReport {
   published?: PublishedReport;
 }
 
-export interface PublishedReport {
-  ok: boolean;
-  /** One per product.published entry, in order. "missing": no folder (the bundle is still in the blob). "differs": a file or the manifest is not what the blob holds. "bad_head": the head the manifest names is not an entry of this ledger. "bad_blob": the bundle blob is missing, corrupt or unreadable. */
-  bundles: { n: number; seq: number; state: "ok" | "missing" | "differs" | "bad_head" | "bad_blob"; detail: string }[];
-  /** Folders under published/ that no entry records (names starting ".tmp-" are leftovers and are listed too). */
-  unrecorded: string[];
-}
+export type { PublishedReport };
 
 /** The payload fields of an entry type that hold blob references. */
 function blobFieldsOf(type: string): readonly string[] {

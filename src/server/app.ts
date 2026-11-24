@@ -4,12 +4,14 @@ import { isMarking, MARKINGS } from "../core/types";
 import type { Actor, Observable } from "../core/types";
 import { CaseNotFoundError } from "../core/workbench";
 import type { NewCase, Workbench } from "../core/workbench";
-import type { CommandResult, Me } from "../core/wire";
+import type { CommandResult, Me, Preview } from "../core/wire";
 import type { Config } from "../modules/config";
 import type { EngineDeps } from "../pipeline/engine";
+import { previewBundle } from "../pipeline/publish";
 import { MAX_BODY_BYTES, refusal, secure } from "./guard";
 import { argProblems, COMMANDS } from "./commands";
 import type { CommandContext } from "./commands";
+import { blobResponse, bundleFile, custodyOf } from "./evidence";
 import { CaseHub } from "./hub";
 import { mayDo, mayRead } from "./roles";
 import type { Reading } from "./roles";
@@ -27,7 +29,7 @@ export interface Running { port: number; origin: string; app: App; stop(): Promi
 
 /** What a handler is given. `body` reads and parses the request's JSON, refusing more than 1 MiB as it reads. */
 interface Call { req: Request; url: URL; params: string[]; body(): Promise<unknown> }
-type Kind = "page" | "api";
+type Kind = "page" | "api" | "download";
 interface Route {
   method: "GET" | "POST"; path: RegExp;
   /** What the route reads, or the command it does: the one thing the role check looks at. */
@@ -152,6 +154,27 @@ export function createApp(opts: AppOptions): App {
         if (after > session.head().seq) throw new Declined(409, ["the stream position is ahead of this case; reload from 0"]);
         return entryStream(session, after, req.signal, (close) => { open.add(close); return () => { open.delete(close); }; });
       },
+    },
+    {
+      method: "GET", path: /^\/api\/cases\/([^/]+)\/blobs\/([^/]+)$/, needs: { read: "blob" }, kind: "download",
+      handle: ({ params }) => blobResponse(hub.read(params[0]!), params[1]!),
+    },
+    {
+      method: "GET", path: /^\/api\/cases\/([^/]+)\/published\/([^/]+)\/([a-z.]+)$/, needs: { read: "bundle" }, kind: "download",
+      handle: ({ params }) => bundleFile(hub.read(params[0]!), params[1]!, params[2]!),
+    },
+    {
+      method: "GET", path: /^\/api\/cases\/([^/]+)\/preview$/, needs: { read: "preview" }, kind: "api",
+      handle: ({ params }) => {
+        const made = previewBundle(hub.read(params[0]!), deps);
+        if ("reasons" in made) return json(200, { reasons: made.reasons.map((r) => shown(deps, r)) } satisfies Preview);
+        const m = made.manifest;
+        return json(200, { manifest: { n: m.n, draft: m.draft, draft_hash: m.draft_hash, marking: m.marking, title: m.title, note: m.note, files: m.files }, files: made.files } satisfies Preview);
+      },
+    },
+    {
+      method: "GET", path: /^\/api\/cases\/([^/]+)\/custody$/, needs: { read: "custody" }, kind: "api",
+      handle: ({ params }) => json(200, custodyOf(hub.read(params[0]!))),
     },
     {
       method: "POST", path: /^\/api\/cases$/, needs: { command: "create_case" }, kind: "api",

@@ -18,7 +18,7 @@ import { Engine } from "../../src/pipeline/engine";
 import type { EngineDeps, StageEnd, StageRunner } from "../../src/pipeline/engine";
 import { loadPipeline } from "../../src/pipeline/manifests";
 import type { Role } from "../../src/pipeline/manifests";
-import { approve, draftProblem, PublishRefused } from "../../src/pipeline/publish";
+import { approve, draftProblem, previewBundle, PublishRefused } from "../../src/pipeline/publish";
 import { lastOutput } from "../../src/pipeline/stages/agent";
 import { publishRunner } from "../../src/pipeline/stages/publish";
 import { feedbackRunner } from "../../src/pipeline/stages/feedback";
@@ -527,4 +527,26 @@ test("a person's rejection is refused when the Publish stage has nowhere to send
   expect(ofType("publish.rejected")).toEqual([]);
   reject(f.s, pipeline, { reason: "no", stop: true, actor: human });
   expect(f.s.state.run.outcome).toBe("stopped");
+});
+
+test("previewBundle gives the files approve then writes, and writes nothing itself", async () => {
+  const r = await gated();
+  const before = f.s.head().seq;
+  const preview = previewBundle(f.s, r.deps);
+  expect(f.s.head().seq).toBe(before);
+  expect(readdirSync(join(f.s.dir, "published"))).toEqual([]);
+  if ("reasons" in preview) throw new Error(preview.reasons.join("; "));
+  r.engine.approve({ actor: human });
+  for (const [name, text] of Object.entries(preview.files)) expect(read("published/1", name)).toBe(text);
+  expect(read("published/1", "manifest.json")).toBe(canonical(preview.manifest as unknown as Json));
+});
+
+test("previewBundle gives the reason when there is no draft", () => {
+  const r = rig();
+  expect(previewBundle(f.s, r.deps)).toEqual({ reasons: ["there is no draft to publish"] });
+});
+
+test("previewBundle gives the reason when the Publish stage has not named the draft", async () => {
+  const r = await gated({ publish: async () => ({ ...PASS, draft_hash: latestDraft(f.s.state)?.hash ?? null }) });
+  expect(previewBundle(f.s, r.deps)).toEqual({ reasons: ["the Publish stage has not named this draft"] });
 });

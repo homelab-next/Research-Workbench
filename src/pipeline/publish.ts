@@ -174,6 +174,28 @@ export function removeTempBundles(session: CaseSession, onError: (error: unknown
 }
 
 /**
+ * The bundle `approve` would write now, or why there is none: no draft, a draft whose hash is not its product's, the publish rule's blockers, a product
+ * marked below a card it cites, or no Publish stage output naming this draft. It writes nothing and reads no gate or person; `approve` builds its bundle
+ * through this function after checking both, so what is previewed and what is written cannot differ.
+ */
+export function previewBundle(session: CaseSession, deps: EngineDeps): Bundle | { reasons: string[] } {
+  const state = session.state;
+  const d = latestDraft(state);
+  if (d === null) return { reasons: ["there is no draft to publish"] };
+  const problem = draftProblem(d);
+  if (problem !== null) return { reasons: [problem] };
+  const why = blockers(state, d.hash);
+  if (why.length > 0) return { reasons: why };
+  const low = markingProblem(session, d);
+  if (low !== null) return { reasons: [low] };
+  const stage = publishStage(deps.pipeline);
+  const cover = stage === null ? null : coverOf(session, stage, d.hash);
+  if (cover === null) return { reasons: ["the Publish stage has not named this draft"] };
+  if (typeof cover === "string") return { reasons: [cover] };
+  return buildBundle(session, d, cover, session.head(), state.published.length + 1);
+}
+
+/**
  * A person approves the draft the run waits on. Everything is checked again at this moment, from the ledger: the person, the gate, the hash against
  * the product, the product's marking against the cards it cites, and the publish rule. The bundle is written to a temporary folder and stored as a blob;
  * one commit records it, and only then is the folder moved to `published/<n>`, so a folder there always has its entry.
@@ -182,22 +204,11 @@ export function approve(session: CaseSession, deps: EngineDeps, input: { actor: 
   const { actor } = input;
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     atGate(session, actor);
-    const state = session.state;
-    const d = latestDraft(state);
-    if (d === null) throw new PublishRefused(["there is no draft to publish"]);
-    const problem = draftProblem(d);
-    if (problem !== null) throw new PublishRefused([problem]);
-    const why = blockers(state, d.hash);
-    if (why.length > 0) throw new PublishRefused(why);
-    const low = markingProblem(session, d);
-    if (low !== null) throw new PublishRefused([low]);
-    const stage = publishStage(deps.pipeline);
-    const cover = stage === null ? null : coverOf(session, stage, d.hash);
-    if (cover === null) throw new PublishRefused(["the Publish stage has not named this draft"]);
-    if (typeof cover === "string") throw new PublishRefused([cover]);
-    const n = state.published.length + 1;
-    const head = session.head();
-    const bundle = buildBundle(session, d, cover, head, n);
+    const made = previewBundle(session, deps);
+    if ("reasons" in made) throw new PublishRefused(made.reasons);
+    const bundle = made;
+    const { n, head } = { n: bundle.manifest.n, head: bundle.manifest.head };
+    const d = latestDraft(session.state)!;
     const rel = `published/${n}`;
     const tmp = join(session.dir, "published", `.tmp-${n}-${randomBytes(6).toString("hex")}`);
     try {

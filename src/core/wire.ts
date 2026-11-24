@@ -17,3 +17,21 @@ export interface Reference {
 export interface ModelView { provider: string; model: string; where: Where; efforts: string[]; context: number | null; allowed: boolean; reason: string | null }
 /** What a command returns: where the ledger now ends, or why it was refused. Never state. */
 export type CommandResult = { ok: true; seq: number } | { ok: false; refused: string[] };
+
+export interface PublishedReport {
+  ok: boolean;
+  /** One per product.published entry, in order. "missing": no folder (the bundle is still in the blob). "differs": a file or the manifest is not what the blob holds. "bad_head": the head the manifest names is not an entry of this ledger. "bad_blob": the bundle blob is missing, corrupt or unreadable. */
+  bundles: { n: number; seq: number; state: "ok" | "missing" | "differs" | "bad_head" | "bad_blob"; detail: string }[];
+  /** Folders under published/ that no entry records (names starting ".tmp-" are leftovers and are listed too). */
+  unrecorded: string[];
+}
+
+/** The custody report: what the check of the record found, in words. `line` is the one sentence the screen shows. */
+export interface Custody {
+  ok: boolean; entries: number; head: string; first_bad: { seq: number; reason: string } | null;
+  bad_blobs: { blob: string; state: string; seq: number }[]; published: PublishedReport; skipped: number; line: string;
+}
+/** The bundle `approve` would write now, or why there is none. Computed from the ledger; it writes nothing. */
+export type Preview =
+  | { manifest: { n: number; draft: number; draft_hash: string; marking: Marking; title: string; note: string; files: { name: string; sha256: string; bytes: number }[] }; files: Record<string, string> }
+  | { reasons: string[] };
