@@ -282,3 +282,14 @@ test("hostile arguments are refused as results", async () => {
   expect(typeof r.summary).toBe("string");
   expect(({} as Record<string, unknown>).x).toBeUndefined();
 });
+
+test("run_step given a pivot id says it is a pivot and names the steps to use", async () => {
+  f.ctx.subgoal = "g2";
+  expect((await f.call("run_step", { step: "address_to_internal_peers", value: START, why: "w" })).summary)
+    .toBe("address_to_internal_peers is a pivot, not a step; this sub-goal's steps are s2 (address_to_internal_peers), s4 (address_to_asset)");
+  f.ctx.subgoal = null;
+  expect((await f.call("run_step", { step: "address_to_verdict", why: "w" })).summary)
+    .toBe("address_to_verdict is a pivot, not a step; the plan's steps are s1 (address_to_asset), s2 (address_to_internal_peers), s3 (address_to_verdict), s4 (address_to_asset)");
+  expect((await f.call("run_step", { step: "nope", why: "w" })).summary).toBe("unknown step: nope");
+  expect(issued()).toEqual([]);
+});

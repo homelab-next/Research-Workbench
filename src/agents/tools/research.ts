@@ -83,7 +83,15 @@ async function runStepTool(ctx: ToolContext, args: Record<string, Json>): Promis
   const plan = acceptedPlan(ctx.session);
   const id = str(args.step);
   const step = plan.steps.find((s) => s.id === id);
-  if (step === undefined) throw new ToolError(`unknown step: ${id}`);
+  if (step === undefined) {
+    // a model that names the pivot where it means the step is told which steps it may run
+    if (ctx.deps.registry.pivot(id) !== null) {
+      const mine = plan.steps.filter((s) => ctx.subgoal === null || s.subgoal === ctx.subgoal);
+      const listed = mine.length === 0 ? "none" : mine.map((s) => `${s.id} (${s.pivot})`).join(", ");
+      throw new ToolError(`${id} is a pivot, not a step; ${ctx.subgoal === null ? "the plan's" : "this sub-goal's"} steps are ${listed}`);
+    }
+    throw new ToolError(`unknown step: ${id}`);
+  }
   if (!ctx.session.state.plan.accepted_steps.includes(id)) throw new ToolError(`step ${id} was not accepted`);
   const had = Object.hasOwn(ctx.session.state.plan.steps, id) ? ctx.session.state.plan.steps[id]! : null;
   if (had !== null && had.status !== "pending" && had.status !== "running") throw new ToolError("this step has already run");
