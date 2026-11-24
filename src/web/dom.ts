@@ -11,7 +11,7 @@ export type H = (tag: string, props?: Props | null, ...children: Child[]) => HTM
 
 export const TAGS: readonly string[] = [
   "div", "span", "p", "h1", "h2", "h3", "header", "footer", "main", "nav", "section", "article", "aside", "button", "input", "textarea", "select", "option", "label",
-  "ul", "ol", "li", "table", "thead", "tbody", "tr", "th", "td", "pre", "code", "time", "details", "summary", "form", "fieldset", "legend", "kbd",
+  "ul", "ol", "li", "table", "thead", "tbody", "tr", "th", "td", "pre", "code", "time", "details", "summary", "form", "fieldset", "legend", "kbd", "dl", "dt", "dd",
 ];
 const PROPS = new Set(["class", "id", "title", "name", "role", "tabindex", "type", "value", "placeholder", "for", "disabled", "checked", "hidden", "current", "data", "aria", "on"]);
 const TEXT_ATTRS: Record<string, string> = { class: "class", id: "id", title: "title", role: "role", type: "type", placeholder: "placeholder", for: "for" };

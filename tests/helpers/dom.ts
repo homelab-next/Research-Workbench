@@ -2,7 +2,7 @@ import { Window } from "happy-dom";
 import type { Config } from "../../src/modules/config";
 import type { Entry } from "../../src/core/types";
 import type { Reference } from "../../src/core/wire";
-import { TAGS, makeH } from "../../src/web/dom";
+import { makeH } from "../../src/web/dom";
 import { makeApi } from "../../src/web/api";
 import type { EntrySource, Fetcher } from "../../src/web/api";
 import { startApp } from "../../src/web/app";
@@ -16,8 +16,6 @@ import type { Served } from "./served";
 
 type Role = Config["role"];
 
-// Task 6 needs dl, dt and dd in src/web/dom.ts's TAGS (the provenance block is a definition list). Until that file has them, this adds them for the tests.
-for (const tag of ["dl", "dt", "dd"]) if (!TAGS.includes(tag)) (TAGS as string[]).push(tag);
 
 export interface Page {
   s: Served; win: Window; doc: Document; ui: Ui; root: HTMLElement;
