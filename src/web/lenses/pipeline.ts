@@ -14,8 +14,6 @@ import type { Ui, View } from "../ui";
 
 const WHERE: Record<Where, string> = { machine: "this machine", network: "your network", hosted: "hosted" };
 const MARK_WORDS: Record<string, string> = { idle: "not started" };
-/** The most times one stage may be sent back to (src/pipeline/publish.ts); the figure the screen shows beside a count. */
-const SENDBACK_LIMIT = 3;
 
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 const size = (chars: number): string => (chars >= 1000 ? `${Math.round(chars / 1000)}k chars` : `${chars} chars`);
@@ -67,13 +65,26 @@ export function makePipeline(ui: Ui, open: Open, arg: string | null): View {
   const fetched = new Map<string, Fetched>();
   const shownTurns = new Set<string>();
   const texts = new Map<string, string>();
-  const parts = new Map<HTMLElement, { sig: string; summary: HTMLElement; body: HTMLElement }>();
+  /** Per row: what each painted piece last showed, so a piece is rebuilt only when what it shows changed. */
+  interface RowParts { sigs: Map<string, string>; summary: HTMLElement; model: HTMLElement; context: HTMLElement; turns: HTMLElement; transcriptNote: HTMLElement; back: HTMLElement; feedback: HTMLElement }
+  const parts = new Map<HTMLElement, RowParts>();
+  const turnSigs = new WeakMap<HTMLElement, string>();
 
   const state = (): CaseState => store.shown;
   const ro = (): boolean => store.at !== null;
   const objective = (s: CaseState) => ui.ref.objectives.find((o) => o.id === s.meta?.objective) ?? null;
 
-  void ui.api.models(store.id).then((list) => { models = list; modelsVersion++; if (!destroyed) update(); }, () => { modelsFailed = true; modelsVersion++; if (!destroyed) update(); });
+  let loadingModels = false;
+  const loadModels = (): void => {
+    if (loadingModels) return;
+    loadingModels = true;
+    modelsFailed = false;
+    ui.api.models(store.id).then(
+      (list) => { loadingModels = false; models = list; modelsVersion++; if (!destroyed) update(); },
+      () => { loadingModels = false; modelsFailed = true; modelsVersion++; if (!destroyed) update(); },
+    );
+  };
+  loadModels();
 
   // ---------- the run line ----------
   const status = h("span", { class: "run-status" });
@@ -124,7 +135,7 @@ export function makePipeline(ui: Ui, open: Open, arg: string | null): View {
     const list = models ?? [];
     const current = viewOf(stage);
     const sel = h("select", {
-      name: "Model", disabled: ro() || models === null,
+      name: "Model", disabled: ro() || models === null || list.length === 0,
       on: {
         change: (e) => {
           const picked = list[Number((e.target as HTMLSelectElement).value)];
@@ -135,7 +146,7 @@ export function makePipeline(ui: Ui, open: Open, arg: string | null): View {
         },
       },
     // the placeholder is shown, never offered, and is there only while the recorded setting is not in the list
-    }, current !== null ? null : h("option", { value: "", hidden: true }, models === null ? (modelsFailed ? "The model list could not be read" : "Loading models…") : "Choose a model"),
+    }, current !== null ? null : h("option", { value: "", hidden: true }, models === null ? (modelsFailed ? "The model list could not be read" : "Loading models…") : list.length === 0 ? "No models could be listed" : "Choose a model"),
     list.map((m, i) => h("option", { value: String(i), disabled: !m.allowed }, `${m.model} · ${WHERE[m.where]}${m.allowed ? "" : ` (not allowed: ${m.reason ?? "not allowed for this case's marking"})`}`))) as HTMLSelectElement;
     sel.value = current === null ? "" : String(list.indexOf(current));
     return sel;
@@ -164,6 +175,9 @@ export function makePipeline(ui: Ui, open: Open, arg: string | null): View {
 
   const modelSection = (stage: StageState, rec: StageRecord, s: CaseState): Child[] => {
     const out: Child[] = [h("p", { class: "runs" }, runsLine(stage))];
+    if (stage.runs === "agent" && (models === null || models.length === 0)) {
+      out.push(h("p", { class: "models-note attention" }, models === null ? (modelsFailed ? "The model list could not be read" : "Loading models…") : "No models could be listed"));
+    }
     if (stage.runs === "agent") out.push(h("div", { class: "model-controls" }, h("label", null, "Model ", modelSelect(stage)), " ", h("label", null, "Effort ", effortSelect(stage))));
     if (stage.status === "declined") {
       const reason = stage.last_reason ?? [...rec.turns].reverse().find((t) => t.outcome === "declined")?.reason ?? "no reason was given";
@@ -211,7 +225,7 @@ export function makePipeline(ui: Ui, open: Open, arg: string | null): View {
   const textBlock = (roleName: string, text: string, cls = "message"): HTMLElement => h("div", { class: cls }, h("span", { class: "role" }, roleName), h("pre", null, text));
   const outcomeWords = (t: TurnRecord): string => t.outcome;
 
-  const turnView = (t: TurnRecord, repaint: () => void): HTMLElement => {
+  const turnKids = (t: TurnRecord, repaint: () => void): Child[] => {
     const key = t.request;
     const shown = shownTurns.has(key);
     const head = h("div", { class: "turn-head" },
@@ -220,7 +234,8 @@ export function makePipeline(ui: Ui, open: Open, arg: string | null): View {
       t.reason === null ? null : h("span", { class: "reason" }, ` ${t.reason}`), " ", timeEl(ui, t.ts, "local"), " ",
       h("button", { type: "button", data: { action: "show" }, title: shown ? "Hide the recorded text" : "Fetch and show the recorded text of this turn", on: { click: () => { if (shownTurns.has(key)) shownTurns.delete(key); else shownTurns.add(key); repaint(); } } }, shown ? "Hide" : "Show"));
     const partList = h("div", { class: "parts" },
-      t.pack.map((i) => h("span", { class: "part" }, `${i.title} · ${t.marking}`), ), t.left_out.map((i) => h("span", { class: "part left-out" }, `${i.title} · left out`)));
+      // the ledger records one marking for the whole pack (in the head); a part withheld by the marking rule is not named
+      t.pack.map((i) => h("span", { class: "part" }, i.title)), t.left_out.map(() => h("span", { class: "part left-out" }, "left out")));
     const kids: Child[] = [head, partList];
     if (shown) {
       const messages = fetchBlob(t.messages.blob, repaint);
@@ -245,14 +260,18 @@ export function makePipeline(ui: Ui, open: Open, arg: string | null): View {
         h("span", { class: "tool" }, c.tool), " — ", h("span", { class: "why" }, `why (the agent's own account): ${c.why}`), " ", h("span", { class: `outcome${c.ok === false ? " attention" : ""}` }, end),
         c.summary === null ? null : h("span", { class: "summary" }, ` ${c.summary}`)));
     }
-    return h("div", { class: "turn", data: { request: t.request } }, kids);
+    return kids;
   };
-  const transcriptSection = (rec: StageRecord, repaint: () => void): HTMLElement =>
-    h("div", { class: "transcript" }, h("h3", { class: "section-title" }, "Transcript"), rec.turns.length === 0 ? h("p", { class: "empty" }, "no model turns yet") : rec.turns.map((t) => turnView(t, repaint)));
+  /** What a turn shows: its record, whether it is open, and how each blob it uses has been fetched. */
+  const turnSig = (t: TurnRecord): string => {
+    const open = shownTurns.has(t.request);
+    const used = open ? [t.messages.blob, t.response?.blob, t.reasoning?.blob].map((hash) => (hash === undefined ? null : fetched.get(hash)?.state ?? null)) : null;
+    return JSON.stringify([t, open, used]);
+  };
 
   const sendbackSection = (rec: StageRecord): HTMLElement | null =>
     rec.sendbacks.length === 0 ? null : h("div", { class: "sendbacks" }, h("h3", { class: "section-title" }, "Send-backs"),
-      rec.sendbacks.map((b) => h("p", { class: "sendback" }, `${b.from} → ${b.to} (${b.count} of ${SENDBACK_LIMIT}): ${b.reason} `, timeEl(ui, b.ts, "local"))));
+      rec.sendbacks.map((b) => h("p", { class: "sendback" }, `${b.from} → ${b.to} (${b.count} of ${ui.ref.send_back_cap}): ${b.reason} `, timeEl(ui, b.ts, "local"))));
 
   // ---------- feedback ----------
   const feedbackSection = (s: CaseState): HTMLElement => {
@@ -273,7 +292,7 @@ export function makePipeline(ui: Ui, open: Open, arg: string | null): View {
         void ui.act("feedback", { measure: m.id, value: Number.isFinite(n) ? n : raw, note: (texts.get(noteKey) ?? "").trim() }).then((ok) => {
           if (!ok) return;
           texts.delete(valueKey); texts.delete(noteKey);
-          for (const [, part] of parts) part.sig = "";
+          for (const [, part] of parts) part.sigs.clear();
           update();
         });
       } } }, "Record") as HTMLButtonElement;
@@ -293,32 +312,54 @@ export function makePipeline(ui: Ui, open: Open, arg: string | null): View {
   const keyOf = (n: Element | null): string | null =>
     n === null ? null : [n.tagName, n.getAttribute("aria-label") ?? "", n.getAttribute("data-action") ?? "", n.closest("[data-measure]")?.getAttribute("data-measure") ?? "", n.closest("[data-request]")?.getAttribute("data-request") ?? ""].join("|");
 
+  /** Replaces what `into` holds with `build()` when `sig` is not what it last showed. */
+  const fill = (part: RowParts, name: string, into: HTMLElement, sig: string, build: () => Child): void => {
+    if (part.sigs.get(name) === sig) return;
+    part.sigs.set(name, sig);
+    clear(into);
+    const made = build();
+    if (made !== null) into.append(made as Node);
+  };
+
   const paintRow = (row: HTMLElement, stage: StageState): void => {
     const part = parts.get(row)!;
     const s = state();
-    const rec = stageRecord(store.entries, stage.id, s.seq);
     const mark = stageMark(s, stage);
-    const sig = JSON.stringify([stage, mark, rec, ro(), modelsVersion, stage.status === "blocked" ? [s.run.pause_reason, s.pack_limits[stage.id] ?? null] : null,
-      stage.runs === "human" ? [s.feedback, s.meta?.objective ?? null, store.entries.length] : null, [...shownTurns].filter((k) => rec.turns.some((t) => t.request === k)), [...fetched.keys()].length]);
-    if (sig === part.sig) return;
-    part.sig = sig;
-    clear(part.summary);
-    const markTag = tag(ui, mark === "passed" ? "done" : mark === "idle" || mark === "running" ? "system" : "attention", MARK_WORDS[mark] ?? mark);
-    markTag.classList.add("mark");
-    part.summary.append(h("span", { class: "summary-line" },
-      h("span", { class: "title" }, stage.title), " ", markTag,
-      " ", h("span", { class: "attempts" }, stage.attempts === 0 ? "no attempts" : plural(stage.attempts, "attempt", "attempts")),
-      stage.last_reason === null ? null : [" ", h("span", { class: "last-reason" }, stage.last_reason)]));
+    fill(part, "summary", part.summary, JSON.stringify([stage, mark]), () => {
+      const markTag = tag(ui, mark === "passed" ? "done" : mark === "idle" || mark === "running" ? "system" : "attention", MARK_WORDS[mark] ?? mark);
+      markTag.classList.add("mark");
+      return h("span", { class: "summary-line" },
+        h("span", { class: "title" }, stage.title), " ", markTag,
+        " ", h("span", { class: "attempts" }, stage.attempts === 0 ? "no attempts" : plural(stage.attempts, "attempt", "attempts")),
+        stage.last_reason === null ? null : [" ", h("span", { class: "last-reason" }, stage.last_reason)]);
+    });
+    // a closed row paints only its summary; opening it paints the rest
+    if (!(row as HTMLDetailsElement).open) return;
+    const rec = stageRecord(store.entries, stage.id, s.seq);
     const active = keyOf(row.contains(ui.doc.activeElement) ? ui.doc.activeElement : null);
-    clear(part.body);
-    part.body.append(...modelSection(stage, rec, s).map((c) => c as Node));
+    const again = (): void => repaint(row, stage.id);
+    fill(part, "model", part.model, JSON.stringify([stage, ro(), modelsVersion, stage.status === "blocked" ? [s.run.pause_reason, s.pack_limits[stage.id] ?? null, rec.blocked.at(-1) ?? null] : null,
+      stage.status === "declined" ? rec.turns.filter((t) => t.outcome === "declined").map((t) => t.reason) : null]),
+    () => h("div", { class: "model-section" }, modelSection(stage, rec, s)));
     if (stage.runs === "agent") {
-      part.body.append(contextSection(rec), transcriptSection(rec, () => repaint(row, stage.id)));
+      const last = rec.turns.at(-1);
+      fill(part, "context", part.context, JSON.stringify(last === undefined ? null : [last.pack, last.left_out, last.chars]), () => contextSection(rec));
+      part.transcriptNote.hidden = rec.turns.length > 0;
+      syncList(part.turns, rec.turns, (t) => t.request, (t) => {
+        const node = h("div", { class: "turn", data: { request: t.request } });
+        turnSigs.set(node, "");
+        return node;
+      }, (node, t) => {
+        const sig = turnSig(t);
+        if (turnSigs.get(node) === sig) return;
+        turnSigs.set(node, sig);
+        clear(node);
+        node.append(...(turnKids(t, again).flatMap((k) => (k === null || k === false || k === undefined ? [] : [k as Node]))));
+      });
     }
-    const back = sendbackSection(rec);
-    if (back !== null) part.body.append(back);
-    if (stage.runs === "human" && stage.gate === null) part.body.append(feedbackSection(s));
-    if (active !== null) ([...part.body.querySelectorAll("input, button, select")].find((n) => keyOf(n) === active) as HTMLElement | undefined)?.focus();
+    fill(part, "back", part.back, JSON.stringify(rec.sendbacks) + String(ui.ref.send_back_cap), () => sendbackSection(rec));
+    if (stage.runs === "human" && stage.gate === null) fill(part, "feedback", part.feedback, JSON.stringify([s.feedback, s.meta?.objective ?? null, store.entries.length, ro()]), () => feedbackSection(s));
+    if (active !== null && !row.contains(ui.doc.activeElement)) ([...row.querySelectorAll("input, button, select")].find((n) => keyOf(n) === active) as HTMLElement | undefined)?.focus();
   };
 
   /** Paints a row again whatever it last showed, from the stage as it is now. */
@@ -326,15 +367,21 @@ export function makePipeline(ui: Ui, open: Open, arg: string | null): View {
     const part = parts.get(row);
     const stage = state().run.stages.find((x) => x.id === id);
     if (part === undefined || stage === undefined) return;
-    part.sig = "";
     paintRow(row, stage);
   };
 
   const makeRow = (stage: StageState): HTMLElement => {
     const summary = h("summary", null);
-    const body = h("div", { class: "body" });
-    const row = h("details", { class: "stage-row", data: { stage: stage.id } }, summary, body);
-    parts.set(row, { sig: "", summary, body });
+    const model = h("div", { class: "sec-model" });
+    const context = h("div", { class: "sec-context" });
+    const turns = h("div", { class: "turns" });
+    const transcriptNote = h("p", { class: "empty" }, "no model turns yet");
+    const back = h("div", { class: "sec-back" });
+    const feedback = h("div", { class: "sec-feedback" });
+    const transcript = h("div", { class: "transcript", hidden: stage.runs !== "agent" }, h("h3", { class: "section-title" }, "Transcript"), transcriptNote, turns);
+    const row = h("details", { class: "stage-row", data: { stage: stage.id }, on: { toggle: () => { if ((row as HTMLDetailsElement).open) { if (modelsFailed) loadModels(); repaint(row, stage.id); } } } },
+      summary, h("div", { class: "body" }, model, context, transcript, back, feedback));
+    parts.set(row, { sigs: new Map(), summary, model, context, turns, transcriptNote, back, feedback });
     if (stage.status === "declined" || stage.status === "blocked") (row as HTMLDetailsElement).open = true;
     return row;
   };

@@ -5,6 +5,7 @@ import { scrub } from "../agents/tools/kit";
 import { mayGo } from "../agents/pack";
 import { pivotWeight } from "../modules/manifests";
 import type { EngineDeps } from "../pipeline/engine";
+import { SEND_BACK_CAP } from "../pipeline/next";
 
 /** Text that came from a source, a manifest or an exception, safe to send. */
 export function shown(deps: EngineDeps, text: string): string {
@@ -37,7 +38,7 @@ export function referenceOf(deps: EngineDeps): Reference {
   }
   return {
     types: registry.types().map((t) => ({ id: t.id, title: shown(deps, t.title) })), sources, pivots, objectives, phases,
-    profile: { id: deps.profile.id, title: shown(deps, deps.profile.title) },
+    profile: { id: deps.profile.id, title: shown(deps, deps.profile.title) }, send_back_cap: SEND_BACK_CAP,
   };
 }
 

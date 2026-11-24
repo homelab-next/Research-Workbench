@@ -35,14 +35,22 @@ function choose(selector: string, value: string): void {
 }
 const row = (stage: string) => `.lens-pipeline .stage-row[data-stage=${stage}]`;
 
-/** A page on the sample case with the run at the plan gate and the Pipeline lens open. */
-async function atPlanGate(opts: { marking?: Marking; before?: (root: string) => void } = {}): Promise<Page> {
+/** Opens a stage row as a person does: the details open and fire their toggle. */
+function openRow(stage: string): void {
+  (p.q(row(stage)) as HTMLDetailsElement).open = true;
+  p.q(row(stage)).dispatchEvent(new p.win.Event("toggle") as unknown as Event);
+}
+const openAll = (): void => { for (const r of p.all(".lens-pipeline .stage-row")) openRow(r.dataset.stage!); };
+
+/** A page on the sample case with the run at the plan gate and the Pipeline lens open, every stage row open unless `closed`. */
+async function atPlanGate(opts: { marking?: Marking; before?: (root: string) => void; closed?: boolean } = {}): Promise<Page> {
   p = await page(opts.before === undefined ? {} : { before: opts.before });
   const id = await p.s.newCase(opts.marking === undefined ? {} : { marking: opts.marking });
   await p.s.toPlanGate(id);
   p.win.location.hash = `#/case/${id}`;
   await p.settle();
   p.press("q");
+  if (opts.closed !== true) openAll();
   return p;
 }
 /** The same, run on to the publish gate. */
@@ -53,6 +61,7 @@ async function atPublishGate(): Promise<Page> {
   p.win.location.hash = `#/case/${id}`;
   await p.settle();
   p.press("q");
+  openAll();
   return p;
 }
 const blob = (text: string) => session().blobs.put(text);
@@ -225,7 +234,10 @@ test("Show fetches the transcript and renders it as text", async () => {
   expect(raw).toEqual(["raw bytes", "raw bytes"]);
   expect(p.q(`${row("assemble")} .transcript a`).getAttribute("href")).toMatch(/^\/api\/cases\/CASE-1\/blobs\/[0-9a-f]{64}$/);
   // pack parts are labelled by title and marking; a part left out reads "left out" with no content
-  expect(p.q(`${row("assemble")} .transcript .parts`).textContent).toContain("Card c1 · TLP:GREEN");
+  // the ledger records one marking for the pack, so it is shown once on the turn, and a part shows its title only
+  expect(p.q(`${row("assemble")} .transcript .parts`).textContent).toContain("Card c1");
+  expect(p.q(`${row("assemble")} .transcript .parts`).textContent).not.toContain("TLP");
+  expect(p.q(`${row("assemble")} .turn-head .marking`).textContent).toBe("TLP:GREEN");
   // it keeps showing after other entries arrive
   session().commit(() => [{ type: "run.paused", actor: sys, payload: { reason: "later" } }]);
   await settled();
@@ -238,8 +250,10 @@ test("a part the marking rule left out is shown as left out, with no content", a
   await settled();
   const parts = p.q(`${row("assemble")} .transcript .parts`);
   const out = parts.querySelector(".part.left-out")!;
-  expect(out.textContent).toBe("Card c9 · left out");
+  expect(out.textContent).toBe("left out");
   expect(out.querySelector("pre")).toBeNull();
+  // what the rule withheld is not named in the transcript at all
+  expect(p.q(`${row("assemble")} .transcript`).textContent).not.toContain("Card c9");
 });
 
 test("reasoning is labelled as stated by the agent", async () => {
@@ -282,6 +296,20 @@ test("a call with no return reads interrupted, or pending while the run is live"
   await settled();
   expect(p.q(`${row("assemble")} .turn .outcome`).textContent).toBe("interrupted");
   expect(p.q(`${row("assemble")} .tool-call .outcome`).textContent).toBe("interrupted");
+});
+
+test("the send-back limit comes from the server's reference, and a count above it is shown as it is", async () => {
+  await atPublishGate();
+  expect(p.ui.ref.send_back_cap).toBe(3);
+  p.ui.ref.send_back_cap = 2;
+  p.press("Escape");
+  p.press("q");
+  openAll();
+  expect(p.q(`${row("assemble")} .sendbacks .sendback`).textContent).toContain("(1 of 2)");
+  const s = session();
+  s.commit((st) => [{ type: "stage.sent_back", actor: sys, run: st.run.id, stage: "assemble", payload: { from: "checks", to: "assemble", reason: "again", count: 4 } }]);
+  await settled();
+  expect(p.all(`${row("assemble")} .sendbacks .sendback`).map((e) => e.textContent).join("|")).toContain("(4 of 2)");
 });
 
 test("a send-back is listed with its reason and count", async () => {
@@ -343,6 +371,7 @@ test("after publishing, measures of performance are listed and a measure of effe
   p.win.location.hash = `#/case/${id}`;
   await p.settle();
   p.press("q");
+  openAll();
   const mops = p.all(`${row("feedback")} .feedback .mop`).map((m) => m.textContent);
   expect(mops.length).toBe(7);
   expect(mops.some((m) => m!.startsWith("Queries run: "))).toBe(true);
@@ -371,4 +400,60 @@ test("text typed into a feedback field survives other entries arriving", async (
   session().commit(() => [{ type: "run.paused", actor: sys, payload: { reason: "later" } }]);
   await settled();
   expect((p.q("[aria-label='Value for Hours saved against doing it by hand']") as HTMLInputElement).value).toBe("7");
+});
+
+test("a new turn does not rebuild the turns already on screen, and a closed row paints only its summary", async () => {
+  await atPlanGate({ closed: true });
+  const s = session();
+  for (let i = 0; i < 60; i++) turn("assemble", { reply: `answer ${i}` });
+  await settled();
+  // the row is closed: its summary is painted and nothing of its body
+  expect(p.all(`${row("assemble")} .turn`).length).toBe(0);
+  openRow("assemble");
+  await settled();
+  const before = p.all(`${row("assemble")} .turn`);
+  expect(before.length).toBe(60);
+  turn("assemble", { reply: "one more" });
+  await settled();
+  const after = p.all(`${row("assemble")} .turn`);
+  expect(after.length).toBe(61);
+  for (let i = 0; i < 60; i++) expect(after[i]).toBe(before[i]!);
+  expect(s.state.skipped).toEqual([]);
+});
+
+test("an empty model list says so in words and the select is disabled", async () => {
+  p = await page();
+  p.ui.api.models = async () => [];
+  const id = await p.s.newCase();
+  await p.s.toPlanGate(id);
+  p.win.location.hash = `#/case/${id}`;
+  await p.settle();
+  p.press("q");
+  openAll();
+  await settled();
+  expect(p.q(`${row("frame")} .models-note`).textContent).toBe("No models could be listed");
+  expect((p.q(`${row("frame")} select[aria-label=Model]`) as HTMLSelectElement).disabled).toBe(true);
+});
+
+test("a failed model list is asked for again when a stage row is opened", async () => {
+  p = await page();
+  let calls = 0;
+  const real = p.ui.api.models;
+  p.ui.api.models = async (id) => { calls++; if (calls <= 2) throw new Error("down"); return real(id); };
+  const id = await p.s.newCase();
+  await p.s.toPlanGate(id);
+  p.win.location.hash = `#/case/${id}`;
+  await p.settle();
+  p.press("q");
+  await settled();
+  expect(calls).toBe(1);
+  openRow("frame");
+  await settled();
+  expect(calls).toBe(2);
+  expect(p.q(`${row("frame")} .models-note`).textContent).toBe("The model list could not be read");
+  // closing and opening the row again asks again
+  (p.q(row("frame")) as HTMLDetailsElement).open = false;
+  openRow("frame");
+  await modelsIn();
+  expect(calls).toBe(3);
 });

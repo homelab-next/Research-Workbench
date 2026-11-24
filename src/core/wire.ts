@@ -13,6 +13,8 @@ export interface Reference {
   types: { id: string; title: string }[]; sources: SourceView[]; pivots: PivotView[];
   objectives: { id: string; title: string; measures: { id: string; kind: "mop" | "moe"; title: string }[] }[];
   phases: { id: string; title: string }[]; profile: { id: string; title: string };
+  /** The most times one stage is sent back to before the run pauses (a person may allow more). */
+  send_back_cap: number;
 }
 export interface ModelView { provider: string; model: string; where: Where; efforts: string[]; context: number | null; allowed: boolean; reason: string | null }
 /** What a command returns: where the ledger now ends, or why it was refused. Never state. */
