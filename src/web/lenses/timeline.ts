@@ -10,8 +10,13 @@ import type { Ui, View } from "../ui";
 
 interface Row { seq: number; ts: string; entry: Entry; card: string | null }
 
-/** The entries the Timeline has a row for: each card, query, stage start and finish, gate, draft revision and published product. */
+/**
+ * The entries the Timeline has a row for: each card, query, stage start and finish, gate, draft revision and published product, and each
+ * step finished on a reused query (which has no query of its own to show).
+ */
 const SHOWN = new Set(["card.created", "query.issued", "stage.started", "stage.finished", "gate.waiting", "gate.passed", "draft.revised", "product.published"]);
+const shown = (entry: Entry): boolean =>
+  SHOWN.has(entry.type) || (entry.type === "step.finished" && typeof (entry.payload as { reused?: unknown }).reused === "string");
 
 const millis = (ts: string): number => { const t = Date.parse(ts); return Number.isNaN(t) ? 0 : t; };
 
@@ -19,7 +24,7 @@ const millis = (ts: string): number => { const t = Date.parse(ts); return Number
 export function timelineRows(state: CaseState, entries: readonly Entry[]): Row[] {
   const rows: Row[] = [];
   for (const entry of entries) {
-    if (entry.seq > state.seq || !SHOWN.has(entry.type)) continue;
+    if (entry.seq > state.seq || !shown(entry)) continue;
     if (entry.type === "card.created") {
       const id = entry.payload.card?.id;
       if (typeof id !== "string" || !Object.hasOwn(state.cards, id)) continue;

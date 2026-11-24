@@ -79,6 +79,27 @@ test("the Timeline orders by time and mutes cards that are not kept", async () =
   expect(rows[0]!.querySelector(".actor-kind")).not.toBeNull();
 });
 
+test("a step finished on a reused query reads as reused on the Worklog and the Timeline", async () => {
+  await published();
+  const card = Object.keys(state().cards)[0]!;
+  p.s.app.hub.read("CASE-1").commit(() => [{
+    type: "step.finished", actor: { kind: "system", id: "t" },
+    payload: { step: "s1", outcome: "answered", cards: [card], note: "reused q1 from 2026-11-20T10:00:00.000Z; same pivot, value and window", reused: "q1" },
+  }]);
+  await p.settle();
+  p.press("w");
+  const last = p.all(".lens .worklog-row").at(-1)!;
+  expect(last.querySelector(".what")!.textContent).toBe("step reused, no query sent");
+  expect(last.getAttribute("title")).toContain("reused q1 from 2026-11-20T10:00:00.000Z");
+  p.press("t");
+  const rows = p.all(".lens .timeline-row").filter((r) => r.textContent!.includes("step reused"));
+  expect(rows).toHaveLength(1);
+  expect(rows[0]!.textContent).toContain("no query sent");
+  expect(rows[0]!.textContent).toContain("reused q1");
+  // a step that ran is not a Timeline row: its query and card are
+  expect(p.all(".lens .timeline-row").filter((r) => r.textContent!.includes("step finished"))).toEqual([]);
+});
+
 test("the Timeline puts a card at its event time when it has one", async () => {
   await published();
   const card = Object.values(state()).length > 0 ? Object.values(state().cards).find((c) => c.event_time !== null) : undefined;

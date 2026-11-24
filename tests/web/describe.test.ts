@@ -65,3 +65,13 @@ test("a repriced proposal says what the source now estimates and the budget that
   const d = describe(sampleOf("proposal.repriced", { proposal: "P1", estimate: { amount: 900, unit: "rows" }, budget: 100, query: null }), ref);
   expect(d).toMatchObject({ what: "proposal repriced", detail: "P1 · 900 rows · budget 100 not enough" });
 });
+
+test("a step finished on a reused query says reused, and that no query was sent", () => {
+  const p: Payloads["step.finished"] = { step: "s4", outcome: "empty", cards: ["c1"], note: "reused q1 from 2026-11-20T10:00:00.000Z; same pivot, value and window", reused: "q1" };
+  expect(describe(sampleOf("step.finished", p), ref)).toEqual({
+    what: "step reused, no query sent", detail: "s4 · empty · reused q1 from 2026-11-20T10:00:00.000Z; same pivot, value and window",
+  });
+  const { reused: _, ...ran } = p;
+  expect(describe(sampleOf("step.finished", { ...ran, note: "1 row" }), ref)).toEqual({ what: "step finished", detail: "s4 · empty · 1 row" });
+  expect(describe(sampleOf("step.finished", { ...ran, reused: 7 }), ref).what).toBe("step finished");
+});

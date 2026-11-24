@@ -11,8 +11,8 @@ const plural = (n: unknown, word: string): string => (typeof n === "number" ? `$
 
 type Say = (p: Loose, ref: Reference) => string;
 const none: Say = () => "";
-/** What each entry type is called, and the particulars worth reading. The table is keyed by EntryType, so a new type that has no row is a type error. */
-const TABLE: Record<EntryType, [string, Say]> = {
+/** What each entry type is called (by its payload, for a type whose name depends on it), and the particulars worth reading. The table is keyed by EntryType, so a new type that has no row is a type error. */
+const TABLE: Record<EntryType, [string | ((p: Loose) => string), Say]> = {
   "case.created": ["case opened", (p) => join(str(p.id), str(p.title))],
   "case.phase_changed": ["phase changed", (p) => str(p.phase)],
   "run.started": ["run started", (p) => join(str(p.run), str(p.pipeline))],
@@ -35,7 +35,8 @@ const TABLE: Record<EntryType, [string, Say]> = {
   "plan.denied": ["plan denied", (p) => join(str(p.plan), str(p.reason))],
   "plan.replan_requested": ["re-plan requested", (p) => join(str(p.plan), str(p.note))],
   "step.started": ["step started", (p) => str(p.step)],
-  "step.finished": ["step finished", (p) => join(str(p.step), str(p.outcome), str(p.note))],
+  // a step finished on a query answered before ran nothing: the line says so, so no one reads it as a lookup sent to the source
+  "step.finished": [(p) => (typeof p.reused === "string" ? "step reused, no query sent" : "step finished"), (p) => join(str(p.step), str(p.outcome), str(p.note))],
   "step.estimated": ["step priced", (p) => join(str(p.step), p.estimate === null ? "no estimate" : cost(p.estimate))],
   "query.issued": ["query issued", (p, ref) => {
     const source = ref.sources.find((s) => s.id === p.source);
@@ -99,5 +100,6 @@ const TABLE: Record<EntryType, [string, Say]> = {
 export function describe(entry: Entry, ref: Reference): { what: string; detail: string } {
   const row = Object.hasOwn(TABLE, entry.type) ? TABLE[entry.type] : null;
   if (row === null) return { what: "unknown entry", detail: String(entry.type) };
-  return { what: row[0], detail: row[1](loose(entry.payload), ref) };
+  const p = loose(entry.payload);
+  return { what: typeof row[0] === "string" ? row[0] : row[0](p), detail: row[1](p, ref) };
 }
