@@ -1,4 +1,4 @@
-import { blockers, CARD_REF, latestDraft, proposalMarking, publishable } from "../../core/state";
+import { blockers, CARD_REF, latestDraft, notedExceptions, proposalMarking, publishable } from "../../core/state";
 import type { CaseState } from "../../core/state";
 import { CONFIDENCES } from "../../core/types";
 import type { Actor, Draft, Finding, Product } from "../../core/types";
@@ -383,6 +383,9 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
       out.push(why.length === 0
         ? h("p", { class: "blockers-none tag tag-done" }, "Nothing blocks publishing")
         : h("div", { class: "blockers-box" }, h("p", { class: "blockers-title tag tag-attention" }, "Cannot be published yet"), h("ul", { class: "blockers" }, why.map((w) => h("li", null, w)))));
+      // a failed check whose manifest says it does not block: shown, so that what is published with it is seen, but it does not stop Approve
+      const noted = notedExceptions(s, d.hash);
+      if (noted.length > 0) out.push(h("div", { class: "noted-box" }, h("p", { class: "noted-title tag tag-human" }, "Noted exceptions (not blocking)"), h("ul", { class: "noted" }, noted.map((w) => h("li", null, w)))));
     }
     return [h("section", { class: "review" }, out)];
   };

@@ -44,12 +44,13 @@ function applyDrafts(s: CaseState, entry: Entry): CaseState {
       return { ...s, drafts: [...s.drafts, d], reviews: { ...s.reviews, [d.hash]: review } };
     }
     case "check.run": {
-      const { check, script_hash, input, output, draft_hash, pass, findings } = entry.payload;
-      if (!isStr(check) || !isStr(script_hash) || !isBlobRefShape(input) || !isBlobRefShape(output) || !isStr(draft_hash) || !isBool(pass) || !isFindings(findings)) {
+      const { check, script_hash, input, output, draft_hash, pass, findings, blocking } = entry.payload;
+      if (!isStr(check) || !isStr(script_hash) || !isBlobRefShape(input) || !isBlobRefShape(output) || !isStr(draft_hash) || !isBool(pass) || !isFindings(findings)
+        || (blocking !== undefined && !isBool(blocking))) {
         return malformed(s, entry);
       }
       return withReview(s, draft_hash, (r) => {
-        const result = { check, pass, findings };
+        const result = blocking === false ? { check, pass, findings, blocking: false as const } : { check, pass, findings };
         const i = r.checks.findIndex((c) => c.check === check);
         return { ...r, checks: i < 0 ? [...r.checks, result] : r.checks.map((c, j) => (j === i ? result : c)) };
       });
@@ -181,16 +182,23 @@ export function blockers(state: CaseState, draftHash: string): string[] {
   }
   // The latest recorded result of each check, and the latest evaluation, are verdicts too.
   for (const c of review?.checks ?? []) {
-    if (!c.pass) out.push(`${c.check} failed on this revision`);
+    if (!c.pass && c.blocking !== false) out.push(`${c.check} failed on this revision`);
   }
   if (review?.evaluation?.pass === false) out.push("Evaluation failed on this revision");
   for (const c of openMustAddress(state, draftHash)) out.push(`Challenge ${c.id} must be addressed`);
   return out;
 }
 
+/** The failed checks on `draftHash` whose manifests say they do not block: listed at the publish gate, never blockers. */
+export function notedExceptions(state: CaseState, draftHash: string): string[] {
+  const review = Object.hasOwn(state.reviews, draftHash) ? state.reviews[draftHash]! : null;
+  return (review?.checks ?? []).filter((c) => !c.pass && c.blocking === false)
+    .map((c) => `${c.check} failed on this revision (noted, not blocking)${c.findings.length === 0 ? "" : `: ${c.findings.map((x) => x.message).join("; ")}`}`);
+}
+
 /**
  * True only when `draftHash` is the latest draft, every review stage passed that exact hash, no recorded
- * check or evaluation of it failed, and no must-address challenge against it is open.
+ * blocking check or evaluation of it failed, and no must-address challenge against it is open.
  */
 export function publishable(state: CaseState, draftHash: string): boolean {
   return blockers(state, draftHash).length === 0;

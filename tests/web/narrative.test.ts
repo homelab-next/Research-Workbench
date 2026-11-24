@@ -585,3 +585,17 @@ test("Accept on a proposal is disabled, with the reason, while there is no draft
   expect(b.disabled).toBe(true);
   expect(b.title).toBe("There is no draft yet to put this in");
 });
+
+test("a failed non-blocking check is listed at the gate as a noted exception and does not disable Approve", async () => {
+  await atGate();
+  const s = p.s.app.hub.read("CASE-1");
+  s.commit(() => [{ type: "check.run", actor: { kind: "system", id: "t" }, payload: {
+    check: "change", script_hash: "h", input: { blob: "a".repeat(64), bytes: 1 }, output: { blob: "a".repeat(64), bytes: 1 }, draft_hash: latest().hash, pass: false, blocking: false,
+    findings: [{ check: "change", where: "change", message: "the change is empty" }],
+  } }]);
+  await settled();
+  expect(p.q(".review .blockers-none").textContent).toBe("Nothing blocks publishing");
+  expect(p.q(".review .noted-title").textContent).toBe("Noted exceptions (not blocking)");
+  expect(p.all(".review .noted li").map((l) => l.textContent)).toEqual(["change failed on this revision (noted, not blocking): the change is empty"]);
+  expect(approve().disabled).toBe(false);
+});

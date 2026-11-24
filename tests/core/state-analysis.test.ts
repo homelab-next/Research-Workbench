@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { apply, blockers, fold, initial, latestDraft, publishable, runUsage } from "../../src/core/state";
+import { apply, blockers, fold, initial, latestDraft, notedExceptions, publishable, runUsage } from "../../src/core/state";
 import type { CaseState } from "../../src/core/state";
 import type { Challenge, Draft, Entry, Product, StageDef } from "../../src/core/types";
 import { EntryBuilder } from "../helpers/entries";
@@ -493,4 +493,38 @@ test("check.run without an output reference is malformed", () => {
   const s = fold(b.entries);
   expect(s.skipped.at(-1)).toEqual({ seq: e.seq, type: "check.run", reason: "malformed check.run" });
   expect(s.reviews).toEqual(before.reviews);
+});
+
+// ---- check strictness (task 11 item 3) ----
+
+test("a failed non-blocking check is not a blocker: it is a noted exception, and only blocking failures block", () => {
+  const b = run();
+  revise(b, 1, "h1");
+  passAll(b, "h1");
+  const input = { blob: "b", bytes: 1 };
+  b.add("check.run", { check: "change", script_hash: "x", input, output: input, draft_hash: "h1", pass: false, blocking: false, findings: [{ check: "change", where: "change", message: "the change is empty" }, { check: "change", where: "x", message: "second" }] });
+  b.add("check.run", { check: "marking", script_hash: "x", input, output: input, draft_hash: "h1", pass: true, findings: [] });
+  let s = fold(b.entries);
+  expect(s.skipped).toEqual([]);
+  expect(s.reviews.h1!.checks[0]).toEqual({ check: "change", pass: false, blocking: false, findings: [{ check: "change", where: "change", message: "the change is empty" }, { check: "change", where: "x", message: "second" }] });
+  expect(s.reviews.h1!.checks[1]).toEqual({ check: "marking", pass: true, findings: [] });
+  expect(blockers(s, "h1")).toEqual([]);
+  expect(publishable(s, "h1")).toBe(true);
+  expect(notedExceptions(s, "h1")).toEqual(["change failed on this revision (noted, not blocking): the change is empty; second"]);
+  // a blocking failure still blocks, and is not a noted exception
+  b.add("check.run", { check: "marking", script_hash: "x", input, output: input, draft_hash: "h1", pass: false, findings: [{ check: "marking", where: "m", message: "too low" }] });
+  s = fold(b.entries);
+  expect(blockers(s, "h1")).toEqual(["marking failed on this revision"]);
+  expect(notedExceptions(s, "h1")).toHaveLength(1);
+  expect(notedExceptions(s, "nope")).toEqual([]);
+});
+
+test("a check.run whose blocking is not a boolean is malformed", () => {
+  const b = run();
+  revise(b, 1, "h1");
+  const input = { blob: "b", bytes: 1 };
+  b.add("check.run", { check: "c", script_hash: "x", input, output: input, draft_hash: "h1", pass: false, blocking: "no", findings: [] } as never);
+  const s = fold(b.entries);
+  expect(s.skipped).toHaveLength(1);
+  expect(s.reviews.h1!.checks).toEqual([]);
 });

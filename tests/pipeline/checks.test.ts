@@ -427,3 +427,80 @@ test("Checks writes no check run after the run was stopped while a check was run
     expect(s.state.skipped).toEqual([]);
   } finally { close(); }
 });
+
+// ---- check strictness (task 11 item 3) ----
+
+test("a check manifest may say blocking: false; a check is blocking unless it says so", () => {
+  const root = join(dir, "root-blocking");
+  write(root, "strict", PRINT("{ pass: true, findings: [] }"), { order: 1 });
+  write(root, "lenient", PRINT("{ pass: true, findings: [] }"), { order: 2, blocking: "false" });
+  write(root, "plain", PRINT("{ pass: true, findings: [] }"), { order: 3, blocking: "true" });
+  const r = load(root);
+  expect(r.problems).toEqual([]);
+  expect(r.checks.map((c) => [c.id, c.blocking])).toEqual([["strict", true], ["lenient", false], ["plain", true]]);
+  write(root, "bad", PRINT("{ pass: true, findings: [] }"), { order: 4, blocking: "maybe" });
+  expect(load(root).broken.map((b) => b.id)).toEqual(["bad"]);
+});
+
+const GAPS = "g";
+
+test("a failed non-blocking check does not send the draft back: Checks notes it in gaps_and_limits in a new revision, checks that one and passes it", async () => {
+  const { env, close } = stageRig({
+    a: [PRINT("{ pass: true, findings: [] }"), { order: 1 }],
+    soft: [PRINT(`{ pass: false, findings: [{ where: "f1", message: "f1 cites c1, which has no rows" }] }`), { order: 2, blocking: "false" }],
+  });
+  try {
+    const d1 = latestDraft(env.session.state)!;
+    const end = await checksRunner(env);
+    const d2 = latestDraft(env.session.state)!;
+    expect(d2.n).toBe(2);
+    expect(d2.author).toEqual({ kind: "system", id: "checks" });
+    expect(d2.reason).toBe("Checks noted form exceptions: soft");
+    // card ids in the note are written so that the note cites no card
+    expect(d2.product.gaps_and_limits).toBe(`${GAPS}\n\nForm exceptions noted:\n- soft (f1): f1 cites card 1, which has no rows`);
+    expect({ ...d2.product, gaps_and_limits: GAPS }).toEqual(d1.product);
+    expect(d2.hash).toBe(sha256Hex(canonical(d2.product as never)));
+    expect(end).toEqual({ kind: "finished", outcome: "pass", draft_hash: d2.hash, output: { checks: [{ check: "a", pass: true }, { check: "soft", pass: false, blocking: false }] }, reason: null });
+    const es = runs(env).map((e) => (e.type === "check.run" ? [e.payload.check, e.payload.draft_hash, e.payload.pass, e.payload.blocking ?? true] : []));
+    expect(es).toEqual([["a", d1.hash, true, true], ["soft", d1.hash, false, false], ["a", d2.hash, true, true], ["soft", d2.hash, false, false]]);
+    const s = env.session.state;
+    expect(s.reviews[d2.hash]!.checks.map((c) => [c.check, c.pass])).toEqual([["a", true], ["soft", false]]);
+    expect(s.skipped).toEqual([]);
+  } finally { close(); }
+});
+
+test("a revision that already holds the same note is not written again; one whose exceptions are gone loses its note", async () => {
+  const { env, close } = stageRig({ soft: [PRINT(`{ pass: false, findings: [{ where: "change", message: "empty" }] }`), { order: 1, blocking: "false" }] });
+  try {
+    await checksRunner(env);
+    expect(env.session.state.drafts).toHaveLength(2);
+    const end = await checksRunner(env);
+    expect(env.session.state.drafts).toHaveLength(2);
+    expect(end).toMatchObject({ outcome: "pass", draft_hash: latestDraft(env.session.state)!.hash });
+  } finally { close(); }
+  const r2 = stageRig({ a: [PRINT("{ pass: true, findings: [] }"), { order: 1 }] });
+  try {
+    const d = latestDraft(r2.env.session.state)!;
+    const noted = { ...d.product, gaps_and_limits: `${GAPS}\n\nForm exceptions noted:\n- old (x): stale` };
+    r2.env.session.commit(() => [{ type: "draft.revised", actor: person, payload: { draft: { n: 2, hash: sha256Hex(canonical(noted as never)), author: person, product: noted, reason: "r" } } }]);
+    const end = await checksRunner(r2.env);
+    const last = latestDraft(r2.env.session.state)!;
+    expect(last.n).toBe(3);
+    expect(last.product.gaps_and_limits).toBe(GAPS);
+    expect(last.reason).toBe("Checks removed form exceptions that no longer apply");
+    expect(end).toMatchObject({ outcome: "pass", draft_hash: last.hash });
+  } finally { r2.close(); }
+});
+
+test("a blocking failure fails the stage as before, and no note is written even when a non-blocking check failed too", async () => {
+  const { env, close } = stageRig({
+    hard: [PRINT(`{ pass: false, findings: [{ where: "f1", message: "bad" }] }`), { order: 1 }],
+    soft: [PRINT(`{ pass: false, findings: [{ where: "f1", message: "meh" }] }`), { order: 2, blocking: "false" }],
+  });
+  try {
+    const d = latestDraft(env.session.state)!;
+    const end = await checksRunner(env);
+    expect(env.session.state.drafts).toHaveLength(1);
+    expect(end).toMatchObject({ kind: "finished", outcome: "fail", draft_hash: d.hash, reason: "hard failed: bad" });
+  } finally { close(); }
+});

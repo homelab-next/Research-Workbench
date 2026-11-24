@@ -71,6 +71,8 @@ test("the sample root loads eleven checks in order with no problems", () => {
   expect(r.problems).toEqual([]);
   expect(r.checks.map((c) => c.id)).toEqual(IDS);
   expect(r.checks.map((c) => c.order)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  // every sample check stays blocking
+  expect(r.checks.every((c) => c.blocking)).toBe(true);
 });
 
 test("the good product passes all eleven checks", async () => {

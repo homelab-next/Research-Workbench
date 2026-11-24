@@ -5,7 +5,7 @@ import type { CaseState, IdKind } from "./types";
 export { apply, applyCase, countedKind, REDUCERS } from "./apply";
 export type { Reducer } from "./apply";
 export { applyRun, runUsage, stageFinishedCounts, subgoalAnswered } from "./run";
-export { applyAnalysis, blockers, latestDraft, openMustAddress, proposalMarking, publishable } from "./analysis";
+export { applyAnalysis, blockers, latestDraft, notedExceptions, openMustAddress, proposalMarking, publishable } from "./analysis";
 export { applyCards, cardLocation } from "./cards";
 export { CARD_REF, cardRefs } from "./cites";
 export { cardFields, caseFields, isCard, isCaseCreated, isCoverage, isObservable, isTimeWindow } from "./shapes";

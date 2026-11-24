@@ -129,7 +129,11 @@ export function loadPipeline(registry: Registry): { pipeline: Pipeline | null; p
   return { pipeline: { id: "default", hash, stages }, problems };
 }
 
-export interface CheckManifest { id: string; title: string; order: number; hash: string; path: string; script: string; runner: "bun" | "exec"; timeout_ms: number }
+export interface CheckManifest {
+  id: string; title: string; order: number; hash: string; path: string; script: string; runner: "bun" | "exec"; timeout_ms: number;
+  /** False for a check whose failure is noted rather than sent back; true unless the manifest says `blocking: false`. */
+  blocking: boolean;
+}
 
 const CHECK_SCHEMA: Schema = {
   type: "object",
@@ -143,6 +147,7 @@ const CHECK_SCHEMA: Schema = {
     script: { type: "string", minLength: 1 },
     runner: { type: "string", enum: ["bun", "exec"] },
     timeout_ms: { type: "number" },
+    blocking: { type: "boolean" },
   },
 };
 
@@ -158,14 +163,14 @@ export function loadChecks(registry: Registry): { checks: CheckManifest[]; probl
     const bad = (problem: string): void => { problems.push(`check ${m.id}: ${problem}`); broken.push({ id: m.id, problem }); };
     const errors = validate(CHECK_SCHEMA, m.body as Json);
     if (errors.length > 0) { problems.push(`check ${m.id} (${m.path}): ${describeErrors(errors)}`); broken.push({ id: m.id, problem: describeErrors(errors) }); continue; }
-    const b = m.body as unknown as { script: string; order: number; runner: "bun" | "exec"; timeout_ms: number; title?: string };
+    const b = m.body as unknown as { script: string; order: number; runner: "bun" | "exec"; timeout_ms: number; title?: string; blocking?: boolean };
     if (!(b.timeout_ms > 0) || !Number.isFinite(b.timeout_ms)) { bad("timeout_ms must be a positive number"); continue; }
     const plain = b.script === basename(b.script) && b.script !== "." && b.script !== ".." && !isAbsolute(b.script) && !/[\\/]/.test(b.script);
     if (!plain) { bad(`script "${b.script}" must be a plain file name in the manifest's folder`); continue; }
     const file = join(dirname(m.path), b.script);
     if (!staysInside(root.path, file)) { bad(`script "${b.script}" is outside the module root`); continue; }
     if (!existsSync(file) || !statSync(file).isFile()) { bad(`script "${b.script}" is missing`); continue; }
-    checks.push({ id: m.id, title: b.title ?? m.title, order: b.order, hash: m.hash, path: m.path, script: b.script, runner: b.runner, timeout_ms: b.timeout_ms });
+    checks.push({ id: m.id, title: b.title ?? m.title, order: b.order, hash: m.hash, path: m.path, script: b.script, runner: b.runner, timeout_ms: b.timeout_ms, blocking: b.blocking !== false });
   }
   // a check manifest in a trusted root that the registry itself refused (its id is taken, its body is invalid) is broken too, recognised by its
   // parsed kind. A file that cannot be parsed at all counts when its folder holds another check manifest, so an unreadable check cannot drop out.

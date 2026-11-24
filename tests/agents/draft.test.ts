@@ -6,7 +6,7 @@ import type { CardState } from "../../src/core/state/types";
 import type { Actor, Finding, Product } from "../../src/core/types";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildProduct, CARD_REF, cardRefs, citedBy, composeChange, composeStatement, DraftWork, draftOf, likelihoodTermsIn, termsOf } from "../../src/agents/draft";
+import { buildProduct, CARD_REF, cardRefs, citedBy, composeChange, composeStatement, DraftWork, draftOf, likelihoodTermsIn, termsOf, withFormExceptions } from "../../src/agents/draft";
 import { ToolError } from "../../src/agents/tools";
 import type { SourceManifest } from "../../src/modules/manifests";
 
@@ -240,4 +240,15 @@ test("the change is composed from its kind and its detail", () => {
   // a detail that repeats its kind is not doubled
   expect(composeChange("consistent with", "Consistent with product 1")).toBe("Consistent with product 1.");
   expect(composeChange("first judgment", "First judgment on this question.")).toBe("First judgment: on this question.");
+});
+
+test("the form exceptions note is appended to gaps_and_limits, replaces an earlier one, and leaves text with no note untouched", () => {
+  const x = [{ check: "change", where: "change", message: "empty" }, { check: "gaps-and-negatives", where: "f1", message: "f1 cites c17, which has no rows" }];
+  const noted = withFormExceptions("Flows were cut off. ", x);
+  expect(noted).toBe("Flows were cut off.\n\nForm exceptions noted:\n- change (change): empty\n- gaps-and-negatives (f1): f1 cites card 17, which has no rows");
+  expect(cardRefs(noted)).toEqual([]);
+  expect(withFormExceptions(noted, x)).toBe(noted);
+  expect(withFormExceptions(noted, [])).toBe("Flows were cut off.");
+  expect(withFormExceptions("", [x[0]!])).toBe("Form exceptions noted:\n- change (change): empty");
+  expect(withFormExceptions("untouched \n", [])).toBe("untouched \n");
 });

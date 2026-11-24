@@ -67,7 +67,8 @@ export interface QueryState {
 }
 export type ProposalState = Proposal & { status: "open" | "accepted" | "rejected"; seq: number; budget: number | null; reason: string | null; refused_budget: number | null };
 export interface ReviewState {
-  checks: { check: string; pass: boolean; findings: CheckFinding[] }[];
+  /** `blocking` is present, as false, only for a check that does not block publishing. */
+  checks: { check: string; pass: boolean; findings: CheckFinding[]; blocking?: false }[];
   evaluation: { pass: boolean; findings: CheckFinding[] } | null;
   challenges: string[];
   /** Ids of stages that finished with outcome "pass" for this draft hash. */

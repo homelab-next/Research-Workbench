@@ -170,7 +170,8 @@ export interface Payloads {
   "assessment.made": { finding: Finding; draft_hash: string };
   "research.requested": { question: string; why: string };
   "draft.revised": { draft: Draft };
-  "check.run": { check: string; script_hash: string; input: BlobRef; output: BlobRef; draft_hash: string; pass: boolean; findings: CheckFinding[] };
+  /** `blocking` is written only as false, for a check whose manifest says it does not block: its failure is a noted exception, not a blocker. */
+  "check.run": { check: string; script_hash: string; input: BlobRef; output: BlobRef; draft_hash: string; pass: boolean; findings: CheckFinding[]; blocking?: boolean };
   "evaluation.made": { draft_hash: string; pass: boolean; findings: CheckFinding[] };
   "challenge.raised": { challenge: Challenge };
   "challenge.answered": { challenge: string; answer: string; action: "revised" | "rebutted" };

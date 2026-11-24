@@ -172,6 +172,22 @@ export function buildProduct(work: DraftWork, facts: {
   return product;
 }
 
+export const FORM_EXCEPTIONS = "Form exceptions noted:";
+
+/**
+ * gaps_and_limits with the Checks stage's note of failed non-blocking checks: any earlier note (from FORM_EXCEPTIONS to the end) is replaced, and
+ * with no exceptions none is left. A card id in a check's message is written "card <n>", so that the note cites no card of its own.
+ */
+export function withFormExceptions(gaps: string, exceptions: readonly { check: string; where: string; message: string }[]): string {
+  const at = gaps.indexOf(FORM_EXCEPTIONS);
+  if (at < 0 && exceptions.length === 0) return gaps;
+  const own = (at < 0 ? gaps : gaps.slice(0, at)).replace(/\s+$/, "");
+  if (exceptions.length === 0) return own;
+  const plain = (t: string): string => t.replace(CARD_REF, (id) => `card ${id.slice(1)}`).replace(/\s+/g, " ").trim();
+  const lines = exceptions.map((x) => `- ${x.check} (${plain(x.where)}): ${plain(x.message)}`);
+  return `${own === "" ? "" : `${own}\n\n`}${FORM_EXCEPTIONS}\n${lines.join("\n")}`;
+}
+
 /** The hash is always computed here, from the product; a model never supplies it. */
 export function draftOf(product: Product, n: number, author: Actor, reason: string, narrativeCites: readonly string[] = []): Draft {
   return { n, hash: sha256Hex(canonical(product as unknown as Json)), author, product, reason, cited: citedBy(product, [...narrativeCites, ...(builtCites.get(product) ?? [])]) };
