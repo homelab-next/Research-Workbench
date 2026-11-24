@@ -397,6 +397,48 @@ test("a new draft offers Approve focus again to a person in the lens", async () 
   expect((p.doc.activeElement as HTMLElement).dataset.action).toBe("approve");
 });
 
+test("'approve' typed at the plan gate does not arm the publish gate that arrives later", async () => {
+  p = await page();
+  const id = await p.s.newCase();
+  p.win.location.hash = `#/case/${id}`;
+  await p.settle();
+  await p.s.toPlanGate(id);
+  await p.settle();
+  const bar = p.q("[aria-label=Command]") as HTMLInputElement;
+  bar.focus();
+  p.fill(bar, "approve");
+  p.press("Enter");
+  await p.settle();
+  bar.focus();
+  p.fill(bar, "what do we kn");
+  const plan = state().plan.current!;
+  expect((await p.s.command(id, "accept_plan", { plan: plan.id, steps: plan.steps.map((x) => x.id), budgets: { s3: 5 } })).status).toBe(200);
+  for (let i = 0; i < 10 && !(state().run.waiting === "publish" && !approve().disabled); i++) await settled();
+  expect(state().run.waiting).toBe("publish");
+  expect(approve().disabled).toBe(false);
+  expect(p.doc.activeElement).toBe(bar);
+  expect(state().published.length).toBe(0);
+});
+
+test("Approve never takes focus from a text field, even one in the lens", async () => {
+  await atGate();
+  for (let i = 0; i < 5 && (p.doc.activeElement as HTMLElement | null)?.dataset?.action !== "approve"; i++) await settled();
+  const prop = propose("assessment", "Proposed words.");
+  await settled();
+  p.click(`[data-proposal=${prop}] [data-action=edit-proposal]`);
+  await settled();
+  const field = (): HTMLTextAreaElement => p.q(`[aria-label='Text proposed in ${prop}']`) as HTMLTextAreaElement;
+  field().focus();
+  expect(p.doc.activeElement).toBe(field());
+  // a new draft arrives and is checked: Approve can be pressed again, and the person is still typing
+  const n = latest().n;
+  expect((await p.s.command("CASE-1", "revise", { product: { ...latest().product, summary: "A changed summary." }, reason: "edit" })).status).toBe(200);
+  for (let i = 0; i < 10 && !(latest().n > n && state().run.waiting === "publish" && !approve().disabled); i++) await settled();
+  expect(approve().disabled).toBe(false);
+  expect((p.doc.activeElement as HTMLElement).tagName).toBe("TEXTAREA");
+  expect(p.doc.activeElement).toBe(field());
+});
+
 test("Copy as Markdown puts the recorded text on the clipboard; when it cannot, the text is shown selected", async () => {
   await atGate();
   const written: string[] = [];

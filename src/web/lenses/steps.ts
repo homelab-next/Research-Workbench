@@ -3,7 +3,7 @@ import type { CaseState } from "../../core/state";
 import type { Cost, PlanStep } from "../../core/types";
 import type { Open } from "../app";
 import { tag } from "../chips";
-import { AT_GATE } from "../ui";
+import { AT_GATE, typingIn } from "../ui";
 import { cardChip } from "../chips";
 import type { Child } from "../dom";
 import { clear } from "../dom";
@@ -247,8 +247,11 @@ export function makeSteps(ui: Ui, open: Open, arg: string | null = null): View {
   const keyOf = (n: Element | null): string | null =>
     n === null ? null : [n.tagName, n.getAttribute("aria-label") ?? "", n.getAttribute("data-action") ?? "", n.closest("[data-step]")?.getAttribute("data-step") ?? "", n.closest("[data-proposal]")?.getAttribute("data-proposal") ?? ""].join("|");
 
+  let painted = false;
   const render = (): void => {
     const s = state();
+    // the one-shot is for a gate that is waiting when the person asks; one that arrives later is not theirs to be taken to
+    if (!painted) { painted = true; if (!atGate(s)) armed = false; }
     const plan = s.plan.current;
     if ((plan?.id ?? null) !== planId) { planId = plan?.id ?? null; unchecked.clear(); budgets.clear(); texts.clear(); asking = null; focusedAtGate = false; }
     const sig = [plan, s.plan.status, s.plan.estimates, s.plan.steps, s.plan.accepted_steps, s.plan.budgets, s.run.waiting, s.cards, s.proposals, s.queries, store.at, asking, ui.ref];
@@ -272,6 +275,7 @@ export function makeSteps(ui: Ui, open: Open, arg: string | null = null): View {
       const at = ui.doc.activeElement;
       const asked = armed && at === armedFrom;
       armed = false;
+      if (typingIn(at)) return;                       // never from a field the person types in, even one in this lens
       if (!(asked || at === null || at === ui.doc.body || el.contains(at))) return;
       // the Accept button when it can be pressed; else the first field that still needs a budget
       const need = el.querySelector("[data-action=accept_plan]:not([disabled])") as HTMLElement | null

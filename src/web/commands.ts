@@ -84,8 +84,8 @@ export async function perform(intent: Intent, env: PerformEnv): Promise<{ cleare
     case "ask": nav.ask(intent.text); return done;
     case "pause": return { cleared: await ui.act("pause") };
     // A gate is passed only by its own button: the bar takes the person to the gate and says so.
-    case "approve": nav.openLens("narrative", AT_GATE); return { cleared: false, say: "Approve the draft from the Narrative lens" };
-    case "accept_plan": nav.openLens("steps", AT_GATE); return { cleared: false, say: "Accept the plan from the Steps lens" };
+    case "approve": nav.openLens("narrative", store?.live.run.waiting === "publish" ? AT_GATE : undefined); return { cleared: false, say: "Approve the draft from the Narrative lens" };
+    case "accept_plan": nav.openLens("steps", store?.live.run.waiting === "plan" ? AT_GATE : undefined); return { cleared: false, say: "Accept the plan from the Steps lens" };
     case "run": {
       const status = store?.live.run.status ?? "none";
       if (status === "running") return { cleared: false, say: "The run is already going" };

@@ -9,7 +9,7 @@ import type { Child } from "../dom";
 import { clear, fileLink } from "../dom";
 import { narrativeMarkdown, SECTION_TITLES, TEXT_SECTIONS } from "../markdown";
 import type { TextSection } from "../markdown";
-import { AT_GATE, REPLAY_REFUSAL } from "../ui";
+import { AT_GATE, REPLAY_REFUSAL, typingIn } from "../ui";
 import type { Ui, View } from "../ui";
 
 export interface NarrativeView extends View {
@@ -70,6 +70,8 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
   // a one-shot: the person asked to be taken to the gate (Shift+Enter, the brief's button, the command bar), from where focus was then
   let armed = arg === AT_GATE;
   const armedFrom = armed ? ui.doc.activeElement : null;
+  /** The draft the one-shot was armed for: it is for the gate waiting when the person asked, not a later one. */
+  let armedFor: string | null | undefined;
   /** Commands sent and not yet seen: the answer's seq once it has come (the press stays off until that entry is here), null while the answer is awaited. */
   const inflight = new Map<string, number | null>();
   let inflightVersion = 0;
@@ -520,6 +522,10 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
     }
     // the first time Approve can be pressed, a person who came here for the gate is on it (Approve waits for the server's check, so this cannot be done on opening)
     if (d !== null && d.hash !== focusedFor) { focusedFor = d.hash; focusedAtGate = false; }
+    if (armed) {
+      if (armedFor === undefined) armedFor = s.run.waiting === "publish" && d !== null ? d.hash : null;
+      if (armedFor === null || d?.hash !== armedFor || s.run.waiting !== "publish") armed = false;
+    }
     if (!focusedAtGate && el.isConnected) {
       const ap = gateBox.querySelector("[data-action=approve]:not([disabled])") as HTMLElement | null;
       const at = ui.doc.activeElement;
@@ -528,7 +534,8 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
         // asked for the gate and focus has not moved since; else only a person on the page or in this lens
         const asked = armed && at === armedFrom;
         armed = false;
-        if (asked || at === null || at === ui.doc.body || el.contains(at) || at.closest("[data-area=lens]") !== null) ap.focus();
+        // never from a field the person types in, even one in this lens
+        if (!typingIn(at) && (asked || at === null || at === ui.doc.body || el.contains(at) || at.closest("[data-area=lens]") !== null)) ap.focus();
       }
     }
     paint(copyBox, [fallback], () => (fallback === null ? [] : [h("div", { class: "copy-fallback" },

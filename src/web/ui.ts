@@ -17,6 +17,13 @@ export interface Ui {
 
 /** The lens argument that says the person asked to be taken to the gate: the lens may then put focus on the gate's own control, once. */
 export const AT_GATE = "gate";
+
+/** True for an element a person types into: a gate control never takes focus from one, inside a lens or out. */
+export function typingIn(el: Element | null): boolean {
+  if (el === null) return false;
+  const tag = el.tagName.toLowerCase();
+  return tag === "input" || tag === "textarea" || tag === "select" || (el as HTMLElement).isContentEditable === true;
+}
 export const REPLAY_REFUSAL = "Return to live to change the case";
 export const NO_ANSWER = "The server did not answer.";
 

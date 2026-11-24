@@ -303,6 +303,35 @@ test("with an all-free plan, a Space or Enter typed elsewhere does not accept it
   expect(types().filter((t) => t === "plan.accepted" || t === "gate.passed")).toEqual([]);
 });
 
+test("'accept plan' typed before there is a plan does not arm the gate that arrives later", async () => {
+  p = await page({ before: (root) => {
+    const f = join(root, "scripts", "sample-run.yaml");
+    const y = readFileSync(f, "utf8");
+    const cut = y.replace(/"route": \["address_to_asset", "asset_to_accounts"\]\},\n[\s\S]*?"route": \["address_to_verdict"\]\}/, '"route": ["address_to_asset", "asset_to_accounts"]}');
+    if (cut === y) throw new Error("script not changed");
+    writeFileSync(f, cut);
+  } });
+  const id = await p.s.newCase();
+  p.win.location.hash = `#/case/${id}`;
+  await p.settle();
+  const bar = p.q("[aria-label=Command]") as HTMLInputElement;
+  bar.focus();
+  p.fill(bar, "accept plan");
+  p.press("Enter");
+  await p.settle();
+  bar.focus();
+  p.fill(bar, "what do we kn");
+  await p.s.command(id, "start_run");
+  await settled(); await settled();
+  expect(state().run.waiting).toBe("plan");
+  expect(accept().disabled).toBe(false);
+  const a = p.doc.activeElement as HTMLElement;
+  expect(a).toBe(bar);
+  a.click();
+  await settled();
+  expect(types().filter((t) => t === "plan.accepted" || t === "gate.passed")).toEqual([]);
+});
+
 test("Shift+Enter from a column takes the person to the plan gate's control", async () => {
   p = await page();
   const id = await p.s.newCase();
