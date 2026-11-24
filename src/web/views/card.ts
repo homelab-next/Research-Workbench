@@ -33,7 +33,7 @@ const cut = (text: string): string => (text.length > CELL_LIMIT ? `${text.slice(
 export function makeCardView(env: CardEnv, id: string): CardView {
   const { ui } = env;
   const h = ui.h;
-  const el = h("article", { class: "card", tabindex: 0, data: { card: id }, on: {
+  const el = h("article", { class: "card", tabindex: 0, data: { card: id, drop: "card" }, on: {
     click: (e) => { if (!insideControl(e.target)) env.toggle(id); },
     dblclick: (e) => { if (!insideControl(e.target) && placeOf() === "incoming") env.keep(id); },
   } });

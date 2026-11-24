@@ -6,7 +6,7 @@ import type { Ui, View } from "../ui";
 interface LaneControl { el: HTMLElement; update(state: CaseState, lane: LaneState): void; edit(): void }
 
 /** The lanes: one column per lane, the target highlighted, and `+ New lane`. */
-export function makeLanes(ui: Ui, store: CaseStore, card: (id: string, state: CaseState) => HTMLElement, patch: (id: string, state: CaseState) => void): View {
+export function makeLanes(ui: Ui, store: CaseStore, card: (id: string, state: CaseState) => HTMLElement, patch: (id: string, state: CaseState) => void): View & { rename(lane: string): void } {
   const { h } = ui;
   const controls = new Map<string, LaneControl>();
   const readonly = (): boolean => store.at !== null;
@@ -18,7 +18,7 @@ export function makeLanes(ui: Ui, store: CaseStore, card: (id: string, state: Ca
     let latest: LaneState = lane;
     const head = h("div", { class: "lane-head" });
     const cards = h("div", { class: "lane-cards" });
-    const el = h("section", { class: isTarget ? "lane target" : "lane", current: isTarget, tabindex: -1, data: { lane: lane.id }, on: {
+    const el = h("section", { class: isTarget ? "lane target" : "lane", current: isTarget, tabindex: -1, data: { lane: lane.id, drop: "lane" }, on: {
       keydown: (e) => {
         const k = e as KeyboardEvent;
         if (k.key === "F2" && (k.target as HTMLElement).tagName.toLowerCase() !== "input") { k.preventDefault(); edit(); }
@@ -102,6 +102,7 @@ export function makeLanes(ui: Ui, store: CaseStore, card: (id: string, state: Ca
   let boxRo: boolean | null = null;
   return {
     el,
+    rename: (lane) => { controls.get(lane)?.edit(); },
     update() {
       const state = store.shown;
       const active = ui.doc.activeElement as HTMLElement | null;

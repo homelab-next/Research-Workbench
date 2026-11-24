@@ -10,6 +10,9 @@ import { topBar } from "./views/topbar";
 import { caseScreenFor } from "./views/workarea";
 import { makeSend } from "./ui";
 import { makeToasts } from "./views/toasts";
+import { makeHelp } from "./views/help";
+import { dispatchKey } from "./keys";
+import { nextThing } from "./derive";
 
 export type LensId = "agent" | "steps" | "timeline" | "narrative" | "worklog" | "discarded" | "jobs" | "pipeline" | "replay";
 export type Route = { screen: "home" } | { screen: "pick" } | { screen: "new" } | { screen: "soon"; mode: string } | { screen: "case"; id: string };
@@ -50,6 +53,10 @@ export interface Open { store: CaseStore; nav: Nav }
 export interface CaseHandlers {
   openLens?(id: LensId, arg?: string): void; closeLens?(): boolean; focusCard?(card: string): void;
   pivot?(card: string, values: Observable[]): void; ask?(text: string): void; focusLane?(lane: string): void;
+  /** The key actions of the case screen (every action of KEYMAP but the four of "anywhere"). */
+  actions?: Record<string, () => void>;
+  /** Escape on the case screen: returns to live, closes the lens, closes the open cards. True when it closed something. */
+  escape?(): boolean;
 }
 /** Builds the case screen. It calls `register` with what it can do for the app. */
 export type CaseScreen = (open: Open, register: (handlers: CaseHandlers) => void) => View;
@@ -67,7 +74,7 @@ export interface Shell {
 }
 export type Screen = View & { focus?(): void };
 
-export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { destroy(): void } {
+export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { destroy(): void; actions(): Record<string, () => void> } {
   const { h, win, doc } = ui;
   let cases: CaseSummaryView[] = [];
   let store: CaseStore | null = null;
@@ -162,20 +169,44 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
     const tag = (t as HTMLElement | null)?.tagName?.toLowerCase();
     return tag === "input" || tag === "textarea" || tag === "select";
   };
+  const helpHost = h("div", { class: "help-host" });
+  root.appendChild(helpHost);
+  const help = makeHelp(ui, helpHost);
+  /** The four keys of "anywhere", and whatever the case screen in front adds. */
+  const actions = (): Record<string, () => void> => ({
+    ...handlers.actions,
+    help: () => help.toggle(),
+    command_bar: () => { (root.querySelector("[aria-label=Command]") as HTMLElement | null)?.focus(); },
+    up: () => { if (help.close()) return; if (handlers.escape?.() === true) return; nav.up(); },
+    next_thing: () => {
+      const next = store === null ? null : nextThing(store.live);
+      if (next === null) return;
+      if ("command" in next) void ui.act(next.command); else nav.openLens(next.lens);
+    },
+  });
   const onKey = (e: Event): void => {
     const k = e as KeyboardEvent;
-    if (k.key === "/" && !k.ctrlKey && !k.metaKey && !k.altKey && !inText(k.target)) {
-      const box = root.querySelector("[aria-label=Command]") as HTMLElement | null;
-      if (box !== null) { k.preventDefault(); box.focus(); }
-    } else if (k.key === "Escape" && !inText(k.target)) nav.up();
+    if (k.defaultPrevented) return;                        // a view or a drag took it
+    if (help.isOpen()) {                                   // the card is modal: only its own keys work
+      if (k.key === "Escape" || k.key === "?") { k.preventDefault(); help.close(); }
+      return;
+    }
+    const target = k.target as Element | null;
+    if (k.key === "Escape" && !inText(target) && target !== null && typeof target.closest === "function") {
+      const home = target.closest("[data-card], .lane, [data-area]") as HTMLElement | null;
+      if (home !== null && home !== target) home.focus();  // a button in a card: back to the card first
+    }
+    if (dispatchKey(k, actions())) k.preventDefault();
   };
   win.addEventListener("hashchange", onHash);
   doc.addEventListener("keydown", onKey);
   render();
 
   return {
+    actions,
     destroy() {
       destroyed = true;
+      help.destroy();
       win.removeEventListener("hashchange", onHash);
       doc.removeEventListener("keydown", onKey);
       view?.destroy?.(); view = null;

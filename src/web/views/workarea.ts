@@ -2,7 +2,9 @@ import type { CaseState } from "../../core/state";
 import { knownValues } from "../derive";
 import { clear } from "../dom";
 import type { CaseHandlers, CaseScreen, LensId, Open } from "../app";
+import { dropCommand, enableDrag } from "../drag";
 import { LENSES } from "../lenses";
+import { flip } from "../motion";
 import type { Ui, View } from "../ui";
 import { makeBrief } from "./brief";
 import { makeCardPool } from "./card";
@@ -23,6 +25,10 @@ export interface WorkArea extends View {
   openLens(id: LensId, arg?: string): void;
   /** True when a lens was open. */
   closeLens(): boolean;
+  /** The key actions of the work area, by the names KEYMAP gives them. */
+  actions(): Record<string, () => void>;
+  /** The Escape of the work area: back to live, else close the lens, else close the open cards. True when one did something. */
+  escape(): boolean;
 }
 
 /** The case screen of the app: the work area for the case the store follows. */
@@ -34,6 +40,8 @@ export function caseScreenFor(ui: Ui): CaseScreen {
       closeLens: () => area.closeLens(),
       focusCard: (card) => { area.open(card); area.select(card); },
       focusLane: (lane) => area.focusColumn(lane),
+      actions: area.actions(),
+      escape: () => area.escape(),
     };
     register(handlers);
     return area;
@@ -93,9 +101,10 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
   const shelf = makeShelf(ui, {
     open: (id) => area.openLens(id),
     dock: () => dock,
-    toggleDock: () => { dock = dock === "bottom" ? "right" : "bottom"; ui.prefs.set("dock", dock); layout(); shelf.update(); },
+    toggleDock: () => toggleDock(),
     current: () => lensId,
   });
+  const toggleDock = (): void => { dock = dock === "bottom" ? "right" : "bottom"; ui.prefs.set("dock", dock); layout(); shelf.update(); };
   const banner = h("div", { class: "replay-banner", role: "status" });
   const stage = h("div", { class: "stage-col" }, brief.el, lanes.el);
   const lensBox = h("div", { class: "lens-dock", tabindex: 0, data: { area: "lens" }, hidden: true });
@@ -109,8 +118,12 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
 
   // ---------- rendering ----------
   let replayText = "";
-  const render = (): void => {
+  let pendingFocus: { card: string; seq: number } | null = null;
+  /** Cards slide to where they now are (and a discarded one slides out); with reduced motion this is just `paint`. */
+  const render = (): void => flip(ui, () => [...el.querySelectorAll("[data-card]")] as HTMLElement[], paint);
+  const paint = (): void => {
     const state = store.shown;
+    const follow = pendingFocus !== null && store.live.seq > pendingFocus.seq ? pendingFocus : null;   // read before the parts repaint: they may move the focus themselves
     brief.update();
     incoming.update();
     lanes.update();
@@ -123,6 +136,12 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
       if (text === "") banner.remove(); else { banner.textContent = text; stage.insertBefore(banner, stage.firstChild); }
     }
     layout();
+    // A card that was focused and left its place (kept, sent back, moved) gives the focus to the card that follows it, once the entries have arrived.
+    if (follow !== null) {
+      pendingFocus = null;
+      const next = byData("card", follow.card);
+      if (next !== null && ui.doc.activeElement !== next) next.focus();
+    }
   };
   let frame: number | null = null;
   const schedule = (): void => {
@@ -134,6 +153,7 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
   // focus and selection follow the browser's focus
   el.addEventListener("focusin", (e) => {
     const t = e.target as Element;
+    pendingFocus = null;
     const cardEl = t.closest?.("[data-card]") as HTMLElement | null;
     if (cardEl !== null && cardEl !== undefined) selection = cardEl.dataset.card ?? null;
     const laneEl = t.closest?.(".lane") as HTMLElement | null;
@@ -185,6 +205,8 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
       lensBox.appendChild(lensView.el);
       render();
     },
+    actions: () => ({}),
+    escape: () => false,
     closeLens() {
       if (lensId === null) return false;
       lensView?.destroy?.();
@@ -195,6 +217,101 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
       return true;
     },
   };
+  const columns = (): string[] => ["incoming", ...store.shown.lanes.map((l) => l.id)];
+  const column = (): string => {
+    const active = ui.doc.activeElement;
+    const lane = active?.closest?.(".lane") as HTMLElement | null | undefined;
+    if (lane !== null && lane !== undefined && el.contains(lane)) return lane.dataset.lane ?? "incoming";
+    if (active !== null && incoming.el.contains(active)) return "incoming";
+    if (active !== null && lanes.el.contains(active) && where === "incoming") return store.shown.lanes[0]?.id ?? "incoming";
+    return where;
+  };
+  const cardsIn = (col: string): HTMLElement[] => {
+    const root = col === "incoming" ? incoming.el : byData("lane", col);
+    return root === null ? [] : ([...root.querySelectorAll("[data-card]")] as HTMLElement[]);
+  };
+  const current = (): string | null => {
+    const active = ui.doc.activeElement?.closest?.("[data-card]") as HTMLElement | null | undefined;
+    return active?.dataset.card ?? selection;
+  };
+  const currentState = (): CaseState["cards"][string] | null => { const c = current(); return c !== null && Object.hasOwn(store.shown.cards, c) ? store.shown.cards[c]! : null; };
+  /** The card after this one in its column, else the one before it. */
+  const neighbour = (card: string): string | null => {
+    const ids = cardsIn(column()).map((n) => n.dataset.card!);
+    const at = ids.indexOf(card);
+    return at < 0 ? null : (ids[at + 1] ?? ids[at - 1] ?? null);
+  };
+  const followCard = (card: string | null): void => { pendingFocus = card === null ? null : { card, seq: store.live.seq }; };
+  const step = (dir: 1 | -1): void => {
+    const ids = cardsIn(column()).map((n) => n.dataset.card!);
+    if (ids.length === 0) return;
+    const at = current() === null ? -1 : ids.indexOf(current()!);
+    area.select(ids[at < 0 ? (dir > 0 ? 0 : ids.length - 1) : Math.max(0, Math.min(ids.length - 1, at + dir))]!);
+  };
+  const goColumn = (dir: 1 | -1): void => {
+    const all = columns();
+    const at = all.indexOf(column());
+    area.focusColumn(all[(Math.max(at, 0) + dir + all.length) % all.length]!);
+  };
+  const withCard = (fn: (card: string, c: NonNullable<ReturnType<typeof currentState>>) => void) => (): void => { const c = currentState(); if (c !== null) fn(c.id, c); };
+  const lensKeys: Record<string, () => void> = {};
+  for (const id of ["agent", "steps", "timeline", "narrative", "worklog", "discarded", "jobs", "pipeline", "replay"] as const) lensKeys[`lens_${id}`] = () => area.openLens(id);
+  const targetKeys: Record<string, () => void> = {};
+  for (let n = 1; n <= 9; n++) {
+    targetKeys[`target_${n}`] = () => {
+      const lane = store.shown.lanes[n - 1];
+      if (lane !== undefined && lane.id !== store.live.target) void ui.act("set_target", { lane: lane.id });
+    };
+  }
+  const sideways = (dir: 1 | -1) => withCard((card, c) => {
+    if (c.place !== "lane") return;
+    const all = store.shown.lanes;
+    const at = all.findIndex((l) => l.id === c.lane);
+    followCard(card);
+    if (dir < 0 && at === 0) env.sendBack(card);
+    else if (all[at + dir] !== undefined) env.move(card, all[at + dir]!.id);
+  });
+  const keys: Record<string, () => void> = {
+    next_card: () => step(1), prev_card: () => step(-1),
+    keep: withCard((card, c) => { if (c.place === "incoming") { followCard(neighbour(card)); env.keep(card); } }),
+    discard: withCard((card) => { followCard(neighbour(card)); env.discard(card); }),
+    pin: withCard((card, c) => env.pin(card, !c.pinned)),
+    keep_open: withCard((card) => area.open(card, true)),
+    open_card: withCard((card) => {
+      area.open(card);
+      byData("card", card)?.querySelector<HTMLElement>(".actions button:not([disabled]), .actions select:not([disabled])")?.focus();
+    }),
+    undo: () => { void ui.act("undo"); },
+    cite: withCard((card) => {
+      if (!opened.has(card)) area.open(card);
+      byData("card", card)?.querySelector<HTMLElement>("[data-action=cite]:not([disabled])")?.click();
+    }),
+    next_column: () => goColumn(1), prev_column: () => goColumn(-1),
+    focus_incoming: () => area.focusColumn("incoming"),
+    card_left: sideways(-1), card_right: sideways(1),
+    rename_lane: () => { const c = column(); if (c !== "incoming") lanes.rename(c); },
+    dock_side: () => toggleDock(),
+    replay_next: () => { if (store.at !== null) store.goTo(store.at + 1); },
+    replay_prev: () => { if (store.at !== null) store.goTo(store.at - 1); },
+    ...targetKeys, ...lensKeys,
+  };
+  area.actions = () => ({ ...keys });
+  area.escape = () => {
+    if (store.at !== null) { store.goTo(null); return true; }
+    if (area.closeLens()) return true;
+    if (opened.size > 0) { for (const id of [...opened]) area.close(id); return true; }
+    return false;
+  };
+
+  const stopDrag = enableDrag(ui, el, open, (card, target) => {
+    const cmd = dropCommand(store.live, card, target);
+    if (cmd === null) return;
+    const lane = typeof cmd.args.lane === "string" ? store.live.lanes.find((l) => l.id === cmd.args.lane) : undefined;
+    const words = cmd.command === "keep" ? `Kept in ${lane?.title ?? "Kept"}` : cmd.command === "move" ? `Moved to ${lane?.title ?? ""}` : "Back in Incoming";
+    void ui.send(cmd.command, cmd.args).then((r) => done(words, r));
+  });
+  const baseDestroy = area.destroy!;
+  area.destroy = () => { stopDrag(); baseDestroy(); };
   render();
   return area;
 }

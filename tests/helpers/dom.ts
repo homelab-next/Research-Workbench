@@ -20,6 +20,8 @@ type Role = Config["role"];
 export interface Page {
   s: Served; win: Window; doc: Document; ui: Ui; root: HTMLElement;
   press(key: string, mods?: { shift?: boolean; alt?: boolean }): void;      // a keydown on the focused element, bubbling
+  /** Every key action the screen in front answers to. */
+  actions(): Record<string, () => void>;
   click(target: string | Element): void; fill(target: string | Element, text: string): void;
   q(selector: string): HTMLElement; all(selector: string): HTMLElement[]; text(): string;
   /** Waits until the server is idle and every entry it wrote has been rendered. */
@@ -87,6 +89,7 @@ export async function page(opts: { role?: Role; reducedMotion?: boolean; hash?: 
       const target = doc.activeElement ?? doc.body;
       target.dispatchEvent(new win.KeyboardEvent("keydown", { key, shiftKey: mods.shift === true, altKey: mods.alt === true, bubbles: true }) as unknown as Event);
     },
+    actions: () => app.actions(),
     click(target) { el(target).dispatchEvent(new win.MouseEvent("click", { bubbles: true }) as unknown as Event); },
     fill(target, text) {
       const input = el(target) as HTMLInputElement;

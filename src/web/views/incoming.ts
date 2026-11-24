@@ -36,7 +36,7 @@ export function makeIncoming(ui: Ui, store: CaseStore, card: (id: string, state:
   const list = h("div", { class: "incoming-list" });
   const empty = h("p", { class: "empty muted" }, "Nothing waiting");
   const foot = h("div", { class: "incoming-foot muted" }, "J/K move · Space keep · X discard · ? keys");
-  const el = h("div", { class: "incoming column", tabindex: 0, data: { area: "incoming" }, name: "Incoming" }, bar, list, empty, foot);
+  const el = h("div", { class: "incoming column", tabindex: 0, data: { area: "incoming", drop: "incoming" }, name: "Incoming" }, bar, list, empty, foot);
 
   function update(): void {
     const state = store.shown;
