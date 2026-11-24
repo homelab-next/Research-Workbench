@@ -70,8 +70,9 @@ test("blocked pivots are routed around", () => {
   expect(ids(seeker.routes(["a"], "c", DEFAULT_LIMITS, new Set(["bc"])))).toEqual([["ac"]]);
 });
 
-test("already holding the goal type gives one empty route", () => {
-  expect(seeker.routes(["c"], "c", DEFAULT_LIMITS)).toEqual([{ hops: [], weight: 0 }]);
+test("holding the goal type asks for new values of it: every route has at least one hop", () => {
+  expect(seeker.routes(["c"], "c", DEFAULT_LIMITS)).toEqual([]);
+  expect(ids(seeker.routes(["a", "b"], "b", DEFAULT_LIMITS))).toEqual([["ab"]]);
 });
 
 test("no route gives an empty list", () => {
@@ -85,10 +86,34 @@ test("max_hops limits the search and cycles are never followed", () => {
   expect(ids(seeker.routes(["a"], "d", { ...DEFAULT_LIMITS, max_hops: 2 }))).toEqual([["ac", "cd"]]);
   expect(ids(seeker.routes(["a"], "d", { ...DEFAULT_LIMITS, max_hops: 3 }))).toEqual([["ab", "bc", "cd"], ["ac", "cd"]]);
   expect(ids(seeker.routes(["a"], "d", { ...DEFAULT_LIMITS, max_hops: 0 }))).toEqual([]);
-  // no route revisits a type
+  // no route uses a pivot twice
   for (const r of seeker.routes(["a"], "d", { ...DEFAULT_LIMITS, allow_unconfirmed: true, max_hops: 10 })) {
-    const seen = ["a", ...r.hops.map((h) => h.to)];
-    expect(new Set(seen).size).toBe(seen.length);
+    const used = r.hops.map((h) => h.pivot);
+    expect(new Set(used).size).toBe(used.length);
+  }
+});
+
+test("a route may pass through a type it already holds, using no pivot twice, within max_hops", () => {
+  const dir2 = mkdtempSync(join(tmpdir(), "seeker-cycle-"));
+  try {
+    mkdirSync(join(dir2, "data"));
+    writeFileSync(join(dir2, "s.yaml"), src("s", ""));
+    writeFileSync(join(dir2, "types.yaml"), `kind: types\ntypes:\n${["address", "domain", "asset", "account"].map((t) => `  - { id: ${t}, title: ${t}, pattern: '${t}' }`).join("\n")}\n`);
+    // the sample's shape: address -> domain -> address -> asset -> account
+    writeFileSync(join(dir2, "pivots.yaml"), `kind: pivots\npivots:\n${[
+      pivot("names", "address", "domain", "s", ", weight: 0"), pivot("clients", "domain", "address", "s", ", weight: 0"),
+      pivot("asset", "address", "asset", "s", ", weight: 0"), pivot("accounts", "asset", "account", "s", ", weight: 0"),
+    ].join("\n")}\n`);
+    const r = Registry.load([{ path: dir2, trusted: true, credentials: [] }]);
+    expect(r.problems).toEqual([]);
+    const sk = cheapestSeeker(r);
+    expect(ids(sk.routes(["address"], "account", DEFAULT_LIMITS))).toEqual([["asset", "accounts"], ["names", "clients", "asset", "accounts"]]);
+    expect(ids(sk.routes(["address"], "account", { ...DEFAULT_LIMITS, max_hops: 3 }))).toEqual([["asset", "accounts"]]);
+    expect(ids(sk.routes(["address"], "account", DEFAULT_LIMITS, new Set(["asset"])))).toEqual([]);
+    // asking for the held type: other addresses, by way of a name
+    expect(ids(sk.routes(["address"], "address", DEFAULT_LIMITS))).toEqual([["names", "clients"]]);
+  } finally {
+    rmSync(dir2, { recursive: true, force: true });
   }
 });
 

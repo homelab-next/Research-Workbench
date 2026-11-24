@@ -24,7 +24,12 @@ function hopOf(p: PivotManifest, s: SourceManifest): Hop {
   };
 }
 
-/** Cheapest first: each pivot is an edge between observable types; simple paths are enumerated depth-first and sorted by weight, hops, then pivot ids. */
+/**
+ * Cheapest first: each pivot is an edge between observable types. Simple paths over pivots (no pivot used twice) are
+ * enumerated depth-first up to max_hops, so a route may pass through a type it already holds (address, domain, address,
+ * asset, account); a route has at least one hop and ends at the first arrival at `want`, so asking for a type already
+ * held asks for new values of it. Routes are sorted by weight, hops, then pivot ids.
+ */
 export function cheapestSeeker(registry: Registry): Seeker {
   return {
     routes(have, want, limits, blocked = new Set()) {
@@ -36,26 +41,26 @@ export function cheapestSeeker(registry: Registry): Seeker {
         list.push(hopOf(p, s));
         edges.set(p.from, list);
       }
-      if (have.includes(want)) return [{ hops: [], weight: 0 }];
       const found = new Map<string, Route>();
-      const walk = (type: string, path: Hop[], visited: Set<string>, weight: number): void => {
+      const key = (r: Route): string => r.hops.map((h) => h.pivot).join(">");
+      const walk = (type: string, path: Hop[], used: Set<string>, weight: number): void => {
         if (limits.max_weight !== null && weight > limits.max_weight) return;
-        if (type === want) {
-          found.set(path.map((h) => h.pivot).join(">"), { hops: [...path], weight });
+        if (path.length > 0 && type === want) {
+          const route = { hops: [...path], weight };
+          found.set(key(route), route);
           return;
         }
         if (path.length >= limits.max_hops) return;
         for (const hop of edges.get(type) ?? []) {
-          if (visited.has(hop.to)) continue;
-          visited.add(hop.to);
+          if (used.has(hop.pivot)) continue;
+          used.add(hop.pivot);
           path.push(hop);
-          walk(hop.to, path, visited, weight + hop.weight);
+          walk(hop.to, path, used, weight + hop.weight);
           path.pop();
-          visited.delete(hop.to);
+          used.delete(hop.pivot);
         }
       };
-      for (const start of new Set(have)) walk(start, [], new Set([start]), 0);
-      const key = (r: Route): string => r.hops.map((h) => h.pivot).join(">");
+      for (const start of new Set(have)) walk(start, [], new Set(), 0);
       return [...found.values()]
         .sort((a, b) => a.weight - b.weight || a.hops.length - b.hops.length || (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0))
         .slice(0, MAX_ROUTES);

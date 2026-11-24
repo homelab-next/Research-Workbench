@@ -159,9 +159,12 @@ test("a refused hop is a roadblock", async () => {
   expect(r.blocked).toEqual(["ad"]);
 });
 
-test("already holding the goal answers with no trail", async () => {
+test("values given in have never count as reached: holding the goal type asks for other values of it", async () => {
   const r = await go([{ type: "owner", value: "Example Hosting" }], "owner");
-  expect(r).toMatchObject({ outcome: "answered", trail: [], cards: [], blocked: [] });
+  expect(r).toMatchObject({ outcome: "blocked", reached: [], trail: [], cards: [], blocked: [] });
+  // given an owner and an address, the owner found by the route is reached; the given one is not
+  const both = await go([{ type: "owner", value: "Example Other" }, ...addr("192.0.2.17")], "owner");
+  expect(both.reached).toEqual([{ type: "owner", value: "Example Hosting" }]);
 });
 
 test("fan-out is capped", async () => {
@@ -208,10 +211,32 @@ test("values beyond the fan-out limit are a caveat", async () => {
   expect(r.caveats).toContain("do1: 5 values not tried (fan-out limit 3)");
 });
 
-test("once the goal is known, the hop's remaining values are not run", async () => {
+test("once the goal is known, the hop's remaining values are not run, and the answer says so", async () => {
   const have = ["192.0.2.17", "192.0.2.50", "192.0.2.60", "192.0.2.61", "192.0.2.62"].map((value) => ({ type: "address", value }));
   const r = await go(have, "domain");
   expect(r.outcome).toBe("answered");
   expect(r.trail.map((t) => [t.hop.pivot, t.value])).toEqual([["ad", "192.0.2.17"]]);
-  expect(r.caveats).toEqual([]);
+  expect(r.caveats).toEqual(["ad: 4 values not followed after the goal was reached"]);
+  const two = await go(["192.0.2.61", "192.0.2.17", "192.0.2.62"].map((value) => ({ type: "address", value })), "domain");
+  expect(two.trail.map((t) => t.value)).toEqual(["192.0.2.61", "192.0.2.17"]);
+  expect(two.caveats).toEqual(["ad: 1 value not followed after the goal was reached"]);
+});
+
+test("an empty lookup marks only that pivot and value: the pivot runs again on a value found later", async () => {
+  // 192.0.2.99 has no domain, so ad runs dry on it; at gives tags, not addresses, so nothing reopens ad, and the run ends
+  const dry = await go(addr("192.0.2.99"), "domain");
+  expect(dry).toMatchObject({ outcome: "blocked", blocked: ["ad"] });
+  // with a second address in hand, ad is tried on each value in turn, not blocked after the first
+  const r = await go([...addr("192.0.2.99"), ...addr("192.0.2.17")], "domain");
+  expect(r.outcome).toBe("answered");
+  expect(r.trail.map((t) => [t.hop.pivot, t.value, t.outcome])).toEqual([["ad", "192.0.2.99", "empty"], ["ad", "192.0.2.17", "answered"]]);
+  expect(r.blocked).toEqual([]);
+});
+
+test("a route whose first hop ran dry blocks that hop, not the route's last one", async () => {
+  // ad finds nothing for 192.0.2.99; the routes to owner are ad>do1 and ad>dr>ro, and it is ad that ran dry
+  const r = await go(addr("192.0.2.99"), "owner");
+  expect(r.blocked).toEqual(["ad"]);
+  expect(r.blocked).not.toContain("do1");
+  expect(r.blocked).not.toContain("ro");
 });

@@ -113,41 +113,49 @@ test("the sample holds only reserved addresses and example domains", () => {
   for (const n of names) expect(/\.example\.(?:com|net|org)$/.test(n)).toBe(true);
 });
 
-test("from the suspicious address, a route reaches the account behind it", async () => {
-  // The asset list proves 198.51.100.77 is not internal, which blocks that pivot for the whole run; the analyst therefore
-  // learns the internal client first (address -> domain -> client), then asks for the account from both addresses.
-  const dom = await runRoute(s, deps, seeker, { have: [SAMPLE_START], want: "domain", window: SAMPLE_WINDOW, why: "who named it", actor: human });
-  expect(dom.reached.map((o) => o.value)).toEqual(["cdn-update.example.org"]);
-  const cli = await runRoute(s, deps, seeker, { have: dom.reached, want: "address", window: SAMPLE_WINDOW, why: "who asked", actor: human });
-  expect(cli.reached.map((o) => o.value)).toEqual(["192.0.2.17"]);
-  const r = await runRoute(s, deps, seeker, { have: [SAMPLE_START, ...cli.reached], want: "account", window: SAMPLE_WINDOW, why: "who is behind this", actor: human });
+test("from the suspicious address, one route call reaches the account behind it", async () => {
+  // The asset list proves 198.51.100.77 is not internal. That empty answer marks only address_to_asset|198.51.100.77 as
+  // done: the run learns the internal host that beacons to it, and the asset list then places that host.
+  const r = await runRoute(s, deps, seeker, { have: [SAMPLE_START], want: "account", window: SAMPLE_WINDOW, why: "who is behind this", actor: human });
   expect(r.outcome).toBe("answered");
-  expect(r.reached.map((o) => o.value)).toContain("j.doe");
+  expect(r.reached.map((o) => o.value)).toEqual(["j.doe"]);
   expect(r.trail.map((t) => [t.hop.pivot, t.value, t.outcome])).toEqual([
     ["address_to_asset", "198.51.100.77", "empty"],
+    ["address_to_internal_peers", "198.51.100.77", "partial"],
     ["address_to_asset", "192.0.2.17", "answered"],
     ["asset_to_accounts", "ws-17.example.net", "answered"],
   ]);
+  expect(s.state.cards[r.trail[0]!.card!]!.empty).toBe("proven-negative");
+  expect(r.blocked).toEqual([]);
+  expect(r.caveats).toEqual(["address_to_internal_peers: partial coverage (row_limit)"]);
   expect(verifyCase(s.dir).ok).toBe(true);
 });
 
-test("from the suspicious address alone, the proven negative in the asset list ends the default route", async () => {
-  const r = await runRoute(s, deps, seeker, { have: [SAMPLE_START], want: "account", window: SAMPLE_WINDOW, why: "who is behind this", actor: human });
-  expect(r.outcome).toBe("blocked");
-  expect(r.blocked).toEqual(["address_to_asset"]);
-  expect(r.trail.map((t) => [t.hop.pivot, t.outcome])).toEqual([["address_to_asset", "empty"]]);
+test("asking for addresses from an address finds other addresses, never the one given", async () => {
+  const r = await runRoute(s, deps, seeker, { have: [SAMPLE_START], want: "address", window: SAMPLE_WINDOW, why: "who talks to it", actor: human });
+  expect(r.outcome).toBe("answered");
+  expect(r.reached.map((o) => o.value)).toEqual(["192.0.2.17"]);
 });
 
-test("the unconfirmed lease source is skipped by default, and is a dead end when allowed", async () => {
+test("an address the sample knows nothing about has no route: the run is blocked after trying each way in", async () => {
+  const r = await runRoute(s, deps, seeker, { have: [addr("203.0.113.200")], want: "account", window: SAMPLE_WINDOW, why: "who is behind this", actor: human });
+  expect(r.outcome).toBe("blocked");
+  expect(r.reached).toEqual([]);
+  expect(r.trail.map((t) => [t.hop.pivot, t.outcome])).toEqual([
+    ["address_to_asset", "empty"], ["address_to_internal_peers", "empty"], ["address_to_domains", "empty"],
+  ]);
+  expect(r.blocked).toEqual(["address_to_asset", "address_to_domains"]);
+});
+
+test("the unconfirmed lease source is skipped by default, and adds nothing when allowed", async () => {
   const input = { have: [SAMPLE_START], want: "asset", window: SAMPLE_WINDOW, why: "which asset", actor: human };
   const skipped = await runRoute(s, deps, seeker, input);
-  expect(skipped.trail.map((t) => t.hop.pivot)).toEqual(["address_to_asset"]);
+  expect(skipped.reached.map((o) => o.value)).toEqual(["ws-17.example.net"]);
+  expect(skipped.trail.some((t) => t.hop.pivot === "address_to_asset_by_lease")).toBe(false);
   const r = await runRoute(s, deps, seeker, { ...input, limits: { ...DEFAULT_LIMITS, allow_unconfirmed: true } });
-  expect(r.outcome).toBe("blocked");
-  expect(r.trail.map((t) => [t.hop.pivot, t.found, t.outcome])).toEqual([
-    ["address_to_asset", [], "empty"],
-    ["address_to_asset_by_lease", [], "empty"],
-  ]);
+  expect(r.reached.map((o) => o.value)).toEqual(["ws-17.example.net"]);
+  expect(r.trail.filter((t) => t.hop.pivot === "address_to_asset_by_lease").map((t) => [t.value, t.found, t.outcome])).toEqual([["198.51.100.77", [], "empty"]]);
+  expect(r.caveats).toContain("address_to_asset_by_lease: unconfirmed source leases");
   // the lease list is silent about the workstation too: it cannot place 192.0.2.17, so it is no basis for a negative
   const lease = await pivot("address_to_asset_by_lease", "192.0.2.17");
   expect(lease.status === "done" && lease.rows).toBe(0);
