@@ -13,6 +13,9 @@ import { Engine } from "../../src/pipeline/engine";
 import type { EngineDeps, StageEnd, StageRunner } from "../../src/pipeline/engine";
 import { loadPipeline } from "../../src/pipeline/manifests";
 import type { Role } from "../../src/pipeline/manifests";
+import { frameRunner } from "../../src/pipeline/stages/frame";
+import { planRunner } from "../../src/pipeline/stages/plan";
+import { researchRunner } from "../../src/pipeline/stages/research";
 import { lastOutput } from "../../src/pipeline/stages/agent";
 import { fixture, person } from "../helpers/tools-fixture";
 import type { Fixture } from "../helpers/tools-fixture";
@@ -261,9 +264,60 @@ test("research asked for by the analyst runs one researcher per question", async
     "researcher-r2": [say({ outcome: "blocked", found: [], note: "nothing" })],
   }, { steps: ["s1", "s2"] }, { runners: { assemble } });
   expect(ofType("stage.sent_back").map((e) => [e.payload.from, e.payload.to])).toEqual([["assemble", "research"]]);
+  const toolsOf = (actor: string) => ofType("model.request").find((e) => e.actor.id === actor)!.payload.tools;
+  expect(toolsOf("researcher-g1")).toContain("run_step");
+  expect(toolsOf("researcher-r1")).not.toContain("run_step");
+  expect(toolsOf("researcher-r1")).toContain("run_pivot");
   expect(jobs()).toEqual(["Research: Who uses it", "Research: Who owns the asset?", "Research: Was the address seen before?"]);
   expect(ofType("model.request").filter((e) => e.actor.id === "researcher-g1")).toHaveLength(2);
   const out = lastOutput(f.s, "research") as { subgoals: { id: string }[]; requested: { question: string; note: string }[] };
   expect(out.requested).toEqual([{ question: "Who owns the asset?", note: "owner found" }, { question: "Was the address seen before?", note: "nothing" }]);
   expect(finished("research").map((e) => e.payload.outcome)).toEqual(["pass", "pass"]);
+});
+
+test("a stage with no output schema stalls instead of passing unvalidated output", async () => {
+  const r = rig({});
+  r.engine.start(person);
+  for (const [id, run] of [["frame", frameRunner], ["plan", planRunner], ["research", researchRunner]] as const) {
+    const stage = { ...r.deps.pipeline.stages.find((s) => s.id === id)!, schema: null };
+    const end = await run({ session: f.s, deps: r.deps, stage, attempt: 1, onNeedsBudget: async () => null });
+    expect(end).toEqual({ kind: "stalled", reason: `stage ${id} has no output schema` });
+  }
+  expect(ofType("model.request")).toEqual([]);
+});
+
+test("a frame window that is backwards or outside the case window fails the stage with a reason", async () => {
+  for (const window of [{ from: "2026-11-20T00:00:00.000Z", to: "2026-11-19T00:00:00.000Z" }, { from: "2026-11-01T00:00:00.000Z", to: "2026-11-02T00:00:00.000Z" }]) {
+    const r = rig({ orchestrator: [say({ ...FRAME, window })] });
+    r.engine.start(person);
+    const sum = await r.engine.advance();
+    expect(sum.status).toBe("paused");
+    expect(finished("frame").at(-1)!.payload).toMatchObject({ outcome: "fail" });
+    expect(finished("frame").at(-1)!.payload.reason).toContain("window");
+    expect(lastOutput(f.s, "frame")).toBeNull();
+    f.s.commit((st) => [{ type: "run.finished", actor: { kind: "system", id: "engine" }, run: st.run.id, payload: { outcome: "stopped" } }]);
+  }
+});
+
+test("a sent-back rerun does not redo a requested question whose researcher finished", async () => {
+  let assembled = 0;
+  const assemble: StageRunner = async (env): Promise<StageEnd> => {
+    if (assembled++ > 0) return { kind: "stopped" };
+    const actor = { kind: "agent", id: "analyst", stage: "assemble", profile: "investigation", model: "m", effort: null, where: "machine" } as const;
+    env.session.commit(() => [
+      { type: "research.requested", actor, payload: { question: "Q one?", why: "gap" } },
+      { type: "research.requested", actor, payload: { question: "Q two?", why: "gap" } },
+    ]);
+    return { kind: "finished", outcome: "fail", draft_hash: null, output: null, reason: "more" };
+  };
+  const r = await researched({
+    "researcher-g1": G1, "researcher-g2": G2,
+    "researcher-r1": [answered("one")], "researcher-r2": [{ declined: "not now" }, answered("two")],
+  }, { steps: ["s1", "s2"] }, { runners: { assemble } });
+  expect(f.s.state.run.status).toBe("paused");
+  await r.engine.resume(person);
+  expect(ofType("model.request").filter((e) => e.actor.id === "researcher-r1")).toHaveLength(1);
+  expect(ofType("model.request").filter((e) => e.actor.id === "researcher-r2")).toHaveLength(2);
+  const out = lastOutput(f.s, "research") as { requested: { question: string }[] };
+  expect(out.requested.map((x) => x.question)).toEqual(["Q one?", "Q two?"]);
 });

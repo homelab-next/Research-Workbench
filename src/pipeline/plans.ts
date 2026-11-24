@@ -19,6 +19,22 @@ export class PlanRefused extends Error {
   }
 }
 
+const isText = (x: unknown): x is string => typeof x === "string";
+const isPlainRecord = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
+
+/** What is wrong with the shape of the planner's output, if anything. buildPlan reads only what this has checked. */
+function shapeProblem(o: unknown): string | null {
+  const bad = "the plan output is not in the required shape: ";
+  if (!isPlainRecord(o) || !isText(o.goal) || !Array.isArray(o.subgoals) || o.subgoals.length === 0) return `${bad}it needs a goal and at least one sub-goal`;
+  for (const g of o.subgoals) {
+    if (!isPlainRecord(g) || !isText(g.title) || !isText(g.question) || !isText(g.want) || !Array.isArray(g.have) || !Array.isArray(g.route) || g.route.length === 0
+      || !g.route.every(isText) || !g.have.every((h) => isPlainRecord(h) && isText(h.type) && isText(h.value))) {
+      return `${bad}each sub-goal needs a title, question, want, have list and a route of pivot ids`;
+    }
+  }
+  return null;
+}
+
 /**
  * The plan for the planner's output, or every reason it cannot be built. A route must be one the route finder offers for the
  * starting types, the wanted type and the frame's limits. `research` is where the Research stage's model runs, for the warnings.
@@ -27,6 +43,8 @@ export function buildPlan(
   id: string, output: PlanOutput, deps: Pick<EngineDeps, "registry" | "seeker" | "config" | "runner">,
   frame: { window: TimeWindow; limits: SeekLimits }, research: { where: Where } | null,
 ): Plan | { errors: string[] } {
+  const shape = shapeProblem(output);
+  if (shape !== null) return { errors: [shape] };
   const errors: string[] = [];
   const subgoals: Plan["subgoals"] = [];
   const steps: PlanStep[] = [];
@@ -65,7 +83,9 @@ export function buildPlan(
 }
 
 function proposedPlan(session: CaseSession): Plan {
-  const { plan } = session.state;
+  const { plan, run } = session.state;
+  if (run.id === null || run.status === "none" || run.status === "finished") throw new PlanRefused("there is no run in progress");
+  if (run.waiting !== "plan") throw new PlanRefused("the run is not waiting at the plan gate");
   if (plan.status !== "proposed" || plan.current === null) throw new PlanRefused("there is no proposed plan");
   return plan.current;
 }
@@ -79,6 +99,7 @@ export function acceptPlan(session: CaseSession, input: { steps?: string[]; budg
   const plan = proposedPlan(session);
   const known = new Set(plan.steps.map((s) => s.id));
   const steps = input.steps === undefined ? plan.steps.map((s) => s.id) : [...new Set(input.steps)];
+  if (steps.length === 0) throw new PlanRefused("a plan with no accepted step cannot be accepted; deny it instead");
   const unknown = steps.find((s) => !known.has(s));
   if (unknown !== undefined) throw new PlanRefused(`unknown step: ${unknown}`);
   const budgets: Record<string, number> = {};
@@ -95,6 +116,7 @@ export function acceptPlan(session: CaseSession, input: { steps?: string[]; budg
     const out: EntryInput[] = [{ type: "plan.accepted", actor, ...link(session), payload: { plan: plan.id, steps: ordered, budgets } }];
     for (const g of plan.subgoals) {
       if (!g.steps.some((s) => steps.includes(s))) continue;
+      if (session.state.lanes.some((l) => l.subgoal === g.id)) continue;
       out.push({ type: "lane.created", actor, ...link(session), payload: { lane: ids.next("lane"), title: g.title, subgoal: g.id } });
     }
     out.push({ type: "gate.passed", actor, ...link(session), payload: { gate: "plan" } });
@@ -102,7 +124,8 @@ export function acceptPlan(session: CaseSession, input: { steps?: string[]; budg
   });
 }
 
-export function denyPlan(session: CaseSession, input: { reason: string; actor: Actor }): void {
+/** `anchor` is called once the denial is written: closing a run is anchored, and the caller says how. */
+export function denyPlan(session: CaseSession, input: { reason: string; actor: Actor }, anchor: () => void): void {
   onlyAPerson(input.actor);
   const plan = proposedPlan(session);
   const { actor } = input;
@@ -110,6 +133,7 @@ export function denyPlan(session: CaseSession, input: { reason: string; actor: A
     { type: "plan.denied", actor, ...link(session), payload: { plan: plan.id, reason: input.reason } },
     { type: "run.finished", actor, ...link(session), payload: { outcome: "stopped" } },
   ]);
+  anchor();
 }
 
 /** The gate is passed with the request, so the plan stage runs again: the plan stays "replanning" until the planner proposes another. */

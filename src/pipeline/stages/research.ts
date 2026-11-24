@@ -3,13 +3,13 @@ import type { Actor } from "../../core/types";
 import type { PlanStep } from "../../core/types";
 import { spendPlanBudget } from "../plans";
 import type { StageEnd, StageEnv } from "../engine";
-import { stageAgent } from "./agent";
+import { noSchema, stageAgent } from "./agent";
 import type { AgentStageEnd } from "./agent";
 
 const ENGINE: Actor = { kind: "system", id: "engine" };
 const DONE = new Set(["answered", "empty", "partial"]);
 
-interface Unit { actor_id: string; title: string; task: string; subgoal: string | null; question: string | null }
+interface Unit { sent_back?: boolean; actor_id: string; title: string; task: string; subgoal: string | null; question: string | null }
 interface SubResult { id: string; title: string; outcome: "answered" | "blocked"; cards: string[]; note: string }
 
 const noteOf = (end: AgentStageEnd | undefined): string => {
@@ -28,11 +28,14 @@ const describeStep = (s: PlanStep): string =>
  */
 export async function researchRunner(env: StageEnv): Promise<StageEnd> {
   const { session, deps, stage } = env;
+  const stalled = noSchema(env);
+  if (stalled !== null) return stalled;
   const plan = session.state.plan;
   if (plan.current === null || plan.status !== "accepted") return { kind: "stalled", reason: "Research: there is no accepted plan" };
   const current = plan.current;
   const entries = session.entries();
-  const lastFinished = entries.reduce((n, e) => (e.type === "stage.finished" && e.payload.stage === stage.id ? e.seq : n), 0);
+  // a declined stage has not finished its work: a restart is still the same pass
+  const lastFinished = entries.reduce((n, e) => (e.type === "stage.finished" && e.payload.stage === stage.id && e.payload.outcome !== "declined" ? e.seq : n), 0);
   const sentBack = entries.some((e) => e.type === "stage.sent_back" && e.payload.to === stage.id && e.seq > lastFinished);
 
   const accepted = (g: { steps: string[] }): string[] => g.steps.filter((s) => plan.accepted_steps.includes(s));
@@ -41,13 +44,18 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
   const actorId = (suffix: string): string => `${deps.profile.stages[stage.id]?.agent ?? "researcher"}-${suffix}`;
 
   const units: Unit[] = [];
+  /** Questions asked for whose researcher already finished in this pass: not asked again. */
+  const answeredBefore: { question: string }[] = [];
+  const doneJobs = new Set(entries.filter((e) => e.type === "job.finished" && e.payload.outcome === "done").map((e) => (e.type === "job.finished" ? e.payload.job : "")));
+  const doneTitles = new Set(entries.filter((e) => e.type === "job.started" && e.seq > lastFinished && doneJobs.has(e.payload.job)).map((e) => (e.type === "job.started" ? e.payload.title : "")));
   if (sentBack) {
     let n = 0;
     for (const e of entries) {
       if (e.type !== "research.requested") continue;
       n++;
-      if (e.seq > lastFinished) {
-        units.push({ actor_id: actorId(`r${n}`), title: `Research: ${e.payload.question}`, subgoal: null, question: e.payload.question, task: e.payload.question });
+      if (e.seq > lastFinished && doneTitles.has(`Research: ${e.payload.question}`)) answeredBefore.push({ question: e.payload.question });
+      else if (e.seq > lastFinished) {
+        units.push({ sent_back: true, actor_id: actorId(`r${n}`), title: `Research: ${e.payload.question}`, subgoal: null, question: e.payload.question, task: e.payload.question });
       }
     }
   } else {
@@ -75,7 +83,8 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
     try {
       end = await stageAgent(env, {
         actor_id: u.actor_id, task: u.task, extras: [], subgoal: u.subgoal, job,
-        onNeedsBudget: (p, step) => spendPlanBudget(session, deps.runner, p, step),
+        // a researcher sent back for a question has no sub-goal: it may not run plan steps or spend a plan budget
+        ...(u.sent_back === true ? { omit_tools: ["run_step"] as const } : { onNeedsBudget: (p: string, step: string | null) => spendPlanBudget(session, deps.runner, p, step) }),
       });
     } catch (err) {
       close("failed");
@@ -113,7 +122,7 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
     const outcome = statusOf(last) === "answered" || statusOf(last) === "partial" ? "answered" : "blocked";
     return { id: g.id, title: g.title, outcome, cards, note: noteFor(g.id) };
   });
-  const requested = units.flatMap((u, i) => (u.question === null ? [] : [{ question: u.question, note: noteOf(results[i]) }]));
+  const requested = [...answeredBefore.map((a) => ({ question: a.question, note: "" })), ...units.flatMap((u, i) => (u.question === null ? [] : [{ question: u.question, note: noteOf(results[i]) }]))];
   const output = { subgoals, requested } as unknown as Json;
   if (subgoals.some((g) => g.outcome === "answered") || requested.length > 0) return { kind: "finished", outcome: "pass", draft_hash: null, output, reason: null };
   const notes = subgoals.map((g) => `${g.title}: ${g.note === "" ? "no note" : g.note}`).join("; ");

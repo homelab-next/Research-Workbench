@@ -4,7 +4,7 @@ import type { PackPart } from "../../agents/context";
 import { buildPlan } from "../plans";
 import type { PlanOutput } from "../plans";
 import type { StageEnd, StageEnv } from "../engine";
-import { frameOf, lastOutput, stageAgent } from "./agent";
+import { frameOf, lastOutput, noSchema, stageAgent } from "./agent";
 
 /** The `where` of the provider chosen for the first stage whose role is research; null when it cannot be resolved. */
 function researchWhere(env: StageEnv): { where: Where } | null {
@@ -17,6 +17,8 @@ function researchWhere(env: StageEnv): { where: Where } | null {
 /** Plan: the planner names a route per sub-goal; code checks each against the route finder and builds the plan, which is only a proposal. */
 export async function planRunner(env: StageEnv): Promise<StageEnd> {
   const { session, deps, stage } = env;
+  const stalled = noSchema(env);
+  if (stalled !== null) return stalled;
   const state = session.state;
   const frameOut = lastOutput(session, "frame");
   const extras: PackPart[] = [];

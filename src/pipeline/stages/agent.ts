@@ -11,7 +11,7 @@ import { assemblePack, packBudget } from "../../agents/pack";
 import { DEFAULT_CONTEXT } from "../../agents/providers/local";
 import type { Provider } from "../../agents/providers/types";
 import type { DraftWork } from "../../agents/draft";
-import type { ToolContext } from "../../agents/tools";
+import type { ToolContext, ToolName } from "../../agents/tools";
 import type { SeekLimits } from "../../modules/seeker";
 import { DEFAULT_LIMITS } from "../../modules/seeker";
 import type { StageEnd, StageEnv } from "../engine";
@@ -43,13 +43,14 @@ export async function resolveAgent(env: StageEnv, actorId: string): Promise<{ ac
 /** What every agent stage shares: the model, the pack, the actor, the tool context, the loop and what the loop ended with. */
 export async function stageAgent(env: StageEnv, opts: {
   actor_id: string; task: string; extras: PackPart[]; subgoal?: string | null; job?: string | null;
-  draft?: DraftWork | null; draft_hash?: string | null; onNeedsBudget?: ToolContext["onNeedsBudget"];
+  draft?: DraftWork | null; draft_hash?: string | null; onNeedsBudget?: ToolContext["onNeedsBudget"]; omit_tools?: readonly ToolName[];
 }): Promise<AgentStageEnd> {
   const { session, deps, stage } = env;
-  const state = session.state;
   const title = titleOf(env);
   const who = await resolveAgent(env, opts.actor_id);
   if ("stalled" in who) return { kind: "stalled", reason: who.stalled };
+  // read after the await: a person may have changed the case, the run or a stage limit while the model was being resolved
+  const state = session.state;
 
   let pack: ReturnType<typeof assemblePack>;
   let schema: ReturnType<typeof schemaOf> | null = null;
@@ -65,7 +66,7 @@ export async function stageAgent(env: StageEnv, opts: {
 
   const { window, limits } = frameOf(session);
   const end = await runAgent(session, {
-    actor: who.actor, provider: who.provider, model: who.model, effort: who.effort, pack, task: opts.task, tools: stage.tools, schema,
+    actor: who.actor, provider: who.provider, model: who.model, effort: who.effort, pack, task: opts.task, tools: stage.tools.filter((t) => !(opts.omit_tools ?? []).includes(t)), schema,
     policy: deps.config.marking_policy, max_marking: Object.hasOwn(state.pack_limits, stage.id) ? state.pack_limits[stage.id]! : null,
     ctx: {
       session, deps: deps.runner, seeker: deps.seeker, actor: who.actor, link: { run: state.run.id, stage: stage.id, job: opts.job ?? null },
@@ -89,6 +90,20 @@ export async function stageAgent(env: StageEnv, opts: {
   }
 }
 
+/** The stall for a stage whose manifest names no output schema, or null when it names one. */
+export function noSchema(env: StageEnv): StageEnd | null {
+  return env.stage.schema === null ? { kind: "stalled", reason: `stage ${env.stage.id} has no output schema` } : null;
+}
+
+/** Why a window is not one the case may use: backwards, or not inside the case's own (open ends allow anything); null when it is fine. */
+export function windowProblem(w: { from: string; to: string }, within: TimeWindow): string | null {
+  if (!(w.from <= w.to)) return `the window from ${w.from} to ${w.to} ends before it begins`;
+  if ((within.from !== null && w.from < within.from) || (within.to !== null && w.to > within.to)) {
+    return `the window from ${w.from} to ${w.to} is not inside the case window (${within.from ?? "open"} to ${within.to ?? "open"})`;
+  }
+  return null;
+}
+
 /** The output blob of the stage's latest stage.finished with outcome pass; null when there is none. */
 export function lastOutput(session: CaseSession, stage: string): Json | null {
   const entries = session.entries();
@@ -109,6 +124,7 @@ export function frameOf(session: CaseSession): { window: TimeWindow; limits: See
   if (out === null || typeof out !== "object" || Array.isArray(out)) return fallback;
   const { window, limits } = out as { window?: { from?: unknown; to?: unknown }; limits?: { allow_unconfirmed?: unknown; max_weight?: unknown } };
   if (window === undefined || limits === undefined || typeof window.from !== "string" || typeof window.to !== "string") return fallback;
+  if (windowProblem({ from: window.from, to: window.to }, fallback.window) !== null) return fallback;
   return {
     window: { from: window.from, to: window.to },
     limits: {

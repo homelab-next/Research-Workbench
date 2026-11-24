@@ -30,7 +30,15 @@ const out: PlanOutput = {
   ],
 };
 const sub = (over: Partial<PlanOutput["subgoals"][number]>): PlanOutput => ({ ...out, subgoals: [{ ...out.subgoals[0]!, ...over }] });
-const propose = (o: PlanOutput = out): Plan => {
+const STAGE = { id: "plan", title: "Plan", phase: null, runs: "agent" as const, gate: "plan" as const, reviews: false, model: null };
+const system = { kind: "system" as const, id: "engine" };
+/** A run whose plan stage is waiting at the plan gate. */
+const startRun = (): void => {
+  f.s.commit((_st, ids) => [{ type: "run.started", actor: person, payload: { run: ids.next("run"), pipeline: "default", pipeline_hash: "h", stages: [STAGE] } }]);
+  f.s.commit((st) => [{ type: "gate.waiting", actor: system, run: st.run.id, payload: { gate: "plan" } }]);
+};
+const propose = (o: PlanOutput = out, withRun = true): Plan => {
+  if (withRun && f.s.state.run.status === "none") startRun();
   const built = buildPlan("", o, deps(), frame, null);
   if ("errors" in built) throw new Error(built.errors.join("; "));
   f.s.commit((_st, ids) => [{ type: "plan.proposed", actor: agent, payload: { plan: buildPlan(ids.next("plan"), o, deps(), frame, null) as Plan } }]);
@@ -80,7 +88,8 @@ test("accepting makes one lane per sub-goal and passes the gate, in one commit",
   acceptPlan(f.s, { actor: person });
   const added = f.s.entries().slice(before);
   expect(added.map((e) => e.type)).toEqual(["plan.accepted", "lane.created", "lane.created", "gate.passed"]);
-  expect(new Set(added.map((e) => e.ts)).size).toBeGreaterThanOrEqual(1);
+  expect(added.map((e) => e.seq)).toEqual([before + 1, before + 2, before + 3, before + 4]);
+  expect(added.every((e) => e.run === f.s.state.run.id)).toBe(true);
   expect(added.every((e) => e.actor.kind === "human")).toBe(true);
   expect(added[0]!.payload).toEqual({ plan: "plan-1", steps: ["s1", "s2", "s3"], budgets: {} });
   expect(added[1]!.payload).toMatchObject({ title: "Is it internal", subgoal: "g1" });
@@ -100,6 +109,8 @@ test("a budget for a free step, an unknown step, or a budget of zero is refused 
   refused(() => acceptPlan(f.s, { actor: person, budgets: { s1: 5 } }));
   refused(() => acceptPlan(f.s, { actor: person, budgets: { s9: 5 } }));
   refused(() => acceptPlan(f.s, { actor: person, budgets: { s3: 0 } }));
+  refused(() => acceptPlan(f.s, { actor: person, budgets: { s3: -5 } }));
+  refused(() => acceptPlan(f.s, { actor: person, budgets: { s3: Number.NaN } }));
   refused(() => acceptPlan(f.s, { actor: person, budgets: { s3: Number.POSITIVE_INFINITY } }));
   refused(() => acceptPlan(f.s, { actor: person, steps: ["s1"], budgets: { s3: 5 } }));
   refused(() => acceptPlan(f.s, { actor: person, steps: ["s9"] }));
@@ -110,13 +121,13 @@ test("an agent or the system cannot accept a plan", () => {
   propose();
   refused(() => acceptPlan(f.s, { actor: agent }));
   refused(() => acceptPlan(f.s, { actor: { kind: "system", id: "engine" } }));
-  refused(() => denyPlan(f.s, { actor: agent, reason: "no" }));
+  refused(() => denyPlan(f.s, { actor: agent, reason: "no" }, () => {}));
   refused(() => requestReplan(f.s, { actor: agent, note: "no" }));
 });
 
 test("a plan that was not proposed cannot be accepted, denied or re-planned", () => {
   refused(() => acceptPlan(f.s, { actor: person }));
-  refused(() => denyPlan(f.s, { actor: person, reason: "no" }));
+  refused(() => denyPlan(f.s, { actor: person, reason: "no" }, () => {}));
   refused(() => requestReplan(f.s, { actor: person, note: "again" }));
   propose();
   acceptPlan(f.s, { actor: person });
@@ -126,7 +137,7 @@ test("a plan that was not proposed cannot be accepted, denied or re-planned", ()
 test("denying the plan stops the run", () => {
   propose();
   const before = count();
-  denyPlan(f.s, { actor: person, reason: "wrong question" });
+  denyPlan(f.s, { actor: person, reason: "wrong question" }, () => {});
   expect(f.s.entries().slice(before).map((e) => [e.type, e.payload])).toEqual([
     ["plan.denied", { plan: "plan-1", reason: "wrong question" }], ["run.finished", { outcome: "stopped" }],
   ]);
@@ -142,6 +153,7 @@ test("a re-plan request is recorded with its note", () => {
 
 /** The hand-built plan, accepted with a budget on its costly step, and the proposal the researcher's run_step on it raised. */
 async function costly(budgets: Record<string, number>): Promise<void> {
+  startRun();
   f.s.commit((_st, ids) => [{ type: "plan.proposed", actor: agent, payload: { plan: PLAN(ids.next("plan")) } }]);
   acceptPlan(f.s, { actor: person, budgets });
   const r = await f.call("run_step", { step: "s3", why: "reputation" });
@@ -210,4 +222,55 @@ test("a proposal for another step is not paid with this step's budget", async ()
   await proposalFor();
   expect(await spendPlanBudget(f.s, f.sample.deps, "p1", "s1")).toBeNull();
   expect(f.s.state.proposals.p1!.status).toBe("open");
+});
+
+test("the plan commands refuse unless the run is waiting at the plan gate", () => {
+  propose(out, false);                                   // a plan with no run at all
+  refused(() => acceptPlan(f.s, { actor: person }));
+  refused(() => denyPlan(f.s, { actor: person, reason: "x" }, () => {}));
+  refused(() => requestReplan(f.s, { actor: person, note: "x" }));
+  f.s.commit((_st, ids) => [{ type: "run.started", actor: person, payload: { run: ids.next("run"), pipeline: "default", pipeline_hash: "h", stages: [STAGE] } }]);
+  refused(() => acceptPlan(f.s, { actor: person }));      // mid-stage: not yet at the gate
+  f.s.commit((st) => [{ type: "gate.waiting", actor: system, run: st.run.id, payload: { gate: "plan" } }]);
+  f.s.commit((st) => [{ type: "run.paused", actor: person, run: st.run.id, payload: { reason: "p" } }]);
+  acceptPlan(f.s, { actor: person });                     // a paused run waiting at the gate may be decided
+  expect(f.s.state.plan.status).toBe("accepted");
+});
+
+test("a finished run refuses the plan commands", () => {
+  propose();
+  f.s.commit((st) => [{ type: "run.finished", actor: system, run: st.run.id, payload: { outcome: "stopped" } }]);
+  refused(() => acceptPlan(f.s, { actor: person }));
+  refused(() => requestReplan(f.s, { actor: person, note: "x" }));
+});
+
+test("an empty step selection is refused", () => {
+  propose();
+  refused(() => acceptPlan(f.s, { actor: person, steps: [] }));
+});
+
+test("denying the plan anchors through the callback it is given", () => {
+  propose();
+  let anchored = 0;
+  denyPlan(f.s, { actor: person, reason: "no" }, () => { anchored++; });
+  expect(anchored).toBe(1);
+});
+
+test("a re-accepted plan reuses the lanes of sub-goals it already has", () => {
+  propose();
+  acceptPlan(f.s, { actor: person });
+  expect(f.s.state.lanes).toHaveLength(2);
+  // research sent the run back to plan; a new plan with the same sub-goal ids is proposed and accepted
+  f.s.commit((st) => [{ type: "gate.waiting", actor: system, run: st.run.id, payload: { gate: "plan" } }]);
+  f.s.commit((_st, ids) => [{ type: "plan.proposed", actor: agent, payload: { plan: buildPlan(ids.next("plan"), out, deps(), frame, null) as Plan } }]);
+  acceptPlan(f.s, { actor: person });
+  expect(f.s.state.lanes.map((l) => l.subgoal)).toEqual(["g1", "g2"]);
+  expect(f.s.entries().filter((e) => e.type === "lane.created")).toHaveLength(2);
+});
+
+test("a plan output that is not in the required shape is an error, not a throw", () => {
+  for (const bad of [null, {}, { goal: "g" }, { goal: "g", subgoals: [{}] }, { goal: "g", subgoals: [{ title: "t", question: "q", have: "x", want: "w", route: [] }] }]) {
+    const r = buildPlan("", bad as unknown as PlanOutput, deps(), frame, null);
+    expect("errors" in r && r.errors.length > 0).toBe(true);
+  }
 });

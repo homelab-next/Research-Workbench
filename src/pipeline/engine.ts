@@ -104,8 +104,7 @@ export class Engine {
   }
 
   denyPlan(input: { reason: string; actor: Actor }): void {
-    denyPlan(this.session, input);
-    this.anchorCase("closed");
+    denyPlan(this.session, input, () => this.anchorCase("closed"));
   }
 
   /** Asks the planner to plan again with the person's note. */
