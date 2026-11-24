@@ -27,7 +27,6 @@ export function makeJobs(ui: Ui, open: Open): View {
   const list = h("div", { class: "jobs" });
   const empty = h("p", { class: "empty" }, "No jobs yet.");
   const el = h("div", { class: "lens lens-jobs", name: "Jobs" }, list, empty);
-  let seen: unknown = null;
 
   const source = (j: JobState): string => (j.source === null ? "no source" : ui.ref.sources.find((s) => s.id === j.source)?.title ?? j.source);
   const duration = (j: JobState): string => {
@@ -48,15 +47,17 @@ export function makeJobs(ui: Ui, open: Open): View {
     return n;
   };
 
-  return {
-    el,
-    update() {
-      const state = store.shown;
-      const jobs = orderJobs(state.jobs);
-      empty.hidden = jobs.length > 0;
-      // a running job's length moves with the clock, so this repaints on every update, which is cheap
-      seen = state;
-      syncList(list, jobs, (j) => j.id, make, paint);
-    },
+  // a running job's length moves with the clock: while one runs and we are live, repaint once a second; the timer is cleared when none runs and on destroy
+  let timer: number | null = null;
+  const stopTimer = (): void => { if (timer !== null) { ui.win.clearInterval(timer); timer = null; } };
+  const update = (): void => {
+    const state = store.shown;
+    const jobs = orderJobs(state.jobs);
+    empty.hidden = jobs.length > 0;
+    syncList(list, jobs, (j) => j.id, make, paint);
+    const ticking = store.at === null && jobs.some((j) => j.status === "running");
+    if (ticking && timer === null) timer = ui.win.setInterval(update, 1000);
+    else if (!ticking) stopTimer();
   };
+  return { el, update, destroy: stopTimer };
 }

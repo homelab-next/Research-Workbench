@@ -176,13 +176,19 @@ export async function spendPlanBudget(session: CaseSession, deps: RunnerDeps, pr
  * A person asks what a costly step would cost, before accepting the plan. The step is priced through the runner, which records an estimate
  * query when the source has to be asked and runs nothing else; the figure is then recorded as step.estimated. Null when no price could be had.
  */
-export async function estimateStep(session: CaseSession, deps: RunnerDeps, input: { step: string; actor: Actor }): Promise<Cost | null> {
+export function checkEstimate(session: CaseSession, input: { step: string; actor: Actor }): PlanStep {
   onlyAPerson(input.actor, "ask for an estimate");
   const plan = proposedPlan(session);
   const step = plan.steps.find((s) => s.id === input.step);
   if (step === undefined) throw new PlanRefused(`there is no step ${input.step}`);
   if (step.free) throw new PlanRefused(`step ${step.id} is free and needs no estimate`);
   if (step.from.value === "") throw new PlanRefused(`step ${step.id} starts from what an earlier step finds; it can be priced only after that step has run`);
+  return step;
+}
+
+export async function estimateStep(session: CaseSession, deps: RunnerDeps, input: { step: string; actor: Actor }): Promise<Cost | null> {
+  const step = checkEstimate(session, input);
+  const plan = session.state.plan.current!;
   const began = session.state.seq;
   const { actor } = input;
   const result = await runPivot(session, deps, {
@@ -190,8 +196,8 @@ export async function estimateStep(session: CaseSession, deps: RunnerDeps, input
     ...(session.state.run.id === null ? {} : { run: session.state.run.id }),
   });
   if (result.status === "refused") throw new PlanRefused(result.reasons.join("; "));
-  if (result.status !== "needs_budget") throw new PlanRefused(`step ${step.id} could not be priced`);
-  // the plan may have been decided while the source was asked
+  if (result.status !== "needs_budget") throw new PlanRefused("this step is no longer priced as the plan says");
+  // the plan may have been decided while the source was asked; the write below is one synchronous commit, so nothing can come between this look and it
   if (session.state.plan.current?.id !== plan.id || session.state.plan.status !== "proposed") throw new PlanRefused("the plan was decided while the estimate was being made");
   const issued = Object.values(session.state.queries).filter((q) => q.purpose === "estimate" && q.step === step.id && q.issued_seq > began).sort((a, b) => b.issued_seq - a.issued_seq)[0];
   session.commit(() => [{ type: "step.estimated", actor, ...link(session), payload: { step: step.id, estimate: result.estimate, query: issued?.id ?? null } }]);

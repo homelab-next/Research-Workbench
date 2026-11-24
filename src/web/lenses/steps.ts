@@ -35,7 +35,6 @@ export function makeSteps(ui: Ui, open: Open): View {
   const unchecked = new Set<string>();
   const budgets = new Map<string, string>();
   const texts = new Map<string, string>();
-  const pricing = new Set<string>();
   let asking: string | null = null;
   let planId: string | null = null;
   let focusAsk = false;
@@ -53,6 +52,8 @@ export function makeSteps(ui: Ui, open: Open): View {
   /** The figure on record for a step: the person's asked-for estimate, else the plan's own. */
   const estimateOf = (s: CaseState, step: PlanStep): Cost | null => (Object.hasOwn(s.plan.estimates, step.id) ? s.plan.estimates[step.id]! : step.estimate);
   const unitOf = (s: CaseState, step: PlanStep): string => estimateOf(s, step)?.unit ?? sourceView(step.source)?.cost.unit ?? "units";
+  /** Whether an estimate query for the step is running: read from the queries the stream has brought, not from a flag of this screen. */
+  const estimating = (s: CaseState, id: string): boolean => Object.values(s.queries).some((q) => q.purpose === "estimate" && q.step === id && q.status === "running");
   const canPrice = (step: PlanStep): boolean => !step.free && step.from.value !== "";
 
   // ---------- the buttons at the gate, kept in step with what is typed ----------
@@ -124,9 +125,9 @@ export function makeSteps(ui: Ui, open: Open): View {
       else if (!canPrice(step)) kids.push(h("span", { class: "estimate-note" }, "can be priced after the earlier step has run"));
       else if (gate) {
         kids.push(h("button", {
-          type: "button", data: { action: "estimate" }, disabled: ro() || pricing.has(step.id), title: "Ask the source what this step would cost; nothing else runs",
-          on: { click: () => { pricing.add(step.id); render(); void ui.act("estimate_step", { step: step.id }).finally(() => { pricing.delete(step.id); render(); }); } },
-        }, "Estimate"));
+          type: "button", data: { action: "estimate" }, disabled: ro() || estimating(s, step.id), title: "Ask the source what this step would cost; nothing else runs",
+          on: { click: () => { void ui.act("estimate_step", { step: step.id }); } },
+        }, estimating(s, step.id) ? "Estimating…" : "Estimate"));
       }
       if (Object.hasOwn(s.plan.estimates, step.id) && est === null) kids.push(h("span", { class: "estimate-note" }, "no estimate could be given"));
       if (gate) {
@@ -195,8 +196,12 @@ export function makeSteps(ui: Ui, open: Open): View {
   const waiting = (s: CaseState): HTMLElement | null => {
     const open = Object.values(s.proposals).filter((p) => p.kind === "costly_query" && p.status === "open"
       && !(s.plan.status === "accepted" && p.step !== null && Object.hasOwn(s.plan.budgets, p.step)));
-    if (open.length === 0) return null;
-    return h("section", { class: "waiting-budget" }, h("h3", null, "Waiting for a budget"), open.map((p) => {
+    // a proposal that was accepted and whose query is still running is shown as running, from the query on the stream
+    const underway = Object.values(s.proposals).filter((p) => p.kind === "costly_query" && p.status === "accepted"
+      && Object.values(s.queries).some((q) => q.status === "running" && q.purpose === "result" && q.source === p.source && q.text === p.text && q.why === p.why));
+    if (open.length === 0 && underway.length === 0) return null;
+    return h("section", { class: "waiting-budget" }, h("h3", null, "Waiting for a budget"), underway.map((p) =>
+      h("div", { class: "proposal", data: { proposal: p.id, running: "true" } }, h("span", { class: "title" }, p.title), " ", h("span", { class: "tag tag-attention" }, "running…"))), open.map((p) => {
       if (p.kind !== "costly_query") return h("div");
       const unit = p.estimate?.unit ?? sourceView(p.source)?.cost.unit ?? "units";
       const key = `budget:${p.id}`;
@@ -234,7 +239,7 @@ export function makeSteps(ui: Ui, open: Open): View {
     const s = state();
     const plan = s.plan.current;
     if ((plan?.id ?? null) !== planId) { planId = plan?.id ?? null; unchecked.clear(); budgets.clear(); texts.clear(); asking = null; focusedAtGate = false; }
-    const sig = [plan, s.plan.status, s.plan.estimates, s.plan.steps, s.plan.accepted_steps, s.plan.budgets, s.run.waiting, s.cards, s.proposals, store.at, asking, [...pricing].join(), ui.ref];
+    const sig = [plan, s.plan.status, s.plan.estimates, s.plan.steps, s.plan.accepted_steps, s.plan.budgets, s.run.waiting, s.cards, s.proposals, s.queries, store.at, asking, ui.ref];
     if (last !== null && sig.length === last.length && sig.every((x, i) => x === last![i])) return;
     last = sig;
     const active = keyOf(el.contains(ui.doc.activeElement) ? ui.doc.activeElement : null);

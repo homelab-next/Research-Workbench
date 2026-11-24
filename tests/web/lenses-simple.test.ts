@@ -172,3 +172,18 @@ test("each lens opens with its key and closes with Escape", async () => {
     expect([id, p.q(".lens-dock").hidden]).toEqual([id, true]);
   }
 });
+
+test("a running job's length ticks while the Jobs lens is open and the tick stops when it closes", async () => {
+  await published();
+  p.s.app.hub.read("CASE-1").commit((_s, ids) => [{ type: "job.started", actor: { kind: "system", id: "t" }, payload: { job: ids.next("job"), title: "Slow", kind: "query", source: null } }]);
+  await p.settle();
+  const win = p.win as unknown as { setInterval: (...a: unknown[]) => number; clearInterval: (id: number) => void };
+  const set = win.setInterval.bind(win), clear = win.clearInterval.bind(win);
+  const started: number[] = [], cleared: number[] = [];
+  win.setInterval = (...a: unknown[]) => { const id = set(...a); started.push(id); return id; };
+  win.clearInterval = (id: number) => { cleared.push(id); clear(id); };
+  p.press("b");
+  expect(started.length).toBe(1);
+  p.press("Escape");
+  expect(cleared).toEqual(started);
+});

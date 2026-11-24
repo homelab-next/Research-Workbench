@@ -1,6 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 import type { Actor } from "../../src/core/types";
 import { runPivot } from "../../src/modules/pivots";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { startStandin } from "../helpers/http-standin";
 import { served } from "../helpers/served";
 import type { Served } from "../helpers/served";
 
@@ -59,12 +62,12 @@ async function withProposalOn(id: string): Promise<string> {
   return r.proposal;
 }
 
-test("run_proposal with a budget below the estimate is refused and leaves the proposal open", async () => {
+test("run_proposal with a budget below the estimate runs nothing and leaves the proposal open", async () => {
   const { id, proposal } = await withProposal();
   const before = s.entries(id).length;
   const r = await s.command(id, "run_proposal", { proposal, budget: 0.5 });
-  expect(r.status).toBe(409);
-  expect(JSON.stringify(r.body)).toMatch(/the estimate is \d+ lookups; the budget does not cover it/);
+  expect(r.status).toBe(200);
+  await s.app.hub.idle();
   expect(types(id).filter((t) => t === "proposal.accepted")).toEqual([]);
   expect(state(id).proposals[proposal]!.status).toBe("open");
   expect(s.entries(id).slice(before).filter((e) => e.type === "query.result" && state(id).queries[e.payload.query]!.purpose === "result")).toEqual([]);
@@ -108,4 +111,42 @@ test("the three commands are for the analyst only", async () => {
   for (const [name, args] of [["estimate_step", { step: "s1" }], ["run_proposal", { proposal: "p1", budget: 1 }], ["reject_proposal", { proposal: "p1", reason: "r" }]] as const) {
     expect([name, (await s.command(id, name, args)).status]).toEqual([name, 403]);
   }
+});
+
+// ---------- a slow source never holds the case's queue ----------
+test("a source that never answers does not hold stop, and a late answer writes no proposal entry", async () => {
+  let release: (r: Response) => void = () => {};
+  const hung = startStandin({ "GET /v1/reputation/198.51.100.77": () => new Promise<Response>((resolve) => { release = resolve; }) });
+  s = await served({ before: (root) => { const f = join(root, "sources", "reputation.yaml"); writeFileSync(f, readFileSync(f, "utf8").replace(/location: .*/, `location: ${hung.url}`)); } });
+  try {
+    const id = await s.newCase();
+    cases.push(id);
+    await s.toPlanGate(id);
+    const r = await runPivot(s.app.hub.read(id), s.app.hub.deps.runner, { pivot: "address_to_verdict", value: "198.51.100.77", window: state(id).plan.current!.window, why: "x", actor: agent });
+    if (r.status !== "needs_budget" || r.proposal === null) throw new Error("no proposal");
+    const t0 = Date.now();
+    const run = await s.command(id, "run_proposal", { proposal: r.proposal, budget: 10 });
+    expect(run.status).toBe(200);
+    expect(Date.now() - t0).toBeLessThan(1000);
+    while (hung.requests.length === 0) await Bun.sleep(20);
+    const t1 = Date.now();
+    expect((await s.command(id, "stop", { reason: "enough" })).status).toBe(200);
+    expect(Date.now() - t1).toBeLessThan(1000);
+    expect(state(id).run).toMatchObject({ status: "finished", outcome: "stopped" });
+    const at = s.entries(id).length;
+    release(new Response(JSON.stringify({ results: [] }), { headers: { "content-type": "application/json" } }));
+    await s.app.hub.idle();
+    expect(s.entries(id).slice(at).filter((e) => e.type.startsWith("proposal."))).toEqual([]);
+  } finally {
+    release(new Response("{}"));
+    hung.stop();
+  }
+});
+
+test("run_proposal still refuses at once what can be seen without the source", async () => {
+  const { id } = await withProposal();
+  const before = s.entries(id).length;
+  expect((await s.command(id, "run_proposal", { proposal: "p99", budget: 10 })).status).toBe(409);
+  expect((await s.command(id, "run_proposal", { proposal: "p1", budget: -1 })).status).toBe(409);
+  expect(s.entries(id).length).toBe(before);
 });

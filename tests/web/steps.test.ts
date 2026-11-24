@@ -267,3 +267,16 @@ test("with no plan the lens says so", async () => {
   p.press("s");
   expect(p.q(".lens").textContent).toContain("No plan yet.");
 });
+
+test("a step is shown as being estimated while an estimate query for it is running, from the stream", async () => {
+  await atGate();
+  const sys: Actor = { kind: "system", id: "runner" };
+  const hub = p.s.app.hub.read("CASE-1");
+  hub.commit((_s, ids) => [{ type: "query.issued", actor: sys, payload: { query: ids.next("query"), source: "reputation", source_hash: "h", pivot: null, pivot_hash: null, connector: "http", text: "t", bound: {}, window: { from: null, to: null }, why: "estimate for plan step s3", estimate: null, step: "s3", verifies: null, purpose: "estimate" } }]);
+  await p.settle();
+  const b = p.q("[data-step=s3] [data-action=estimate]") as HTMLButtonElement;
+  expect([b.textContent, b.disabled]).toEqual(["Estimating…", true]);
+  hub.commit(() => [{ type: "query.failed", actor: sys, payload: { query: "q1", error: "down" } }]);
+  await p.settle();
+  expect(p.q("[data-step=s3] [data-action=estimate]").textContent).toBe("Estimate");
+});
