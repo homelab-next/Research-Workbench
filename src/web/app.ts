@@ -182,14 +182,22 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
     next_thing: () => {
       const next = store === null ? null : nextThing(store.live);
       if (next === null) return;
-      if ("command" in next) void ui.act(next.command); else nav.openLens(next.lens);
+      if ("lens" in next) { nav.openLens(next.lens); return; }
+      if (next.command === "resume") { void ui.act("resume"); return; }
+      // A gate is passed only by its own button in its lens: the key takes you there.
+      const lens = next.command === "approve" ? "narrative" : "steps";
+      nav.openLens(lens);
+      ui.toast(next.command === "approve" ? "Approve the draft from the Narrative lens" : "Accept the plan from the Steps lens");
+      (root.querySelector(`.lens-dock [data-action=${next.command}]:not([disabled])`) as HTMLElement | null)?.focus();
     },
   });
   const onKey = (e: Event): void => {
     const k = e as KeyboardEvent;
     if (k.defaultPrevented) return;                        // a view or a drag took it
     if (help.isOpen()) {                                   // the card is modal: only its own keys work
-      if (k.key === "Escape" || k.key === "?") { k.preventDefault(); help.close(); }
+      if (k.ctrlKey || k.metaKey || k.altKey || inText(k.target)) return;
+      if (k.key === "Tab") { k.preventDefault(); help.trap(k.shiftKey); }
+      else if (k.key === "Escape" || k.key === "?") { k.preventDefault(); help.close(); }
       return;
     }
     const target = k.target as Element | null;

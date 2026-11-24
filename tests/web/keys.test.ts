@@ -7,9 +7,16 @@ import type { LensDef } from "../../src/web/lenses";
 
 let p: Page | null = null;
 const added: LensDef[] = [];
+let shadowed: LensDef[] = [];
+/** Puts a stub in place of any real lens of the same id for the test. */
+const stub = (def: LensDef): void => {
+  for (const real of LENSES.filter((l) => l.id === def.id)) { shadowed.push(real); LENSES.splice(LENSES.indexOf(real), 1); }
+  LENSES.push(def); added.push(def);
+};
 afterEach(async () => {
   for (const l of added) LENSES.splice(LENSES.indexOf(l), 1);
   added.length = 0;
+  LENSES.push(...shadowed); shadowed = [];
   if (p !== null) expect(p.s.app.hub.read("CASE-1").state.skipped).toEqual([]);
   await p?.close();
   p = null;
@@ -51,7 +58,7 @@ const incomingIds = (q: Page): string[] => q.all("[data-area=incoming] [data-car
 const focused = (q: Page): HTMLElement => q.doc.activeElement as HTMLElement;
 const lens = (id: string, key: string, seen: string[]): LensDef => {
   const def: LensDef = { id: id as never, key, title: id, make: (ui) => { seen.push(id); return { el: ui.h("div", { class: "stub-lens" }, id), update() {} }; } };
-  LENSES.push(def); added.push(def);
+  stub(def);
   return def;
 };
 const stubTarget = (q: Page, tag: string, props: Record<string, string> = {}): Element => {
@@ -342,14 +349,17 @@ test("Escape from a button inside a card goes back to the card first", async () 
   expect(c.classList.contains("open")).toBe(false);
 });
 
-test("Shift+Enter accepts a plan of free steps, approves a publishable draft, and resumes a paused run", async () => {
+test("Shift+Enter never passes a gate: it opens the gate's lens and says where the button is; it resumes a paused run", async () => {
   const q = await open("publish");
-  const label = q.q(".next-thing").textContent!;
-  expect(label).toMatch(/^Approve: publish draft/);
+  const seen: string[] = [];
+  lens("narrative", "r", seen);
+  const seq = st(q).seq;
   first(q).focus();
-  q.press("Enter", { shift: true }); await q.settle(); await q.s.app.hub.idle(); await q.settle();
-  expect(st(q).published.length).toBe(1);
-  // a paused run
+  q.press("Enter", { shift: true }); await q.settle();
+  expect(st(q).seq).toBe(seq);                                  // approve was not sent
+  expect(st(q).published.length).toBe(0);
+  expect(seen).toEqual(["narrative"]);
+  expect(q.toasts().at(-1)).toBe("Approve the draft from the Narrative lens");
   await q.s.command("CASE-1", "pause", {}); await q.settle();
   if (q.root.querySelector(".next-thing") !== null && /^Resume/.test(q.q(".next-thing").textContent!)) {
     q.press("Enter", { shift: true }); await q.settle();
@@ -357,18 +367,17 @@ test("Shift+Enter accepts a plan of free steps, approves a publishable draft, an
   }
 });
 
-test("Shift+Enter on a plan of free steps accepts it", async () => {
-  p = await page();
-  const id = await p.s.newCase();
-  await p.s.toPlanGate(id);
-  p.win.location.hash = `#/case/${id}`; await p.settle();
-  const free = st(p).plan.current!.steps.every((s) => s.free);
-  if (!free) return;                                              // the sample's plan has a costly step: covered by the next test
-  p.press("Enter", { shift: true }); await p.settle();
-  expect(st(p).plan.status).toBe("accepted");
+test("Shift+Enter focuses the gate's own button when the lens has one", async () => {
+  const q = await open("publish");
+  const def: LensDef = { id: "narrative", key: "r", title: "n", make: (ui) => ({ el: ui.h("div", null, ui.h("button", { type: "button", data: { action: "approve" } }, "Approve")), update() {} }) };
+  stub(def);
+  first(q).focus();
+  q.press("Enter", { shift: true });
+  expect(focused(q)).toBe(q.q("[data-action=approve]"));
+  expect(st(q).published.length).toBe(0);
 });
 
-test("Shift+Enter on a plan with a costly step opens Steps instead of accepting", async () => {
+test("Shift+Enter on a plan with a costly step opens Steps and sends nothing", async () => {
   const q = await open("plan");
   const seen: string[] = [];
   lens("steps", "s", seen);
@@ -377,6 +386,38 @@ test("Shift+Enter on a plan with a costly step opens Steps instead of accepting"
   q.press("Enter", { shift: true }); await q.settle();
   expect(seen).toEqual(["steps"]);
   expect(st(q).seq).toBe(seq);
+});
+
+test("the plan gate is never passed by a key either", async () => {
+  const q = await open("plan");
+  const seq = st(q).seq;
+  q.press("Enter", { shift: true }); await q.settle();
+  expect(st(q).seq).toBe(seq);
+  expect(st(q).plan.status).not.toBe("accepted");
+});
+
+test("Tab stays inside the ? card while it is open", async () => {
+  const q = await open();
+  first(q).focus();
+  q.press("?");
+  const dialog = q.q("[role=dialog]");
+  const ev = new q.win.KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+  dialog.dispatchEvent(ev as unknown as Event);
+  expect(ev.defaultPrevented).toBe(true);
+  expect(dialog.contains(focused(q))).toBe(true);
+  const back = new q.win.KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true });
+  dialog.dispatchEvent(back as unknown as Event);
+  expect(back.defaultPrevented).toBe(true);
+  expect(dialog.contains(focused(q))).toBe(true);
+});
+
+test("with the ? card open, a modified Escape or ? does not close it", async () => {
+  const q = await open();
+  q.press("?");
+  q.press("Escape", { alt: true });
+  expect(q.doc.querySelector("[role=dialog]")).not.toBeNull();
+  q.press("Escape");
+  expect(q.doc.querySelector("[role=dialog]")).toBeNull();
 });
 
 test("typing in a field never triggers a shortcut", async () => {

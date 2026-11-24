@@ -64,7 +64,7 @@ export function enableDrag(ui: Ui, root: HTMLElement, open: Open, onDrop: (card:
   let line: HTMLElement | null = null;
 
   const showLine = (hit: { target: DropTarget; el: HTMLElement } | null): void => {
-    const would = hit !== null && press !== null && dropCommand(open.store.live, press.card, hit.target) !== null ? hit : null;
+    const would = hit !== null && press !== null && open.store.at === null && dropCommand(open.store.live, press.card, hit.target) !== null ? hit : null;
     if (would === null) { line?.remove(); line = null; return; }
     if (line === null) { line = h("div", { class: "drop-line" }); doc.body.appendChild(line); }
     const r = would.el.getBoundingClientRect();
@@ -80,6 +80,8 @@ export function enableDrag(ui: Ui, root: HTMLElement, open: Open, onDrop: (card:
     doc.removeEventListener("pointerup", up);
     doc.removeEventListener("pointercancel", cancel);
     doc.removeEventListener("keydown", key, true);
+    ui.win.removeEventListener("blur", cancel);
+    doc.removeEventListener("visibilitychange", hide);
     press?.el.classList.remove("dragging");
     line?.remove(); line = null; press = null; dragging = false;
   };
@@ -92,6 +94,7 @@ export function enableDrag(ui: Ui, root: HTMLElement, open: Open, onDrop: (card:
   function move(ev: Event): void {
     const e = ev as MouseEvent;
     if (press === null) return;
+    if (dragging && e.buttons === 0) { cancel(); return; }   // the release happened where we could not hear it
     if (!dragging) {
       if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < DRAG_PX) return;
       dragging = true;
@@ -109,6 +112,7 @@ export function enableDrag(ui: Ui, root: HTMLElement, open: Open, onDrop: (card:
     if (hit !== null) onDrop(card, hit.target);
   }
   function cancel(): void { if (dragging) swallowClick(); stop(); }
+  function hide(): void { if (doc.visibilityState === "hidden") cancel(); }
   function key(ev: Event): void {
     const e = ev as KeyboardEvent;
     if (e.key !== "Escape") return;
@@ -127,6 +131,8 @@ export function enableDrag(ui: Ui, root: HTMLElement, open: Open, onDrop: (card:
     doc.addEventListener("pointerup", up);
     doc.addEventListener("pointercancel", cancel);
     doc.addEventListener("keydown", key, true);
+    ui.win.addEventListener("blur", cancel);
+    doc.addEventListener("visibilitychange", hide);
   };
   root.addEventListener("pointerdown", down);
   return () => { stop(); root.removeEventListener("pointerdown", down); };

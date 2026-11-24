@@ -50,8 +50,8 @@ test.each([
 const box = (el: Element, top: number, height = 40, left = 0, width = 200): void => {
   (el as unknown as { getBoundingClientRect(): unknown }).getBoundingClientRect = () => ({ top, height, left, width, bottom: top + height, right: left + width, x: left, y: top });
 };
-const ptr = (q: Page, type: string, target: Element | Document, x: number, y: number) =>
-  target.dispatchEvent(new q.win.MouseEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true }) as unknown as Event);
+const ptr = (q: Page, type: string, target: Element | Document, x: number, y: number, buttons = type === "pointerup" ? 0 : 1) =>
+  target.dispatchEvent(new q.win.MouseEvent(type, { clientX: x, clientY: y, button: 0, buttons, bubbles: true }) as unknown as Event);
 async function open(): Promise<Page> {
   p = await page();
   const id = await p.s.newCase();
@@ -172,4 +172,58 @@ test("while replaying a drop changes nothing and says why", async () => {
   await q.settle();
   expect(q.s.entries("CASE-1").length).toBe(before);
   expect(q.toasts()).toContain("Return to live to change the case");
+});
+
+/** A drag started and left over a lane, so a drop would keep the card. */
+async function started(): Promise<{ q: Page; c: HTMLElement; id: string; lane: string }> {
+  const q = await open();
+  const lane = st(q).lanes[1]!.id;
+  const c = q.q("[data-area=incoming] [data-card]");
+  const laneEl = q.q(`.lane[data-lane=${lane}]`);
+  box(c, 100); box(laneEl, 300, 200, 300, 300);
+  under(q, laneEl);
+  ptr(q, "pointerdown", c, 10, 110); ptr(q, "pointermove", q.doc, 320, 350);
+  expect(q.doc.querySelector(".drop-line")).not.toBeNull();
+  return { q, c, id: c.dataset.card!, lane };
+}
+
+test("a pointercancel ends the drag and the next release drops nothing", async () => {
+  const { q, c, id } = await started();
+  ptr(q, "pointercancel", q.doc, 320, 350);
+  expect(q.doc.querySelector(".drop-line")).toBeNull();
+  expect(c.classList.contains("dragging")).toBe(false);
+  ptr(q, "pointerup", q.doc, 320, 350); await q.settle();
+  expect(st(q).cards[id]!.place).toBe("incoming");
+});
+
+test("losing the window's focus or the page's visibility ends the drag", async () => {
+  for (const how of ["blur", "hidden"] as const) {
+    const { q, id } = await started();
+    if (how === "blur") q.win.dispatchEvent(new q.win.Event("blur") as never);
+    else { Object.defineProperty(q.doc, "visibilityState", { value: "hidden", configurable: true }); q.doc.dispatchEvent(new q.win.Event("visibilitychange") as unknown as Event); }
+    expect(q.doc.querySelector(".drop-line")).toBeNull();
+    ptr(q, "pointerup", q.doc, 320, 350); await q.settle();
+    expect(st(q).cards[id]!.place).toBe("incoming");
+    await q.close(); p = null;
+  }
+});
+
+test("a move with no button down means the release was lost, so the drag ends", async () => {
+  const { q, c, id } = await started();
+  ptr(q, "pointermove", q.doc, 330, 360, 0);
+  expect(q.doc.querySelector(".drop-line")).toBeNull();
+  expect(c.classList.contains("dragging")).toBe(false);
+  ptr(q, "pointerup", q.doc, 330, 360); await q.settle();
+  expect(st(q).cards[id]!.place).toBe("incoming");
+});
+
+test("no drop line shows while replaying", async () => {
+  const q = await open();
+  q.store()!.goTo(q.store()!.live.seq - 1); await q.settle();
+  const lane = st(q).lanes[0]!.id;
+  const c = q.q("[data-area=incoming] [data-card]");
+  const laneEl = q.q(`.lane[data-lane=${lane}]`);
+  box(c, 100); box(laneEl, 300); under(q, laneEl);
+  ptr(q, "pointerdown", c, 10, 110); ptr(q, "pointermove", q.doc, 320, 350);
+  expect(q.doc.querySelector(".drop-line")).toBeNull();
 });

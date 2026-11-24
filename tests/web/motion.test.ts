@@ -39,6 +39,7 @@ test("an element that leaves slides out as a copy instead of vanishing", () => {
   const win = new Window({ url: "http://127.0.0.1:1/" });
   const ui = testUi(win, { reducedMotion: () => false });
   const el = ui.doc.createElement("div");
+  el.setAttribute("id", "x"); el.setAttribute("tabindex", "0"); el.setAttribute("data-card", "c1"); el.setAttribute("data-drop", "card");
   ui.doc.body.appendChild(el);
   (el as unknown as { getBoundingClientRect(): unknown }).getBoundingClientRect = () => ({ top: 10, left: 5, width: 100, height: 20, bottom: 30, right: 105, x: 5, y: 10 });
   const animated: unknown[] = [];
@@ -49,6 +50,9 @@ test("an element that leaves slides out as a copy instead of vanishing", () => {
   try { flip(ui, () => [el], () => el.remove()); } finally { proto.animate = had; }
   expect(animated.length).toBe(1);
   expect(animated[0]).not.toBe(el);
+  const ghost = ui.doc.querySelector(".ghost")!;
+  expect(ghost.hasAttribute("inert")).toBe(true);
+  expect(ghost.hasAttribute("tabindex") || ghost.hasAttribute("id") || ghost.hasAttribute("data-card") || ghost.hasAttribute("data-drop")).toBe(false);
 });
 
 test("the work area animates nothing under reduced motion", async () => {

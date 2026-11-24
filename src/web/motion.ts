@@ -15,6 +15,9 @@ export function flip(ui: Ui, elements: () => HTMLElement[], change: () => void):
     if (!el.isConnected) {
       const ghost = el.cloneNode(true) as HTMLElement;
       ghost.classList.add("ghost");
+      ghost.toggleAttribute("inert", true);
+      ghost.ariaHidden = "true";
+      for (const n of [ghost, ...ghost.querySelectorAll("[id], [tabindex], [data-card], [data-drop]")] as HTMLElement[]) for (const name of ["id", "tabindex", "data-card", "data-drop"]) n.removeAttribute(name);
       for (const [k, v] of [["position", "fixed"], ["top", `${box.top}px`], ["left", `${box.left}px`], ["width", `${box.width}px`], ["height", `${box.height}px`], ["pointer-events", "none"], ["margin", "0"]] as const) ghost.style.setProperty(k, v);
       ui.doc.body.appendChild(ghost);
       const run = canAnimate(ghost) ? ghost.animate([{ opacity: 1, transform: "translateX(0)" }, { opacity: 0, transform: "translateX(-24px)" }], { duration: FLIP_MS, easing: "ease-out" }) : null;
