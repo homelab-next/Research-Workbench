@@ -1,0 +1,100 @@
+import type { Json } from "../../core/canonical";
+import { isPlainObject, parseJson } from "../../core/canonical";
+import type { Schema } from "../../core/schema";
+import { validate } from "../../core/schema";
+import type { CaseSession } from "../../core/session";
+import type { Actor, Marking, TimeWindow } from "../../core/types";
+import type { RunnerDeps, RunQueryResult } from "../../modules/runner";
+import type { Seeker, SeekLimits } from "../../modules/seeker";
+import type { ToolSpec } from "../providers/types";
+import { CARD_TOOLS } from "./cards";
+import { params, TOOL_VIEW_CHARS, ToolError, VIEW_ROWS } from "./kit";
+import { RESEARCH_TOOLS } from "./research";
+import { SOURCE_TOOLS } from "./sources";
+
+export { TOOL_VIEW_CHARS, ToolError, VIEW_ROWS };
+
+export const TOOL_NAMES = ["list_sources", "describe_source", "find_routes", "run_step", "run_pivot", "run_query", "list_cards", "read_card", "verify_card",
+  "propose_assessment", "propose_narrative", "request_research", "raise_challenge", "answer_challenge"] as const;
+export type ToolName = (typeof TOOL_NAMES)[number];
+
+export interface ToolContext {
+  session: CaseSession; deps: RunnerDeps; seeker: Seeker; actor: Extract<Actor, { kind: "agent" }>;
+  link: { run: string | null; stage: string | null; job: string | null };
+  subgoal: string | null; window: TimeWindow; limits: SeekLimits;
+  /** Set by the engine. Called when a costly step raised a proposal; returns the result if the person's plan budget ran it, else null. */
+  onNeedsBudget?: (proposal: string, step: string | null) => Promise<RunQueryResult | null>;
+}
+/** `view` is what the model is given; `marking` is the marking of any source data in it. */
+export interface ToolResult { ok: boolean; summary: string; view: Json; marking: Marking | null }
+export interface ToolDef { name: ToolName; description: string; parameters: Schema; call(ctx: ToolContext, args: Record<string, Json>): Promise<ToolResult> }
+
+const unavailable = (name: ToolName): ToolDef => ({
+  name, description: "Not available yet.", parameters: params(),
+  call: async () => ({ ok: false, summary: "not available", view: { error: "not available" }, marking: null }),
+});
+
+const defs = new Map<string, ToolDef>([...SOURCE_TOOLS, ...RESEARCH_TOOLS, ...CARD_TOOLS].map((t) => [t.name, t]));
+export const TOOLS = Object.fromEntries(TOOL_NAMES.map((n) => [n, defs.get(n) ?? unavailable(n)])) as Record<ToolName, ToolDef>;
+
+export function toolSpecs(names: readonly ToolName[]): ToolSpec[] {
+  return names.map((n) => ({ name: n, description: TOOLS[n].description, parameters: TOOLS[n].parameters }));
+}
+
+export interface ParsedCall { tool: ToolDef | null; name: string; args: Json; why: string; error: string | null }
+
+export function parseCall(allowed: readonly ToolName[], name: string, argumentsText: string): ParsedCall {
+  const parsed = parseJson(argumentsText);
+  const args: Json = parsed === null ? { _raw: argumentsText.slice(0, 2000) } : parsed.value;
+  const why = isPlainObject(args) && typeof args.why === "string" && args.why !== "" ? args.why : "";
+  const fail = (tool: ToolDef | null, error: string): ParsedCall => ({ tool, name, args, why, error });
+  const known = (TOOL_NAMES as readonly string[]).includes(name);
+  if (!known) return fail(null, `unknown tool: ${name}`);
+  const tool = TOOLS[name as ToolName];
+  if (!(allowed as readonly string[]).includes(name)) return fail(tool, `this stage may not use ${name}`);
+  if (parsed === null) return fail(tool, "the arguments were not valid JSON");
+  const errors = validate(tool.parameters, args);
+  if (errors.length > 0) {
+    const text = errors.slice(0, 3).map((e) => `${e.path.replace(/^\$\.?/, "") || "arguments"} ${e.message}`).join("; ");
+    return fail(tool, `invalid arguments: ${text}`);
+  }
+  return { tool, name, args, why, error: null };
+}
+
+const firstLine = (err: unknown): string => (err instanceof Error ? err.message : String(err)).split("\n")[0]!;
+
+/** Runs a parsed call. Never throws: an error, from the parse or from the tool, is a result the model can read. */
+export async function execTool(ctx: ToolContext, parsed: ParsedCall): Promise<ToolResult> {
+  if (parsed.error !== null || parsed.tool === null) {
+    const error = parsed.error ?? `unknown tool: ${parsed.name}`;
+    return { ok: false, summary: error, view: { error }, marking: null };
+  }
+  try {
+    return await parsed.tool.call(ctx, parsed.args as Record<string, Json>);
+  } catch (err) {
+    const error = firstLine(err);
+    return { ok: false, summary: error, view: { error }, marking: null };
+  }
+}
+
+const ROW_KEYS = ["rows", "data", "cards", "sources", "routes", "found", "kept", "incoming", "discarded"];
+
+/** The view as JSON text, at most TOOL_VIEW_CHARS. The row list is halved until it fits; the record around it is never trimmed. */
+export function viewText(result: ToolResult): string {
+  const whole = JSON.stringify(result.view);
+  if (whole.length <= TOOL_VIEW_CHARS) return whole;
+  const tooBig = JSON.stringify({ truncated: true, error: "the result is too large to show" });
+  if (!isPlainObject(result.view)) return tooBig;
+  const view: Record<string, Json> = { ...(result.view as Record<string, Json>), truncated: true };
+  for (;;) {
+    const text = JSON.stringify(view);
+    if (text.length <= TOOL_VIEW_CHARS) return text;
+    const lists = Object.keys(view).filter((k) => Array.isArray(view[k]) && (view[k] as Json[]).length > 0);
+    const rowLists = lists.filter((k) => ROW_KEYS.includes(k));
+    const pool = rowLists.length > 0 ? rowLists : lists;
+    if (pool.length === 0) return tooBig;
+    const key = pool.reduce((a, b) => (JSON.stringify(view[b]).length > JSON.stringify(view[a]).length ? b : a));
+    const list = view[key] as Json[];
+    view[key] = list.slice(0, Math.floor(list.length / 2));
+  }
+}
