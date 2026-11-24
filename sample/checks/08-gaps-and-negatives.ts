@@ -13,7 +13,7 @@ for (const f of product.key_findings) {
     if (card === undefined) continue;
     if (card.coverage !== null && card.coverage.kind === "partial" && !seen.has(id)) {
       seen.add(id);
-      if (!gaps.includes(`[${id}]`)) fail("gaps_and_limits", `${id} has partial coverage (${card.coverage.reason}) and is not named as [${id}] in the gaps and limits`);
+      if (!new RegExp(`(?<![\\w])${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w])`, "i").test(gaps)) fail("gaps_and_limits", `${id} has partial coverage (${card.coverage.reason}) and is not named in the gaps and limits`);
     }
     if (card.row_count === 0 && !(card.empty === "proven-negative" && card.coverage !== null && card.coverage.kind === "full")) {
       fail(f.id, `${f.id} cites ${id}, which has no rows and is not a proven negative with full coverage`);

@@ -134,3 +134,51 @@ test("a variant of a term counts as that term", async () => {
   i.draft.product.key_findings[0]!.likelihood = "likely";
   expect((await run("likelihood-term", i)).pass).toBe(false);
 });
+
+test("the word remote alone is not a likelihood term; the phrase remote chance is", async () => {
+  const i = good();
+  i.draft.product.key_findings[0]!.statement = "We assess it is very likely that the address was used for remote desktop by ws-17.";
+  expect(await run("likelihood-term", i)).toMatchObject({ pass: true });
+  const j = good();
+  j.draft.product.key_findings[0]!.likelihood = "almost no chance";
+  j.draft.product.key_findings[0]!.statement = "We assess there is a remote chance that ws-17 is external.";
+  expect(await run("likelihood-term", j)).toMatchObject({ pass: true });
+});
+
+test("a card with a marking that is not a marking fails the marking check", async () => {
+  const i = good();
+  i.cards.c2!.marking = "TLP:PURPLE" as never;
+  const o = await run("marking", i);
+  expect(o.pass).toBe(false);
+  expect(o.findings[0]!.where).toBe("product");
+});
+
+test("a product with no key findings fails the citations check", async () => {
+  const i = good();
+  i.draft.product.key_findings = [];
+  const o = await run("citations", i);
+  expect(o.pass).toBe(false);
+  expect(o.findings[0]).toMatchObject({ where: "key_findings", message: "the product has no key findings" });
+});
+
+test.each(["[c2]", "[c3, c2]", "c3", "[Card c2]", "(see C2)"])("an assumption citing a card as %s fails", async (form) => {
+  const i = good();
+  i.draft.product.assumptions = [`The asset list is current ${form}.`];
+  const o = await run("assumptions-and-judgments", i);
+  expect(o.pass).toBe(false);
+  expect(o.findings[0]!.where).toBe("assumptions");
+});
+
+test.each(["[c3]", "[c3, c2]", "c3", "[Card c3]"])("a partial card named as %s in the gaps counts as named", async (form) => {
+  const i = good();
+  i.draft.product.gaps_and_limits = `The proxy log is partial ${form}; the last hour is missing.`;
+  expect(await run("gaps-and-negatives", i)).toMatchObject({ pass: true });
+});
+
+test.each(["We have confidence is low in this, and it is likely.", "Confidence: moderate, and this is likely.", "Our confidence is high; it is very likely so."])("%s mixes confidence and likelihood", async (text) => {
+  const i = good();
+  i.draft.product.summary = text;
+  const o = await run("confidence-and-likelihood", i);
+  expect(o.pass).toBe(false);
+  expect(o.findings[0]!.where).toBe("summary");
+});

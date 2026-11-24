@@ -10,7 +10,8 @@ if (own < 0) fail("product", `"${product.marking}" is not a marking`);
 else {
   for (const f of product.key_findings) for (const id of f.cites) {
     const card = input.cards[id];
-    if (card !== undefined && order.indexOf(card.marking) > own) fail("product", `the product is marked ${product.marking}, which is less restrictive than ${id} (${card.marking})`);
+    if (card !== undefined && order.indexOf(card.marking) < 0) fail("product", `${id} is marked "${card.marking}", which is not a marking, so it counts as the most restrictive`);
+    else if (card !== undefined && order.indexOf(card.marking) > own) fail("product", `the product is marked ${product.marking}, which is less restrictive than ${id} (${card.marking})`);
   }
 }
 console.log(JSON.stringify({ pass: findings.length === 0, findings }));

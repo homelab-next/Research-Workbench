@@ -1,6 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { Json } from "../core/canonical";
 import { canonical } from "../core/canonical";
 import { sha256Hex } from "../core/hash";
@@ -98,14 +98,20 @@ export async function runCheck(check: CheckManifest, input: CheckInput): Promise
   }
   let cwd: string | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let killGroup = (): void => {};
   try {
     cwd = mkdtempSync(join(tmpdir(), "rw-check-"));
-    const cmd = check.runner === "bun" ? [process.execPath, script] : [script];
-    const proc = Bun.spawn(cmd, { cwd, env: { PATH: process.env.PATH ?? "", LANG: "C.UTF-8" }, stdin: "pipe", stdout: "pipe", stderr: "ignore" });
+    // what runs is a copy of the bytes that were hashed, alone in the working folder: the original may change, and its siblings are out of reach
+    const copy = join(cwd, basename(script));
+    writeFileSync(copy, scriptBytes, { mode: check.runner === "exec" ? 0o700 : 0o600 });
+    const cmd = check.runner === "bun" ? [process.execPath, copy] : [copy];
+    // its own process group, so that the whole group can be killed, not only the program
+    const proc = Bun.spawn(cmd, { cwd, env: { PATH: process.env.PATH ?? "", LANG: "C.UTF-8" }, stdin: "pipe", stdout: "pipe", stderr: "ignore", detached: true });
+    killGroup = (): void => { try { process.kill(-proc.pid, "SIGKILL"); } catch { /* the group is gone */ } try { proc.kill("SIGKILL"); } catch { /* so is the program */ } };
     let timedOut = false;
     let tooBig = false;
     const stop = new Promise<"stop">((resolve) => {
-      timer = setTimeout(() => { timedOut = true; proc.kill("SIGKILL"); resolve("stop"); }, check.timeout_ms);
+      timer = setTimeout(() => { timedOut = true; killGroup(); resolve("stop"); }, check.timeout_ms);
     });
     try {
       proc.stdin.write(inputBytes);
@@ -124,7 +130,7 @@ export async function runCheck(check: CheckManifest, input: CheckInput): Promise
           if (room > 0) chunks.push(value.subarray(0, room));
           total = CHECK_MAX_OUTPUT;
           tooBig = true;
-          proc.kill("SIGKILL");
+          killGroup();
           return;
         }
         chunks.push(value);
@@ -133,7 +139,14 @@ export async function runCheck(check: CheckManifest, input: CheckInput): Promise
     };
     await Promise.race([readAll().catch(() => {}), stop]);
     if (timedOut || tooBig) void reader.cancel().catch(() => {});
-    const code = await Promise.race([proc.exited, new Promise<number>((r) => setTimeout(() => r(-1), 2000))]);
+    // a program that closed its output and carries on has not finished: it runs until the timeout, which kills it
+    let code = -1;
+    if (!timedOut && !tooBig) {
+      const ended = await Promise.race([proc.exited, stop]);
+      if (ended === "stop") timedOut = true;
+      else code = ended;
+    }
+    killGroup();
     const output = Buffer.concat(chunks);
     if (timedOut) return failed(check, `timed out after ${check.timeout_ms} ms`, script_hash, inputBytes, output);
     if (tooBig) return failed(check, "returned more than 1 MiB", script_hash, inputBytes, output);
@@ -148,6 +161,7 @@ export async function runCheck(check: CheckManifest, input: CheckInput): Promise
     return failed(check, `could not run: ${(err as Error).message.split("\n")[0]}`, script_hash, inputBytes, empty);
   } finally {
     clearTimeout(timer);
+    killGroup();
     if (cwd !== null) rmSync(cwd, { recursive: true, force: true });
   }
 }

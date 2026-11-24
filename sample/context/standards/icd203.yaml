@@ -3,7 +3,7 @@ id: icd203
 title: Likelihood and confidence terms (after ICD 203)
 note: Check these terms and ranges against the published directive before relying on them.
 likelihood:
-  - { term: almost no chance,   also: [remote],                           range: [1, 5] }
+  - { term: almost no chance,   also: [remote chance],                         range: [1, 5] }
   - { term: very unlikely,      also: [highly improbable],                range: [5, 20] }
   - { term: unlikely,           also: [improbable],                       range: [20, 45] }
   - { term: roughly even chance, also: [roughly even odds],               range: [45, 55] }

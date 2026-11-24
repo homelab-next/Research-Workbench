@@ -24,7 +24,7 @@ const levels: string[] = input.standard.confidence;
 const sentences = (text: string): string[] => text.split(/(?<=[.!?])\s+/);
 /** A sentence that holds both "<level> confidence" and a likelihood term has run the two together. */
 function mixed(text: string): boolean {
-  return sentences(text).some((s) => levels.some((l) => new RegExp(`(?<![\\w])${l} confidence(?![\\w])`, "i").test(s)) && termsIn(s).length > 0);
+  return sentences(text).some((s) => levels.some((l) => new RegExp(`(?<![\\w])(?:${l} confidence|confidence(?:\\s+(?:is|of|level|level is))?\\s*[:=-]?\\s*${l})(?![\\w])`, "i").test(s)) && termsIn(s).length > 0);
 }
 for (const f of product.key_findings) {
   if (!levels.includes(f.confidence)) fail(f.id, `${f.id}: "${f.confidence}" is not a confidence level of the standard`);

@@ -172,6 +172,64 @@ test("a script that is missing is left out with a problem", () => {
   expect(r.problems[0]).toMatch(/check missing.*missing/);
 });
 
+const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const waitGone = async (pid: number): Promise<boolean> => { for (let i = 0; i < 40; i++) { if (!alive(pid)) return true; await Bun.sleep(50); } return false; };
+
+test("the program that runs is a copy of the bytes that were hashed, kept apart from the original folder", async () => {
+  const root = join(dir, "root-copy");
+  const A = `console.log(JSON.stringify({ pass: false, findings: [{ where: "w", message: "A" + (import.meta.dir === ${JSON.stringify(root)} ? "!" : "") }] }));\n`;
+  const B = A.replace('"A"', '"B"');
+  write(root, "copy", A);
+  const c = load(root).checks[0]!;
+  const f = join(root, "copy.ts");
+  writeFileSync(join(dir, "flip.sh"), `while true; do printf '%s\\n' '${B.trim()}' > ${dir}/t1; mv ${dir}/t1 ${f}; printf '%s\\n' '${A.trim()}' > ${dir}/t2; mv ${dir}/t2 ${f}; done`);
+  const flip = Bun.spawn(["bash", join(dir, "flip.sh")], { stdout: "ignore", stderr: "ignore" });
+  try {
+    for (let i = 0; i < 40; i++) {
+      const o = await runCheck(c, INPUT);
+      const ran = o.findings[0]!.message;
+      const hashed = [A, B].find((x) => sha256Hex(new TextEncoder().encode(x)) === o.script_hash);
+      expect(hashed).toBeDefined();
+      expect(ran).toBe(hashed!.includes('"B"') ? "B" : "A");
+    }
+  } finally { flip.kill(); }
+});
+
+test("a child the check started does not outlive the timeout", async () => {
+  const pidFile = join(dir, "child.pid");
+  const c = one("kids", `Bun.spawn(["sleep", "30"], { stdout: "ignore" }).pid; await Bun.write(${JSON.stringify(pidFile)}, String(Bun.spawn(["sleep", "30"]).pid)); for (;;) { await Bun.sleep(50); }`, { timeout_ms: 600 });
+  const o = await runCheck(c, INPUT);
+  expect(o.findings[0]!.message).toBe("timed out after 600 ms");
+  const pid = Number(await Bun.file(pidFile).text());
+  expect(await waitGone(pid)).toBe(true);
+});
+
+test("a program that closes standard output and keeps running is a timeout and is killed", async () => {
+  const pidFile = join(dir, "me.pid");
+  const c = one("closer", `import { closeSync, writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); closeSync(1); for (;;) { await Bun.sleep(50); }`, { timeout_ms: 600 });
+  const o = await runCheck(c, INPUT);
+  expect(o).toMatchObject({ pass: false, findings: [{ check: "closer", where: "check", message: "timed out after 600 ms" }] });
+  expect(await waitGone(Number(await Bun.file(pidFile).text()))).toBe(true);
+});
+
+test("a program whose standard output really is closed, and that carries on, is a timeout and is killed", async () => {
+  const pidFile = join(dir, "sh.pid");
+  const root = join(dir, "root-sh");
+  write(root, "sh", `#!/bin/sh\necho $$ > ${pidFile}\nexec 1>&-\nsleep 30\n`, { runner: "exec", timeout_ms: 600 }, "sh.sh");
+  chmodSync(join(root, "sh.sh"), 0o755);
+  const o = await runCheck(load(root).checks[0]!, INPUT);
+  expect(o.findings[0]!.message).toBe("timed out after 600 ms");
+  expect(await waitGone(Number((await Bun.file(pidFile).text()).trim()))).toBe(true);
+});
+
+test("a child left running after an overflow is killed too", async () => {
+  const pidFile = join(dir, "kid2.pid");
+  const c = one("flood", `await Bun.write(${JSON.stringify(pidFile)}, String(Bun.spawn(["sleep", "30"]).pid)); process.stdout.write("x".repeat(${CHECK_MAX_OUTPUT + 10})); for (;;) { await Bun.sleep(50); }`);
+  const o = await runCheck(c, INPUT);
+  expect(o.findings[0]!.message).toBe("returned more than 1 MiB");
+  expect(await waitGone(Number(await Bun.file(pidFile).text()))).toBe(true);
+});
+
 // ---- the stage ----
 
 const DRAFT_PRODUCT: Product = { ...PRODUCT, key_findings: [{ id: "f1", statement: "s", likelihood: "likely", confidence: "high", confidence_basis: "b", cites: ["c1"], assumptions: [], reasoning: "r" }] };
