@@ -2,7 +2,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { casePart, ContextError, loadProfile, packPart, partOf, schemaOf, stageParts } from "../../src/agents/context";
+import { casePart, ContextError, exampleOf, loadProfile, packPart, partOf, schemaOf, stageParts, SCHEMA_LEAD } from "../../src/agents/context";
+import { loadPipeline } from "../../src/pipeline/manifests";
 import { EntryBuilder } from "../helpers/entries";
 import { validate } from "../../src/core/schema";
 import type { CaseState, CardState } from "../../src/core/state/types";
@@ -229,4 +230,37 @@ test("text a model wrote carries the marking of the request it answered; a perso
   expect(part([answered], "TLP:AMBER").marking).toBe("TLP:AMBER");
   const stray = { ...raised, seq: 1 };
   expect(() => part([stray])).toThrow(ContextError);
+});
+
+test("no stage's pack carries a schema manifest's wrapper: a plain line, the schema body, and an example", () => {
+  expect(SCHEMA_LEAD).toBe("Reply with one JSON object that matches this schema — not the schema itself.");
+  const p = loadProfile(registry, "investigation");
+  const { pipeline } = loadPipeline(registry);
+  const withSchema = pipeline!.stages.filter((s) => s.schema !== null && Object.hasOwn(p.stages, s.id));
+  expect(withSchema.length).toBeGreaterThan(5);
+  for (const stage of withSchema) {
+    const parts = stageParts(registry, p, stage.id, { schema: stage.schema, objective: null });
+    for (const x of parts) {
+      expect(x.text).not.toMatch(/"kind":\s*"schema"/);
+    }
+    const part = parts.find((x) => x.kind === "schema")!;
+    expect(part.id).toBe(stage.schema!);
+    expect(part.fixed).toBe(true);
+    const body = schemaOf(registry, stage.schema!);
+    expect(part.text).toStartWith(`${SCHEMA_LEAD}\n`);
+    expect(part.text).toContain(JSON.stringify(body, null, 2));
+    expect(part.text).toContain(`Example:\n${JSON.stringify(exampleOf(body))}`);
+  }
+});
+
+test("the example has the required fields, the first enum value and empty arrays, and matches its schema", () => {
+  const research = schemaOf(registry, "research-output");
+  expect(exampleOf(research)).toEqual({ outcome: "answered", found: [], note: "" });
+  expect(validate(research, exampleOf(research))).toEqual([]);
+  for (const id of ["plan-output", "assemble-output", "evaluate-output", "challenge-output", "publish-output", "product"]) {
+    expect(validate(schemaOf(registry, id), exampleOf(schemaOf(registry, id)))).toEqual([]);
+  }
+  expect(exampleOf({ type: "object", required: ["a", "n"], properties: { a: { type: "array", minItems: 1, items: { type: "integer", minimum: 3 } }, n: { type: ["number", "null"] }, o: { type: "string" } } }))
+    .toEqual({ a: [3], n: 0 });
+  expect(exampleOf({ anyOf: [{ const: "x" }, { type: "string" }] })).toBe("x");
 });

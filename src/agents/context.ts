@@ -80,7 +80,7 @@ export function stageParts(registry: Registry, profile: Profile, stage: string, 
   parts.push({ kind: "goal", id: `${stage}-goal`, title: "Goal", text: s.goal, marking: profile.marking, fixed: false });
   if (s.procedure !== null) parts.push(partOf(registry, "procedure", s.procedure));
   for (const id of s.skills) parts.push(partOf(registry, "skill", id));
-  if (opts.schema !== null) parts.push(partOf(registry, "schema", opts.schema, true));
+  if (opts.schema !== null) parts.push(schemaPart(registry, opts.schema));
   for (const id of s.references) parts.push(partOf(registry, "reference", id));
   for (const id of s.gates) parts.push(partOf(registry, "gate", id));
   if (opts.objective !== null) parts.push(partOf(registry, "objective", opts.objective));
@@ -166,4 +166,40 @@ export function schemaOf(registry: Registry, id: string): Schema {
   const m = trustedManifest(registry, "schema", id);
   if (!isPlainObject(m.body.schema)) throw new ContextError(`schema "${id}" has no schema`);
   return m.body.schema as unknown as Schema;
+}
+
+/** The line before a stage's output schema: the model is to reply with an instance, not copy the schema. */
+export const SCHEMA_LEAD = "Reply with one JSON object that matches this schema — not the schema itself.";
+
+/**
+ * A small instance of the schema to show its shape: an object's required fields only, the first enum or const value, the first
+ * anyOf branch, the first listed type, arrays at their fewest items, strings at their least length, numbers at their minimum.
+ * A `pattern` is not generated for, so an example of a schema with one may not match it.
+ */
+export function exampleOf(schema: Schema): Json {
+  if (schema.const !== undefined) return schema.const as Json;
+  if (Array.isArray(schema.enum) && schema.enum.length > 0) return schema.enum[0] as Json;
+  if (Array.isArray(schema.anyOf) && schema.anyOf.length > 0) return exampleOf(schema.anyOf[0]!);
+  const t = Array.isArray(schema.type) ? schema.type[0] : schema.type;
+  switch (t ?? (schema.properties !== undefined ? "object" : schema.items !== undefined ? "array" : null)) {
+    case "object": {
+      const out: Record<string, Json> = {};
+      for (const k of schema.required ?? []) out[k] = exampleOf(schema.properties?.[k] ?? {});
+      return out;
+    }
+    case "array": return Array.from({ length: schema.minItems ?? 0 }, () => exampleOf(schema.items ?? {}));
+    case "string": return "x".repeat(schema.minLength ?? 0);
+    case "number":
+    case "integer": return schema.minimum ?? 0;
+    case "boolean": return false;
+    default: return null;
+  }
+}
+
+/** A stage's output schema as a part: the lead line, the JSON Schema body alone (never the manifest's kind, id and title), and an example. */
+export function schemaPart(registry: Registry, id: string): PackPart {
+  const m = trustedManifest(registry, "schema", id);
+  const schema = schemaOf(registry, id);
+  const text = `${SCHEMA_LEAD}\n${JSON.stringify(schema, null, 2)}\nExample:\n${JSON.stringify(exampleOf(schema))}`;
+  return { kind: "schema", id, title: m.title, text, marking: markingOf(m), fixed: true };
 }
