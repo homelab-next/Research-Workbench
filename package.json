@@ -6,6 +6,7 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "verify": "bun run src/cli/verify.ts",
+    "investigate": "bun run src/cli/run.ts",
     "sample:data": "bun run scripts/make-sample-data.ts",
     "sample:fixture": "bun run sample/fixture/reputation-server.ts"
   },

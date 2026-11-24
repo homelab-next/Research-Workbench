@@ -1,0 +1,202 @@
+kind: script
+id: sample-run
+title: Scripted investigation of the sample story
+# Card titles are "<pivot title>: <value>", which is how {{card:...}} finds a card in what a tool returned.
+turns:
+  - actor: orchestrator
+    reply:
+      tool_calls:
+        - { tool: list_sources, args: { why: "See what may be asked before framing." } }
+  - actor: orchestrator
+    reply:
+      content: |
+        {"goals": [
+          {"title": "Who is behind the traffic", "question": "Which account is behind the connections to 198.51.100.77?", "want": "account"},
+          {"title": "Is the address known to be bad", "question": "Is 198.51.100.77 known to be bad?", "want": "verdict"}
+        ],
+         "window": {"from": "2026-11-17T00:00:00.000Z", "to": "2026-11-24T00:00:00.000Z"},
+         "limits": {"allow_unconfirmed": false, "max_weight": null},
+         "notes": "Use the sample window as given."}
+
+  - actor: planner
+    reply:
+      tool_calls:
+        - { tool: find_routes, args: { why: "Routes from the address to an account.", have: [{ type: address, value: 198.51.100.77 }], want: account } }
+  - actor: planner
+    reply:
+      tool_calls:
+        - { tool: find_routes, args: { why: "Routes from the address to a verdict.", have: [{ type: address, value: 198.51.100.77 }], want: verdict } }
+  - actor: planner
+    reply:
+      content: |
+        {"goal": "Find who is behind the traffic to 198.51.100.77 and whether it is known to be bad",
+         "subgoals": [
+           {"title": "Who is behind the traffic", "question": "Which account is behind the connections to 198.51.100.77?",
+            "have": [{"type": "address", "value": "198.51.100.77"}], "want": "account",
+            "route": ["address_to_asset", "asset_to_accounts"]},
+           {"title": "Is the address known to be bad", "question": "Is 198.51.100.77 known to be bad?",
+            "have": [{"type": "address", "value": "198.51.100.77"}], "want": "verdict",
+            "route": ["address_to_verdict"]}
+         ]}
+
+  # sub-goal 1: a dead end, a re-route, a partial result, then the account
+  - actor: researcher-g1
+    reply:
+      tool_calls:
+        - { tool: run_step, args: { why: "The asset list should say whether the address is internal.", step: s1 } }
+  - actor: researcher-g1
+    reply:
+      tool_calls:
+        - { tool: find_routes, args: { why: "The address is not an asset; look for another way to an account.", have: [{ type: address, value: 198.51.100.77 }], want: account } }
+  - actor: researcher-g1
+    reply:
+      tool_calls:
+        - { tool: run_pivot, args: { why: "Find the hosts that connected to the address.", pivot: address_to_internal_peers, value: 198.51.100.77 } }
+  - actor: researcher-g1
+    reply:
+      tool_calls:
+        - { tool: run_pivot, args: { why: "The peer 192.0.2.17 is internal: find its asset.", pivot: address_to_asset, value: 192.0.2.17 } }
+  - actor: researcher-g1
+    reply:
+      tool_calls:
+        - { tool: run_step, args: { why: "Find the accounts that signed in to the asset.", step: s2, value: ws-17.example.net } }
+  - actor: researcher-g1
+    reply:
+      tool_calls:
+        - { tool: run_pivot, args: { why: "Check where the account signed in from.", pivot: account_to_signin_addresses, value: j.doe } }
+  - actor: researcher-g1
+    reply:
+      content: |
+        {"outcome": "answered", "found": [{"type": "account", "value": "j.doe"}],
+         "note": "The address is not an asset. The peers list was partial, but it named 192.0.2.17 (ws-17.example.net), where j.doe signed in, once from an address it had not used."}
+
+  # sub-goal 2: the costly lookup, paid from the plan budget by the engine
+  - actor: researcher-g2
+    reply:
+      tool_calls:
+        - { tool: run_step, args: { why: "Ask the reputation service about the address.", step: s3 } }
+  - actor: researcher-g2
+    reply:
+      content: |
+        {"outcome": "answered", "found": [{"type": "verdict", "value": "suspicious"}], "note": "The reputation service calls the address suspicious."}
+
+  # draft 1: f1 holds a confidence and a likelihood in one sentence
+  - actor: analyst
+    reply:
+      tool_calls:
+        - { tool: list_cards, args: { why: "See what was collected." } }
+  - actor: analyst
+    reply:
+      tool_calls:
+        - tool: propose_assessment
+          args:
+            why: "The account is the answer to the first goal."
+            statement: "We assess that the account j.doe is very likely behind the regular connections from ws-17.example.net to 198.51.100.77, and we have moderate confidence in this."
+            likelihood: very likely
+            confidence: moderate
+            confidence_basis: "Flow records were truncated, but the sign-in and asset records agree."
+            cites: ["{{card:Hosts that connected to the address: 198.51.100.77}}", "{{card:Asset with the address, by asset list: 192.0.2.17}}", "{{card:Accounts that signed in to the asset: ws-17.example.net}}"]
+            assumptions: ["The asset list is current."]
+            reasoning: "ws-17.example.net connects every ten minutes, and j.doe signed in there shortly before it began."
+        - tool: propose_assessment
+          args:
+            why: "The address is not one of ours."
+            statement: "We assess that 198.51.100.77 is almost certainly not an internal host."
+            likelihood: almost certain
+            confidence: high
+            confidence_basis: "The asset list is complete for internal hosts and had no row for the address."
+            cites: ["{{card:Asset with the address, by asset list: 198.51.100.77}}"]
+            assumptions: []
+            reasoning: "An address absent from a complete asset list is not internal."
+        - tool: propose_narrative
+          args:
+            why: "Summarise the judgment."
+            section: summary
+            text: "The account j.doe is the most likely user behind regular connections from ws-17.example.net to 198.51.100.77, an address that is not internal."
+            cites: ["{{card:Accounts that signed in to the asset: ws-17.example.net}}"]
+        - tool: propose_narrative
+          args:
+            why: "Say what the record does not show."
+            section: gaps_and_limits
+            text: "The list of hosts that connected to the address ({{card:Hosts that connected to the address: 198.51.100.77}}) was cut off at the row limit, so other hosts may have connected too."
+            cites: ["{{card:Hosts that connected to the address: 198.51.100.77}}"]
+        - tool: propose_narrative
+          args:
+            why: "Say what else could explain it."
+            section: alternatives
+            text: "Someone else may have used the account on ws-17.example.net, or the workstation may be running software the account holder did not start."
+            cites: ["{{card:Accounts that signed in to the asset: ws-17.example.net}}"]
+        - tool: propose_narrative
+          args:
+            why: "Set out the reasoning."
+            section: assessment
+            text: "The workstation made regular calls to the address, and the account signed in to it from a new address shortly before they began."
+            cites: ["{{card:Accounts that signed in to the asset: ws-17.example.net}}"]
+  - actor: analyst
+    reply:
+      content: |
+        {"done": true, "change": "First judgment on this question.", "assumptions": ["The asset list is current."], "note": "First draft."}
+
+  # draft 2: the planted fault is fixed by keeping the first sentence only
+  - actor: analyst
+    reply:
+      tool_calls:
+        - { tool: list_cards, args: { why: "See what was collected." } }
+  - actor: analyst
+    reply:
+      tool_calls:
+        - tool: propose_assessment
+          args:
+            why: "Check 3 failed: one sentence held a confidence and a likelihood."
+            replaces: f1
+            statement: "We assess that the account j.doe is very likely behind the regular connections from ws-17.example.net to 198.51.100.77."
+            likelihood: very likely
+            confidence: moderate
+            confidence_basis: "Flow records were truncated, but the sign-in and asset records agree."
+            cites: ["{{card:Hosts that connected to the address: 198.51.100.77}}", "{{card:Asset with the address, by asset list: 192.0.2.17}}", "{{card:Accounts that signed in to the asset: ws-17.example.net}}"]
+            assumptions: ["The asset list is current."]
+            reasoning: "ws-17.example.net connects every ten minutes, and j.doe signed in there shortly before it began."
+  - actor: analyst
+    reply:
+      content: |
+        {"done": true, "change": "First judgment on this question, with the first finding reworded so that its confidence is not stated inside its likelihood sentence.", "assumptions": ["The asset list is current."], "note": "Second draft."}
+
+  - actor: evaluator
+    reply:
+      tool_calls:
+        - { tool: list_cards, args: { why: "See the cards the draft cites." } }
+  - actor: evaluator
+    reply:
+      tool_calls:
+        - { tool: read_card, args: { why: "Read the card the main finding rests on.", card: "{{card:Accounts that signed in to the asset: ws-17.example.net}}" } }
+  - actor: evaluator
+    reply:
+      tool_calls:
+        - { tool: verify_card, args: { why: "Run the asset lookup again.", card: "{{card:Asset with the address, by asset list: 192.0.2.17}}" } }
+  - actor: evaluator
+    reply:
+      content: |
+        {"pass": true, "findings": []}
+
+  - actor: adversary
+    reply:
+      tool_calls:
+        - { tool: list_cards, args: { why: "See the cards the draft cites." } }
+  - actor: adversary
+    reply:
+      tool_calls:
+        - tool: raise_challenge
+          args:
+            why: "The peers list was cut off."
+            severity: consider
+            text: "The hosts that connected to the address were cut off at the row limit; other hosts may share the behaviour."
+            cites: ["{{card:Hosts that connected to the address: 198.51.100.77}}"]
+  - actor: adversary
+    reply:
+      content: |
+        {"done": true, "summary": "One point to consider; nothing that must be answered."}
+
+  - actor: publisher
+    reply:
+      content: |
+        {"title": "Regular connections to 198.51.100.77", "note": "Sample run."}

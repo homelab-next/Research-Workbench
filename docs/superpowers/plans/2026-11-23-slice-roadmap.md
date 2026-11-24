@@ -41,17 +41,20 @@ The slice is too large for one plan. It is built as five plans, in order. Each p
 
 ### Plan 3: Agents and pipeline
 
-1. Provider interface and the `scripted` provider
-2. `local endpoint` provider, with a stand-in server for tests
-3. Context pack, context budget, marking rule
-4. The fixed tool list
-5. The agent loop
-6. Pipeline engine: stages, gates, send-back cap, pause, resume, interrupted
-7. Stage runners: Frame, Plan, Research
-8. Stage runners: Assemble, Evaluate, Challenge; draft revisions
-9. Checks runner and the eleven form checks
-10. Publishing and feedback
-11. Sample context, scripted run, headless run command, custody acceptance test
+0. Close out plan 2
+1. Core additions and session recovery
+2. Provider interface, model manifests, the `scripted` provider
+3. The `local` endpoint provider, with a stand-in server for tests
+4. Context parts, the pack, its budget, the marking rule
+5. The fixed tool list: sources, research and cards
+6. Analysis tools and the draft builder
+7. The agent loop
+8. Pipeline manifests and the engine: stages, gates, send-back cap, pause, resume, interrupted
+9. Stage runners: Frame, Plan, Research
+10. Stage runners: Assemble, Evaluate, Challenge; draft revisions
+11. The checks runner and the eleven form checks
+12. Publishing and feedback
+13. The scripted run, the headless command, the custody acceptance test
 
 ### Plan 4: Server and interface
 
