@@ -47,6 +47,59 @@ export function compileType(pattern: string): RegExp {
   return new RegExp(`^(?:${pattern})$`);
 }
 
+/** A type's pattern that takes longer than this on any probe is refused. An honest pattern takes microseconds. */
+export const PATTERN_PROBE_LIMIT_MS = 50;
+const PROBE_LENGTHS = [64, 128, 256, MAX_VALUE_LENGTH];
+const CLASS_SAMPLE: Record<string, string> = { d: "0", D: "a", w: "a", W: "-", s: " ", S: "a", b: "", B: "" };
+const SYNTAX = new Set([..."()[]{}|*+?^$."]);
+const TERMINATORS = ["\u0001", "\n", "!", "~", "\u00ff"];
+
+/** The characters a pattern is written with, in order of first use: literals, and a sample for each class escape and for ".". */
+function patternChars(pattern: string): string[] {
+  const out: string[] = [];
+  const add = (c: string): void => { if (c !== "" && !out.includes(c)) out.push(c); };
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i]!;
+    if (c === "\\") {
+      const n = pattern[++i] ?? "";
+      add(Object.hasOwn(CLASS_SAMPLE, n) ? CLASS_SAMPLE[n]! : n);
+    } else if (c === "{") {
+      while (i < pattern.length && pattern[i] !== "}") i++; // a quantifier's digits are not text the pattern reads
+    } else if (c === ".") {
+      add("a");
+    } else if (!SYNTAX.has(c)) {
+      add(c);
+    }
+  }
+  return out.length > 0 ? out : ["a"];
+}
+
+/**
+ * Times a type's pattern, compiled as compileType compiles it, on three probe strings built from the characters in the
+ * pattern (all of them in turn, the first repeated, the last repeated), each ending in a character the pattern does not
+ * use so that the match must fail. Each probe is tried at growing lengths up to MAX_VALUE_LENGTH, stopping as soon as
+ * one try is over the limit, so a pattern that blows up is caught before the longest probe runs. Returns the slowest
+ * time in milliseconds, or that of the first try over the limit.
+ */
+export function probePattern(pattern: string, limitMs = PATTERN_PROBE_LIMIT_MS): number {
+  const re = compileType(pattern);
+  const chars = patternChars(pattern);
+  const end = TERMINATORS.find((t) => !chars.includes(t)) ?? "\u0002";
+  const bodies = [chars.join(""), chars[0]!, chars[chars.length - 1]!];
+  let worst = 0;
+  for (const unit of bodies) {
+    for (const length of PROBE_LENGTHS) {
+      const probe = unit.repeat(Math.ceil(length / unit.length)).slice(0, length - 1) + end;
+      const started = performance.now();
+      re.test(probe);
+      const took = performance.now() - started;
+      worst = Math.max(worst, took);
+      if (took > limitMs) return took;
+    }
+  }
+  return worst;
+}
+
 export class Observables {
   private readonly compiled: { id: string; re: RegExp }[];
 

@@ -7,7 +7,7 @@ import type { Actor } from "../core/types";
 import type { RootConfig } from "./config";
 import { ManifestError, parseManifestFile, toPivot, toSource, toType, validateBody } from "./manifests";
 import type { LoadedManifest, PivotManifest, SourceManifest } from "./manifests";
-import { compileType } from "./observables";
+import { compileType, MAX_VALUE_LENGTH, PATTERN_PROBE_LIMIT_MS, probePattern } from "./observables";
 import type { ObservableType } from "./observables";
 
 export type { LoadedManifest, PivotManifest, QualityNote, SourceManifest, TableManifest, EndpointManifest } from "./manifests";
@@ -182,7 +182,11 @@ export class Registry {
       for (const item of body[parsed.kind] as Record<string, Json>[]) {
         const id = item.id as string;
         try {
-          if (parsed.kind === "types") compileType(item.pattern as string);
+          if (parsed.kind === "types") {
+            compileType(item.pattern as string);
+            const took = probePattern(item.pattern as string);
+            if (took > PATTERN_PROBE_LIMIT_MS) throw new Error(`it took ${Math.round(took)} ms on a probe string of at most ${MAX_VALUE_LENGTH} characters (the limit is ${PATTERN_PROBE_LIMIT_MS} ms)`);
+          }
         } catch (err) {
           this.reject(root.path, path, `type "${id}": pattern ${JSON.stringify(item.pattern)} refused: ${(err as Error).message}`);
           continue;

@@ -6,6 +6,7 @@ import { Ledger } from "../../src/core/ledger";
 import { sha256Hex } from "../../src/core/hash";
 import type { RootConfig } from "../../src/modules/config";
 import { Registry, staysInside } from "../../src/modules/registry";
+import { PATTERN_PROBE_LIMIT_MS, probePattern } from "../../src/modules/observables";
 
 const dirs: string[] = [];
 const tmp = (): string => {
@@ -406,4 +407,24 @@ test("a trusted root's source may name only a credential granted to that root", 
   // a grant on another root does not carry over
   const two = Registry.load([root({}, { trusted: true, credentials: ["MODEL_API_KEY"] }), root({ "s.yaml": httpSource("s", "credential: MODEL_API_KEY\n") }, { trusted: true })]);
   expect(two.source("s")).toBeNull();
+});
+
+test("a type pattern that is slow on a 512-character probe is a problem; the sample's patterns load", () => {
+  const types = (p: string) => `kind: types\ntypes:\n  - { id: slow, pattern: '${p}' }\n  - { id: ok, pattern: 'a' }\n`;
+  // no nested quantifier, so only the timing catches them: polynomial backtracking on a long failing string
+  for (const p of ["\\d+\\d+\\d+\\d+x", "a{0,500}a{0,500}a{0,500}a{0,500}b"]) {
+    const r = Registry.load([root({ "t.yaml": types(p) })]);
+    expect(r.types().map(t => t.id)).toEqual(["ok"]);
+    expect(r.problems).toHaveLength(1);
+    expect(r.problems[0]!.error).toMatch(/type "slow": pattern .* refused: it took \d+ ms on a probe string of at most 512 characters \(the limit is 50 ms\)/);
+  }
+  const sample = Registry.load([{ path: join(import.meta.dir, "..", "..", "sample"), trusted: true, credentials: [] }]);
+  expect(sample.problems).toEqual([]);
+  expect(sample.types()).toHaveLength(6);
+});
+
+test("probePattern builds its probes from the pattern's own characters", () => {
+  expect(probePattern("(?:\\d{1,3}\\.){3}\\d{1,3}")).toBeLessThan(PATTERN_PROBE_LIMIT_MS);
+  expect(probePattern("\\d+\\d+\\d+\\d+x")).toBeGreaterThan(PATTERN_PROBE_LIMIT_MS);
+  expect(probePattern("[0-9]+[0-9]+[0-9]+[0-9]+x")).toBeGreaterThan(PATTERN_PROBE_LIMIT_MS);
 });
