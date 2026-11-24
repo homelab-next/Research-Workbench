@@ -8,6 +8,7 @@ import type { AgentView, PartView } from "../core/wire";
 import { ContextError, casePart, packPart, partOf, stageParts } from "../agents/context";
 import type { PackPart } from "../agents/context";
 import { runAgent } from "../agents/loop";
+import type { AgentEnd } from "../agents/loop";
 import { assemblePack, packBudget } from "../agents/pack";
 import { DEFAULT_CONTEXT } from "../agents/providers/local";
 import type { Provider } from "../agents/providers/types";
@@ -171,6 +172,10 @@ export async function ask(ctx: CommandContext, input: { text: string; left_out: 
   }));
 }
 
+/** Why a turn the loop ended will not be answered, as its agent.ended says. */
+const END_REASON: Record<Exclude<AgentEnd["kind"], "done">, string> = { blocked: "blocked", declined: "declined", error: "the model call failed", stopped: "stopped", invalid: "the answer was not valid",
+};
+
 async function answer(ctx: CommandContext, who: Resolved, q: { turn: string; seq: number; text: string; left_out: string[]; added: string[] }): Promise<void> {
   const { session, deps } = ctx;
   const state = session.state;
@@ -187,8 +192,12 @@ async function answer(ctx: CommandContext, who: Resolved, q: { turn: string; seq
     policy: deps.config.marking_policy, max_marking: Object.hasOwn(state.pack_limits, STAGE) ? state.pack_limits[STAGE]! : null,
     ctx: { session, deps: deps.runner, seeker: deps.seeker, actor, link: { run: null, stage: null, job: null }, draft: null, draft_hash: null, subgoal: null, window, limits: { ...DEFAULT_LIMITS } },
   });
-  // anything but an answer has been recorded by the loop itself (a decline, a block, an error)
-  if (end.kind !== "done") return;
+  // anything but an answer has been recorded by the loop itself (a decline, a block, an error); the turn's own end says which, so it is closed
+  if (end.kind !== "done") {
+    const reason = END_REASON[end.kind];
+    session.commit(() => [{ type: "agent.ended", actor: { kind: "system", id: "converse" }, cause: q.seq, payload: { asked: q.seq, reason } }]);
+    return;
+  }
   const request = session.entries().findLast((e) => e.type === "model.request" && e.cause === q.seq);
   if (request === undefined || request.type !== "model.request") throw new Error("the answer has no request");
   const text = clip(end.content.trim() === "" ? "The model returned no text." : end.content, ANSWER_MAX);

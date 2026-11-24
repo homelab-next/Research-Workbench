@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { latestDraft, runUsage } from "../../src/core/state";
 import type { Actor, Entry } from "../../src/core/types";
 import type { AgentView } from "../../src/core/wire";
+import { recoverSession } from "../../src/pipeline/recover";
 import { agentParts } from "../../src/server/converse";
 import { served } from "../helpers/served";
 import type { Served } from "../helpers/served";
@@ -174,6 +175,24 @@ test("a model the case's marking may not go to is not called: model.blocked is w
   expect(types(id)).not.toContain("model.request");
   expect(types(id)).not.toContain("agent.answered");
   expect(state(id).conversation.at(-1)).toMatchObject({ asked: "What do we know?", answer: null });
+});
+
+test("a turn the loop ended as blocked records its own end, and recovery then writes nothing", async () => {
+  s = await served();
+  const id = await s.newCase();
+  cases.push(id);
+  s.config.marking_policy["TLP:GREEN"] = [];
+  expect((await ask(id)).status).toBe(200);
+  await s.app.hub.idle();
+  const asked = s.entries(id).find((e) => e.type === "agent.asked")!;
+  const ended = s.entries(id).filter((e) => e.type === "agent.ended");
+  expect(ended.map((e) => ({ payload: e.payload, cause: e.cause, actor: e.actor.kind }))).toEqual([{ payload: { asked: asked.seq, reason: "blocked" }, cause: asked.seq, actor: "system" }]);
+  expect(state(id).conversation.at(-1)).toMatchObject({ answer: null, ended: "blocked" });
+  // what Engine.open does for this case the next time the server starts
+  const session = s.app.hub.read(id);
+  const head = session.state.seq;
+  expect(recoverSession(session).asks).toEqual([]);
+  expect(session.state.seq).toBe(head);
 });
 
 test("an earlier answer made under a stricter marking makes the next pack as strict", async () => {
