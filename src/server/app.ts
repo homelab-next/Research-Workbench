@@ -204,14 +204,16 @@ export function createApp(opts: AppOptions): App {
         if (Object.hasOwn(args, "actor")) return bad("the server names the actor");
         const problems = argProblems(def, args);
         if (problems.length > 0) return bad(...problems);
-        hub.read(id); // an unknown case is 404 before anything is recovered
+        const known = hub.read(id); // an unknown case is 404 before anything is recovered
         try {
+          // slow checks happen here, outside the case's queue
+          const prepared = def.prepare === undefined ? undefined : await def.prepare({ case: id, session: known, deps }, args as Record<string, never>);
           // one at a time per case: a command never interleaves with another, and the drive it asks for starts after it has written
           const result = await hub.serial(id, async (): Promise<CommandResult> => {
             const engine = hub.engine(id);
             const session = hub.read(id);
             const ctx: CommandContext = { hub, case: id, session, engine, deps, actor: { kind: "human", id: config.user } };
-            await def.perform(ctx, args as Record<string, never>);
+            await def.perform(ctx, args as Record<string, never>, prepared);
             if (def.then === "advance") hub.drive(id);
             return { ok: true, seq: session.head().seq };
           });

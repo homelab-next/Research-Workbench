@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { Engine } from "../../src/pipeline/engine";
 import type { EngineDeps } from "../../src/pipeline/engine";
 import { PlanRefused } from "../../src/pipeline/plans";
+import { LIMITS } from "../../src/server/views";
 import { startStandin } from "../helpers/http-standin";
 import { served, writeLocalModel } from "../helpers/served";
 import type { Served } from "../helpers/served";
@@ -179,11 +180,48 @@ test("answer_challenge refuses a challenge from an earlier run", async () => {
   await s.app.hub.idle();
   const st = s.app.hub.read(id).state;
   const old = Object.entries(st.challenges).find(([, c]) => c.run !== st.run.id);
-  if (open === undefined || old === undefined) return; // the sample raised no challenge to carry over
+  expect(open).toBeDefined();
+  expect(old).toBeDefined();
+  if (old === undefined) return;
   const before = s.entries(id).length;
   const r = await s.command(id, "answer_challenge", { challenge: old[0], answer: "a", action: "rebutted" });
   expect(r).toEqual({ status: 409, body: { ok: false, refused: [`challenge ${old[0]} is from an earlier run`] } });
   expect(s.entries(id).length).toBe(before);
+});
+
+test("a challenge of the current run can be answered", async () => {
+  s = await served();
+  const id = await s.newCase();
+  await s.toPublishGate(id);
+  const open = Object.values(s.app.hub.read(id).state.challenges).find((c) => c.status === "open")!;
+  expect(open.run).toBe(s.app.hub.read(id).state.run.id);
+  const r = await s.command(id, "answer_challenge", { challenge: open.id, answer: "checked", action: "rebutted" });
+  expect(r.status).toBe(200);
+  expect(s.app.hub.read(id).state.challenges[open.id]).toMatchObject({ status: "answered", answer: "checked", action: "rebutted" });
+});
+
+test("a provider that never lists its models cannot hold up stop; set_model says the list could not be read", async () => {
+  s = await served();
+  const id = await s.newCase();
+  await s.toPlanGate(id);
+  const deps = (s.app.hub as unknown as { deps: EngineDeps }).deps;
+  const real = deps.providers.all.bind(deps.providers);
+  const saved = LIMITS.modelListMs;
+  LIMITS.modelListMs = 400;
+  (deps.providers as unknown as { all: () => unknown[] }).all = () => [{ id: "hung", where: "machine", models: () => new Promise(() => {}) }];
+  try {
+    const stage = s.app.hub.read(id).state.run.stages[0]!.id;
+    const asked = s.command(id, "set_model", { stage, provider: "hung", model: "m", effort: null });
+    await Bun.sleep(50);
+    const t0 = Date.now();
+    const stopped = await s.command(id, "stop", { reason: "x" });
+    expect(stopped.status).toBe(200);
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(await asked).toEqual({ status: 409, body: { ok: false, refused: ["the model list could not be read"] } });
+  } finally {
+    LIMITS.modelListMs = saved;
+    (deps.providers as unknown as { all: unknown }).all = real;
+  }
 });
 
 test("the first command on a case left running by a stopped process finds it interrupted", async () => {

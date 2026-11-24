@@ -4,7 +4,7 @@ import { validate } from "../core/schema";
 import type { Schema } from "../core/schema";
 import type { CaseSession } from "../core/session";
 import { MARKINGS } from "../core/types";
-import type { Actor, Marking, Product } from "../core/types";
+import type { Actor, Marking, ModelChoice, Product } from "../core/types";
 import { THEN_ADVANCE } from "../pipeline/contract";
 import type { EngineCommand } from "../pipeline/contract";
 import type { Engine } from "../pipeline/engine";
@@ -19,7 +19,9 @@ export interface CommandDef {
   args: Schema;
   /** Whether the server calls engine.advance() in the background once perform has returned. */
   then: "advance" | "nothing";
-  perform(ctx: CommandContext, args: Record<string, Json>): void | Promise<void>;
+  /** Slow checks, made before the case's queue is entered so nothing slow ever holds it. What it returns is perform's third argument; a Refused it throws refuses the command. */
+  prepare?(ctx: { case: string; session: CaseSession; deps: EngineDeps }, args: Record<string, Json>): Promise<unknown>;
+  perform(ctx: CommandContext, args: Record<string, Json>, prepared: unknown): void | Promise<void>;
 }
 
 export const COMMANDS: Record<string, CommandDef> = Object.create(null) as Record<string, CommandDef>;
@@ -96,17 +98,19 @@ defineCommand("feedback", {
 // ---------- settings ----------
 defineCommand("set_model", {
   args: obj({ stage: str, provider: str, model: str, effort: { type: ["string", "null"] } }), then: then("setModel"),
-  async perform({ engine, session, deps, actor }, a) {
+  async prepare({ session, deps }, a): Promise<ModelChoice> {
     const stage = text(a, "stage");
     if (stage !== "agent" && !deps.pipeline.stages.some((s) => s.id === stage)) throw new SettingRefused(`there is no stage ${stage}`);
     const marking: Marking = session.state.meta?.marking ?? "TLP:RED";
-    const view = (await modelsFor(deps, marking)).find((m) => m.provider === a.provider && m.model === a.model);
-    if (view === undefined) throw new SettingRefused(`no provider lists the model ${text(a, "model")} for ${text(a, "provider")}`);
+    let slow = false;
+    const view = (await modelsFor(deps, marking, () => { slow = true; })).find((m) => m.provider === a.provider && m.model === a.model);
+    if (view === undefined) throw new SettingRefused(slow ? "the model list could not be read" : `no provider lists the model ${text(a, "model")} for ${text(a, "provider")}`);
     const effort = a.effort as string | null;
     if (effort !== null && !view.efforts.includes(effort)) throw new SettingRefused(`the model ${view.model} has no effort ${effort}`);
     if (!view.allowed) throw new SettingRefused(view.reason ?? `${marking} may not go to this model`);
-    engine.setModel(stage, { provider: view.provider, model: view.model, effort }, actor);
+    return { provider: view.provider, model: view.model, effort };
   },
+  perform: ({ engine, actor }, a, choice) => { engine.setModel(text(a, "stage"), choice as ModelChoice, actor); },
 });
 defineCommand("set_budget", {
   args: obj({ tokens: { type: ["integer", "null"], minimum: 1 } }), then: then("setBudget"),

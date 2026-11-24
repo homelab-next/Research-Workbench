@@ -126,11 +126,18 @@ export function setTarget(session: CaseSession, actor: Actor, lane: string): voi
   });
 }
 
-/** Undoes the newest undoable move, or the one at `target` (a seq). */
+/** Undoes the newest undoable move a person made since the last gate, or the one at `target` (a seq). A system entry, or one from before a gate, cannot be undone. */
 export function undo(session: CaseSession, actor: Actor, target?: number): void {
   session.commit((state) => {
-    const item = target === undefined ? state.undoable[state.undoable.length - 1] : state.undoable.find((u) => u.seq === target);
+    let gate = 0;
+    // a publish writes its own card.kept entries after gate.passed and before product.published, in the approver's name: they are the gate's, not the person's
+    for (const e of session.entries(0)) if (e.type === "gate.passed" || e.type === "product.published") gate = e.seq;
+    const mine = (seq: number): boolean => seq > gate && session.entries(seq - 1, 1)[0]?.actor.kind === "human";
+    const item = target === undefined
+      ? [...state.undoable].reverse().find((u) => mine(u.seq))
+      : state.undoable.find((u) => u.seq === target);
     if (item === undefined) throw new TriageRefused("nothing to undo");
+    if (!mine(item.seq)) throw new TriageRefused("that action can no longer be undone");
     return [{ type: "undo", actor, payload: { target: item.seq, card: item.card, place: item.place, lane: item.lane, index: item.index } }];
   });
 }

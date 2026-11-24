@@ -153,3 +153,36 @@ test("an agent or system actor is never written by a triage command", async () =
   expect(mine.length).toBe(8);
   for (const e of mine) expect(e.actor).toEqual({ kind: "human", id: s.config.user });
 });
+
+test("undo after the run is published refuses and moves nothing", async () => {
+  await cmd("approve");
+  await s.app.hub.idle();
+  expect(state().run.outcome).toBe("published");
+  const cards = JSON.stringify(state().cards);
+  const before = s.entries(id).length;
+  expect((await cmd("undo")).status).toBe(409);
+  for (const u of state().undoable) expect((await cmd("undo", { target: u.seq })).status).toBe(409);
+  expect(JSON.stringify(state().cards)).toBe(cards);
+  expect(s.entries(id).length).toBe(before);
+});
+
+test("undo of a system entry refuses", async () => {
+  const card = state().incoming[0]!;
+  const sys = s.app.hub.read(id).commit(() => [{ type: "card.kept", actor: { kind: "system", id: "engine" }, payload: { card, lane: state().target!, index: null } }])[0]!;
+  expect(state().undoable.some((u) => u.seq === sys.seq)).toBe(true);
+  const before = s.entries(id).length;
+  expect(await cmd("undo", { target: sys.seq })).toEqual({ status: 409, body: { ok: false, refused: ["that action can no longer be undone"] } });
+  expect((await cmd("undo")).body).toEqual({ ok: false, refused: ["nothing to undo"] });
+  expect(s.entries(id).length).toBe(before);
+  expect(state().cards[card]!.place).toBe("lane");
+});
+
+test("a person's keep before a gate cannot be undone after it", async () => {
+  const card = state().incoming[0]!;
+  await cmd("keep", { card });
+  const kept = state().undoable.at(-1)!;
+  await cmd("approve");
+  await s.app.hub.idle();
+  expect(await cmd("undo", { target: kept.seq })).toEqual({ status: 409, body: { ok: false, refused: ["that action can no longer be undone"] } });
+  expect(state().cards[card]!.place).toBe("lane");
+});

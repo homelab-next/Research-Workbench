@@ -41,11 +41,17 @@ export function referenceOf(deps: EngineDeps): Reference {
   };
 }
 
-/** Every model every provider lists, each marked allowed or not for this marking under the policy. A provider that cannot list is left out. */
-export async function modelsFor(deps: EngineDeps, marking: Marking): Promise<ModelView[]> {
+/** How long a provider may take to list its models before it is given up on. Tests may change it. */
+export const LIMITS = { modelListMs: 5000 };
+
+/** Every model every provider lists, each marked allowed or not for this marking under the policy. A provider that cannot list, or takes more than LIMITS.modelListMs, is left out; `onSlow` hears of the slow ones. */
+export async function modelsFor(deps: EngineDeps, marking: Marking, onSlow?: (provider: string) => void): Promise<ModelView[]> {
   const lists = await Promise.all(deps.providers.all().map(async (provider) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return (await provider.models()).map((m): ModelView => {
+      const slow = new Promise<never>((_, reject) => { timer = setTimeout(() => { onSlow?.(provider.id); reject(new Error("slow")); }, LIMITS.modelListMs); });
+      slow.catch(() => undefined);
+      return (await Promise.race([provider.models(), slow])).map((m): ModelView => {
         const allowed = mayGo(marking, provider.where, deps.config.marking_policy);
         return {
           provider: provider.id, model: m.id, where: provider.where, efforts: m.efforts, context: m.context, allowed,
@@ -54,6 +60,8 @@ export async function modelsFor(deps: EngineDeps, marking: Marking): Promise<Mod
       });
     } catch {
       return [];
+    } finally {
+      clearTimeout(timer);
     }
   }));
   return lists.flat();
