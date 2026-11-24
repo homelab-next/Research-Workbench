@@ -2,7 +2,7 @@
  * What crosses between the server and the browser besides entries. Types only, browser-safe: the server and src/web/ both import from here.
  */
 import type { RunState } from "./state";
-import type { EmptyMeans, Marking, Observable, TimeWindow, Where } from "./types";
+import type { EmptyMeans, Marking, ModelChoice, Observable, TimeWindow, Where } from "./types";
 
 export interface Me { user: string; role: "analyst" | "requester" | "leader"; origin: string; markings: Marking[]; policy: Record<Marking, Where[]>; problems: string[] }
 export interface CaseSummaryView { id: string; title: string; marking: Marking; created_ts: string; run_status: RunState["status"]; phase: string | null; incoming: number; kept: number }
@@ -37,3 +37,11 @@ export interface Custody {
 export type Preview =
   | { manifest: { n: number; draft: number; draft_hash: string; marking: Marking; title: string; note: string; files: { name: string; sha256: string; bytes: number }[] }; files: Record<string, string> }
   | { reasons: string[] };
+
+/** One thing in the context the conversational agent would be given: `key` is `<kind>:<id>`; `excerpt` is the first 600 characters of its text. */
+export interface PartView { key: string; kind: string; id: string; title: string; chars: number; fixed: boolean; marking: Marking | null; excerpt: string }
+/** What the Agent lens shows besides the conversation (which it reads from the entries): computed from the ledger and the registry, and written nowhere. */
+export interface AgentView {
+  agent: string; profile: string; objective: string | null; model: ModelChoice | null; budget_chars: number | null;
+  parts: PartView[]; addable: { key: string; title: string }[];
+}

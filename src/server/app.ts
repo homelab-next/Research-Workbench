@@ -12,12 +12,14 @@ import { MAX_BODY_BYTES, refusal, secure } from "./guard";
 import { argProblems, COMMANDS } from "./commands";
 import "./plan-commands";
 import "./draft-commands";
+import "./converse";
 import type { CommandContext } from "./commands";
 import { blobResponse, bundleFile, custodyOf } from "./evidence";
 import { CaseHub } from "./hub";
 import { mayDo, mayRead } from "./roles";
 import type { Reading } from "./roles";
 import { entryStream } from "./stream";
+import { agentView } from "./converse";
 import { modelsFor, referenceOf, shown } from "./views";
 
 export interface Assets { html: string; js: string; css: string }
@@ -142,6 +144,10 @@ export function createApp(opts: AppOptions): App {
     {
       method: "GET", path: /^\/api\/cases\/([^/]+)\/models$/, needs: { read: "models" }, kind: "api",
       handle: async ({ params }) => json(200, await modelsFor(deps, hub.read(params[0]!).state.meta?.marking ?? "TLP:RED")),
+    },
+    {
+      method: "GET", path: /^\/api\/cases\/([^/]+)\/agent$/, needs: { read: "agent" }, kind: "api",
+      handle: async ({ params }) => json(200, await agentView(hub.read(params[0]!), deps)),
     },
     {
       method: "GET", path: /^\/api\/cases\/([^/]+)\/entries$/, needs: { read: "entries" }, kind: "api",

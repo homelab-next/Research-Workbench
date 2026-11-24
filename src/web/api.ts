@@ -1,5 +1,5 @@
 import type { Entry } from "../core/types";
-import type { CaseSummaryView, CommandResult, Custody, Me, ModelView, NewCaseInput, Preview, Reference } from "../core/wire";
+import type { AgentView, CaseSummaryView, CommandResult, Custody, Me, ModelView, NewCaseInput, Preview, Reference } from "../core/wire";
 
 export type Fetcher = (req: Request) => Promise<Response>;
 export interface EntrySource { open(caseId: string, after: number, onEntry: (entry: Entry) => void, onDrop: () => void): () => void }
@@ -7,6 +7,7 @@ export interface Api {
   me(): Promise<Me>; cases(): Promise<CaseSummaryView[]>; reference(): Promise<Reference>; models(caseId: string): Promise<ModelView[]>;
   newCase(input: NewCaseInput): Promise<{ id: string } | { refused: string[] }>;
   command(caseId: string, name: string, args: Record<string, unknown>): Promise<CommandResult>;
+  agent(caseId: string): Promise<AgentView>;
   custody(caseId: string): Promise<Custody>; preview(caseId: string): Promise<Preview>;
   blobText(caseId: string, hash: string): Promise<string>;
   blobPath(caseId: string, hash: string): string; bundlePath(caseId: string, n: number, file: string): string;
@@ -48,6 +49,7 @@ export function makeApi(fetcher: Fetcher, origin: string, entries: EntrySource):
       if (res.ok) return (await res.json()) as CommandResult;
       return { ok: false, refused: await refusedOf(res) };
     },
+    agent: (id) => read<AgentView>(`/api/cases/${seg(id)}/agent`),
     custody: (id) => read<Custody>(`/api/cases/${seg(id)}/custody`),
     preview: (id) => read<Preview>(`/api/cases/${seg(id)}/preview`),
     async blobText(id, hash) {

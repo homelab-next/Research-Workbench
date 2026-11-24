@@ -302,7 +302,7 @@ test("each lens letter opens its lens and V flips the dock side", async () => {
 test("a lens key for a lens that is not on the shelf does nothing", async () => {
   const q = await open();
   first(q).focus();
-  q.press("a");
+  q.press("e");
   expect(q.q(".lens-dock").hasAttribute("hidden")).toBe(true);
 });
 

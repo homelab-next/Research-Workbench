@@ -216,3 +216,25 @@ kbd { font-family: var(--mono); font-size: 12px; background: var(--panel-2); bor
 .lens-narrative .tabs .active { border-color: var(--accent); color: var(--accent); }
 .lens-narrative pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20em; overflow: auto; }
 .lens-narrative [data-drop=cite].drop-hover { outline: 2px dashed var(--accent); }
+
+/* ---------- Agent lens ---------- */
+.lens-agent .agent-head { margin: 0 0 6px; }
+.lens-agent .model-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+.lens-agent .loaded { color: var(--muted); margin: 6px 0 2px; }
+.lens-agent .chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.lens-agent .chip.part { display: inline-flex; align-items: center; gap: 2px; }
+.lens-agent .chip.part.selected { border-color: var(--accent); }
+.lens-agent .chip-pick, .lens-agent .chip-remove { background: none; border: 0; padding: 0 2px; color: inherit; cursor: pointer; }
+.lens-agent .fixed-note { color: var(--muted); font-size: 12px; }
+.lens-agent .add-box, .lens-agent .quick { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+.lens-agent .excerpt pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 14em; overflow: auto; margin: 2px 0 6px; }
+.lens-agent .label { color: var(--muted); font-size: 12px; }
+.lens-agent .conversation { margin-top: 10px; }
+.lens-agent .turn { border-top: 1px solid var(--line); padding: 6px 0; }
+.lens-agent .question { font-weight: 600; margin: 0 0 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.lens-agent .answer-text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 4px; }
+.lens-agent .byline { color: var(--muted); font-size: 12px; margin: 2px 0; }
+.lens-agent .turn-context ul { margin: 2px 0; padding-left: 18px; }
+.lens-agent .turn-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.lens-agent .status.attention { color: var(--amber); }
+.lens-agent .ask-row textarea { width: 100%; min-height: 3.5em; box-sizing: border-box; margin-top: 8px; }

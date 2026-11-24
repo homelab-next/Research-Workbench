@@ -35,3 +35,7 @@ stages:
     agent: publisher
     persona: publisher
     goal: Give the reviewed product a title and a short note for its bundle.
+  agent:
+    agent: assistant
+    persona: assistant
+    goal: Answer the analyst's questions from the case as it stands. Cite cards as [c1]. Say what is not known. You propose; the analyst decides.

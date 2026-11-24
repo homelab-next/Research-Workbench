@@ -22,7 +22,7 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-const STAGES = { frame: "orchestrator", plan: "planner", research: "researcher", assemble: "analyst", evaluate: "evaluator", challenge: "adversary", publish: "publisher" };
+const STAGES = { frame: "orchestrator", plan: "planner", research: "researcher", assemble: "analyst", evaluate: "evaluator", challenge: "adversary", publish: "publisher", agent: "assistant" };
 
 test("the sample root still loads with no problems", () => {
   expect(registry.problems).toEqual([]);

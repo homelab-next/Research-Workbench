@@ -262,6 +262,33 @@ test("at the run's token budget the loop stops before the next call", async () =
   expect(p.turns).toBe(1);
 });
 
+test("with outside_run the loop answers while the run is paused or finished, and still checks the marking", async () => {
+  startRun();
+  f.s.commit(() => [{ type: "run.paused", actor: human, payload: { reason: "r" } }]);
+  f.s.commit(() => [{ type: "budget.set", actor: human, payload: { tokens: 1 } }]);
+  const a = spy([{ content: "answered", usage: { input: 50, output: 50 } }]);
+  expect(await runAgent(f.s, spec(a, { outside_run: true, tools: [] }))).toEqual({ kind: "done", content: "answered", output: null, calls: [] });
+  expect(a.turns).toBe(1);
+  f.s.commit(() => [{ type: "run.finished", actor: human, payload: { outcome: "stopped" } }]);
+  expect(f.s.state.run.status).toBe("finished");
+  const b = spy([{ content: "skipped: the first turn was a.s" }, { content: "again" }]);
+  expect((await runAgent(f.s, spec(b, { outside_run: true, tools: [] }))).kind).toBe("done");
+  const c = spy([{ content: "never" }], "hosted");
+  expect(await runAgent(f.s, spec(c, { outside_run: true, tools: [], pack: pack("TLP:AMBER") }))).toEqual({ kind: "blocked", marking: "TLP:AMBER" });
+  expect(c.turns).toBe(0);
+  expect(ofType("model.blocked").length).toBe(1);
+});
+
+test("an agent with no tools has any tool call in a reply recorded as skipped and never run", async () => {
+  const p = spy([{ content: "plain words", tool_calls: [{ tool: "list_sources", args: { why: "w" } }, { tool: "run_step", args: { step: "s1", why: "w" } }] }]);
+  const end = await runAgent(f.s, spec(p, { tools: [], outside_run: true }));
+  expect(end).toEqual({ kind: "done", content: "plain words", output: null, calls: [] });
+  expect(ofType("tool.called").length).toBe(0);
+  expect(ofType("query.issued").length).toBe(0);
+  expect(ofType("tool.skipped").map((e) => e.payload.count)).toEqual([2]);
+  expect(p.seen[0]!.tools).toEqual([]);
+});
+
 test("the loop gives up after max_turns", async () => {
   const call: ScriptReply = { tool_calls: [{ tool: "list_sources", args: { why: "w" } }] };
   const p = spy([call, call, call]);

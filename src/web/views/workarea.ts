@@ -27,6 +27,8 @@ export interface WorkArea extends View {
   closeLens(): boolean;
   /** Opens the Narrative lens (when it is not the one open) and cites `card` there. */
   cite(card: string, section?: string): void;
+  /** Opens the Agent lens (when it is not the one open) and sends `text` to your agent. */
+  ask(text: string): void;
   /** The key actions of the work area, by the names KEYMAP gives them. */
   actions(): Record<string, () => void>;
   /** The Escape of the work area: back to live, else close the lens, else close the open cards. True when one did something. */
@@ -42,6 +44,7 @@ export function caseScreenFor(ui: Ui): CaseScreen {
       closeLens: () => area.closeLens(),
       focusCard: (card) => { area.open(card); area.select(card); },
       cite: (card, section) => area.cite(card, section),
+      ask: (text) => area.ask(text),
       focusLane: (lane) => area.focusColumn(lane),
       actions: area.actions(),
       escape: () => area.escape(),
@@ -211,6 +214,10 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
     cite(card, section) {
       if (lensId !== "narrative") area.openLens("narrative");
       (lensView as (View & { cite?(card: string, section?: string): void }) | null)?.cite?.(card, section);
+    },
+    ask(text) {
+      if (lensId !== "agent") area.openLens("agent");
+      (lensView as (View & { ask?(text: string): void }) | null)?.ask?.(text);
     },
     actions: () => ({}),
     escape: () => false,

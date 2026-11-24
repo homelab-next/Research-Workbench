@@ -19,6 +19,8 @@ export interface AgentSpec {
   actor: Extract<Actor, { kind: "agent" }>; provider: Provider; model: string; effort: string | null;
   pack: Pack; task: string; tools: readonly ToolName[]; ctx: ToolContext; schema: Schema | null;
   policy: Record<Marking, Where[]>; max_marking: Marking | null; max_turns?: number;
+  /** True for an agent that works beside the run (the conversational one): the run being paused, finished or out of budget does not stop it. The marking check and every entry written are the same. */
+  outside_run?: boolean;
 }
 export interface CallRecord { call: string; tool: string; args: Json; ok: boolean }
 export type AgentEnd =
@@ -93,8 +95,8 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
   for (let turn = 0; turn < maxTurns; turn++) {
     // 1. stop checks
     const run = session.state.run;
-    if (run.status === "paused" || run.status === "finished") return { kind: "stopped", why: "paused" };
-    if (run.budget_tokens !== null) {
+    if (!spec.outside_run && (run.status === "paused" || run.status === "finished")) return { kind: "stopped", why: "paused" };
+    if (!spec.outside_run && run.budget_tokens !== null) {
       const { usage } = runUsage(session.state);
       if (usage.input + usage.output >= run.budget_tokens) return { kind: "stopped", why: "budget" };
     }
@@ -166,9 +168,10 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     const usage = { input: count(result.usage?.input), output: count(result.usage?.output), reasoning: count(result.usage?.reasoning) };
     const stop = result.stop === "tool_calls" || result.stop === "length" ? result.stop : "end";
     // at most MAX_CALLS of a reply's tool calls run; the rest are one entry beside the response, not an entry each
-    const toRun = result.tool_calls.slice(0, MAX_CALLS);
+    // an agent with no tools runs none: every call in its reply is skipped
+    const toRun = spec.tools.length === 0 ? [] : result.tool_calls.slice(0, MAX_CALLS);
     const extra = result.tool_calls.length - toRun.length;
-    const skippedNote = `${extra} further tool calls were not run`;
+    const skippedNote = spec.tools.length === 0 ? `${extra} tool calls were not run: this agent has no tools` : `${extra} further tool calls were not run`;
     if (!guarded(() => [
       {
         type: "model.response", actor, ...link, cause: requested!.seq,
@@ -182,7 +185,7 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     if (toRun.length > 0) {
       const results: ChatMessage[] = [];
       for (const [i, tc] of toRun.entries()) {
-        if (i > 0 && (session.state.run.status === "paused" || session.state.run.status === "finished")) return { kind: "stopped", why: "paused" };
+        if (i > 0 && !spec.outside_run && (session.state.run.status === "paused" || session.state.run.status === "finished")) return { kind: "stopped", why: "paused" };
         const name = clip(String(tc.name), NAME_CHARS);
         const parsed = parseCall(spec.tools, name, tc.arguments);
         const why = clip(parsed.why, WHY_CHARS);

@@ -214,3 +214,13 @@ turns:
     reply:
       content: |
         {"title": "Regular connections to 198.51.100.77", "note": "Sample run."}
+
+  # the conversational agent: plain answers from its context, no tools
+  - actor: assistant
+    reply:
+      content: |
+        The case holds one result so far: the asset behind the address [c1]. Nothing else is known yet.
+  - actor: assistant
+    reply:
+      content: |
+        Next, confirm the account with a second source. The first card [c1] is the only evidence, so what it does not show stays open.
