@@ -27,7 +27,7 @@ function plan(id = "plan-1"): Plan {
 function issue(b: EntryBuilder, q = "q1") {
   return b.add("query.issued", {
     query: q, source: "src", source_hash: "h", pivot: null, pivot_hash: null, connector: "c", text: "select 1", bound: {},
-    window: { from: null, to: null }, why: "w", estimate: null, step: "s1", verifies: null,
+    window: { from: null, to: null }, why: "w", estimate: null, step: "s1", verifies: null, purpose: "result",
   }, { actor: { kind: "agent", id: "a1", stage: "collect", profile: "p", model: "m", effort: null, where: "machine" } });
 }
 
@@ -243,7 +243,7 @@ test("query.issued then query.result fills the query", () => {
   const issued = issue(b);
   let s = fold(b.entries);
   expect(s.queries.q1).toMatchObject({
-    id: "q1", source: "src", text: "select 1", why: "w", step: "s1", verifies: null, status: "running",
+    id: "q1", source: "src", text: "select 1", why: "w", step: "s1", verifies: null, purpose: "result", status: "running",
     rows: null, rows_hash: null, coverage: null, result: null, error: null, card: null, issued_seq: 1, issued_ts: issued.ts, by: issued.actor,
   });
   expect(s.counters.query).toBe(1);

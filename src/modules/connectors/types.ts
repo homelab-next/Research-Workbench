@@ -23,10 +23,19 @@ export interface QueryOutcome {
   cost: Cost | null;
 }
 
+/**
+ * A source's connector. Only the runner calls run, estimate and estimateRequest, so every contact is in the record.
+ * `budget` on a request is in the source's cost unit; a connector that can count in that unit stops at it.
+ */
 export interface Connector {
   readonly kind: "sql" | "files" | "http" | "trino";
   render(req: QueryRequest): string;
+  /** A cost known without contacting the source (a fixed price per request), or null. Never contacts anything. */
   estimate(req: QueryRequest): Promise<Cost | null>;
+  /** When pricing the query means asking the source, the request that asks it; the runner issues it as a query. Else null. */
+  estimateRequest(req: QueryRequest): QueryRequest | null;
+  /** The cost read from the outcome of estimateRequest's query, or null when it says none. */
+  readEstimate(outcome: QueryOutcome): Cost | null;
   run(req: QueryRequest): Promise<QueryOutcome>;
   close(): void;
 }

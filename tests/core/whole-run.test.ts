@@ -119,7 +119,7 @@ test("a whole run, live, equals its replay at every entry", () => {
       type: "query.issued",
       payload: {
         query, source: "netflow", source_hash: "b".repeat(64), pivot: "ip", pivot_hash: "c".repeat(64), connector: "scripted", text: "flows from 192.0.2.10",
-        bound: { ip: "192.0.2.10" }, window: { from: null, to: null }, why: "periodicity", estimate: { amount: 1, unit: "query" }, step: "s1", verifies: null,
+        bound: { ip: "192.0.2.10" }, window: { from: null, to: null }, why: "periodicity", estimate: { amount: 1, unit: "query" }, step: "s1", verifies: null, purpose: "result",
       },
       actor: system,
     }];
@@ -139,7 +139,7 @@ test("a whole run, live, equals its replay at every entry", () => {
   one({ type: "card.pinned", payload: { card: "c1", pinned: true }, actor: human });
   commit((_st, ids) => [{ type: "proposal.created", payload: { proposal: { id: ids.next("proposal"), kind: "costly_query", title: "Pull a week", by: "planner", step: "s1", source: "netflow", text: "7 days", estimate: { amount: 3, unit: "credits" }, why: "confirm" } }, actor: planner }]);
   one({ type: "proposal.accepted", payload: { proposal: "p1", budget: 3 }, actor: human });
-  const [rerun] = commit((_st, ids) => [{ type: "query.issued", payload: { query: ids.next("query"), source: "netflow", source_hash: "b".repeat(64), pivot: null, pivot_hash: null, connector: "scripted", text: "again", bound: {}, window: { from: null, to: null }, why: "re-validate", estimate: null, step: null, verifies: "c1" }, actor: system }]);
+  const [rerun] = commit((_st, ids) => [{ type: "query.issued", payload: { query: ids.next("query"), source: "netflow", source_hash: "b".repeat(64), pivot: null, pivot_hash: null, connector: "scripted", text: "again", bound: {}, window: { from: null, to: null }, why: "re-validate", estimate: null, step: null, verifies: "c1", purpose: "verify" }, actor: system }]);
   const q2 = (rerun!.payload as { query: string }).query;
   one({ type: "query.failed", payload: { query: q2, error: "timeout" }, actor: system });
   one({ type: "verify.run", payload: { original: q1, rerun: q2, card: "c1", outcome: "could_not_run", detail: "timeout" }, actor: system });

@@ -3,9 +3,9 @@ import { canonical, isPlainObject } from "../core/canonical";
 import { sha256Hex } from "../core/hash";
 import { isCoverage } from "../core/state/shapes";
 import type { CaseSession } from "../core/session";
-import type { Actor, Card, Coverage, Cost, EmptyMeans, EntryInput, TimeWindow } from "../core/types";
+import type { Actor, Card, Coverage, Cost, EmptyMeans, EntryInput, QueryPurpose, TimeWindow } from "../core/types";
 import { isUtcTimestamp } from "./connectors";
-import type { Bound, ConnectorPool, QueryOutcome, QueryRequest } from "./connectors";
+import type { Bound, Connector, ConnectorPool, QueryOutcome, QueryRequest } from "./connectors";
 import type { Observables } from "./observables";
 import { pivotWeight } from "./manifests";
 import type { PivotManifest, Registry, SourceManifest } from "./registry";
@@ -19,6 +19,8 @@ export interface RunQueryInput {
   source: string; text: string; bound: Bound; window: TimeWindow; why: string; actor: Actor;
   pivot?: PivotManifest | null; title?: string; step?: string | null; subgoal?: string | null; verifies?: string | null;
   budget?: number | null; run?: string | null; stage?: string | null; job?: string | null; make_card?: boolean;
+  /** An earlier entry this query follows from, recorded as the query.issued cause. */
+  cause?: number | null;
 }
 
 export type RunQueryResult =
@@ -121,7 +123,7 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
     max_rows: source.limits.max_rows, timeout_ms: source.limits.timeout_ms, budget,
   };
 
-  let connector;
+  let connector: Connector;
   let rendered: string;
   try {
     connector = deps.pool.for(source);
@@ -129,45 +131,100 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
   } catch (err) {
     return refusedBy(err);
   }
+  const title = titleOf(input, source, pivot, bound);
+  const base = { source, connector, actor: input.actor, step: input.step ?? null, subgoal: input.subgoal ?? null, link };
 
   const weight = pivot !== null ? pivotWeight(pivot, source) : source.cost.weight;
   let estimate: Cost | null = null;
+  let cause: number | null = null;
   if (weight > 0) {
+    let estimateReq: QueryRequest | null;
     try {
       estimate = await connector.estimate(req);
+      estimateReq = connector.estimateRequest(req);
     } catch (err) {
       return refusedBy(err);
     }
-    const priced: Cost = estimate ?? { amount: weight, unit: source.cost.unit };
-    if (budget === null || (estimate !== null && estimate.amount > budget)) {
+    if (estimateReq !== null) {
+      // An estimate that asks the source is a query like any other: issued, run and kept in the record before it is read.
+      let estimateText: string;
+      try {
+        estimateText = connector.render(estimateReq);
+      } catch (err) {
+        return refusedBy(err);
+      }
+      const priced = await issueAndRun(session, deps, {
+        ...base, req: estimateReq, rendered: estimateText, pivot: null, why: `estimate for: ${input.why}`, verifies: null,
+        purpose: "estimate", estimate: null, cause: input.cause ?? null, makeCard: false, title,
+      });
+      if (priced.out !== null && priced.result.status === "done") {
+        try {
+          estimate = connector.readEstimate(priced.out);
+        } catch {
+          estimate = null;
+        }
+      }
+      cause = priced.resultSeq;
+    }
+    // An estimate the runner cannot compare with a budget in the source's unit is no estimate.
+    if (estimate !== null && !isEstimate(estimate, source.cost.unit)) estimate = null;
+    // With no estimate, only a person may decide that a budget is enough.
+    const funded = budget !== null && (estimate !== null ? estimate.amount <= budget : input.actor.kind === "human");
+    if (!funded) {
       if (input.actor.kind !== "agent") return { status: "needs_budget", proposal: null, estimate };
       const entries = session.commit((_state, ids) => {
         const id = ids.next("proposal");
         return [{
-          type: "proposal.created", actor: input.actor, ...link,
-          payload: { proposal: { id, kind: "costly_query", title: titleOf(input, source, pivot, bound), by: input.actor.id, step: input.step ?? null, source: source.id, text: rendered, estimate: priced, why: input.why } },
+          type: "proposal.created", actor: input.actor, cause, ...link,
+          payload: { proposal: { id, kind: "costly_query", title, by: input.actor.id, step: input.step ?? null, source: source.id, text: rendered, estimate, why: input.why } },
         }];
       });
       const made = entries[0]!.payload as { proposal: { id: string } };
-      return { status: "needs_budget", proposal: made.proposal.id, estimate: priced };
+      return { status: "needs_budget", proposal: made.proposal.id, estimate };
     }
   }
 
+  const ran = await issueAndRun(session, deps, {
+    ...base, req, rendered, pivot, why: input.why, verifies: input.verifies ?? null,
+    purpose: input.verifies != null ? "verify" : "result", estimate, cause: cause ?? input.cause ?? null, makeCard: input.make_card !== false, title,
+  });
+  return ran.result;
+}
+
+/** A cost in the given unit with a finite amount of zero or more. */
+function isEstimate(c: unknown, unit: string): c is Cost {
+  return isPlainObject(c) && typeof c.amount === "number" && Number.isFinite(c.amount) && c.amount >= 0 && c.unit === unit;
+}
+
+const isCost = (c: unknown): c is Cost => isPlainObject(c) && typeof c.amount === "number" && Number.isFinite(c.amount) && c.amount >= 0 && typeof c.unit === "string";
+
+interface Issue {
+  source: SourceManifest; connector: Connector; req: QueryRequest; rendered: string; pivot: PivotManifest | null; actor: Actor;
+  why: string; step: string | null; subgoal: string | null; verifies: string | null; purpose: QueryPurpose; estimate: Cost | null;
+  cause: number | null; link: { run: string | null; stage: string | null; job: string | null }; makeCard: boolean; title: string;
+}
+
+/**
+ * The custody line for one request: query.issued before the source is contacted, then query.result (and a card) or
+ * query.failed. Returns the result, the connector's outcome when it is done, and the seq of the entry that closed it.
+ */
+async function issueAndRun(session: CaseSession, deps: RunnerDeps, q: Issue): Promise<{ result: RunQueryResult; out: QueryOutcome | null; resultSeq: number | null }> {
+  const { source, connector, req, pivot, link } = q;
   const issuedAt = session.commit((_state, ids) => {
     const query = ids.next("query");
     return [{
-      type: "query.issued", actor: input.actor, ...link,
+      type: "query.issued", actor: q.actor, cause: q.cause, ...link,
       payload: {
         query, source: source.id, source_hash: source.hash, pivot: pivot?.id ?? null, pivot_hash: pivot?.hash ?? null,
-        connector: source.connector, text: rendered, bound: { ...bound }, window, why: input.why,
-        estimate, step: input.step ?? null, verifies: input.verifies ?? null,
+        connector: source.connector, text: q.rendered, bound: { ...req.bound }, window: req.window, why: q.why,
+        estimate: q.estimate, step: q.step, verifies: q.verifies, purpose: q.purpose,
       },
     }];
   })[0]!;
   const query = (issuedAt.payload as { query: string }).query;
-  const fail = (error: string): RunQueryResult => {
-    session.commit(() => [{ type: "query.failed", actor: RUNNER, cause: issuedAt.seq, ...link, payload: { query, error } }]);
-    return { status: "failed", query, error };
+  const fail = (error: string): { result: RunQueryResult; out: null; resultSeq: number | null } => {
+    const e = session.commit(() => [{ type: "query.failed", actor: RUNNER, cause: issuedAt.seq, ...link, payload: { query, error } }]);
+    return { result: { status: "failed", query, error }, out: null, resultSeq: e[0]?.seq ?? null };
   };
 
   const started = Date.now();
@@ -183,40 +240,42 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
     if (!Array.isArray(out.columns) || !out.columns.every((c) => typeof c === "string") || !Array.isArray(out.rows)) {
       return fail("the source returned an invalid result: columns are not a list of strings");
     }
+    if (out.cost !== null && !isCost(out.cost)) return fail("the source returned an invalid result: cost is malformed");
     const blob = session.blobs.put(out.raw, out.media);
     const hash = rowsHash(out.columns, out.rows);
     const rows = out.rows.length;
     const empty: EmptyMeans | null = rows > 0 ? null : pivot?.empty_means === "proven-negative" && out.coverage.kind === "full" ? "proven-negative" : "not-seen";
-    const hints: Record<string, string | null> = {};
-    for (const t of source.tables) for (const c of t.columns) if (c.type !== null && !Object.hasOwn(hints, c.name)) hints[c.name] = c.type;
-    Object.assign(hints, pivot?.yields ?? {});
-    const columnTypes = deps.observables.columnTypes(out.columns, hints, out.rows);
-    const notes = source.quality_notes.filter((n) => overlaps(n, window)).map((n) => n.id);
     const outcome = out.coverage.kind === "partial" ? "partial" : rows === 0 ? "empty" : "answered";
-    const makeCard = input.make_card !== false;
     let cardId: string | null = null;
-    session.commit((_state, ids) => {
+    const committed = session.commit((_state, ids) => {
       const entries: EntryInput[] = [{
         type: "query.result", actor: RUNNER, cause: issuedAt.seq, ...link,
         payload: { query, result: blob, rows, rows_hash: hash, coverage: out.coverage, duration_ms: Date.now() - started, cost: out.cost },
       }];
-      if (makeCard) {
+      if (q.makeCard) {
+        const hints: Record<string, string | null> = {};
+        for (const t of source.tables) for (const c of t.columns) if (c.type !== null && !Object.hasOwn(hints, c.name)) hints[c.name] = c.type;
+        Object.assign(hints, pivot?.yields ?? {});
         cardId = ids.next("card");
         const card: Card = {
-          id: cardId, title: titleOf(input, source, pivot, bound), body: bodyOf(rows, out.coverage, empty), kind: "result",
-          made_by: input.actor.kind, query, columns: out.columns, column_types: columnTypes,
+          id: cardId, title: q.title, body: bodyOf(rows, out.coverage, empty), kind: "result",
+          made_by: q.actor.kind, query, columns: out.columns, column_types: deps.observables.columnTypes(out.columns, hints, out.rows),
           rows: out.rows.slice(0, CARD_PREVIEW_ROWS), row_count: rows, coverage: out.coverage, empty, marking: source.marking,
-          source: source.id, step: input.step ?? null, subgoal: input.subgoal ?? null, why: input.why, event_time: null, quality_notes: notes,
+          source: source.id, step: q.step, subgoal: q.subgoal, why: q.why, event_time: null,
+          quality_notes: source.quality_notes.filter((n) => overlaps(n, req.window)).map((n) => n.id),
         };
-        entries.push({ type: "card.created", actor: input.actor, cause: issuedAt.seq, ...link, payload: { card } });
+        entries.push({ type: "card.created", actor: q.actor, cause: issuedAt.seq, ...link, payload: { card } });
       }
       return entries;
     });
     const now = session.state.queries[query];
-    if (now?.status !== "done" || (makeCard && (cardId === null || !Object.hasOwn(session.state.cards, cardId)))) {
+    if (now?.status !== "done" || (q.makeCard && (cardId === null || !Object.hasOwn(session.state.cards, cardId)))) {
       return fail("the result was not accepted into the case record");
     }
-    return { status: "done", query, card: cardId, outcome, rows, rows_hash: hash, coverage: out.coverage, columns: out.columns, data: out.rows };
+    return {
+      result: { status: "done", query, card: cardId, outcome, rows, rows_hash: hash, coverage: out.coverage, columns: out.columns, data: out.rows },
+      out, resultSeq: committed[0]!.seq,
+    };
   } catch (err) {
     return fail(firstLine(err));
   }

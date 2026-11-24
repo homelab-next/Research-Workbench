@@ -1,4 +1,4 @@
-import { EMPTY_MEANS, GATES, JOB_KINDS, JOB_OUTCOMES, RUN_OUTCOMES, SECTIONS, STAGE_RUNS, STEP_OUTCOMES, VERIFY_OUTCOMES } from "../types";
+import { EMPTY_MEANS, GATES, JOB_KINDS, JOB_OUTCOMES, QUERY_PURPOSES, RUN_OUTCOMES, SECTIONS, STAGE_RUNS, STEP_OUTCOMES, VERIFY_OUTCOMES } from "../types";
 import type { Cost, Entry, ModelChoice, Plan, PlanStep, Proposal, StageDef } from "../types";
 import { has, isBool, isNum, isObj, isOneOf, isStr, isStrList, isStrOrNull, malformed } from "./guards";
 import { isBlobRefShape, isCard, isCount, isCoverage, isObservable, isStageFinishedShape, isTimeWindow } from "./shapes";
@@ -21,7 +21,7 @@ const isPlan = (x: unknown): x is Plan =>
   && Array.isArray(x.subgoals) && x.subgoals.every(isSubGoal) && Array.isArray(x.steps) && x.steps.every(isStep);
 const isProposal = (x: unknown): x is Proposal => {
   if (!isObj(x) || !isStr(x.id) || !isStr(x.title) || !isStr(x.by)) return false;
-  if (x.kind === "costly_query") return (x.step === null || isStr(x.step)) && isStr(x.source) && isStr(x.text) && isCost(x.estimate) && isStr(x.why);
+  if (x.kind === "costly_query") return (x.step === null || isStr(x.step)) && isStr(x.source) && isStr(x.text) && (x.estimate === null || isCost(x.estimate)) && isStr(x.why);
   if (x.kind === "narrative") return isOneOf(x.section, SECTIONS) && isStr(x.text) && isStrList(x.cites);
   return false;
 };
@@ -85,13 +85,14 @@ function applyPlan(s: CaseState, entry: Entry): CaseState {
 function applyQuery(s: CaseState, entry: Entry): CaseState {
   switch (entry.type) {
     case "query.issued": {
-      const { query, source, text, why, window, step, verifies } = entry.payload;
-      if (!isStr(query) || !isStr(source) || !isStr(text) || !isStr(why) || !isTimeWindow(window) || !isStrOrNull(step) || !isStrOrNull(verifies)) {
+      const { query, source, text, why, window, step, verifies, purpose } = entry.payload;
+      if (!isStr(query) || !isStr(source) || !isStr(text) || !isStr(why) || !isTimeWindow(window) || !isStrOrNull(step) || !isStrOrNull(verifies)
+        || !isOneOf(purpose, QUERY_PURPOSES)) {
         return malformed(s, entry);
       }
       if (Object.hasOwn(s.queries, query)) return s;
       const q: QueryState = {
-        id: query, source, text, why, window, by: entry.actor, step, verifies,
+        id: query, source, text, why, window, by: entry.actor, step, verifies, purpose,
         issued_seq: entry.seq, issued_ts: entry.ts, status: "running",
         rows: null, rows_hash: null, coverage: null, result: null, error: null, card: null,
       };

@@ -1,6 +1,7 @@
 import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { Json } from "../core/canonical";
+import { isPlainObject } from "../core/canonical";
 import { sha256Hex } from "../core/hash";
 import type { Ledger } from "../core/ledger";
 import type { Actor } from "../core/types";
@@ -211,6 +212,9 @@ export class Registry {
       } else if (credential !== null && !root.credentials.includes(credential)) {
         throw new ManifestError(`source names credential "${credential}", which the configuration does not grant to this root`);
       }
+      // the runner compares a trino estimate, which is in rows, with a budget in the source's unit
+      const unit = isPlainObject(body.cost) && typeof body.cost.unit === "string" ? body.cost.unit : "seconds";
+      if (connector === "trino" && unit !== "rows") throw new ManifestError(`a trino source's cost unit must be rows (the engine estimates in rows), not ${unit}`);
       if (connector === "sql" || connector === "files") {
         if (!pathStaysInside(root.path, dir, body.location as string)) throw new ManifestError(`location "${body.location}" is outside the module root`);
         const where = resolve(dir, body.location as string);

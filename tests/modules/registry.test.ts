@@ -428,3 +428,16 @@ test("probePattern builds its probes from the pattern's own characters", () => {
   expect(probePattern("\\d+\\d+\\d+\\d+x")).toBeGreaterThan(PATTERN_PROBE_LIMIT_MS);
   expect(probePattern("[0-9]+[0-9]+[0-9]+[0-9]+x")).toBeGreaterThan(PATTERN_PROBE_LIMIT_MS);
 });
+
+test("a trino source's cost unit must be rows", () => {
+  const r = Registry.load([root({
+    "sources/a.yaml": trinoSource("a"),
+    "sources/b.yaml": trinoSource("b").replace("unit: rows", "unit: seconds"),
+    "sources/c.yaml": trinoSource("c").replace("cost: { weight: 1, unit: rows }\n", ""),
+  })]);
+  expect(r.sources().map(x => x.id)).toEqual(["a"]);
+  expect(r.problems.map(p => p.error).sort()).toEqual([
+    "a trino source's cost unit must be rows (the engine estimates in rows), not seconds",
+    "a trino source's cost unit must be rows (the engine estimates in rows), not seconds",
+  ]);
+});

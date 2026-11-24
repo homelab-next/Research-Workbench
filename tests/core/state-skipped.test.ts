@@ -42,7 +42,7 @@ test("query.result coverage is checked as strictly as a plan", () => {
     const b = started();
     b.add("query.issued", {
       query: "q1", source: "dns", source_hash: "h", pivot: null, pivot_hash: null, connector: "c", text: "t", bound: {},
-      window: { from: null, to: null }, why: "w", estimate: null, step: null, verifies: null,
+      window: { from: null, to: null }, why: "w", estimate: null, step: null, verifies: null, purpose: "result",
     });
     b.add("query.result", { query: "q1", result: { blob: "b", bytes: 1 }, rows: 1, rows_hash: "h", coverage: coverage as Coverage, duration_ms: 1, cost: null });
     const s = fold(b.entries);
@@ -52,7 +52,7 @@ test("query.result coverage is checked as strictly as a plan", () => {
   const ok = started();
   ok.add("query.issued", {
     query: "q1", source: "dns", source_hash: "h", pivot: null, pivot_hash: null, connector: "c", text: "t", bound: {},
-    window: { from: null, to: null }, why: "w", estimate: null, step: null, verifies: null,
+    window: { from: null, to: null }, why: "w", estimate: null, step: null, verifies: null, purpose: "result",
   });
   ok.add("query.result", { query: "q1", result: { blob: "b", bytes: 1 }, rows: 1, rows_hash: "h", coverage: { kind: "partial", reason: "row_limit" }, duration_ms: 1, cost: null });
   expect(fold(ok.entries).queries.q1!.status).toBe("done");

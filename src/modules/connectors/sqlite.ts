@@ -97,6 +97,14 @@ export class SqliteConnector implements Connector {
     return null;
   }
 
+  estimateRequest(_req: QueryRequest): null {
+    return null;
+  }
+
+  readEstimate(_outcome: QueryOutcome): null {
+    return null;
+  }
+
   async run(req: QueryRequest): Promise<QueryOutcome> {
     return runOnDatabase(this.handle, req);
   }

@@ -1,6 +1,6 @@
 import type {
   Actor, BlobRef, Card, Challenge, CheckFinding, Coverage, Draft, ModelChoice, Payloads,
-  Place, Plan, Proposal, StageDef, StepOutcome, TimeWindow,
+  Place, Plan, Proposal, QueryPurpose, StageDef, StepOutcome, TimeWindow,
 } from "../types";
 
 export type IdKind = "card" | "lane" | "query" | "job" | "proposal" | "challenge" | "request" | "call" | "turn" | "run" | "plan";
@@ -57,7 +57,7 @@ export interface JobState {
 }
 export interface QueryState {
   id: string; source: string; text: string; why: string; window: TimeWindow; by: Actor;
-  step: string | null; verifies: string | null;
+  step: string | null; verifies: string | null; purpose: QueryPurpose;
   issued_seq: number; issued_ts: string;
   status: "running" | "done" | "failed";
   rows: number | null; rows_hash: string | null; coverage: Coverage | null; result: BlobRef | null;

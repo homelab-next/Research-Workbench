@@ -75,6 +75,7 @@ user: workbench
 marking: "TLP:AMBER"
 where: machine
 confirmed: true
+cost: { weight: 0, unit: rows }
 tables:
   - { name: iceberg.s.events, time_column: ts, guarded: true, columns: [] }
 `,
@@ -140,7 +141,8 @@ test("an unchanged source matches", async () => {
 test("the re-run is a logged query that names what it verifies and makes no card", async () => {
   await runQuery(s, deps, flows);
   await v();
-  expect(issued("q2")).toMatchObject({ verifies: "q1" });
+  expect(issued("q2")).toMatchObject({ verifies: "q1", purpose: "verify" });
+  expect(issued("q1")).toMatchObject({ verifies: null, purpose: "result" });
   expect(s.state.queries.q2).toMatchObject({ status: "done", card: null, verifies: "q1" });
   expect(Object.keys(s.state.cards)).toEqual(["c1"]);
 });
@@ -267,7 +269,7 @@ test("a pivot that changed since the original query could not run", async () => 
 function stubbed(coverages: QueryOutcome["coverage"][]): RunnerDeps {
   let i = 0;
   const stub: Connector = {
-    kind: "sql", render: (r) => r.text, estimate: async () => null, close: () => {},
+    kind: "sql", render: (r) => r.text, estimate: async () => null, estimateRequest: () => null, readEstimate: () => null, close: () => {},
     run: async () => ({ columns: ["dst"], rows: [["a"], ["b"], ["c"]], raw: new TextEncoder().encode("[]"), media: "application/json", coverage: coverages[i++]!, cost: null }),
   };
   return { ...deps, pool: { for: () => stub, closeAll: () => {} } as unknown as ConnectorPool };

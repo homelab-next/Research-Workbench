@@ -309,23 +309,33 @@ test("a malformed page is a ConnectorError", async () => {
   await expect(make(s2.url).run(okReq)).rejects.toBeInstanceOf(ConnectorError);
 });
 
-test("estimate asks the engine for the plan and reads the row estimate", async () => {
+// Ruling 3: estimate() never contacts the engine; the plan is asked by a request the runner issues and records.
+test("estimate contacts nothing; estimateRequest is an EXPLAIN of the same query, and readEstimate reads its row count", async () => {
+  expect(await c.estimate(okReq)).toBeNull();
+  expect(t.statements).toHaveLength(0);
+  const asked = c.estimateRequest(okReq)!;
+  expect(asked).toMatchObject({ text: `EXPLAIN (TYPE IO, FORMAT JSON) ${okReq.text}`, bound: okReq.bound, window: okReq.window, budget: null });
   t.on(/^explain \(type io, format json\)/i, { columns: ["Query Plan"], pages: [[[JSON.stringify({ estimate: { outputRowCount: 1200 } })]]] });
-  expect(await c.estimate(okReq)).toEqual({ amount: 1200, unit: "rows" });
+  const out = await c.run(asked);
   expect(t.statements[0]!.sql).toBe(`EXPLAIN (TYPE IO, FORMAT JSON) ${c.render(okReq)}`);
+  expect(c.readEstimate(out)).toEqual({ amount: 1200, unit: "rows" });
 });
 
-test("estimate is null when the engine cannot say", async () => {
-  t.on(/^explain/i, { error: "nope" });
-  expect(await c.estimate(okReq)).toBeNull();
+test("readEstimate is null when the plan cannot say", async () => {
+  const asked = c.estimateRequest(okReq)!;
   t.on(/^explain/i, { columns: ["Query Plan"], pages: [[[JSON.stringify({ estimate: {} })]]] });
-  expect(await c.estimate(okReq)).toBeNull();
+  expect(c.readEstimate(await c.run(asked))).toBeNull();
   t.on(/^explain/i, { columns: ["Query Plan"], pages: [[["not json"]]] });
-  expect(await c.estimate(okReq)).toBeNull();
+  expect(c.readEstimate(await c.run(asked))).toBeNull();
+  t.on(/^explain/i, { columns: ["Query Plan"], pages: [[[JSON.stringify({ estimate: { outputRowCount: "NaN" } })]]] });
+  expect(c.readEstimate(await c.run(asked))).toBeNull();
+  t.on(/^explain/i, { error: "nope" });
+  await expect(c.run(asked)).rejects.toThrow(/nope/);
 });
 
-test("estimate still refuses a query the guard refuses, without sending anything", async () => {
-  await expect(c.estimate(req("delete from iceberg.s.events"))).rejects.toThrow(GuardError);
+test("the estimate request still refuses a query the guard refuses, without sending anything", async () => {
+  await expect(c.estimate(req("delete from iceberg.s.events"))).resolves.toBeNull();
+  expect(() => c.render(c.estimateRequest(req("delete from iceberg.s.events"))!)).toThrow(GuardError);
   expect(t.statements).toHaveLength(0);
 });
 
@@ -433,4 +443,19 @@ test("an echo in an encoded form is refused, and an echo on the POST reply still
   });
   await expect(make(onPost.url, { credential: "LAKE_PW" }, { LAKE_PW: PW }).run(req(TEXT, {}, win, { timeout_ms: 5000 }))).rejects.toThrow("echoed the credential");
   expect(deletes(onPost.hits)).toEqual(["DELETE /v1/statement/q1/1"]);
+});
+
+// ---------- final review finding 6: a budget in rows stops the query ----------
+test("a budget in rows stops the query once that many rows are read, as partial coverage with reason budget", async () => {
+  t.on(/./, { columns: ["a"], pages: [[[1], [2]], [[3], [4]], [[5]]] });
+  const out = await c.run({ ...okReq, budget: 3, max_rows: 10 });
+  expect(out.rows).toEqual([[1], [2], [3]]);
+  expect(out.coverage).toEqual({ kind: "partial", reason: "budget", detail: "stopped at the budget of 3 rows" });
+  expect(t.cancelled).toHaveLength(1);
+  // a query that ends within the budget is whole
+  const whole = await c.run({ ...okReq, budget: 100, max_rows: 10 });
+  expect(whole.coverage).toEqual({ kind: "full" });
+  // the row cap still decides when it is the smaller limit
+  const capped = await c.run({ ...okReq, budget: 100, max_rows: 2 });
+  expect(capped.coverage).toMatchObject({ kind: "partial", reason: "row_limit" });
 });

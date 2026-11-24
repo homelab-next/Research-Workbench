@@ -16,6 +16,8 @@ import { CARD_PREVIEW_ROWS, rowsHash, runQuery } from "../../src/modules/runner"
 import type { RunnerDeps, RunQueryInput } from "../../src/modules/runner";
 import { startStandin } from "../helpers/http-standin";
 import type { Standin } from "../helpers/http-standin";
+import { startTrino } from "../helpers/trino-standin";
+import type { TrinoStandin } from "../helpers/trino-standin";
 
 const human: Actor = { kind: "human", id: "analyst" };
 const agent: Actor = { kind: "agent", id: "a1", stage: "gather", profile: "p", model: "m", effort: null, where: "machine" };
@@ -25,12 +27,13 @@ let dir: string;
 let wb: Workbench;
 let s: CaseSession;
 let standin: Standin;
+let trino: TrinoStandin;
 let registry: Registry;
 let pool: ConnectorPool;
 let deps: RunnerDeps;
 const observables = new Observables([{ id: "address", title: "Address", pattern: "^(?:\\d{1,3}\\.){3}\\d{1,3}$" }]);
 
-const SOURCES = (url: string): Record<string, string> => ({
+const SOURCES = (url: string, trinoUrl: string): Record<string, string> => ({
   "sources/flows.yaml": `kind: source
 id: flows
 title: Flows
@@ -66,6 +69,20 @@ endpoints:
   - { name: reputation, method: GET, path: "/v1/reputation/{value}?days={days}", read: true, rows: results, columns: [address, verdict] }
   - { name: reputation2, method: GET, path: "/v1/reputation/{value}", read: true, rows: results, columns: [address, verdict] }
 `,
+  "sources/lake.yaml": `kind: source
+id: lake
+title: Lake
+connector: trino
+location: ${trinoUrl}
+user: workbench
+marking: "TLP:AMBER"
+where: machine
+adhoc: true
+cost: { weight: 2, unit: rows }
+limits: { max_rows: 10, timeout_ms: 5000 }
+tables:
+  - { name: iceberg.s.events, time_column: ts, columns: [] }
+`,
   "types.yaml": `kind: types
 types:
   - { id: address, title: Address, pattern: '^(?:\\d{1,3}\\.){3}\\d{1,3}$' }
@@ -89,7 +106,8 @@ beforeEach(() => {
     "GET /v1/reputation/198.51.100.66": (r) => new Response(JSON.stringify({ results: [{ address: "198.51.100.66", verdict: r.headers.get("authorization") }] }), { headers: { "content-type": "application/json" } }),
   });
   mkdirSync(join(root, "sources"), { recursive: true });
-  for (const [name, text] of Object.entries(SOURCES(standin.url))) writeFileSync(join(root, name), text);
+  trino = startTrino();
+  for (const [name, text] of Object.entries(SOURCES(standin.url, trino.url))) writeFileSync(join(root, name), text);
   mkdirSync(join(root, "sources", "data"), { recursive: true });
   // the files source reads from <dir of manifest>/data
   writeFileSync(join(root, "sources", "data", "assets.csv"), "asset,address\nlaptop-1,192.0.2.17\nlaptop-2,192.0.2.18\nprinter,192.0.2.19\n");
@@ -108,6 +126,7 @@ afterEach(() => {
   pool.closeAll();
   try { wb.close(); } catch { /* already closed */ }
   standin.stop();
+  trino.stop();
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -120,6 +139,8 @@ function stubDeps(outcome: Partial<QueryOutcome> | (() => Promise<QueryOutcome>)
     kind: "sql",
     render: (r) => r.text,
     estimate: async () => null,
+    estimateRequest: () => null,
+    readEstimate: () => null,
     run: async (r) => {
       seen.push(r);
       if (typeof outcome === "function") return outcome();
@@ -504,4 +525,77 @@ test("any error while rendering or estimating is a refusal, not a throw", async 
   expect(await runQuery(s, throwing("render"), base)).toEqual({ status: "refused", reasons: ["render broke"] });
   expect(await runQuery(s, throwing("estimate"), { ...repInput, budget: 3 })).toEqual({ status: "refused", reasons: ["estimate broke"] });
   expect(types()).toEqual(["case.created"]);
+});
+
+// ---------- final review finding 2: an estimate that asks the source is a recorded query ----------
+const LAKE = "select a from iceberg.s.events where a <> {value}";
+const lakeInput: RunQueryInput = { source: "lake", text: LAKE, bound: { value: "x" }, window: win, why: "events", actor: human };
+const plan = (rows: number) => ({ columns: ["Query Plan"], pages: [[[JSON.stringify({ estimate: { outputRowCount: rows } })]]] });
+const issuedPayloads = () => s.entries().filter((e) => e.type === "query.issued").map((e) => e.payload as Record<string, unknown>);
+
+test("a costly trino query is priced by a recorded EXPLAIN query, then runs citing it", async () => {
+  trino.on(/^explain/i, plan(3));
+  trino.on(/^select/i, { columns: ["a"], pages: [[["p"], ["q"]]] });
+  const r = await runQuery(s, deps, { ...lakeInput, budget: 5 });
+  expect(r).toMatchObject({ status: "done", rows: 2 });
+  expect(types()).toEqual(["case.created", "query.issued", "query.result", "query.issued", "query.result", "card.created"]);
+  const [est, real] = issuedPayloads();
+  expect(est).toMatchObject({ purpose: "estimate", pivot: null, estimate: null, why: "estimate for: events", text: `EXPLAIN (TYPE IO, FORMAT JSON) select a from iceberg.s.events where a <> 'x'` });
+  expect(real).toMatchObject({ purpose: "result", estimate: { amount: 3, unit: "rows" }, text: "select a from iceberg.s.events where a <> 'x'" });
+  const entries = s.entries();
+  const estResult = entries.find((e) => e.type === "query.result")!;
+  expect(entries.filter((e) => e.type === "query.issued")[1]!.cause).toBe(estResult.seq);
+  expect(s.state.queries.q1).toMatchObject({ purpose: "estimate", status: "done", card: null });
+  expect(s.blobs.get((estResult.payload as { result: { blob: string } }).result.blob).length).toBeGreaterThan(0);
+  expect(trino.statements.map((x) => x.sql.split(" ")[0])).toEqual(["EXPLAIN", "select"]);
+  expect(verifyCase(s.dir).ok).toBe(true);
+});
+
+test("an estimate above the budget is recorded, and the query does not run", async () => {
+  trino.on(/^explain/i, plan(50));
+  expect(await runQuery(s, deps, { ...lakeInput, budget: 5 })).toEqual({ status: "needs_budget", proposal: null, estimate: { amount: 50, unit: "rows" } });
+  expect(types()).toEqual(["case.created", "query.issued", "query.result"]);
+  expect(trino.statements).toHaveLength(1);
+});
+
+test("a failed estimate is query.failed; with no estimate only a person's budget runs the query", async () => {
+  trino.on(/^explain/i, { error: "no stats" });
+  trino.on(/^select/i, { columns: ["a"], pages: [[["p"]]] });
+  const system: Actor = { kind: "system", id: "scheduler" };
+  expect(await runQuery(s, deps, { ...lakeInput, actor: system, budget: 1000 })).toEqual({ status: "needs_budget", proposal: null, estimate: null });
+  expect(s.state.queries.q1).toMatchObject({ purpose: "estimate", status: "failed" });
+  const person = await runQuery(s, deps, { ...lakeInput, budget: 1000 });
+  expect(person).toMatchObject({ status: "done" });
+  const viaAgent = await runQuery(s, deps, { ...lakeInput, actor: agent });
+  expect(viaAgent).toEqual({ status: "needs_budget", proposal: "p1", estimate: null });
+  expect(s.state.proposals.p1).toMatchObject({ estimate: null }); // never the ranking weight
+});
+
+// ---------- final review finding 6: budgets are enforced ----------
+test("a non-finite or wrongly-unitted estimate counts as none", async () => {
+  for (const bad of [{ amount: NaN, unit: "lookups" }, { amount: Infinity, unit: "lookups" }, { amount: -1, unit: "lookups" }, { amount: 1, unit: "usd" }]) {
+    const stub = {
+      kind: "sql", render: (r: QueryRequest) => r.text, close: () => {}, estimate: async () => bad, estimateRequest: () => null, readEstimate: () => null,
+      run: async () => ({ columns: ["dst"], rows: [], raw: new Uint8Array(), media: "", coverage: { kind: "full" }, cost: null }),
+    } as unknown as Connector;
+    const d: RunnerDeps = { registry, observables, pool: { for: () => stub, closeAll: () => {} } as unknown as ConnectorPool };
+    expect(await runQuery(s, d, { ...repInput, actor: { kind: "system", id: "x" }, budget: 3 })).toEqual({ status: "needs_budget", proposal: null, estimate: null });
+  }
+  expect(s.head().seq).toBe(1);
+});
+
+test("a malformed cost from the source fails the query before anything is kept", async () => {
+  for (const cost of [{ amount: NaN, unit: "s" }, { amount: 1 }, "1", { amount: -2, unit: "s" }]) {
+    const r = await runQuery(s, stubDeps({ cost: cost as unknown as Cost }), base);
+    expect(r).toMatchObject({ status: "failed", error: "the source returned an invalid result: cost is malformed" });
+  }
+  expect(types().filter((t) => t === "query.result")).toEqual([]);
+});
+
+test("the budget reaches the connector in the source's unit, and a trino query stops at it", async () => {
+  trino.on(/^explain/i, plan(2));
+  trino.on(/^select/i, { columns: ["a"], pages: [[["p"], ["q"]], [["r"], ["s"]], [["t"]]] });
+  const r = await runQuery(s, deps, { ...lakeInput, budget: 2 });
+  expect(r).toMatchObject({ status: "done", outcome: "partial", rows: 2, coverage: { kind: "partial", reason: "budget" } });
+  expect(trino.cancelled).toHaveLength(1);
 });

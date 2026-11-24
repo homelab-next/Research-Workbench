@@ -83,8 +83,10 @@ export interface Product {
 export interface Draft { n: number; hash: string; author: Actor; product: Product; reason: string }
 export interface CheckFinding { check: string; where: string; message: string }
 export interface Challenge { id: string; draft_hash: string; severity: "must_address" | "consider"; text: string; cites: string[] }
+/** Why a query was issued: for its result, to price another query (an estimate), or to re-run an earlier one (a verify). */
+export type QueryPurpose = "result" | "estimate" | "verify";
 export type Proposal =
-  | { id: string; kind: "costly_query"; title: string; by: string; step: string | null; source: string; text: string; estimate: Cost; why: string }
+  | { id: string; kind: "costly_query"; title: string; by: string; step: string | null; source: string; text: string; estimate: Cost | null; why: string }
   | { id: string; kind: "narrative"; title: string; by: string; section: Section; text: string; cites: string[] };
 
 // ---------- entries ----------
@@ -114,7 +116,7 @@ export interface Payloads {
   "step.started": { step: string };
   "step.finished": { step: string; outcome: StepOutcome; cards: string[]; note: string };
   // queries
-  "query.issued": { query: string; source: string; source_hash: string; pivot: string | null; pivot_hash: string | null; connector: string; text: string; bound: Record<string, Json>; window: TimeWindow; why: string; estimate: Cost | null; step: string | null; verifies: string | null };
+  "query.issued": { query: string; source: string; source_hash: string; pivot: string | null; pivot_hash: string | null; connector: string; text: string; bound: Record<string, Json>; window: TimeWindow; why: string; estimate: Cost | null; step: string | null; verifies: string | null; purpose: QueryPurpose };
   "query.result": { query: string; result: BlobRef; rows: number; rows_hash: string; coverage: Coverage; duration_ms: number; cost: Cost | null };
   "query.failed": { query: string; error: string };
   "verify.run": { original: string; rerun: string | null; card: string; outcome: "matches" | "differs" | "could_not_run"; detail: string };
@@ -238,6 +240,7 @@ export const RUN_OUTCOMES = listOf<Payloads["run.finished"]["outcome"]>({ publis
 export const STEP_OUTCOMES = listOf<StepOutcome>({ answered: true, empty: true, partial: true, blocked: true, failed: true });
 export const JOB_KINDS = listOf<Payloads["job.started"]["kind"]>({ research: true, query: true, model: true, check: true });
 export const JOB_OUTCOMES = listOf<Payloads["job.finished"]["outcome"]>({ done: true, failed: true });
+export const QUERY_PURPOSES = listOf<QueryPurpose>({ result: true, estimate: true, verify: true });
 export const VERIFY_OUTCOMES = listOf<Payloads["verify.run"]["outcome"]>({ matches: true, differs: true, could_not_run: true });
 export const PLACES = listOf<Place>({ incoming: true, lane: true, discarded: true });
 export const EMPTY_MEANS = listOf<EmptyMeans>({ "proven-negative": true, "not-seen": true });

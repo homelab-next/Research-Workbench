@@ -286,3 +286,11 @@ test("a response that echoes the credential, plainly or encoded, is refused whol
     expect((err as Error).message, name).toBe("the source echoed the credential; result refused");
   }
 });
+
+// ---------- final review finding 6: the budget is honoured in the source's unit ----------
+test("a budget below the fixed cost of one request is refused before anything is sent", async () => {
+  const c = make();
+  await expect(c.run(req("reputation", { value: "198.51.100.77", days: 7 }, { budget: 0.5 }))).rejects.toThrow(/budget of 0.5 lookups is below the cost of one request \(1 lookups\); not sent/);
+  expect(s.requests).toHaveLength(0);
+  expect((await c.run(req("reputation", { value: "198.51.100.77", days: 7 }, { budget: 1 }))).rows).toHaveLength(1);
+});

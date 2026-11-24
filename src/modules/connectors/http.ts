@@ -58,12 +58,24 @@ export class HttpConnector implements Connector {
     return this.cost();
   }
 
+  estimateRequest(_req: QueryRequest): null {
+    return null;
+  }
+
+  readEstimate(_outcome: QueryOutcome): null {
+    return null;
+  }
+
   private cost(): Cost | null {
     return this.source.cost.weight > 0 ? { amount: 1, unit: this.source.cost.unit } : null;
   }
 
   async run(req: QueryRequest): Promise<QueryOutcome> {
     const e = this.endpoint(req.text);
+    const price = this.cost();
+    if (req.budget !== null && price !== null && req.budget < price.amount) {
+      throw new ConnectorError(`the budget of ${req.budget} ${price.unit} is below the cost of one request (${price.amount} ${price.unit}); not sent`);
+    }
     const bound = effectiveBound(req);
     const url = this.url(e, bound);
     const body = this.body(e, bound);

@@ -68,25 +68,35 @@ export class TrinoConnector implements Connector {
     return sql;
   }
 
-  async estimate(req: QueryRequest): Promise<Cost | null> {
-    const sql = this.render(req);
+  /** Never contacts the engine: the estimate is a query of its own (estimateRequest), issued and recorded by the runner. */
+  async estimate(_req: QueryRequest): Promise<null> {
+    return null;
+  }
+
+  /** The engine's plan for the query, asked as an EXPLAIN of the same template, bound values and window. */
+  estimateRequest(req: QueryRequest): QueryRequest {
+    return { ...req, text: `EXPLAIN (TYPE IO, FORMAT JSON) ${req.text.replace(/[\s;]+$/, "")}`, max_rows: 2, budget: null };
+  }
+
+  /** The plan's estimated output rows, in rows. Null unless the plan came back whole, as one cell of JSON, with a finite count. */
+  readEstimate(out: QueryOutcome): Cost | null {
+    if (out.coverage.kind !== "full" || out.rows.length !== 1) return null;
+    const cell = out.rows[0]![0];
+    if (typeof cell !== "string") return null;
+    let plan: unknown;
     try {
-      const out = await this.execute(`EXPLAIN (TYPE IO, FORMAT JSON) ${sql.replace(/[\s;]+$/, "")}`, 2, req.timeout_ms);
-      if (out.coverage.kind !== "full" || out.rows.length !== 1) return null;
-      const cell = out.rows[0]![0];
-      if (typeof cell !== "string") return null;
-      const plan: unknown = JSON.parse(cell);
-      const est = typeof plan === "object" && plan !== null ? (plan as { estimate?: unknown }).estimate : undefined;
-      const n = typeof est === "object" && est !== null ? (est as { outputRowCount?: unknown }).outputRowCount : undefined;
-      return typeof n === "number" && Number.isFinite(n) && n >= 0 ? { amount: n, unit: "rows" } : null;
+      plan = JSON.parse(cell);
     } catch {
       return null;
     }
+    const est = typeof plan === "object" && plan !== null ? (plan as { estimate?: unknown }).estimate : undefined;
+    const n = typeof est === "object" && est !== null ? (est as { outputRowCount?: unknown }).outputRowCount : undefined;
+    return typeof n === "number" && Number.isFinite(n) && n >= 0 ? { amount: n, unit: "rows" } : null;
   }
 
   async run(req: QueryRequest): Promise<QueryOutcome> {
     const sql = this.render(req);
-    const out = await this.execute(sql, req.max_rows, req.timeout_ms);
+    const out = await this.execute(sql, req.max_rows, req.timeout_ms, req.budget);
     return {
       columns: out.columns, rows: out.rows, raw: joinPages(out.pages),
       media: "application/json", coverage: out.coverage, cost: null,
@@ -134,7 +144,8 @@ export class TrinoConnector implements Connector {
     }
   }
 
-  private async execute(sql: string, maxRows: number, timeoutMs: number): Promise<Paged> {
+  /** Runs a statement, paging until done. Stops past maxRows (row_limit) or, when a budget in rows is given, once that many rows are read (budget). */
+  private async execute(sql: string, maxRows: number, timeoutMs: number, budget: number | null): Promise<Paged> {
     const base = parseBase(this.source.location);
     const { headers, redact } = this.auth();
     const ctl = new AbortController();
@@ -206,16 +217,23 @@ export class TrinoConnector implements Connector {
 
     try {
       await step("POST", `${this.source.location.replace(/\/+$/, "")}/v1/statement`, sql);
+      let spent = false;
       while (pending !== null) {
         if (rows.length > maxRows) { capped = true; break; }
+        if (budget !== null && rows.length >= budget) { spent = true; break; }
         if (ctl.signal.aborted) throw new TimedOut();
         await step("GET", pending);
       }
       if (rows.length > maxRows) capped = true;
-      if (capped && pending !== null) await this.cancel(pending, headers);
+      if (budget !== null && rows.length > budget) spent = true;
+      if ((capped || spent) && pending !== null) await this.cancel(pending, headers);
+      // the smaller limit is the one that stopped the query
+      const byBudget = spent && budget !== null && budget <= maxRows;
+      const keep = byBudget ? Math.floor(budget) : maxRows;
       return {
-        columns, rows: rows.slice(0, maxRows), pages,
-        coverage: capped ? { kind: "partial", reason: "row_limit", detail: `stopped at ${maxRows} rows` } : { kind: "full" },
+        columns, rows: rows.slice(0, keep), pages,
+        coverage: byBudget ? { kind: "partial", reason: "budget", detail: `stopped at the budget of ${budget} rows` }
+          : capped ? { kind: "partial", reason: "row_limit", detail: `stopped at ${maxRows} rows` } : { kind: "full" },
       };
     } catch (err) {
       if (err instanceof EngineError) throw err;
