@@ -137,7 +137,7 @@ test("a whole run, live, equals its replay at every entry", () => {
   const undo = s.state.undoable.at(-1)!;
   one({ type: "undo", payload: { target: undo.seq, card: undo.card, place: undo.place, lane: undo.lane, index: undo.index }, actor: human });
   one({ type: "card.pinned", payload: { card: "c1", pinned: true }, actor: human });
-  commit((_st, ids) => [{ type: "proposal.created", payload: { proposal: { id: ids.next("proposal"), kind: "costly_query", title: "Pull a week", by: "planner", step: "s1", source: "netflow", text: "7 days", estimate: { amount: 3, unit: "credits" }, why: "confirm" } }, actor: planner }]);
+  commit((_st, ids) => [{ type: "proposal.created", payload: { proposal: { id: ids.next("proposal"), kind: "costly_query", title: "Pull a week", by: "planner", step: "s1", subgoal: null, source: "netflow", pivot: null, pivot_hash: null, text: "7 days", bound: {}, window: { from: null, to: null }, estimate: { amount: 3, unit: "credits" }, why: "confirm" } }, actor: planner }]);
   one({ type: "proposal.accepted", payload: { proposal: "p1", budget: 3 }, actor: human });
   const [rerun] = commit((_st, ids) => [{ type: "query.issued", payload: { query: ids.next("query"), source: "netflow", source_hash: "b".repeat(64), pivot: null, pivot_hash: null, connector: "scripted", text: "again", bound: {}, window: { from: null, to: null }, why: "re-validate", estimate: null, step: null, verifies: "c1", purpose: "verify" }, actor: system }]);
   const q2 = (rerun!.payload as { query: string }).query;

@@ -21,7 +21,10 @@ const isPlan = (x: unknown): x is Plan =>
   && Array.isArray(x.subgoals) && x.subgoals.every(isSubGoal) && Array.isArray(x.steps) && x.steps.every(isStep);
 const isProposal = (x: unknown): x is Proposal => {
   if (!isObj(x) || !isStr(x.id) || !isStr(x.title) || !isStr(x.by)) return false;
-  if (x.kind === "costly_query") return (x.step === null || isStr(x.step)) && isStr(x.source) && isStr(x.text) && (x.estimate === null || isCost(x.estimate)) && isStr(x.why);
+  if (x.kind === "costly_query") {
+    return isStrOrNull(x.step) && isStrOrNull(x.subgoal) && isStr(x.source) && isStrOrNull(x.pivot) && isStrOrNull(x.pivot_hash) && isStr(x.text)
+      && isObj(x.bound) && isTimeWindow(x.window) && (x.estimate === null || isCost(x.estimate)) && isStr(x.why);
+  }
   if (x.kind === "narrative") return isOneOf(x.section, SECTIONS) && isStr(x.text) && isStrList(x.cites);
   return false;
 };

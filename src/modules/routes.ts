@@ -1,12 +1,14 @@
 import type { CaseSession } from "../core/session";
-import type { Actor, Observable, TimeWindow } from "../core/types";
+import type { Actor, Cost, Observable, TimeWindow } from "../core/types";
 import { runPivot, yielded } from "./pivots";
 import type { RunnerDeps, RunQueryResult } from "./runner";
 import { DEFAULT_LIMITS } from "./seeker";
 import type { Hop, Seeker, SeekLimits } from "./seeker";
 
+/** One pivot run on one value. `proposal` and `estimate` are set when the hop needs a budget (the proposal is an agent's). */
 export interface TrailItem {
   hop: Hop; value: string; status: RunQueryResult["status"]; outcome: string | null; card: string | null; query: string | null; found: string[];
+  proposal: string | null; estimate: Cost | null;
 }
 
 export interface RouteInput {
@@ -86,8 +88,12 @@ export async function runRoute(session: CaseSession, deps: RunnerDeps, seeker: S
         hop, value, status: r.status, outcome: r.status === "done" ? r.outcome : null,
         card: r.status === "done" ? r.card : null, query: r.status === "done" || r.status === "failed" ? r.query : null,
         found: found.map((o) => o.value),
+        proposal: r.status === "needs_budget" ? r.proposal : null, estimate: r.status === "needs_budget" ? r.estimate : null,
       });
-      if (r.status === "needs_budget") break; // asking again for the next value would only repeat the request
+      if (r.status === "needs_budget") {
+        caveat(r.proposal !== null ? `${hop.pivot}: needs a budget (proposal ${r.proposal})` : `${hop.pivot}: needs a budget`);
+        break; // asking again for the next value would only repeat the request
+      }
       if (hop.to === input.want && (known.get(input.want)?.length ?? 0) > 0) {
         reachedGoal = true; // the goal is known; the hop's other values are not worth a lookup
         break;

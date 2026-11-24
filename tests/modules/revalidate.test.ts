@@ -220,7 +220,7 @@ test("a card with no query could not run", async () => {
   expect(s.state.cards.c2).toBeDefined();
   const before = s.entries().length;
   const r = await v("c2");
-  expect(r).toEqual({ outcome: "could_not_run", detail: "this card did not come from a query", rerun: null });
+  expect(r).toEqual({ outcome: "could_not_run", detail: "this card did not come from a query", rerun: null, proposal: null });
   expect(s.entries().length).toBe(before);
 });
 
@@ -344,4 +344,15 @@ test("a $ inside a string literal and an underscore name re-run unchanged", asyn
   expect(r).toMatchObject({ outcome: "matches", rerun: "q2" });
   expect(issued("q2")).toMatchObject({ text: issued("q1").text, bound: { src_ip: "192.0.2.17" } });
   expect(String(issued("q2").text)).toContain("'$x'");
+});
+
+// ---------- final review finding 7: an agent's re-run of a costly source raises a proposal the verdict names ----------
+test("an agent re-validating a costly card gets a verdict naming the proposal it raised; its budget is ignored", async () => {
+  const pivot = registry.pivot("paid_rep")!;
+  expect((await runQuery(s, deps, { source: "rep", text: pivot.query, bound: { value: "198.51.100.77", days: 7 }, window: win, why: "w", actor: human, pivot, budget: 10 })).status).toBe("done");
+  const agent: Actor = { kind: "agent", id: "a1", stage: "check", profile: "p", model: "m", effort: null, where: "machine" };
+  const r = await v("c1", { actor: agent, budget: 10 });
+  expect(r).toEqual({ outcome: "could_not_run", detail: "a budget is needed to re-run this query on a costly source (proposal p1)", rerun: null, proposal: "p1" });
+  expect(s.state.proposals.p1).toMatchObject({ kind: "costly_query", source: "rep", pivot: "paid_rep", status: "open" });
+  expect(standin.requests).toHaveLength(1);
 });

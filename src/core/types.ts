@@ -86,7 +86,14 @@ export interface Challenge { id: string; draft_hash: string; severity: "must_add
 /** Why a query was issued: for its result, to price another query (an estimate), or to re-run an earlier one (a verify). */
 export type QueryPurpose = "result" | "estimate" | "verify";
 export type Proposal =
-  | { id: string; kind: "costly_query"; title: string; by: string; step: string | null; source: string; text: string; estimate: Cost | null; why: string }
+  /**
+   * A query an agent may not run until a person sets a budget. `text` is the query as given to the runner (a template
+   * with its bound values and window beside it), so an accepted proposal can be run from the record alone.
+   */
+  | {
+    id: string; kind: "costly_query"; title: string; by: string; step: string | null; subgoal: string | null; source: string;
+    pivot: string | null; pivot_hash: string | null; text: string; bound: Record<string, Json>; window: TimeWindow; estimate: Cost | null; why: string;
+  }
   | { id: string; kind: "narrative"; title: string; by: string; section: Section; text: string; cites: string[] };
 
 // ---------- entries ----------

@@ -139,8 +139,17 @@ test("a costly hop with no budget blocks that pivot and moves on", async () => {
   expect(r.outcome).toBe("blocked");
   expect(r.blocked).toEqual(["dq"]);
   expect(r.trail.map((t) => [t.hop.pivot, t.status])).toEqual([["ad", "done"], ["dq", "needs_budget"]]);
-  expect(r.trail[1]).toMatchObject({ card: null, query: null, found: [] });
+  expect(r.trail[1]).toMatchObject({ card: null, query: null, found: [], proposal: null, estimate: null });
+  expect(r.caveats).toEqual(["dq: needs a budget"]);
   expect(s.entries().filter((e) => e.type === "query.issued")).toHaveLength(1);
+});
+
+test("an agent's costly hop names the proposal it raised, in the trail and in the caveats", async () => {
+  const agent: Actor = { kind: "agent", id: "a1", stage: "gather", profile: "p", model: "m", effort: null, where: "machine" };
+  const r = await go(addr("192.0.2.60"), "rating", { actor: agent });
+  expect(r.trail[1]).toMatchObject({ status: "needs_budget", proposal: "p1", estimate: null });
+  expect(r.caveats).toEqual(["dq: needs a budget (proposal p1)"]);
+  expect(s.state.proposals.p1).toMatchObject({ kind: "costly_query", pivot: "dq", bound: { value: "paid.example.org" } });
 });
 
 test("a refused hop is a roadblock", async () => {

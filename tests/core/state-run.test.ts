@@ -294,7 +294,10 @@ test("verify.run with no re-run (null) still stamps the card", () => {
 
 test("proposals open, then are accepted with a budget or rejected with a reason", () => {
   const b = new EntryBuilder();
-  const mk = (id: string) => ({ id, kind: "costly_query" as const, title: "T", by: "a1", step: null, source: "src", text: "t", estimate: { amount: 5, unit: "usd" }, why: "w" });
+  const mk = (id: string) => ({
+    id, kind: "costly_query" as const, title: "T", by: "a1", step: null, subgoal: null, source: "src", pivot: null, pivot_hash: null, text: "t",
+    bound: {}, window: { from: null, to: null }, estimate: { amount: 5, unit: "usd" }, why: "w",
+  });
   const e1 = b.add("proposal.created", { proposal: mk("p1") });
   b.add("proposal.created", { proposal: mk("p2") });
   let s = fold(b.entries);
@@ -494,6 +497,24 @@ test("a plan step with id '__proto__' is tracked like any other", () => {
   expect(fold(b.entries).plan.steps["__proto__"]!.status).toBe("running");
   b.add("step.finished", { step: "__proto__", outcome: "answered", cards: ["c1"], note: "n" });
   expect(fold(b.entries).plan.steps["__proto__"]).toEqual({ status: "answered", cards: ["c1"], note: "n" });
+});
+
+test("a costly proposal carries what it takes to run it; estimate may be null; one missing a part is malformed", () => {
+  const full = {
+    id: "p1", kind: "costly_query" as const, title: "T", by: "a1", step: null, subgoal: "g1", source: "lake", pivot: "pv", pivot_hash: "h",
+    text: "select {value}", bound: { value: "x" }, window: { from: "2026-01-01T00:00:00.000Z", to: null }, estimate: null, why: "w",
+  };
+  const b = new EntryBuilder();
+  b.add("proposal.created", { proposal: full });
+  for (const drop of ["pivot", "pivot_hash", "bound", "window", "subgoal"] as const) {
+    const { [drop]: _gone, ...rest } = full;
+    b.add("proposal.created", { proposal: { ...rest, id: `p-${drop}` } } as never);
+  }
+  b.add("proposal.created", { proposal: { ...full, id: "p-badbound", bound: [1] } } as never);
+  const s = fold(b.entries);
+  expect(Object.keys(s.proposals)).toEqual(["p1"]);
+  expect(s.proposals.p1).toMatchObject({ ...full, status: "open" });
+  expect(s.skipped).toHaveLength(6);
 });
 
 test("a proposal missing a required field is ignored", () => {

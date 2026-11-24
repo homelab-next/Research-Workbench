@@ -3,6 +3,7 @@ import { canonical, isPlainObject } from "../core/canonical";
 import { sha256Hex } from "../core/hash";
 import { isCoverage } from "../core/state/shapes";
 import type { CaseSession } from "../core/session";
+import type { ProposalState } from "../core/state";
 import type { Actor, Card, Coverage, Cost, EmptyMeans, EntryInput, QueryPurpose, TimeWindow } from "../core/types";
 import { isUtcTimestamp } from "./connectors";
 import type { Bound, Connector, ConnectorPool, QueryOutcome, QueryRequest } from "./connectors";
@@ -116,7 +117,8 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
     return { status: "refused", reasons: [`pivot ${pivot.id} needs a window with both ends set`] };
   }
   const link = { run: input.run ?? null, stage: input.stage ?? null, job: input.job ?? null };
-  const given = input.budget ?? null;
+  // Agents run free things only: a budget comes from a person (directly, or by accepting a proposal), never from an agent.
+  const given = input.actor.kind === "agent" ? null : input.budget ?? null;
   const budget = typeof given === "number" && Number.isFinite(given) && given > 0 ? given : null;
   const req: QueryRequest = {
     text: input.text, bound, window,
@@ -138,6 +140,11 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
   let estimate: Cost | null = null;
   let cause: number | null = null;
   if (weight > 0) {
+    // An agent asking again for the same costly query is pointed at the proposal already waiting for a person.
+    if (input.actor.kind === "agent") {
+      const open = openProposalFor(session, source.id, input.text, bound, window);
+      if (open !== null) return { status: "needs_budget", proposal: open.id, estimate: open.estimate };
+    }
     let estimateReq: QueryRequest | null;
     try {
       estimate = await connector.estimate(req);
@@ -176,7 +183,12 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
         const id = ids.next("proposal");
         return [{
           type: "proposal.created", actor: input.actor, cause, ...link,
-          payload: { proposal: { id, kind: "costly_query", title, by: input.actor.id, step: input.step ?? null, source: source.id, text: rendered, estimate, why: input.why } },
+          payload: {
+            proposal: {
+              id, kind: "costly_query", title, by: input.actor.id, step: input.step ?? null, subgoal: input.subgoal ?? null, source: source.id,
+              pivot: pivot?.id ?? null, pivot_hash: pivot?.hash ?? null, text: input.text, bound: { ...bound }, window: { ...window }, estimate, why: input.why,
+            },
+          },
         }];
       });
       const made = entries[0]!.payload as { proposal: { id: string } };
@@ -189,6 +201,16 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
     purpose: input.verifies != null ? "verify" : "result", estimate, cause: cause ?? input.cause ?? null, makeCard: input.make_card !== false, title,
   });
   return ran.result;
+}
+
+/** An open costly_query proposal for the same source, text, bound values and window, if there is one. */
+function openProposalFor(session: CaseSession, source: string, text: string, bound: Bound, window: TimeWindow): Extract<ProposalState, { kind: "costly_query" }> | null {
+  const key = canonical(bound);
+  for (const p of Object.values(session.state.proposals)) {
+    if (p.kind !== "costly_query" || p.status !== "open") continue;
+    if (p.source === source && p.text === text && p.window.from === window.from && p.window.to === window.to && canonical(p.bound) === key) return p;
+  }
+  return null;
 }
 
 /** A cost in the given unit with a finite amount of zero or more. */

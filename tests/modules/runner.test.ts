@@ -13,6 +13,7 @@ import { Secrets } from "../../src/modules/secrets";
 import { ConnectorPool } from "../../src/modules/connectors";
 import type { Connector, QueryOutcome, QueryRequest } from "../../src/modules/connectors";
 import { CARD_PREVIEW_ROWS, rowsHash, runQuery } from "../../src/modules/runner";
+import { runProposal } from "../../src/modules/proposals";
 import type { RunnerDeps, RunQueryInput } from "../../src/modules/runner";
 import { startStandin } from "../helpers/http-standin";
 import type { Standin } from "../helpers/http-standin";
@@ -598,4 +599,79 @@ test("the budget reaches the connector in the source's unit, and a trino query s
   const r = await runQuery(s, deps, { ...lakeInput, budget: 2 });
   expect(r).toMatchObject({ status: "done", outcome: "partial", rows: 2, coverage: { kind: "partial", reason: "budget" } });
   expect(trino.cancelled).toHaveLength(1);
+});
+
+// ---------- final review finding 7: the costly path, from an agent's proposal to a person's run ----------
+const paidRep = (): RunQueryInput => ({ ...repInput, actor: agent, pivot: registry.pivot("paid_rep")!, step: "st1", subgoal: "g1" });
+
+test("an agent's budget is ignored: a costly query from an agent is always a proposal", async () => {
+  const r = await runQuery(s, deps, { ...paidRep(), budget: 1000 });
+  expect(r).toMatchObject({ status: "needs_budget", proposal: "p1" });
+  expect(standin.requests).toHaveLength(0);
+});
+
+test("a proposal holds what it takes to run it, and the same request reuses it", async () => {
+  const pivot = registry.pivot("paid_rep")!;
+  const r = await runQuery(s, deps, paidRep());
+  expect(r).toEqual({ status: "needs_budget", proposal: "p1", estimate: { amount: 1, unit: "lookups" } });
+  expect(s.state.proposals.p1).toMatchObject({
+    kind: "costly_query", source: "rep", pivot: "paid_rep", pivot_hash: pivot.hash, text: "reputation", bound: { value: "198.51.100.77", days: 7 },
+    window: win, subgoal: "g1", step: "st1", estimate: { amount: 1, unit: "lookups" }, status: "open",
+  });
+  expect(await runQuery(s, deps, paidRep())).toEqual(r);
+  expect(types().filter((t) => t === "proposal.created")).toHaveLength(1);
+  const other = await runQuery(s, deps, { ...paidRep(), bound: { value: "198.51.100.77", days: 8 } });
+  expect(other).toMatchObject({ proposal: "p2" });
+  const otherWindow = await runQuery(s, deps, { ...paidRep(), window: { from: win.from, to: null } });
+  expect(otherWindow).toMatchObject({ proposal: "p3" });
+});
+
+test("a reused proposal does not ask the engine for another estimate", async () => {
+  trino.on(/^explain/i, plan(3));
+  const lakeAgent = { ...lakeInput, actor: agent };
+  expect(await runQuery(s, deps, lakeAgent)).toEqual({ status: "needs_budget", proposal: "p1", estimate: { amount: 3, unit: "rows" } });
+  expect(await runQuery(s, deps, lakeAgent)).toEqual({ status: "needs_budget", proposal: "p1", estimate: { amount: 3, unit: "rows" } });
+  expect(trino.statements).toHaveLength(1);
+  expect(s.entries().find((e) => e.type === "proposal.created")!.cause).toBe(s.entries().find((e) => e.type === "query.result")!.seq);
+});
+
+test("a person runs an accepted proposal from the record alone, even after a restart", async () => {
+  await runQuery(s, deps, paidRep());
+  const caseId = s.id;
+  wb.close();
+  wb = Workbench.open(join(dir, "data"), { onError: () => {} });
+  s = wb.session(caseId);
+  const r = await runProposal(s, deps, { proposal: "p1", budget: 2, actor: human });
+  expect(r).toMatchObject({ status: "done", rows: 1 });
+  expect(s.state.proposals.p1).toMatchObject({ status: "accepted", budget: 2 });
+  const accepted = s.entries().find((e) => e.type === "proposal.accepted")!;
+  expect(accepted.payload).toEqual({ proposal: "p1", budget: 2 });
+  const issued = s.entries().find((e) => e.type === "query.issued")!;
+  expect(issued.cause).toBe(accepted.seq);
+  expect(issued.actor).toEqual(human);
+  expect(issued.payload).toMatchObject({ pivot: "paid_rep", bound: { value: "198.51.100.77", days: 7 }, window: win, step: "st1", purpose: "result" });
+  expect(standin.requests).toHaveLength(1);
+  // a proposal runs once
+  expect(await runProposal(s, deps, { proposal: "p1", budget: 2, actor: human })).toEqual({ status: "refused", reasons: ["proposal p1 is accepted, not open"] });
+});
+
+test("only a person may run a proposal; an unknown, changed or unfunded one is refused and writes nothing", async () => {
+  await runQuery(s, deps, paidRep());
+  const before = s.head().seq;
+  const refusal = async (input: Parameters<typeof runProposal>[2], d: RunnerDeps = deps) => {
+    const r = await runProposal(s, d, input);
+    expect(r.status).toBe("refused");
+    return r.status === "refused" ? r.reasons[0] : "";
+  };
+  expect(await refusal({ proposal: "p1", budget: 2, actor: agent })).toBe("only a person may accept and run a proposal");
+  expect(await refusal({ proposal: "p1", budget: 2, actor: { kind: "system", id: "x" } })).toBe("only a person may accept and run a proposal");
+  expect(await refusal({ proposal: "p9", budget: 2, actor: human })).toBe("unknown proposal: p9");
+  for (const budget of [0, -1, NaN]) expect(await refusal({ proposal: "p1", budget, actor: human })).toBe("the budget must be a number above zero");
+  const real = registry.pivot("paid_rep")!;
+  const changed = { ...registry, source: registry.source.bind(registry), pivot: (id: string) => (id === "paid_rep" ? { ...real, hash: "other" } : registry.pivot(id)) } as unknown as Registry;
+  expect(await refusal({ proposal: "p1", budget: 2, actor: human }, { ...deps, registry: changed })).toBe("the pivot paid_rep has changed since the proposal");
+  const gone = { ...registry, source: () => null, pivot: registry.pivot.bind(registry) } as unknown as Registry;
+  expect(await refusal({ proposal: "p1", budget: 2, actor: human }, { ...deps, registry: gone })).toBe("the source rep is no longer loaded");
+  expect(s.head().seq).toBe(before);
+  expect(standin.requests).toHaveLength(0);
 });

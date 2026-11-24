@@ -4,7 +4,8 @@ import { PivotError, bindPivot } from "./pivots";
 import type { RunnerDeps, RunQueryInput } from "./runner";
 import { runQuery } from "./runner";
 
-export type Verdict = { outcome: "matches" | "differs" | "could_not_run"; detail: string; rerun: string | null };
+/** `proposal` is the costly_query proposal the re-run raised (an agent's re-run of a costly source), else null. */
+export type Verdict = { outcome: "matches" | "differs" | "could_not_run"; detail: string; rerun: string | null; proposal: string | null };
 
 /** Turns a stored `$name` text back into its `{name}` template. `$window_from` and `$window_to` map back to the dotted window names. */
 function toTemplate(text: string, bound: Record<string, unknown>): string {
@@ -25,7 +26,7 @@ export async function revalidateCard(
   const card = Object.hasOwn(session.state.cards, input.card) ? session.state.cards[input.card]! : null;
   if (card === null) throw new Error(`unknown card: ${input.card}`);
   const original = card.query !== null && Object.hasOwn(session.state.queries, card.query) ? session.state.queries[card.query]! : null;
-  if (card.query === null || original === null) return { outcome: "could_not_run", detail: "this card did not come from a query", rerun: null };
+  if (card.query === null || original === null) return { outcome: "could_not_run", detail: "this card did not come from a query", rerun: null, proposal: null };
   const originalId = card.query;
   const entry = session.entries().find((e) => e.seq === original.issued_seq);
   const was = entry !== undefined && entry.type === "query.issued" ? (entry.payload as Payloads["query.issued"]) : null;
@@ -37,7 +38,7 @@ export async function revalidateCard(
     }]);
     return v;
   };
-  const couldNot = (detail: string, rerun: string | null = null): Verdict => finish({ outcome: "could_not_run", detail, rerun });
+  const couldNot = (detail: string, rerun: string | null = null, proposal: string | null = null): Verdict => finish({ outcome: "could_not_run", detail, rerun, proposal });
 
   if (was === null) return couldNot("the original query entry could not be found");
   if (original.status !== "done" || original.rows_hash === null || original.rows === null) return couldNot("the original query has no result to compare with");
@@ -79,7 +80,10 @@ export async function revalidateCard(
   const r = await runQuery(session, deps, run);
   switch (r.status) {
     case "refused": return couldNot(r.reasons.join("; "));
-    case "needs_budget": return couldNot("a budget is needed to re-run this query on a costly source");
+    case "needs_budget":
+      return r.proposal !== null
+        ? couldNot(`a budget is needed to re-run this query on a costly source (proposal ${r.proposal})`, null, r.proposal)
+        : couldNot("a budget is needed to re-run this query on a costly source");
     case "failed": return couldNot(r.error, r.query);
     case "done": {
       const side = (c: Coverage): string | null => (c.kind === "partial" ? c.reason : null);
@@ -87,14 +91,14 @@ export async function revalidateCard(
       const which = o !== null && n !== null ? "original and re-run" : o !== null ? "original" : "re-run";
       const note = o !== null || n !== null ? `the ${which} result is partial (${[o, n].filter((x) => x !== null).join(", ")})` : null;
       if (r.rows_hash === original.rows_hash) {
-        if (note !== null) return finish({ outcome: "could_not_run", detail: `same ${r.rows} rows, but ${note}; it cannot be fully verified`, rerun: r.query });
-        return finish({ outcome: "matches", detail: `same ${r.rows} rows`, rerun: r.query });
+        if (note !== null) return finish({ outcome: "could_not_run", detail: `same ${r.rows} rows, but ${note}; it cannot be fully verified`, rerun: r.query, proposal: null });
+        return finish({ outcome: "matches", detail: `same ${r.rows} rows`, rerun: r.query, proposal: null });
       }
       let detail = r.rows !== original.rows
         ? `was ${original.rows} rows, now ${r.rows} rows; the source may have changed since`
         : `same number of rows (${r.rows}) but different content; the source may have changed since`;
       if (note !== null) detail += `; ${note}`;
-      return finish({ outcome: "differs", detail, rerun: r.query });
+      return finish({ outcome: "differs", detail, rerun: r.query, proposal: null });
     }
   }
 }
