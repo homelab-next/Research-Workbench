@@ -49,8 +49,8 @@ export function testUi(win: Window, over: Partial<Ui> = {}): Ui {
 }
 
 /** served(), a happy-dom Window at the server's origin, makeApi over app.handle, an EntrySource over hub.read(id).subscribe, and startApp. `reducedMotion` sets what ui.reducedMotion() answers. */
-export async function page(opts: { role?: Role; reducedMotion?: boolean; hash?: string } = {}): Promise<Page> {
-  const s = await served({ role: opts.role });
+export async function page(opts: { role?: Role; reducedMotion?: boolean; hash?: string; before?: (root: string) => void } = {}): Promise<Page> {
+  const s = await served({ role: opts.role, ...(opts.before === undefined ? {} : { before: opts.before }) });
   const win = new Window({ url: `${s.origin}/${opts.hash ?? ""}` });
   const doc = win.document as unknown as Document;
   const toasts: string[] = [];

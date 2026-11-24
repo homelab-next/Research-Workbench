@@ -178,3 +178,20 @@ kbd { font-family: var(--mono); font-size: 12px; background: var(--panel-2); bor
 .lens .timeline-row.card-row { cursor: pointer; }
 .lens .worklog-row time { font-variant-numeric: tabular-nums; }
 .lens .filter label { margin-right: 12px; }
+
+/* ---------- lens: Pipeline ---------- */
+.lens .attention { color: var(--amber); }
+.lens-pipeline .run-line { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+.lens-pipeline .stage-row { border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 8px; margin-top: 6px; }
+.lens-pipeline .stage-row > summary { cursor: pointer; }
+.lens-pipeline .stage-row > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lens-pipeline .section-title { font-size: 13px; margin: 10px 0 4px; color: var(--muted); }
+.lens-pipeline .declined, .lens-pipeline .blocked { border: 1px solid var(--amber); border-radius: var(--radius); padding: 6px; margin-top: 6px; }
+.lens-pipeline .chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.lens-pipeline .turn { border-top: 1px solid var(--line); padding: 4px 0; }
+.lens-pipeline .parts { display: flex; flex-wrap: wrap; gap: 4px; color: var(--muted); }
+.lens-pipeline .part.left-out { border: 1px dashed var(--amber); color: var(--amber); padding: 0 4px; }
+.lens-pipeline .tool-call { padding-left: 12px; }
+.lens-pipeline .role, .lens-pipeline .label { color: var(--muted); font-size: 12px; }
+.lens-pipeline pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24em; overflow: auto; margin: 2px 0 6px; }
+.lens-pipeline .moe-form { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; }

@@ -1,5 +1,6 @@
 import { makeDiscarded } from "./discarded";
 import { makeJobs } from "./jobs";
+import { makePipeline } from "./pipeline";
 import { makeSteps } from "./steps";
 import { makeTimeline } from "./timeline";
 import { makeWorklog } from "./worklog";
@@ -14,4 +15,5 @@ export const LENSES: LensDef[] = [
   { id: "worklog", key: "w", title: "Worklog", make: (ui, open) => makeWorklog(ui, open) },
   { id: "discarded", key: "d", title: "Discarded", make: (ui, open) => makeDiscarded(ui, open) },
   { id: "jobs", key: "b", title: "Jobs", make: (ui, open) => makeJobs(ui, open) },
+  { id: "pipeline", key: "q", title: "Pipeline", make: (ui, open, arg) => makePipeline(ui, open, arg) },
 ];
