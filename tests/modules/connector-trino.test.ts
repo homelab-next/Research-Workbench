@@ -378,10 +378,14 @@ test("a network failure mid-paging cancels the query", async () => {
   expect(deletes(s.hits)).toEqual(["DELETE /v1/statement/q1/2"]);
 });
 
-test("an engine error page is not cancelled", async () => {
-  const s = failing(() => json({ id: "q1", error: { message: "boom" } }));
+test("an engine error page before any rows is an error, and is not cancelled", async () => {
+  const s = raw((r, base) => (r.method === "POST" ? json({ id: "q1", nextUri: `${base}/v1/statement/q1/1` }) : json({ id: "q1", error: { message: "boom" } })));
   await expect(make(s.url).run(req(TEXT, {}, win, { timeout_ms: 5000 }))).rejects.toThrow(/boom/);
   expect(deletes(s.hits)).toEqual([]);
+  // after rows have arrived the same error page is partial coverage (see minor 16 below), still with nothing to cancel
+  const late = failing(() => json({ id: "q1", error: { message: "boom" } }));
+  expect((await make(late.url).run(req(TEXT, {}, win, { timeout_ms: 5000 }))).coverage).toMatchObject({ kind: "partial", reason: "source_error" });
+  expect(deletes(late.hits)).toEqual([]);
 });
 
 test("raw keeps every page's bytes exactly, large numbers and all", async () => {
@@ -458,4 +462,16 @@ test("a budget in rows stops the query once that many rows are read, as partial 
   // the row cap still decides when it is the smaller limit
   const capped = await c.run({ ...okReq, budget: 100, max_rows: 2 });
   expect(capped.coverage).toMatchObject({ kind: "partial", reason: "row_limit" });
+});
+
+// ---------- final review minor 16: an engine error after rows arrived is partial, and keeps the bytes ----------
+test("an engine error after rows have arrived is partial coverage with reason source_error, the pages kept", async () => {
+  const s2 = failing(() => json({ id: "q1", error: { message: "worker lost" } }));
+  const out = await make(s2.url).run(req(TEXT, {}, win, { timeout_ms: 5000 }));
+  expect(out.rows).toEqual([[1]]);
+  expect(out.coverage).toEqual({ kind: "partial", reason: "source_error", detail: "the engine reported an error: worker lost" });
+  const pages = JSON.parse(text(out.raw)) as { error?: { message: string } }[];
+  expect(pages).toHaveLength(3);
+  expect(pages[2]!.error!.message).toBe("worker lost");
+  expect(deletes(s2.hits)).toEqual([]);
 });

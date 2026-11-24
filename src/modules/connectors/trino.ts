@@ -236,7 +236,13 @@ export class TrinoConnector implements Connector {
           : capped ? { kind: "partial", reason: "row_limit", detail: `stopped at ${maxRows} rows` } : { kind: "full" },
       };
     } catch (err) {
-      if (err instanceof EngineError) throw err;
+      if (err instanceof EngineError) {
+        // the engine stopped the query: rows that arrived are a partial answer, kept with every page's bytes
+        if (rows.length > 0) {
+          return { columns, rows: rows.slice(0, maxRows), pages, coverage: { kind: "partial", reason: "source_error", detail: err.message } };
+        }
+        throw err;
+      }
       // From here the query may still be running: cancel the last same-origin URI the engine gave us.
       if (err instanceof TimedOut || (timedOut && !(err instanceof ConnectorError))) {
         if (pending !== null) await this.cancel(pending, headers);
