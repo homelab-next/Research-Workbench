@@ -134,10 +134,13 @@ defineCommand("run_pivot", {
     const budget = a.budget === undefined ? null : (a.budget as number);
     if (budget !== null && (!Number.isFinite(budget) || budget <= 0)) throw new Refused("the budget must be a number above zero");
     hub.engine(id);                                  // recovers the case, once, before anything is written for it
-    const r = await runPivot(session, deps.runner, {
+    const work = runPivot(session, deps.runner, {
       pivot: text(a, "pivot"), value: text(a, "value"), window: windowOf(a.window as Json), why, actor: { kind: "human", id: deps.config.user }, budget,
       ...(a.subgoal === undefined ? {} : { subgoal: text(a, "subgoal") }),
     });
+    // the lookup writes to the case as it goes: the hub tracks it, so closing the server waits for it (its outcome is this request's to report)
+    hub.background(work.then(() => undefined, () => undefined));
+    const r = await work;
     if (r.status === "refused") throw new Refused(r.reasons.join("; "), r.reasons);
     if (r.status === "needs_budget") {
       throw new Refused(r.estimate === null ? "this lookup is costly; give a budget" : `this lookup is costly: the estimate is ${r.estimate.amount} ${r.estimate.unit}; give a budget`);

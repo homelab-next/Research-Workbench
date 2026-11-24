@@ -57,9 +57,22 @@ function parseArgs(argv: string[]): Parsed {
 
 const reason = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
+/** What a signal does once the server has been asked to stop: exit 0 after a clean shutdown; else print every closer's error and exit 1. */
+export async function afterSignal(stop: () => Promise<void>, out: { error(line: string): void }, exit: (code: number) => void): Promise<void> {
+  try {
+    await stop();
+  } catch (err) {
+    for (const e of err instanceof AggregateError ? err.errors : [err]) out.error(`shutdown: ${reason(e)}`);
+    exit(1);
+    return;
+  }
+  exit(0);
+}
+
 /**
  * Resolves once the server is listening. Throws UsageError, ConfigError, WorkbenchLockedError or ComposeError, with nothing left open.
- * `stop()` (and SIGINT or SIGTERM) stops the server, then closes the connector pool, the workbench and the fixture, each even if the one before failed.
+ * `stop()` (and SIGINT or SIGTERM) stops the server, then closes the connector pool, the workbench and the fixture, each even if the one before failed;
+ * several failures are thrown together as an AggregateError. On a signal, a failed shutdown prints every error and exits 1.
  */
 export async function serve(argv: string[], out: { log(line: string): void; error(line: string): void }): Promise<{ origin: string; stop(): Promise<void> }> {
   const p = parseArgs(argv);
@@ -69,7 +82,7 @@ export async function serve(argv: string[], out: { log(line: string): void; erro
   let composed: ReturnType<typeof compose> | null = null;
   let running: Awaited<ReturnType<typeof startServer>> | null = null;
   let closed: Promise<void> | null = null;
-  const onSignal = (): void => { void stop().finally(() => process.exit(0)); };
+  const onSignal = (): void => { void afterSignal(stop, out, (code) => process.exit(code)); };
   const stop = (): Promise<void> => (closed ??= (async () => {
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
@@ -81,7 +94,9 @@ export async function serve(argv: string[], out: { log(line: string): void; erro
     await attempt(composed === null ? undefined : () => composed!.close());
     await attempt(wb === null ? undefined : () => wb!.close());
     await attempt(fixture === null ? undefined : () => fixture!.stop());
-    if (problems.length > 0) throw problems[0];
+    // one failure is thrown as itself; several together, so none is lost
+    if (problems.length === 1) throw problems[0];
+    if (problems.length > 1) throw new AggregateError(problems, `${problems.length} closers failed`);
   })());
   try {
     // the lock first: a second serve on this data directory writes nothing and starts nothing, the sample and its fixture included

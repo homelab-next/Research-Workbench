@@ -224,3 +224,27 @@ test("the difference route answers 400 for a malformed escape", async () => {
   const id = await open();
   expect((await s.get(`/api/cases/${id}/cards/%E0%A4%A/difference`)).status).toBe(400);
 });
+
+test("closing the server waits for a run_pivot whose source is still being asked", async () => {
+  let release: (r: Response) => void = () => {};
+  const { startStandin } = await import("../helpers/http-standin");
+  const hung = startStandin({ "GET /v1/reputation/198.51.100.77": () => new Promise<Response>((resolve) => { release = resolve; }) });
+  try {
+    s = await served({ before: (root) => { const f = join(root, "sources", "reputation.yaml"); writeFileSync(f, readFileSync(f, "utf8").replace(/location: .*/, `location: ${hung.url}`)); } });
+    const id = await s.newCase();
+    cases.push(id);
+    const asked = s.command(id, "run_pivot", { pivot: "address_to_verdict", value: "198.51.100.77", window: SAMPLE_WINDOW, why: "is it known bad", budget: 10 });
+    while (hung.requests.length === 0) await Bun.sleep(20);
+    let closed = false;
+    const closing = s.app.close().then(() => { closed = true; });
+    await Bun.sleep(200);
+    expect(closed).toBe(false);
+    release(new Response(JSON.stringify({ results: [] }), { headers: { "content-type": "application/json" } }));
+    await closing;
+    await asked;
+    expect(s.entries(id).some((e) => e.type === "query.result" || e.type === "query.failed")).toBe(true);
+  } finally {
+    release(new Response("{}"));
+    hung.stop();
+  }
+});

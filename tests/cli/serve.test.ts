@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SAMPLE_START, SAMPLE_WINDOW } from "../../scripts/make-sample-data";
-import { serve } from "../../src/cli/serve";
+import { afterSignal, serve } from "../../src/cli/serve";
 import { Workbench, WorkbenchLockedError } from "../../src/core/workbench";
 import { copySample } from "../helpers/sample-root";
 
@@ -150,3 +150,37 @@ test("serve wires refuse_hosts: a source that points at the server is refused wh
   await waitFor(() => texts().includes("own server"));
   expect(texts()).toContain("points at the workbench's own server");
 });
+
+test("on a signal, a clean shutdown exits 0 and a failed one prints every closer's error and exits 1", async () => {
+  const printed: string[] = [];
+  const out = { log: (): void => {}, error: (l: string): void => { printed.push(l); } };
+  const codes: number[] = [];
+  await afterSignal(async () => {}, out, (c) => { codes.push(c); });
+  expect(codes).toEqual([0]);
+  expect(printed).toEqual([]);
+  await afterSignal(async () => { throw new AggregateError([new Error("the server would not stop"), new Error("the workbench would not close")], "shutdown failed"); }, out, (c) => { codes.push(c); });
+  await afterSignal(async () => { throw new Error("the pool would not close"); }, out, (c) => { codes.push(c); });
+  expect(codes).toEqual([0, 1, 1]);
+  expect(printed).toEqual(["shutdown: the server would not stop", "shutdown: the workbench would not close", "shutdown: the pool would not close"]);
+});
+
+test("SIGTERM stops a spawned serve cleanly: exit 0 and the lock released", async () => {
+  const e = setup();
+  const child = Bun.spawn(["bun", "run", join(REPO, "src", "cli", "serve.ts"), "--config", e.config, "--port", "0", "--sample-fixture", String(e.fixturePort)], {
+    cwd: REPO, stdout: "pipe", stderr: "pipe", env: { ...process.env, RESEARCH_WORKBENCH_CONFIG: "" },
+  });
+  stops.push(async () => { child.kill("SIGKILL"); await child.exited; });
+  const reader = child.stdout.getReader();
+  let seen = "";
+  while (!seen.includes("Workbench: ")) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    seen += new TextDecoder().decode(value);
+  }
+  reader.releaseLock();
+  expect(seen).toMatch(/Workbench: http:\/\/127\.0\.0\.1:\d+\//);
+  child.kill("SIGTERM");
+  expect(await child.exited).toBe(0);
+  expect(await new Response(child.stderr).text()).toBe("");
+  Workbench.open(e.data, { onError: () => {} }).close();
+}, 60_000);
