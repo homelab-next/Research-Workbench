@@ -87,7 +87,7 @@ function rig(over: Partial<Record<Role, StageRunner>> = {}, s: CaseSession = f.s
     feedback: async () => { log.push("feedback"); return PASS; },
     ...over,
   };
-  return { engine: new Engine(s, deps, { runners }), s, log, runners };
+  return { engine: Engine.open(s, deps, { runners }), s, log, runners };
 }
 
 const acceptPlan = (s: CaseSession, budgets: Record<string, number> = {}) => {
@@ -539,4 +539,24 @@ test("a run stopped while a stage works goes no further", async () => {
   const sum = await driving;
   expect(sum).toMatchObject({ status: "finished", outcome: "stopped" });
   expect(r.log).not.toContain("assemble");
+});
+
+test("an engine built on a case writes nothing to it; Engine.open recovers it, once", () => {
+  const leftover = (): void => {
+    f.s.commit((_st, ids) => [{
+      type: "query.issued", actor: planner,
+      payload: { query: ids.next("query"), source: "x", source_hash: "h", pivot: null, pivot_hash: null, connector: "c", text: "t", bound: {}, window: WINDOW, why: "w", estimate: null, step: null, verifies: null, purpose: "result" },
+    }]);
+  };
+  leftover();
+  const before = f.s.head();
+  const reader = new Engine(f.s, depsOf(f.sample));
+  expect(reader.summary().status).toBe("none");
+  expect(f.s.head()).toEqual(before);
+  expect(f.s.state.queries.q1!.status).toBe("running");
+  Engine.open(f.s, depsOf(f.sample));
+  expect(f.s.state.queries.q1!.status).toBe("failed");
+  leftover();
+  Engine.open(f.s, depsOf(f.sample)).recover();
+  expect(f.s.state.queries.q2!.status).toBe("running");
 });

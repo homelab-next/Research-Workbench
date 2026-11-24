@@ -69,14 +69,27 @@ export class Engine {
   private inflight: Promise<RunSummary> | null = null;
   private readonly runners: Partial<Record<Role, StageRunner>>;
 
+  /** Builds an engine and writes nothing: a read (a status, a replay) can use one. A command that acts opens it with Engine.open. */
   constructor(private readonly session: CaseSession, private readonly deps: EngineDeps, opts: { runners?: Partial<Record<Role, StageRunner>> } = {}) {
     this.runners = { frame: frameRunner, plan: planRunner, research: researchRunner, assemble: assembleRunner, checks: checksRunner, evaluate: evaluateRunner, challenge: challengeRunner, publish: publishRunner, feedback: feedbackRunner, ...opts.runners };
-    // A case opened here that this process did not create may hold work a stopped process left half done.
-    if (!recovered.has(session)) {
-      recovered.add(session);
-      recoverSession(session);
-      removeTempBundles(session, (err) => (deps.onError ?? logToStderr("publish"))(err));
-    }
+  }
+
+  /** An engine for a command that will act on the case: the case is recovered first (once per open session). */
+  static open(session: CaseSession, deps: EngineDeps, opts: { runners?: Partial<Record<Role, StageRunner>> } = {}): Engine {
+    const engine = new Engine(session, deps, opts);
+    engine.recover();
+    return engine;
+  }
+
+  /**
+   * A case opened here that this process did not create may hold work a stopped process left half done: it is closed, and leftover bundle
+   * folders are removed. Once per open session, so a second engine on it does not close work begun since.
+   */
+  recover(): void {
+    if (recovered.has(this.session)) return;
+    recovered.add(this.session);
+    recoverSession(this.session);
+    removeTempBundles(this.session, (err) => (this.deps.onError ?? logToStderr("publish"))(err));
   }
 
   start(actor: Actor): void {

@@ -209,7 +209,8 @@ function applyPipeline(s: CaseState, entry: Entry): CaseState {
     case "run.finished": {
       if (!isOneOf(entry.payload.outcome, RUN_OUTCOMES) || (entry.payload.reason !== undefined && !isStr(entry.payload.reason))) return malformed(s, entry);
       if (finished || !hasRun(s)) return s;
-      return withRun(s, { status: "finished", outcome: entry.payload.outcome });
+      // a finished run waits for nothing, whatever gate it was stopped at
+      return withRun(s, { status: "finished", outcome: entry.payload.outcome, waiting: null });
     }
     case "stage.model_set": {
       const { stage, choice } = entry.payload;

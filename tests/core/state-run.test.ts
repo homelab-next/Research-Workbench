@@ -703,3 +703,18 @@ test("case.anchored changes nothing but seq in a case fold", () => {
   expect(after).toEqual({ ...before, seq: after.seq, head_ts: after.head_ts });
   expect(after.seq).toBe(before.seq + 1);
 });
+
+test("a run finished at a gate waits for nothing; a stop's reason is kept in the entry and a bad one is skipped", () => {
+  const b = started();
+  b.add("stage.started", { stage: "plan", attempt: 1 });
+  b.add("gate.waiting", { gate: "plan" });
+  expect(fold(b.entries).run).toMatchObject({ status: "waiting", waiting: "plan" });
+  b.add("run.finished", { outcome: "stopped", reason: "not now" });
+  const s = fold(b.entries);
+  expect(s.run).toMatchObject({ status: "finished", outcome: "stopped", waiting: null });
+  expect(s.skipped).toEqual([]);
+  const bad = started();
+  const e = bad.add("run.finished", { outcome: "stopped", reason: 7 } as never);
+  expect(fold(bad.entries).skipped).toEqual([{ seq: e.seq, type: "run.finished", reason: "malformed run.finished" }]);
+  expect(fold(bad.entries).run.status).toBe("running");
+});

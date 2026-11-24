@@ -106,7 +106,7 @@ function rig(over: Partial<Record<Role, StageRunner>> = {}, s: CaseSession = f.s
     feedback: feedbackRunner,
     ...over,
   };
-  return { engine: new Engine(s, deps, { runners }), deps, log };
+  return { engine: Engine.open(s, deps, { runners }), deps, log };
 }
 async function toGate(r: Rig): Promise<void> {
   r.engine.start(human);

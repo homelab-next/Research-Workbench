@@ -190,3 +190,39 @@ test("a run a changed pipeline strands can be stopped, and stays stopped", () =>
   expect(again.err).toContain("no run in progress");
   expect(lines(cli(e, ["resume", "CASE-1"]).out)[0]).toBe("CASE-1 finished");
 });
+
+const anchored = (e: Env): { seq: number; why: string }[] => {
+  const db = new Database(join(e.data, "workbench.sqlite"), { readonly: true });
+  try {
+    return (db.query("select payload from entries where type = 'case.anchored' order by seq").all() as { payload: string }[]).map((r) => JSON.parse(r.payload));
+  } finally { db.close(); }
+};
+const chainHead = (e: Env): number => {
+  const db = new Database(join(e.data, "workbench.sqlite"), { readonly: true });
+  try { return (db.query("select max(seq) as n from entries").get() as { n: number }).n; } finally { db.close(); }
+};
+
+test("status writes to neither ledger, even after a manifest changed; only a command that ends the run anchors the case", () => {
+  const e = setup();
+  expect(cli(e, START).code).toBe(0);
+  expect(anchored(e)).toEqual([]);
+  // a changed manifest would be recorded on the workbench chain by anything that loads the registry
+  const stage = join(e.dir, "sample", "stages", "assemble.yaml");
+  writeFileSync(stage, readFileSync(stage, "utf8").replace("title: Assemble", "title: Assemble the draft"));
+  const caseBefore = head(e), chainBefore = chainHead(e);
+  for (let i = 0; i < 2; i++) {
+    const r = cli(e, ["status", "CASE-1"], false);
+    expect(r.err).toBe("");
+    expect(r.code).toBe(0);
+    expect(lines(r.out)[0]).toBe("CASE-1 waiting waiting=plan");
+  }
+  expect(head(e)).toBe(caseBefore);
+  expect(chainHead(e)).toBe(chainBefore);
+  // a command that leaves the run unfinished anchors nothing; one that ends it anchors once, at its last entry
+  expect(cli(e, ["replan", "CASE-1", "--note", "look at the leases too"]).code).toBe(1);
+  expect(anchored(e)).toEqual([]);
+  expect(cli(e, ["stop", "CASE-1", "--reason", "enough"], false).code).toBe(0);
+  const marks = anchored(e);
+  expect(marks.map((m) => m.why)).toEqual(["closed"]);
+  expect(marks[0]!.seq).toBe(head(e));
+});

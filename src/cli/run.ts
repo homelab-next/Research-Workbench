@@ -149,8 +149,7 @@ function report(session: CaseSession, asked: boolean): { lines: string[]; code: 
   const state = session.state;
   const { run } = state;
   const parts = [session.id, run.status];
-  // a run that was stopped at a gate keeps its `waiting` in the state; it waits for nothing
-  const waiting = run.status === "waiting" ? run.waiting : null;
+  const { waiting } = run;
   if (waiting !== null) parts.push(`waiting=${waiting}`);
   if (run.status !== "finished" && waiting !== "plan" && run.current !== null) parts.push(`stage=${run.current}`);
   const draft = latestDraft(state);
@@ -202,9 +201,18 @@ async function main(argv: string[]): Promise<number> {
       fixture = startReputationFixture(join(root.path, "data"), p.fixture);
     }
     wb = Workbench.open(config.data_dir, { onError: (e) => console.error(`workbench: ${e instanceof Error ? e.message : String(e)}`) });
+    // status only reads: no registry is loaded (that records on the workbench chain), no engine, no recovery, no anchor
+    if (p.command === "status") {
+      const r = report(wb.session(p.case!), true);
+      console.log(r.lines.join("\n"));
+      return r.code;
+    }
     composed = compose(config, wb);
     for (const problem of composed.problems) console.error(`problem: ${problem}`);
-    const { deps } = composed;
+    const base = composed.deps;
+    // what the engine anchored, so a run this command finished is anchored at its last entry once and only once
+    let anchoredAt: number | null = null;
+    const deps = { ...base, anchor: (a: Parameters<NonNullable<typeof base.anchor>>[0]) => { base.anchor?.(a); anchoredAt = a.seq; } };
 
     if (p.command === "start") {
       let input;
@@ -220,7 +228,18 @@ async function main(argv: string[]): Promise<number> {
       session = wb.session(p.case!);
     }
     // an engine on a session this process did not create closes what a stopped process left half done
-    const engine = new Engine(session, deps);
+    const engine = Engine.open(session, deps);
+    const wasFinished = session.state.run.status === "finished";
+    const finishedHere = (): void => {
+      const { run } = session!.state;
+      const head = session!.head();
+      if (wasFinished || run.status !== "finished" || anchoredAt === head.seq) return;
+      try {
+        deps.anchor({ case: session!.id, seq: head.seq, hash: head.hash, why: run.outcome === "published" ? "published" : "closed" });
+      } catch (err) {
+        console.error(`the case head could not be anchored: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    };
     switch (p.command) {
       case "start":
         engine.start(human);
@@ -253,10 +272,9 @@ async function main(argv: string[]): Promise<number> {
         engine.feedback({ measure: p.one.measure!, value: raw.trim() !== "" && Number.isFinite(Number(raw)) ? Number(raw) : raw, note: p.one.note ?? "", actor: human });
         break;
       }
-      case "status":
-        break;
     }
-    const r = report(session, p.command === "status");
+    finishedHere();
+    const r = report(session, false);
     console.log(r.lines.join("\n"));
     return r.code;
   } catch (err) {
@@ -271,14 +289,6 @@ async function main(argv: string[]): Promise<number> {
     console.error(`unexpected error: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
     return 1;
   } finally {
-    try {
-      if (session !== null && composed !== null) {
-        const head = session.head();
-        composed.deps.anchor?.({ case: session.id, seq: head.seq, hash: head.hash, why: "closed" });
-      }
-    } catch (err) {
-      console.error(`the case head could not be anchored: ${err instanceof Error ? err.message : String(err)}`);
-    }
     try { composed?.close(); } catch { /* the pool is already closed */ }
     try { wb?.close(); } catch (err) { console.error(`closing the workbench failed: ${err instanceof Error ? err.message : String(err)}`); }
     fixture?.stop();
