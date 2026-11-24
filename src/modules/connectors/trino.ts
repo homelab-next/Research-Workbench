@@ -4,7 +4,7 @@ import type { SourceManifest } from "../manifests";
 import { assertReadOnly, checkGuardrails, GuardError, stripForAnalysis, tablePattern } from "../sqlguard";
 import type { TableGuard } from "../sqlguard";
 import { effectiveBound, PLACEHOLDER } from "./placeholders";
-import { assertNoEcho, CONTROL, isUtcTimestamp, loadCredential, parseBase, readCapped, scrub, TimedOut, TooBig, UTC_MS } from "./shared";
+import { assertNoEcho, CONTROL, isUtcTimestamp, loadCredential, parseBase, readCapped, refuseOwnServer, scrub, TimedOut, TooBig, UTC_MS } from "./shared";
 import { ConnectorError } from "./types";
 import type { Connector, ConnectorContext, QueryOutcome, QueryRequest } from "./types";
 
@@ -41,7 +41,14 @@ interface Auth { headers: Record<string, string>; redact: string[] }
 export class TrinoConnector implements Connector {
   readonly kind = "trino" as const;
 
-  constructor(private readonly source: SourceManifest, private readonly ctx: ConnectorContext) {}
+  constructor(private readonly source: SourceManifest, private readonly ctx: ConnectorContext) {
+    this.refuseOwnServer();
+  }
+
+  /** A source that points at the workbench's own server would let a manifest talk to the server as if it were a source. */
+  private refuseOwnServer(): void {
+    refuseOwnServer(this.source.location, this.ctx.refuse_hosts?.() ?? []);
+  }
 
   private guards(): TableGuard[] {
     return this.source.tables.filter(t => t.guarded).map(t => ({ table: t.name, time_column: t.time_column, large_columns: t.large_columns }));
@@ -146,6 +153,7 @@ export class TrinoConnector implements Connector {
 
   /** Runs a statement, paging until done. Stops past maxRows (row_limit) or, when a budget in rows is given, once that many rows are read (budget). */
   private async execute(sql: string, maxRows: number, timeoutMs: number, budget: number | null): Promise<Paged> {
+    this.refuseOwnServer();
     const base = parseBase(this.source.location);
     const { headers, redact } = this.auth();
     const ctl = new AbortController();

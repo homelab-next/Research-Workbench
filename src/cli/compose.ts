@@ -20,7 +20,7 @@ export class ComposeError extends Error {
 /**
  * Everything the pipeline needs, built from the configuration: the registry (its loading recorded on the workbench chain), the
  * observable types, the secrets, the connector pool, the seeker the configuration names, the providers, the pipeline and the
- * `investigation` profile. `opts.refuse_hosts` names the hosts (the server's own) no source may point at. `deps.anchor` appends `case.anchored` to the workbench chain. Throws ComposeError when there is no
+ * `investigation` profile. `opts.refuse_hosts` names the hosts (the server's own) no source or model endpoint may point at. `deps.anchor` appends `case.anchored` to the workbench chain. Throws ComposeError when there is no
  * usable pipeline, profile or seeker; every manifest problem short of that is returned in `problems`.
  */
 export function compose(config: Config, wb: Workbench, opts: { refuse_hosts?: () => readonly string[] } = {}): { deps: EngineDeps; problems: string[]; close(): void } {
@@ -32,7 +32,7 @@ export function compose(config: Config, wb: Workbench, opts: { refuse_hosts?: ()
   const observables = new Observables(registry.types());
   const pool = new ConnectorPool({ secrets, observables, ...(opts.refuse_hosts ? { refuse_hosts: opts.refuse_hosts } : {}) });
   try {
-    const loaded = loadProviders(registry, secrets);
+    const loaded = loadProviders(registry, secrets, opts.refuse_hosts ? { refuse_hosts: opts.refuse_hosts } : {});
     problems.push(...loaded.problems.map((p) => `${p.path}: ${p.error}`));
     const { pipeline, problems: pipelineProblems } = loadPipeline(registry);
     problems.push(...pipelineProblems);

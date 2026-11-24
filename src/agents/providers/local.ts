@@ -2,7 +2,7 @@ import type { Json } from "../../core/canonical";
 import { isPlainObject } from "../../core/canonical";
 import type { Usage } from "../../core/state";
 import type { Where } from "../../core/types";
-import { assertNoEcho, CONTROL, LOOPBACK, loadCredential, parseBase, readCapped, scrub, TimedOut, TooBig } from "../../modules/connectors/shared";
+import { assertNoEcho, CONTROL, LOOPBACK, loadCredential, parseBase, readCapped, refuseOwnServer, scrub, TimedOut, TooBig } from "../../modules/connectors/shared";
 import type { Secrets } from "../../modules/secrets";
 import type { ModelInfo, Provider, ToolCall, TurnRequest, TurnResult } from "./types";
 
@@ -21,6 +21,8 @@ export interface LocalOptions {
   efforts: string[];
   timeout_ms: number;
   max_bytes?: number;
+  /** `host:port` of this workbench's own server, asked each time: a model endpoint may not point at it. */
+  refuse_hosts?: () => readonly string[];
 }
 
 const enc = new TextEncoder();
@@ -46,8 +48,11 @@ export class LocalProvider implements Provider {
   readonly #efforts: string[];
   readonly #timeout: number;
   readonly #max: number;
+  readonly #own: () => readonly string[];
 
   constructor(opts: LocalOptions) {
+    this.#own = opts.refuse_hosts ?? (() => []);
+    this.#refuseOwnServer(opts.base_url);
     const u = parseBase(opts.base_url);
     if (opts.where === "machine" && !LOOPBACK.has(u.hostname)) {
       throw new Error(`a model at ${u.host} is not on this machine: where must be network or hosted`);
@@ -63,12 +68,26 @@ export class LocalProvider implements Provider {
     this.#max = opts.max_bytes ?? MODEL_MAX_BYTES;
   }
 
+  /** Throws a plain Error naming the cause when the endpoint is the workbench's own server. */
+  #refuseOwnServer(location: string): void {
+    try {
+      refuseOwnServer(location, this.#own());
+    } catch {
+      throw new Error("this model endpoint points at the workbench's own server");
+    }
+  }
+
   #redact(text: string): string {
     return oneLine(scrub(text, this.#secret === null ? [] : [this.#secret]));
   }
 
   /** One request. Throws Failure with a scrubbed one-line message; the bytes are returned only when they passed the echo check. */
   async #send(method: "GET" | "POST", url: string, body: Uint8Array | null): Promise<{ status: number; raw: Uint8Array; parsed: unknown }> {
+    try {
+      this.#refuseOwnServer(this.#base);
+    } catch (err) {
+      throw new Failure((err as Error).message);
+    }
     const ctl = new AbortController();
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; ctl.abort(); }, this.#timeout);

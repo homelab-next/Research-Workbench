@@ -56,18 +56,23 @@ The slice is too large for one plan. It is built as five plans, in order. Each p
 12. Publishing and feedback
 13. The scripted run, the headless command, the custody acceptance test
 
-### Plan 4: Server and interface
+### Plan 4: Server and interface (as built: fifteen tasks)
 
-1. Server: loopback, origin check, roles, cases, entry stream, blobs
-2. Commands
-3. Interface shell: build, theme, DOM helper, store, home, "which one?", trail, top bar, command bar
-4. Work area: Incoming, brief with phase strip and custody chip, lanes, cards, toasts and undo
-5. Keyboard map, "?" card, drag and drop
-6. Shelf and lenses: Steps, Timeline, Worklog, Discarded, Jobs
-7. Lenses: Narrative and Agent
-8. Lenses: Pipeline and Replay
-9. Pivot panel, Verify, New investigation
-10. Interface safety tests and the browser run
+0. Close out plan 3, and move local queries off the server's thread
+1. The server: loopback, the request guard, roles, cases and the entry stream
+2. Commands: the run and its gates, triage, settings
+3. Evidence: blobs, bundles, the bundle preview and the custody report
+4. Interface foundation: build, the DOM helper, the store that folds entries, and the injection lint
+5. Home, "which one?", New investigation, the trail, the top bar and the command bar
+6. The work area: Incoming, the brief with its phase strip and custody chip, lanes, cards, the shelf and toasts
+7. The keyboard map, the "?" card, dragging and motion
+8. Lenses: Steps with the plan gate, Timeline, Worklog, Discarded, Jobs
+9. The Pipeline lens: stages, model and effort, context, transcript, feedback
+10. The Narrative lens and the publish gate
+11. Your agent: the conversational agent and the Agent lens
+12. The Replay lens
+13. The Pivot panel and Verify on a card
+14. The serve command, the whole run in the DOM and in a browser, and the security notes (`docs/security-notes.md`)
 
 ### Plan 5: Real run
 

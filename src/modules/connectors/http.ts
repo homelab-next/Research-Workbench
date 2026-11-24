@@ -2,7 +2,7 @@ import type { Json } from "../../core/canonical";
 import type { Cost } from "../../core/types";
 import type { EndpointManifest, SourceManifest } from "../manifests";
 import { effectiveBound, PLACEHOLDER } from "./placeholders";
-import { assertNoEcho, LOOPBACK, loadCredential, parseBase, readCapped, scrub, TimedOut, TooBig } from "./shared";
+import { assertNoEcho, loadCredential, parseBase, readCapped, refuseOwnServer, scrub, TimedOut, TooBig } from "./shared";
 import { ConnectorError } from "./types";
 import { MAX_TS, MIN_TS } from "./types";
 import type { Bound, Connector, ConnectorContext, QueryOutcome, QueryRequest } from "./types";
@@ -18,30 +18,7 @@ export class HttpConnector implements Connector {
 
   /** A source that points at the workbench's own server would let a manifest talk to the server as if it were a source. */
   private refuseOwnServer(): void {
-    const own = this.ctx.refuse_hosts?.() ?? [];
-    if (own.length === 0) return;
-    const { location } = this.source;
-    let target: URL;
-    try {
-      target = new URL(location);
-    } catch {
-      return; // parseBase refuses it with its own reason
-    }
-    const loopbackPort = (host: string): string | null => {
-      try {
-        const u = new URL(`http://${host}`);
-        return LOOPBACK.has(u.hostname) ? (u.port || "80") : null;
-      } catch {
-        return null;
-      }
-    };
-    const port = LOOPBACK.has(target.hostname) ? (target.port || (target.protocol === "https:" ? "443" : "80")) : null;
-    for (const host of own) {
-      // the server's own address under any loopback name is the server
-      if (target.host === host.toLowerCase() || (port !== null && port === loopbackPort(host))) {
-        throw new ConnectorError("this source points at the workbench's own server");
-      }
-    }
+    refuseOwnServer(this.source.location, this.ctx.refuse_hosts?.() ?? []);
   }
 
   private endpoint(name: string): EndpointManifest {

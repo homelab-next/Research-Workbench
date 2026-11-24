@@ -16,6 +16,34 @@ export function isUtcTimestamp(value: unknown): value is string {
 export const LOOPBACK: ReadonlySet<string> = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 /**
+ * Throws ConnectorError when `location` points at one of the workbench's own addresses (`host:port`, asked of the server each time):
+ * the same port under any loopback name is the server. A location that is not a URL is left for parseBase to refuse.
+ */
+export function refuseOwnServer(location: string, own: readonly string[]): void {
+  if (own.length === 0) return;
+  let target: URL;
+  try {
+    target = new URL(location);
+  } catch {
+    return;
+  }
+  const loopbackPort = (host: string): string | null => {
+    try {
+      const u = new URL(`http://${host}`);
+      return LOOPBACK.has(u.hostname) ? (u.port || "80") : null;
+    } catch {
+      return null;
+    }
+  };
+  const port = LOOPBACK.has(target.hostname) ? (target.port || (target.protocol === "https:" ? "443" : "80")) : null;
+  for (const host of own) {
+    if (target.host === host.toLowerCase() || (port !== null && port === loopbackPort(host))) {
+      throw new ConnectorError("this source points at the workbench's own server");
+    }
+  }
+}
+
+/**
  * A network source's location as a URL. It must be https (http only on loopback) and carry no credentials,
  * no query and no fragment: anything there would be copied into every query text the ledger records.
  */

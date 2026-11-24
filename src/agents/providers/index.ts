@@ -53,7 +53,7 @@ const LOCAL_SCHEMA: Schema = {
 };
 
 /** A local provider from its manifest, or the reason it cannot be built. */
-function buildLocal(m: LoadedManifest, registry: Registry, secrets: Secrets): LocalProvider | string {
+function buildLocal(m: LoadedManifest, registry: Registry, secrets: Secrets, own: (() => readonly string[]) | undefined): LocalProvider | string {
   const body = withoutNulls(m.body as Json) as Record<string, Json>;
   const errors = validate(LOCAL_SCHEMA, body);
   if (errors.length > 0) return describeErrors(errors);
@@ -71,6 +71,7 @@ function buildLocal(m: LoadedManifest, registry: Registry, secrets: Secrets): Lo
       context: typeof body.context === "number" ? body.context : null,
       efforts: Array.isArray(body.efforts) ? (body.efforts as string[]) : [],
       timeout_ms: typeof body.timeout_ms === "number" ? body.timeout_ms : 120000,
+      ...(own === undefined ? {} : { refuse_hosts: own }),
     });
   } catch (err) {
     return `model "${m.id}": ${(err as Error).message}`;
@@ -78,7 +79,7 @@ function buildLocal(m: LoadedManifest, registry: Registry, secrets: Secrets): Lo
 }
 
 /** Reads every model manifest and every script. Each problem leaves only its own manifest out. */
-export function loadProviders(registry: Registry, secrets: Secrets): { providers: Providers; problems: Problem[] } {
+export function loadProviders(registry: Registry, secrets: Secrets, opts: { refuse_hosts?: () => readonly string[] } = {}): { providers: Providers; problems: Problem[] } {
   const problems: Problem[] = [];
   const problem = (m: LoadedManifest, error: string): void => {
     problems.push({ root: m.root, path: m.path, error });
@@ -110,7 +111,7 @@ export function loadProviders(registry: Registry, secrets: Secrets): { providers
       seen.add(m.id);
       list.push(new ScriptedProvider({ id: m.id, scripts }));
     } else if (kind === "local") {
-      const built = buildLocal(m, registry, secrets);
+      const built = buildLocal(m, registry, secrets, opts.refuse_hosts);
       if (typeof built === "string") { problem(m, built); continue; }
       seen.add(m.id);
       list.push(built);
