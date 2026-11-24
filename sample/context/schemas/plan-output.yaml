@@ -1,0 +1,4 @@
+kind: schema
+id: plan-output
+title: Plan output
+schema: {"type": "object", "additionalProperties": false, "required": ["goal", "subgoals"], "properties": {"goal": {"type": "string"}, "subgoals": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["title", "question", "have", "want", "route"], "properties": {"title": {"type": "string"}, "question": {"type": "string"}, "have": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["type", "value"], "properties": {"type": {"type": "string", "minLength": 1}, "value": {"type": "string", "minLength": 1}}}}, "want": {"type": "string"}, "route": {"type": "array", "minItems": 1, "items": {"type": "string"}}}}}}}

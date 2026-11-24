@@ -1,0 +1,4 @@
+kind: schema
+id: assemble-output
+title: Assemble output
+schema: {"type": "object", "additionalProperties": false, "required": ["done", "change", "assumptions", "note"], "properties": {"done": {"type": "boolean"}, "change": {"type": "string"}, "assumptions": {"type": "array", "items": {"type": "string"}}, "note": {"type": "string"}}}

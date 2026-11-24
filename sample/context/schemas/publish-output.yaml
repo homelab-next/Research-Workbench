@@ -1,0 +1,4 @@
+kind: schema
+id: publish-output
+title: Publish output
+schema: {"type": "object", "additionalProperties": false, "required": ["title", "note"], "properties": {"title": {"type": "string", "minLength": 1}, "note": {"type": "string"}}}

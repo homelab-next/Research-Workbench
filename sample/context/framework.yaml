@@ -1,0 +1,10 @@
+kind: framework
+id: intel-cycle
+title: Intelligence cycle
+phases:
+  direction: { title: Direction }
+  collection: { title: Collection }
+  processing: { title: Processing }
+  analysis: { title: Analysis }
+  dissemination: { title: Dissemination }
+  feedback: { title: Feedback }

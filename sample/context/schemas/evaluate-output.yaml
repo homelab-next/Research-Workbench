@@ -1,0 +1,4 @@
+kind: schema
+id: evaluate-output
+title: Evaluate output
+schema: {"type": "object", "additionalProperties": false, "required": ["pass", "findings"], "properties": {"pass": {"type": "boolean"}, "findings": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["check", "where", "message"], "properties": {"check": {"type": "string"}, "where": {"type": "string"}, "message": {"type": "string"}}}}}}

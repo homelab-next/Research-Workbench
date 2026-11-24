@@ -1,0 +1,15 @@
+kind: standard
+id: icd203
+title: Likelihood and confidence terms (after ICD 203)
+note: Check these terms and ranges against the published directive before relying on them.
+likelihood:
+  - { term: almost no chance,   also: [remote],                           range: [1, 5] }
+  - { term: very unlikely,      also: [highly improbable],                range: [5, 20] }
+  - { term: unlikely,           also: [improbable],                       range: [20, 45] }
+  - { term: roughly even chance, also: [roughly even odds],               range: [45, 55] }
+  - { term: likely,             also: [probable, probably],               range: [55, 80] }
+  - { term: very likely,        also: [highly probable],                  range: [80, 95] }
+  - { term: almost certain,     also: [almost certainly, nearly certain], range: [95, 99] }
+confidence: [low, moderate, high]
+judgment_markers: [we assess, we judge, we estimate]
+change_terms: [first judgment, consistent with, changes]

@@ -1,0 +1,4 @@
+kind: schema
+id: research-output
+title: Research output
+schema: {"type": "object", "additionalProperties": false, "required": ["outcome", "found", "note"], "properties": {"outcome": {"type": "string", "enum": ["answered", "blocked"]}, "found": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["type", "value"], "properties": {"type": {"type": "string", "minLength": 1}, "value": {"type": "string", "minLength": 1}}}}, "note": {"type": "string"}}}

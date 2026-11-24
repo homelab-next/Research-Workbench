@@ -17,6 +17,10 @@ export type { ObservableType } from "./observables";
 export interface Problem { root: string; path: string; error: string }
 
 const DEFAULT_ACTOR: Actor = { kind: "system", id: "registry" };
+/** Kinds whose text or schema is put in front of a model or decides what a run does; an untrusted root may not supply them. */
+export const TRUSTED_ONLY_KINDS: readonly string[] = [
+  "model", "script", "profile", "rules", "persona", "procedure", "skill", "gate", "reference", "objective", "framework", "standard", "schema",
+];
 const MANIFEST_FILE = /\.(?:ya?ml|md)$/i;
 const key = (kind: string, id: string): string => `${kind}\0${id}`;
 const inside = (root: string, target: string): boolean => {
@@ -193,7 +197,7 @@ export class Registry {
       throw new ManifestError("observable types are accepted only from a trusted root (a type's pattern runs on every result)");
     }
     // refused before the id table, so an untrusted root cannot take a trusted manifest's id and make it vanish
-    if ((parsed.kind === "model" || parsed.kind === "script") && !root.trusted) {
+    if (TRUSTED_ONLY_KINDS.includes(parsed.kind) && !root.trusted) {
       throw new ManifestError(`a ${parsed.kind} manifest is accepted only from a trusted root`);
     }
     if (parsed.kind === "types" || parsed.kind === "pivots") {

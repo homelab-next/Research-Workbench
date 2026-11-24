@@ -1,0 +1,18 @@
+kind: objective
+id: sample-objective
+title: Sample objective
+chain:
+  strategic: Keep accounts and workstations under the owner's control.
+  operational: Find out quickly when a workstation talks to an unknown address.
+  tactical: Explain the traffic between one workstation and one address.
+  task: Say who is behind the address and what the workstation sent.
+measures:
+  - { id: elapsed_seconds, kind: mop, title: Seconds from question to product, target: 900 }
+  - { id: queries_run, kind: mop, title: Queries run, target: 20 }
+  - { id: query_cost, kind: mop, title: Query cost spent, target: 100 }
+  - { id: model_tokens, kind: mop, title: Model tokens used, target: 200000 }
+  - { id: steps_blocked, kind: mop, title: Steps blocked, target: 0 }
+  - { id: send_backs, kind: mop, title: Send-backs, target: 2 }
+  - { id: checks_failed, kind: mop, title: Checks failed, target: 0 }
+  - { id: answered_the_question, kind: moe, title: The product answered the question, target: true }
+  - { id: time_saved, kind: moe, title: Hours saved against doing it by hand, target: 2 }
