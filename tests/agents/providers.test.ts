@@ -92,6 +92,12 @@ test("a local model on another host may not say it is on this machine", () => {
   expect(loadLocal(local({ base_url: "https://models.example.net/v1", where: "network" })).problems).toEqual([]);
 });
 
+test("where: machine needs a numeric loopback address", () => {
+  expect(loadLocal(local({ base_url: "http://localhost:1234/v1" })).problems[0]!.error).toContain("write 127.0.0.1 in place of localhost");
+  expect(loadLocal(local({ base_url: "http://127.0.0.1:1234/v1" })).problems).toEqual([]);
+  expect(loadLocal(local({ base_url: "http://[::1]:1234/v1" })).problems).toEqual([]);
+});
+
 test("plain http is accepted for loopback only", () => {
   expect(loadLocal(local({ base_url: "http://127.0.0.1:1234/v1" })).problems).toEqual([]);
   const bad = loadLocal(local({ base_url: "http://models.example.net/v1", where: "network" }));

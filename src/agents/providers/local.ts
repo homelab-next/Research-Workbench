@@ -2,7 +2,7 @@ import type { Json } from "../../core/canonical";
 import { isPlainObject } from "../../core/canonical";
 import type { Usage } from "../../core/state";
 import type { Where } from "../../core/types";
-import { assertNoEcho, CONTROL, LOOPBACK, loadCredential, parseBase, readCapped, refuseOwnServer, scrub, TimedOut, TooBig } from "../../modules/connectors/shared";
+import { assertNoEcho, CONTROL, LOOPBACK, loadCredential, NUMERIC_LOOPBACK, parseBase, readCapped, refuseOwnServer, scrub, TimedOut, TooBig } from "../../modules/connectors/shared";
 import type { Secrets } from "../../modules/secrets";
 import type { ModelInfo, Provider, ToolCall, TurnRequest, TurnResult } from "./types";
 
@@ -56,6 +56,9 @@ export class LocalProvider implements Provider {
     const u = parseBase(opts.base_url);
     if (opts.where === "machine" && !LOOPBACK.has(u.hostname)) {
       throw new Error(`a model at ${u.host} is not on this machine: where must be network or hosted`);
+    }
+    if (opts.where === "machine" && !NUMERIC_LOOPBACK.has(u.hostname)) {
+      throw new Error("a model on this machine must give a numeric address: write 127.0.0.1 in place of localhost");
     }
     this.id = opts.id;
     this.where = opts.where;

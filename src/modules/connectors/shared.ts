@@ -14,6 +14,8 @@ export function isUtcTimestamp(value: unknown): value is string {
 
 /** Hosts where plain http is allowed: this machine only. */
 export const LOOPBACK: ReadonlySet<string> = new Set(["127.0.0.1", "localhost", "[::1]"]);
+/** The loopback addresses that name no resolver: the only ones a model that says it is on this machine may be reached at. */
+export const NUMERIC_LOOPBACK: ReadonlySet<string> = new Set(["127.0.0.1", "[::1]"]);
 
 /**
  * Throws ConnectorError when `location` points at one of the workbench's own addresses (`host:port`, asked of the server each time):
