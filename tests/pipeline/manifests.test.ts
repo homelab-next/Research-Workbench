@@ -141,3 +141,19 @@ test("an on_pass cycle is refused", () => {
   expect(pipeline).toBeNull();
   expect(problems.join("\n")).toMatch(/on_pass cycle.*checks.*evaluate.*checks/);
 });
+
+test("a stage may give sampling and max_output_tokens, validated; a stage without them has none", () => {
+  expect(load().pipeline!.stages.find((s) => s.id === "plan")!.sampling).toBeNull();
+  expect(load().pipeline!.stages.find((s) => s.id === "plan")!.max_output_tokens).toBeNull();
+  const text = readFileSync(file("plan"), "utf8");
+  writeFileSync(file("plan"), text + "sampling: { temperature: 0.8, top_k: 30 }\nmax_output_tokens: 90000\n");
+  const stage = load().pipeline!.stages.find((s) => s.id === "plan")!;
+  expect(stage.sampling).toEqual({ temperature: 0.8, top_k: 30 });
+  expect(stage.max_output_tokens).toBe(90000);
+  for (const bad of ["sampling: { temperature: 9 }\n", "sampling: { warmth: 1 }\n", "max_output_tokens: 0\n", "max_output_tokens: many\n"]) {
+    writeFileSync(file("plan"), text + bad);
+    const { pipeline, problems } = load();
+    expect(problems.some((p) => p.includes("plan"))).toBe(true);
+    expect(pipeline === null || !pipeline.stages.some((s) => s.id === "plan")).toBe(true);
+  }
+});

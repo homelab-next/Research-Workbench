@@ -8,7 +8,7 @@ import type { Actor, BlobRef, EntryInput, Marking, Where } from "../core/types";
 import { strictest } from "../core/types";
 import { mayGo, renderPack, tooStrict } from "./pack";
 import type { Pack } from "./pack";
-import type { ChatMessage, Provider, TurnRequest, TurnResult } from "./providers/types";
+import type { ChatMessage, Provider, Sampling, TurnRequest, TurnResult } from "./providers/types";
 import { execTool, parseCall, toolSpecs, viewText } from "./tools";
 import type { ToolContext, ToolName } from "./tools";
 
@@ -22,6 +22,8 @@ export interface AgentSpec {
   pack: Pack; task: string; tools: readonly ToolName[]; ctx: ToolContext; schema: Schema | null;
   /** The output schema's id: the name a structured-output request gives it ("output" when absent). */
   schema_id?: string;
+  /** This agent's own sampling and output limit (the stage's): each wins over the model's. */
+  sampling?: Sampling; max_output_tokens?: number;
   policy: Record<Marking, Where[]>; max_marking: Marking | null; max_turns?: number;
   /** True for an agent that works beside the run (the conversational one): the run being paused, finished or out of budget does not stop it. The marking check and every entry written are the same. */
   outside_run?: boolean;
@@ -85,19 +87,19 @@ const clip = (s: string, n: number): string => (s.length > n ? s.slice(0, n) : s
 const count = (n: unknown): number => (typeof n === "number" && Number.isFinite(n) ? Math.max(0, Math.min(Math.floor(n), Number.MAX_SAFE_INTEGER)) : 0);
 
 /** What a reply cut off at the output limit did, in plain words. */
-const ranPast = (provider: Provider): string => (provider.max_output_tokens === undefined
-  ? "the model ran past its output limit" : `the model ran past ${provider.max_output_tokens} output tokens`);
+const ranPast = (limit: number | undefined): string => (limit === undefined
+  ? "the model ran past its output limit" : `the model ran past ${limit} output tokens`);
 
 /** A failed call that is made once more for the same turn: no answer in time, the endpoint not reached, or the output limit reached. */
 type Attempt = { kind: "timeout"; ms: number } | { kind: "transport"; message: string } | { kind: "length" };
 const seconds = (ms: number): string => (ms % 1000 === 0 ? `${ms / 1000} s` : `${ms} ms`);
 const subject = (a: Attempt): string => (a.kind === "transport" ? "the model endpoint" : "the model");
-const verb = (a: Attempt, provider: Provider): string => (a.kind === "timeout" ? `did not answer within ${seconds(a.ms)}`
-  : a.kind === "transport" ? "could not be reached" : ranPast(provider).slice("the model ".length));
+const verb = (a: Attempt, limit: number | undefined): string => (a.kind === "timeout" ? `did not answer within ${seconds(a.ms)}`
+  : a.kind === "transport" ? "could not be reached" : ranPast(limit).slice("the model ".length));
 /** What two failed calls for one turn did, in plain words: "the model did not answer within 300 s twice". */
-function twice(first: Attempt, second: Attempt, provider: Provider): string {
+function twice(first: Attempt, second: Attempt, limit: number | undefined): string {
   const same = first.kind === second.kind;
-  const said = same ? `${subject(first)} ${verb(first, provider)} twice` : `${subject(first)} ${verb(first, provider)}, then ${verb(second, provider)}`;
+  const said = same ? `${subject(first)} ${verb(first, limit)} twice` : `${subject(first)} ${verb(first, limit)}, then ${verb(second, limit)}`;
   return second.kind === "transport" ? `${said} (${second.message})` : said;
 }
 
@@ -123,6 +125,7 @@ function returnedWord(empty: boolean, found: { value: Json } | null, schema: Sch
  */
 export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<AgentEnd> {
   const { actor, provider, ctx } = spec;
+  const limit = spec.max_output_tokens ?? provider.max_output_tokens;
   const link = { run: ctx.link.run, stage: ctx.link.stage, job: ctx.link.job };
   const because = spec.cause === undefined ? {} : { cause: spec.cause };
   const messages: ChatMessage[] = [{ role: "system", content: renderPack(spec.pack) }, { role: "user", content: spec.task }];
@@ -154,6 +157,8 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     // 3. request, written before the provider is contacted
     const ordinal = session.entries().filter((e) => e.type === "model.request" && e.actor.kind === "agent" && e.actor.id === actor.id).length;
     const req: TurnRequest = { model: spec.model, effort: spec.effort, messages: [...messages], tools: toolSpecs(spec.tools), key: actor.id, ordinal };
+    if (spec.sampling !== undefined) req.sampling = spec.sampling;
+    if (spec.max_output_tokens !== undefined) req.max_output_tokens = spec.max_output_tokens;
     if (reasked && spec.schema !== null && provider.structured_output === true) req.response_format = { name: spec.schema_id ?? "output", schema: spec.schema };
     const body = provider.body(req);
     const messagesBlob = put(body);
@@ -204,7 +209,7 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     retryCause = null;
     /** A failed attempt: made once more for the same turn (the stop checks come first), else the end, saying what happened twice. */
     const again = (attempt: Attempt, responseSeq: number, message: string): AgentEnd | null => {
-      if (failedOnce !== null) return { kind: "error", message: clip(twice(failedOnce, attempt, provider), 500), retried: true };
+      if (failedOnce !== null) return { kind: "error", message: clip(twice(failedOnce, attempt, limit), 500), retried: true };
       if (spec.outside_run) return { kind: "error", message };
       failedOnce = attempt;
       retryCause = responseSeq;
@@ -250,7 +255,7 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
 
     // a reply cut off at the output limit is a failed attempt: neither its text nor its calls are used
     if (cut) {
-      const end = again({ kind: "length" }, responseSeq, ranPast(provider));
+      const end = again({ kind: "length" }, responseSeq, ranPast(limit));
       if (end !== null) return end;
       turn--;
       continue;

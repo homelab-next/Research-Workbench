@@ -196,3 +196,20 @@ test("a schema failure's pause says in a word what the model returned", async ()
   expect(await go()).toBe("Frame's output failed its schema twice: the model returned nothing (the reply is empty)");
   expect(await go()).toStartWith("Frame's output failed its schema twice: the model returned an object that does not match its schema (output missing required property: window;");
 });
+
+test("a stage's sampling and max_output_tokens reach the model request; a stage without them sends none of its own", async () => {
+  const r = rig(script(say(FRAME), say(FRAME)));
+  const inner = r.deps.providers.get("scripted")!;
+  const seen: Parameters<Provider["turn"]>[0][] = [];
+  r.deps.providers = new Providers([{
+    id: inner.id, kind: inner.kind, where: inner.where, models: () => inner.models(), body: (q) => inner.body(q),
+    turn: (q) => { seen.push(q); return inner.turn(q); },
+  }]);
+  r.engine.start(person);
+  const plain = r.env();
+  await stageAgent(plain, { actor_id: "orchestrator", task: "t", extras: [] });
+  await stageAgent({ ...plain, stage: { ...plain.stage, sampling: { temperature: 0.2, presence_penalty: 1 }, max_output_tokens: 70000 } }, { actor_id: "orchestrator", task: "t", extras: [] });
+  expect(seen[0]).not.toHaveProperty("sampling");
+  expect(seen[0]).not.toHaveProperty("max_output_tokens");
+  expect(seen[1]).toMatchObject({ sampling: { temperature: 0.2, presence_penalty: 1 }, max_output_tokens: 70000 });
+});

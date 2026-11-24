@@ -13,11 +13,15 @@ import type { Registry } from "../modules/registry";
 import { staysInside } from "../modules/registry";
 import { TOOL_NAMES } from "../agents/tools";
 import type { ToolName } from "../agents/tools";
+import { SAMPLING_SCHEMA } from "../agents/providers/sampling";
+import type { Sampling } from "../agents/providers/types";
 
 export const ROLES = ["frame", "plan", "research", "assemble", "checks", "evaluate", "challenge", "publish", "feedback"] as const;
 export type Role = (typeof ROLES)[number];
 
-export interface StageManifest extends StageDef { hash: string; order: number; role: Role; tools: ToolName[]; schema: string | null; on_pass: string | null; on_fail: string | null }
+export interface StageManifest extends StageDef { hash: string; order: number; role: Role; tools: ToolName[]; schema: string | null; on_pass: string | null; on_fail: string | null;
+  /** This stage's own sampling and output limit; each wins over the model manifest's. */
+  sampling?: Sampling | null; max_output_tokens?: number | null }
 export interface Pipeline { id: string; hash: string; stages: StageManifest[] }
 
 const nullableString: Schema = { type: ["string", "null"] };
@@ -48,12 +52,15 @@ const STAGE_SCHEMA: Schema = {
     },
     on_pass: nullableString,
     on_fail: nullableString,
+    sampling: { anyOf: [{ type: "null" }, SAMPLING_SCHEMA] },
+    max_output_tokens: { anyOf: [{ type: "null" }, { type: "integer", minimum: 1 }] },
   },
 };
 
 type Body = {
   id: string; title?: string; order: number; phase?: string | null; runs: StageDef["runs"]; role: string; gate?: StageDef["gate"]; reviews?: boolean;
   tools?: string[] | null; schema?: string | null; model?: { provider: string; model: string; effort?: string | null } | null; on_pass?: string | null; on_fail?: string | null;
+  sampling?: Sampling | null; max_output_tokens?: number | null;
 };
 
 /** One manifest as a stage, or the reason it cannot be used. */
@@ -71,6 +78,7 @@ function toStage(m: LoadedManifest, registry: Registry): StageManifest | string 
   return {
     id: b.id, title: b.title ?? m.title, phase: b.phase ?? null, runs: b.runs, gate: b.gate ?? null, reviews: b.reviews ?? false, model,
     hash: m.hash, order: b.order, role: b.role as Role, tools: tools as ToolName[], schema: b.schema ?? null, on_pass: b.on_pass ?? null, on_fail: b.on_fail ?? null,
+    sampling: b.sampling ?? null, max_output_tokens: b.max_output_tokens ?? null,
   };
 }
 

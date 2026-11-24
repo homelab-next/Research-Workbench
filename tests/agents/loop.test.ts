@@ -666,3 +666,29 @@ test("an invalid end says what the model returned: nothing, the schema itself, n
     "the model returned no JSON object", "the model returned an object that does not match its schema",
   ]);
 });
+
+test("an agent's own sampling and output limit go on every request, and the length message names the limit in force", async () => {
+  const p = cutOff(8192);
+  const end = await runAgent(f.s, spec(p, { sampling: { temperature: 0.4, top_k: 10 }, max_output_tokens: 65536 }));
+  expect(end.kind === "error" && end.message).toContain("ran past 65536 output tokens");
+  expect(p.seen.length).toBeGreaterThan(0);
+  for (const r of p.seen) expect(r).toMatchObject({ sampling: { temperature: 0.4, top_k: 10 }, max_output_tokens: 65536 });
+});
+
+test("without its own settings an agent's request carries none, so the provider's apply", async () => {
+  const p = spy([{ content: "done" }]);
+  await runAgent(f.s, spec(p));
+  expect(p.seen[0]).not.toHaveProperty("sampling");
+  expect(p.seen[0]).not.toHaveProperty("max_output_tokens");
+});
+
+test("what a stage's sampling and limit make the local provider send is what model.request records", async () => {
+  const sa = onStandin(['{"n":1}']);
+  try {
+    await runAgent(f.s, spec(sa.p, { schema: SCHEMA, sampling: { temperature: 0.3 }, max_output_tokens: 4096 }));
+    const [sent] = sa.bodies();
+    expect(sent).toMatchObject({ temperature: 0.3, max_tokens: 4096 });
+    const recorded = ofType("model.request").map((e) => JSON.parse(text(e.payload.messages)) as Record<string, unknown>);
+    expect(recorded).toEqual([sent!]);
+  } finally { sa.stop(); }
+});
