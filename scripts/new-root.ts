@@ -97,7 +97,7 @@ export function newRoot(dir: string, opts: NewRootOptions): string[] {
     mkdirSync(join(dir, "models"));
     writeFileSync(join(dir, "models", `${provider}.yaml`), [
       "kind: model", `id: ${provider}`, "title: Local model", "provider: local", `where: ${where}`,
-      `base_url: ${JSON.stringify(opts.base_url)}`, "efforts: []", "timeout_ms: 300000", "max_output_tokens: 8192", "",
+      `base_url: ${JSON.stringify(opts.base_url)}`, "efforts: []", "timeout_ms: 300000", "max_output_tokens: 8192", "structured_output: true", "",
     ].join("\n"));
     writeFileSync(join(dir, "types.yaml"), ["kind: types", "types:", ...keep.map((t) => `  - { id: ${t.id}, title: ${t.title}, pattern: '${t.pattern.replace(/'/g, "''")}' }`), ""].join("\n"));
     writeFileSync(join(dir, "pivots.yaml"), "kind: pivots\npivots: []\n");

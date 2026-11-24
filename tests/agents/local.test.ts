@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { LocalProvider, DEFAULT_CONTEXT, DEFAULT_MAX_OUTPUT_TOKENS } from "../../src/agents/providers/local";
 import type { TurnRequest, TurnResult } from "../../src/agents/providers";
 import { Secrets } from "../../src/modules/secrets";
+import type { Schema } from "../../src/core/schema";
 import { startStandin } from "../helpers/http-standin";
 import { startModelStandin } from "../helpers/model-standin";
 import type { StandinReply } from "../helpers/model-standin";
@@ -15,11 +16,12 @@ const standin = (replies: (StandinReply | ((b: Record<string, never>) => Standin
   stops.push(m.stop);
   return m;
 };
-const provider = (url: string, o: { credential?: string | null; context?: number | null; efforts?: string[]; timeout_ms?: number; max_bytes?: number; max_output_tokens?: number } = {}) =>
+const provider = (url: string, o: { credential?: string | null; context?: number | null; efforts?: string[]; timeout_ms?: number; max_bytes?: number; max_output_tokens?: number; structured_output?: boolean } = {}) =>
   new LocalProvider({
     id: "lm", base_url: url, where: "machine", credential: o.credential ?? null, secrets: new Secrets({ LM_KEY: KEY }, null),
     context: o.context ?? null, efforts: o.efforts ?? [], timeout_ms: o.timeout_ms ?? 5000, ...(o.max_bytes === undefined ? {} : { max_bytes: o.max_bytes }),
     ...(o.max_output_tokens === undefined ? {} : { max_output_tokens: o.max_output_tokens }),
+    ...(o.structured_output === undefined ? {} : { structured_output: o.structured_output }),
   });
 const req = (over: Partial<TurnRequest> = {}): TurnRequest => ({
   model: "qwen/qwen3.6-35b-a3b", effort: null, key: "a", ordinal: 0,
@@ -268,3 +270,16 @@ test("a timeout and an unreachable endpoint are marked transient; other failures
     expect(r.kind === "error" && "transient" in r).toBe(false);
   }
 }, 5000);
+
+test("a request asking for structured output carries an OpenAI-style json_schema response_format, unless the manifest turns it off", async () => {
+  const schema: Schema = { type: "object", required: ["n"], properties: { n: { type: "number" } }, additionalProperties: false };
+  const asked = req({ response_format: { name: "research-output", schema } });
+  const on = provider("http://127.0.0.1:1/v1");
+  expect(on.structured_output).toBe(true);
+  const sent = JSON.parse(new TextDecoder().decode(on.body(asked))) as Record<string, unknown>;
+  expect(sent.response_format).toEqual({ type: "json_schema", json_schema: { name: "research-output", schema, strict: true } });
+  expect(JSON.parse(new TextDecoder().decode(on.body(req()))) as Record<string, unknown>).not.toHaveProperty("response_format");
+  const off = provider("http://127.0.0.1:1/v1", { structured_output: false });
+  expect(off.structured_output).toBe(false);
+  expect(JSON.parse(new TextDecoder().decode(off.body(asked))) as Record<string, unknown>).not.toHaveProperty("response_format");
+});

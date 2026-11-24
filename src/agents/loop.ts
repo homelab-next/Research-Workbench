@@ -18,6 +18,8 @@ const DECLINE_CHARS = 2000;
 export interface AgentSpec {
   actor: Extract<Actor, { kind: "agent" }>; provider: Provider; model: string; effort: string | null;
   pack: Pack; task: string; tools: readonly ToolName[]; ctx: ToolContext; schema: Schema | null;
+  /** The output schema's id: the name a structured-output request gives it ("output" when absent). */
+  schema_id?: string;
   policy: Record<Marking, Where[]>; max_marking: Marking | null; max_turns?: number;
   /** True for an agent that works beside the run (the conversational one): the run being paused, finished or out of budget does not stop it. The marking check and every entry written are the same. */
   outside_run?: boolean;
@@ -109,6 +111,8 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
   const calls: CallRecord[] = [];
   let marking: Marking = spec.pack.marking;
   let failures = 0;
+  // set once the agent has been re-asked for its answer: from then on a provider that can is asked for output matching the schema
+  let reasked = false;
   // the failed attempt of this turn that is being made once more, and the seq of its response, which causes the new request
   let failedOnce: Attempt | null = null;
   let retryCause: number | null = null;
@@ -132,6 +136,7 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     // 3. request, written before the provider is contacted
     const ordinal = session.entries().filter((e) => e.type === "model.request" && e.actor.kind === "agent" && e.actor.id === actor.id).length;
     const req: TurnRequest = { model: spec.model, effort: spec.effort, messages: [...messages], tools: toolSpecs(spec.tools), key: actor.id, ordinal };
+    if (reasked && spec.schema !== null && provider.structured_output === true) req.response_format = { name: spec.schema_id ?? "output", schema: spec.schema };
     const body = provider.body(req);
     const messagesBlob = put(body);
     let requestId = "";
@@ -293,6 +298,7 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
       if (errors.length === 0) return { kind: "done", content: result.content, output: found.value, calls };
     }
     if (++failures >= 2) return { kind: "invalid", errors, calls };
+    reasked = true;
     messages.push(
       { role: "assistant", content: result.content },
       { role: "user", content: `Your reply did not match the required output: ${errors.join("; ")}. Reply again with the corrected JSON only.` },

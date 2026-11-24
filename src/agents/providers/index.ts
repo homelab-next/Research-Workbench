@@ -49,6 +49,7 @@ const LOCAL_SCHEMA: Schema = {
     efforts: { type: "array", items: { type: "string", minLength: 1 } },
     timeout_ms: { type: "integer", minimum: 1, maximum: 600000 },
     max_output_tokens: { type: "integer", minimum: 1 },
+    structured_output: { type: "boolean" },
   },
   additionalProperties: true,
 };
@@ -73,6 +74,7 @@ function buildLocal(m: LoadedManifest, registry: Registry, secrets: Secrets, own
       efforts: Array.isArray(body.efforts) ? (body.efforts as string[]) : [],
       timeout_ms: typeof body.timeout_ms === "number" ? body.timeout_ms : 120000,
       ...(typeof body.max_output_tokens === "number" ? { max_output_tokens: body.max_output_tokens } : {}),
+      ...(typeof body.structured_output === "boolean" ? { structured_output: body.structured_output } : {}),
       ...(own === undefined ? {} : { refuse_hosts: own }),
     });
   } catch (err) {

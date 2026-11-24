@@ -13,6 +13,9 @@ import type { ScriptReply } from "../../src/agents/providers/scripted";
 import type { Provider, TurnRequest } from "../../src/agents/providers/types";
 import type { ToolName } from "../../src/agents/tools";
 import { agent, fixture } from "../helpers/tools-fixture";
+import { LocalProvider } from "../../src/agents/providers/local";
+import { Secrets } from "../../src/modules/secrets";
+import { startModelStandin } from "../helpers/model-standin";
 import type { Fixture } from "../helpers/tools-fixture";
 
 const POLICY = Object.fromEntries(MARKINGS.map((m, i): [Marking, Where[]] => [m, i < 2 ? ["machine", "network", "hosted"] : i < 4 ? ["machine", "network"] : ["machine"]])) as Record<Marking, Where[]>;
@@ -586,4 +589,36 @@ test("the conversational agent, which works beside the run, is not retried", asy
   const end = await runAgent(f.s, spec(p, { outside_run: true, tools: [] }));
   expect(end).toEqual({ kind: "error", message: "no answer within 300000 ms" });
   expect(p.turns).toBe(1);
+});
+
+/** A local provider on a stand-in endpoint answering these contents in turn; `bodies` are the request bodies it received. */
+function onStandin(contents: string[], structured?: boolean) {
+  const m = startModelStandin({ replies: contents.map((content) => ({ json: { choices: [{ finish_reason: "stop", message: { content } }] } })) });
+  const p = new LocalProvider({
+    id: "lm", base_url: m.url, where: "machine", credential: null, secrets: new Secrets({}, null), context: null, efforts: [], timeout_ms: 5000,
+    ...(structured === undefined ? {} : { structured_output: structured }),
+  });
+  const bodies = (): Record<string, unknown>[] => m.requests.filter((r) => r.method === "POST").map((r) => JSON.parse(r.body) as Record<string, unknown>);
+  return { p, bodies, stop: m.stop };
+}
+
+test("the re-ask after a schema failure asks a local model for structured output, and the ledger records it", async () => {
+  const sa = onStandin(['{"n":"x"}', '{"n":2}']);
+  try {
+    const end = await runAgent(f.s, spec(sa.p, { schema: SCHEMA, schema_id: "research-output" }));
+    expect(end).toMatchObject({ kind: "done", output: { n: 2 } });
+    const [first, second] = sa.bodies();
+    expect(first).not.toHaveProperty("response_format");
+    expect(second!.response_format).toEqual({ type: "json_schema", json_schema: { name: "research-output", schema: SCHEMA, strict: true } });
+    const recorded = ofType("model.request").map((e) => JSON.parse(text(e.payload.messages)) as Record<string, unknown>);
+    expect(recorded).toEqual([first!, second!]);
+  } finally { sa.stop(); }
+});
+
+test("a model whose manifest turns structured output off is re-asked without it", async () => {
+  const sa = onStandin(['{"n":"x"}', '{"n":2}'], false);
+  try {
+    expect(await runAgent(f.s, spec(sa.p, { schema: SCHEMA }))).toMatchObject({ kind: "done" });
+    expect(sa.bodies().map((b) => "response_format" in b)).toEqual([false, false]);
+  } finally { sa.stop(); }
 });

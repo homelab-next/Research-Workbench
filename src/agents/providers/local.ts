@@ -25,6 +25,8 @@ export interface LocalOptions {
   max_bytes?: number;
   /** Sent as max_tokens on every chat request; DEFAULT_MAX_OUTPUT_TOKENS when absent. */
   max_output_tokens?: number;
+  /** Whether a request may carry a json_schema response_format; true when absent. */
+  structured_output?: boolean;
   /** `host:port` of this workbench's own server, asked each time: a model endpoint may not point at it. */
   refuse_hosts?: () => readonly string[];
 }
@@ -46,6 +48,7 @@ export class LocalProvider implements Provider {
   readonly id: string;
   readonly where: Where;
   readonly max_output_tokens: number;
+  readonly structured_output: boolean;
   readonly #base: string;
   readonly #origin: string;
   readonly #secret: string | null;
@@ -75,6 +78,7 @@ export class LocalProvider implements Provider {
     this.#timeout = opts.timeout_ms;
     this.#max = opts.max_bytes ?? MODEL_MAX_BYTES;
     this.max_output_tokens = opts.max_output_tokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+    this.structured_output = opts.structured_output ?? true;
   }
 
   /** Throws a plain Error naming the cause when the endpoint is the workbench's own server. */
@@ -167,6 +171,10 @@ export class LocalProvider implements Provider {
     out.stream = false;
     out.max_tokens = this.max_output_tokens;
     if (req.effort !== null && this.#efforts.includes(req.effort)) out.reasoning_effort = req.effort;
+    if (req.response_format !== undefined && this.structured_output) {
+      const name = req.response_format.name.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64) || "output";
+      out.response_format = { type: "json_schema", json_schema: { name, schema: req.response_format.schema as unknown as Json, strict: true } };
+    }
     return enc.encode(JSON.stringify(out));
   }
 

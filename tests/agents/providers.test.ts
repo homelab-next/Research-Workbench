@@ -163,3 +163,13 @@ test("max_output_tokens is a positive integer, 8192 when the manifest gives none
     expect(out.problems.map((p) => p.error).join()).toContain("max_output_tokens");
   }
 });
+
+test("structured_output is true or false, true when the manifest gives none", () => {
+  const flag = (text: string): unknown => (loadLocal(text).providers.get("lm") as { structured_output?: boolean } | null)?.structured_output ?? null;
+  expect(flag(local({}))).toBe(true);
+  expect(flag(local({ structured_output: "false" }))).toBe(false);
+  expect(flag(local({ structured_output: "true" }))).toBe(true);
+  const out = loadLocal(local({ structured_output: "\"yes\"" }));
+  expect(out.providers.get("lm")).toBeNull();
+  expect(out.problems.map((p) => p.error).join()).toContain("structured_output");
+});

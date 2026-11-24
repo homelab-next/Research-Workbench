@@ -85,6 +85,7 @@ export async function stageAgent(env: StageEnv, opts: {
   const { window, limits } = frameOf(env);
   const end = await runAgent(session, {
     actor: who.actor, provider: who.provider, model: who.model, effort: who.effort, pack, task: opts.task, tools: stage.tools.filter((t) => !(opts.omit_tools ?? []).includes(t)), schema,
+    ...(stage.schema === null ? {} : { schema_id: stage.schema }),
     policy: deps.config.marking_policy, max_marking: Object.hasOwn(state.pack_limits, stage.id) ? state.pack_limits[stage.id]! : null,
     ctx: {
       session, deps: deps.runner, seeker: deps.seeker, actor: who.actor, link: { run: state.run.id, stage: stage.id, job: opts.job ?? null },
