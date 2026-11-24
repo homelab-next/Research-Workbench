@@ -16,15 +16,20 @@ function toTemplate(text: string, bound: Record<string, unknown>): string {
   });
 }
 
+/** What revalidateCard returns: a verdict (recorded as verify.run, except for a card with no query), or a refusal that writes nothing. */
+export type Revalidation = Verdict | { outcome: "refused"; reasons: string[] };
+
 /**
  * Re-runs the query behind a card as a logged query that verifies the original (no card is made), compares the result hashes
- * and records verify.run. Throws for an unknown card. A card with no query writes nothing.
+ * and records verify.run. An unknown card is refused and writes nothing; so does a card with no query.
+ * A pivot query is re-run from its pivot's text and the stored values, and only if that renders to the stored text; a query
+ * with no pivot is re-run from its stored text (sql and files map it back to its template, trino must render it unchanged).
  */
 export async function revalidateCard(
   session: CaseSession, deps: RunnerDeps, input: { card: string; actor: Actor; why: string; budget?: number | null },
-): Promise<Verdict> {
+): Promise<Revalidation> {
   const card = Object.hasOwn(session.state.cards, input.card) ? session.state.cards[input.card]! : null;
-  if (card === null) throw new Error(`unknown card: ${input.card}`);
+  if (card === null) return { outcome: "refused", reasons: [`unknown card: ${input.card}`] };
   const original = card.query !== null && Object.hasOwn(session.state.queries, card.query) ? session.state.queries[card.query]! : null;
   if (card.query === null || original === null) return { outcome: "could_not_run", detail: "this card did not come from a query", rerun: null, proposal: null };
   const originalId = card.query;
@@ -42,39 +47,47 @@ export async function revalidateCard(
 
   if (was === null) return couldNot("the original query entry could not be found");
   if (original.status !== "done" || original.rows_hash === null || original.rows === null) return couldNot("the original query has no result to compare with");
+  const source = deps.registry.source(was.source);
+  if (source === null) return couldNot(`unknown source: ${was.source}`);
+  // "matches" or "differs" against a source whose manifest was edited would compare two different things
+  if (source.hash !== was.source_hash) return couldNot("the source has changed since the original query");
 
   const run: RunQueryInput = {
     source: was.source, text: "", bound: {}, window: was.window, why: input.why, actor: input.actor,
     verifies: originalId, make_card: false, budget: input.budget ?? null,
   };
+  /** The text a request renders to on this source now, or null if it cannot be rendered. */
+  const rendersTo = (text: string, bound: RunQueryInput["bound"]): string | null => {
+    try {
+      return deps.pool.for(source).render({ text, bound, window: was.window, max_rows: source.limits.max_rows, timeout_ms: source.limits.timeout_ms, budget: null });
+    } catch {
+      return null;
+    }
+  };
   if (was.pivot !== null) {
     const pivot = deps.registry.pivot(was.pivot);
     if (pivot === null || pivot.hash !== was.pivot_hash) return couldNot("the pivot has changed since the original query");
-    run.pivot = pivot;
-  }
-  if (was.connector === "sql" || was.connector === "files") {
-    run.text = toTemplate(was.text, was.bound);
-    run.bound = was.bound as RunQueryInput["bound"];
-  } else if (was.connector === "trino") {
-    // the stored text is rendered SQL; a rendering pass must leave it unchanged or a re-run could execute different SQL
-    const source = deps.registry.source(was.source);
-    if (source === null) return couldNot(`unknown source: ${was.source}`);
-    let again: string | null = null;
     try {
-      again = deps.pool.for(source).render({ text: was.text, bound: {}, window: was.window, max_rows: source.limits.max_rows, timeout_ms: source.limits.timeout_ms, budget: null });
-    } catch { again = null; }
-    if (again !== was.text) return couldNot("the stored text cannot be re-run unchanged");
-    run.text = was.text;
-  } else {
-    if (run.pivot === undefined || run.pivot === null) return couldNot("only pivot queries can be re-run on this source");
-    try {
-      bindPivot(run.pivot, String(was.bound.value), deps.observables);
+      bindPivot(pivot, String(was.bound.value), deps.observables);
     } catch (err) {
       if (err instanceof PivotError) return couldNot(err.message);
       throw err;
     }
-    run.text = run.pivot.query;
-    run.bound = was.bound as RunQueryInput["bound"]; // the stored values, which may carry more than the pivot's {value}
+    // the pivot's own text keeps its weight and empty meaning on the re-run; it must render to what ran before
+    const bound = was.bound as RunQueryInput["bound"]; // the stored values, which may carry more than the pivot's {value}
+    if (rendersTo(pivot.query, bound) !== was.text) return couldNot("the stored text cannot be re-run unchanged");
+    run.pivot = pivot;
+    run.text = pivot.query;
+    run.bound = bound;
+  } else if (was.connector === "sql" || was.connector === "files") {
+    run.text = toTemplate(was.text, was.bound);
+    run.bound = was.bound as RunQueryInput["bound"];
+  } else if (was.connector === "trino") {
+    // the stored text is rendered SQL; a rendering pass must leave it unchanged or a re-run could execute different SQL
+    if (rendersTo(was.text, {}) !== was.text) return couldNot("the stored text cannot be re-run unchanged");
+    run.text = was.text;
+  } else {
+    return couldNot("only pivot queries can be re-run on this source");
   }
 
   const r = await runQuery(session, deps, run);

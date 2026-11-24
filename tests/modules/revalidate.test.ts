@@ -14,6 +14,7 @@ import { runQuery } from "../../src/modules/runner";
 import type { Connector, QueryOutcome } from "../../src/modules/connectors";
 import type { RunnerDeps } from "../../src/modules/runner";
 import { revalidateCard } from "../../src/modules/revalidate";
+import type { Revalidation, Verdict } from "../../src/modules/revalidate";
 import { startStandin } from "../helpers/http-standin";
 import type { Standin } from "../helpers/http-standin";
 import { startTrino } from "../helpers/trino-standin";
@@ -87,6 +88,7 @@ types:
 pivots:
   - { id: peers, title: Peers, from: address, to: address, source: flows, query: "select dst, bytes from flows where src = {value}", empty_means: not-seen, yields: { dst: address } }
   - { id: paid_rep, title: Paid reputation, from: address, to: address, source: rep, query: reputation, empty_means: not-seen, yields: { address: address } }
+  - { id: lake_peers, title: Lake peers, from: address, to: address, source: lake, query: "select a from iceberg.s.events where ts >= {window.from} and ts < {window.to} and a = {value}", empty_means: proven-negative, yields: { a: address } }
 `,
 });
 
@@ -125,8 +127,13 @@ const flows = { source: "flows", text: FLOWS, bound: { value: "192.0.2.17" }, wi
 const issued = (q: string): Record<string, unknown> =>
   s.entries().find((e) => e.type === "query.issued" && (e.payload as { query: string }).query === q)!.payload as Record<string, unknown>;
 const edit = (sql: string, ...args: (string | number)[]): void => { const d = new Database(dbPath); d.run(sql, args); d.close(); };
-const v = (card = "c1", extra: { actor?: Actor; budget?: number | null } = {}) =>
-  revalidateCard(s, deps, { card, actor: extra.actor ?? human, why: "check before publishing", budget: extra.budget });
+/** A verdict; a refusal fails the test. */
+const verdict = (r: Revalidation): Verdict => {
+  if (r.outcome === "refused") throw new Error(`refused: ${r.reasons.join("; ")}`);
+  return r;
+};
+const v = async (card = "c1", extra: { actor?: Actor; budget?: number | null } = {}): Promise<Verdict> =>
+  verdict(await revalidateCard(s, deps, { card, actor: extra.actor ?? human, why: "check before publishing", budget: extra.budget }));
 
 test("an unchanged source matches", async () => {
   await runQuery(s, deps, flows);
@@ -224,8 +231,10 @@ test("a card with no query could not run", async () => {
   expect(s.entries().length).toBe(before);
 });
 
-test("an unknown card is refused with an error", async () => {
-  await expect(v("c99")).rejects.toThrow();
+test("an unknown card is refused, not thrown, and writes nothing", async () => {
+  const before = s.head().seq;
+  expect(await revalidateCard(s, deps, { card: "c99", actor: human, why: "w" })).toEqual({ outcome: "refused", reasons: ["unknown card: c99"] });
+  expect(s.head().seq).toBe(before);
 });
 
 test("a files source re-runs its stored $name text", async () => {
@@ -292,7 +301,7 @@ test("equal hashes with a partial re-run cannot be fully verified", async () => 
 test("both partial, and both full", async () => {
   const d = stubbed([partial, partial, full, full]);
   await runQuery(s, d, flows);
-  const r = await revalidateCard(s, d, { card: "c1", actor: human, why: "w" });
+  const r = verdict(await revalidateCard(s, d, { card: "c1", actor: human, why: "w" }));
   expect(r.detail).toBe("same 3 rows, but the original and re-run result is partial (row_limit, row_limit); it cannot be fully verified");
   await runQuery(s, d, flows);
   expect((await revalidateCard(s, d, { card: "c2", actor: human, why: "w" })).outcome).toBe("matches");
@@ -302,7 +311,7 @@ test("differing hashes add the partial note", async () => {
   edit("insert into flows values (?, ?, ?, ?)", "2026-01-09T00:00:00.000Z", "192.0.2.17", "198.51.100.9", 5);
   // the stub returns three other rows, partially covered
   const stubPartial = stubbed([partial]);
-  const r = await revalidateCard(s, stubPartial, { card: "c1", actor: human, why: "w" });
+  const r = verdict(await revalidateCard(s, stubPartial, { card: "c1", actor: human, why: "w" }));
   expect(r.outcome).toBe("differs");
   expect(r.detail).toContain("the re-run result is partial (row_limit)");
 });
@@ -355,4 +364,26 @@ test("an agent re-validating a costly card gets a verdict naming the proposal it
   expect(r).toEqual({ outcome: "could_not_run", detail: "a budget is needed to re-run this query on a costly source (proposal p1)", rerun: null, proposal: "p1" });
   expect(s.state.proposals.p1).toMatchObject({ kind: "costly_query", source: "rep", pivot: "paid_rep", status: "open" });
   expect(standin.requests).toHaveLength(1);
+});
+
+// ---------- final review minor 12: a changed source manifest is noticed ----------
+test("a source whose manifest changed since the original query could not run, and says so", async () => {
+  await runQuery(s, deps, flows);
+  const src = registry.source("flows")!;
+  const edited = { ...registry, source: (id: string) => (id === "flows" ? { ...src, hash: "edited" } : registry.source(id)), pivot: registry.pivot.bind(registry) } as unknown as Registry;
+  const r = verdict(await revalidateCard(s, { ...deps, registry: edited }, { card: "c1", actor: human, why: "w" }));
+  expect(r).toEqual({ outcome: "could_not_run", detail: "the source has changed since the original query", rerun: null, proposal: null });
+  expect(s.state.queries.q2).toBeUndefined();
+  expect(s.state.cards.c1!.validated).toMatchObject({ outcome: "could_not_run", detail: "the source has changed since the original query" });
+});
+
+// ---------- ruling 5 on re-runs: a pivot query is re-run from the pivot's own text, so it keeps the pivot ----------
+test("a trino pivot query re-runs from its pivot's text and stored values, keeping the pivot", async () => {
+  trino.on(/iceberg\.s\.events/, { columns: ["a"], pages: [[["x"]]] });
+  const pivot = registry.pivot("lake_peers")!;
+  const r1 = await runQuery(s, deps, { source: "lake", text: pivot.query, bound: { value: "192.0.2.17" }, window: win, why: "w", actor: human, pivot });
+  expect(r1.status).toBe("done");
+  const r = await v();
+  expect(r).toMatchObject({ outcome: "matches", rerun: "q2" });
+  expect(issued("q2")).toMatchObject({ pivot: "lake_peers", pivot_hash: pivot.hash, text: issued("q1").text, purpose: "verify" });
 });
