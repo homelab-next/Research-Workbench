@@ -31,7 +31,8 @@ export interface AgentSpec {
 export interface CallRecord { call: string; tool: string; args: Json; ok: boolean }
 export type AgentEnd =
   | { kind: "done"; content: string; output: Json | null; calls: CallRecord[] }
-  | { kind: "invalid"; errors: string[]; calls: CallRecord[] }
+  /** `returned`: what the last reply was, in a word ("the model returned the schema itself"), so a model's mistake reads apart from a bug. */
+  | { kind: "invalid"; errors: string[]; returned: string; calls: CallRecord[] }
   | { kind: "declined"; reason: string }
   | { kind: "blocked"; marking: Marking }
   | { kind: "error"; message: string; retried?: true }
@@ -98,6 +99,21 @@ function twice(first: Attempt, second: Attempt, provider: Provider): string {
   const same = first.kind === second.kind;
   const said = same ? `${subject(first)} ${verb(first, provider)} twice` : `${subject(first)} ${verb(first, provider)}, then ${verb(second, provider)}`;
   return second.kind === "transport" ? `${said} (${second.message})` : said;
+}
+
+/** A reply that is a schema rather than an instance of one: a schema manifest (kind: schema), or a JSON Schema object body. */
+function isSchemaCopy(value: Json, schema: Schema): boolean {
+  if (!isPlainObject(value)) return false;
+  if (value.kind === "schema") return true;
+  const own = schema.properties ?? {};
+  return value.type === "object" && isPlainObject(value.properties) && !Object.hasOwn(own, "type") && !Object.hasOwn(own, "properties");
+}
+
+/** What a reply that failed its schema held, in a word. */
+function returnedWord(empty: boolean, found: { value: Json } | null, schema: Schema): string {
+  if (empty) return "the model returned nothing";
+  if (found === null) return "the model returned no JSON object";
+  return isSchemaCopy(found.value, schema) ? "the model returned the schema itself" : "the model returned an object that does not match its schema";
 }
 
 /**
@@ -302,7 +318,7 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
       errors = validate(spec.schema, found.value).map((e) => `${e.path.replace(/^\$\.?/, "") || "output"} ${e.message}`);
       if (errors.length === 0) return { kind: "done", content: result.content, output: found.value, calls };
     }
-    if (++failures >= 2) return { kind: "invalid", errors, calls };
+    if (++failures >= 2) return { kind: "invalid", errors, returned: returnedWord(empty, found, spec.schema), calls };
     reasked = true;
     messages.push(
       { role: "assistant", content: result.content },

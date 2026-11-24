@@ -95,7 +95,7 @@ export async function stageAgent(env: StageEnv, opts: {
   });
   switch (end.kind) {
     case "done": return { kind: "output", output: end.output, calls: end.calls };
-    case "invalid": return { kind: "stalled", reason: `${title}'s output failed its schema twice: ${end.errors.join("; ")}` };
+    case "invalid": return { kind: "stalled", reason: `${title}'s output failed its schema twice: ${end.returned} (${end.errors.join("; ")})` };
     case "declined": return { kind: "declined", reason: end.reason };
     case "blocked": return { kind: "blocked", marking: end.marking };
     case "error": return { kind: "stalled", reason: end.retried === true

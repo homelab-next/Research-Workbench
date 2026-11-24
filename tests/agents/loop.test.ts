@@ -647,3 +647,22 @@ test("the empty-reply re-ask asks a local model for structured output", async ()
     expect(sa.bodies().map((b) => "response_format" in b)).toEqual([false, true]);
   } finally { sa.stop(); }
 });
+
+test("an invalid end says what the model returned: nothing, the schema itself, no JSON, or an object that does not match", async () => {
+  const p = spy([
+    { content: "" }, { content: "" },
+    { content: "x" }, { content: JSON.stringify({ kind: "schema", id: "s", title: "S", schema: SCHEMA }) },
+    { content: "x" }, { content: JSON.stringify(SCHEMA) },
+    { content: "" }, { content: "no json here" },
+    { content: "" }, { content: '{"n":"x"}' },
+  ]);
+  const said: string[] = [];
+  for (let i = 0; i < 5; i++) {
+    const end = await runAgent(f.s, spec(p, { schema: SCHEMA }));
+    said.push(end.kind === "invalid" ? end.returned : end.kind);
+  }
+  expect(said).toEqual([
+    "the model returned nothing", "the model returned the schema itself", "the model returned the schema itself",
+    "the model returned no JSON object", "the model returned an object that does not match its schema",
+  ]);
+});

@@ -183,3 +183,16 @@ test("a failed model-list read does not stop the call when this process saw the 
   expect((ghost as { reason: string }).reason).toContain("could not be read (busy)");
   expect(ofType("model.request")).toHaveLength(2);
 });
+
+test("a schema failure's pause says in a word what the model returned", async () => {
+  const manifest = { kind: "schema", id: "frame-output", title: "Frame output", schema: { type: "object" } };
+  // the scripted provider's ordinal continues across the calls
+  const r = rig(script({ content: "", reasoning: "the answer" }, say(manifest), { content: "" }, { content: " " }, { content: "none" }, { content: '{"goals":1}' }));
+  r.engine.start(person);
+  const go = async () => ((await stageAgent(r.env(), { actor_id: "orchestrator", task: "t", extras: [] })) as { reason: string }).reason;
+  expect(await go()).toBe("Frame's output failed its schema twice: the model returned the schema itself (output missing required property: goals; "
+    + "output missing required property: window; output missing required property: limits; output missing required property: notes; "
+    + "kind unexpected property; id unexpected property; title unexpected property; schema unexpected property)");
+  expect(await go()).toBe("Frame's output failed its schema twice: the model returned nothing (the reply is empty)");
+  expect(await go()).toStartWith("Frame's output failed its schema twice: the model returned an object that does not match its schema (output missing required property: window;");
+});
