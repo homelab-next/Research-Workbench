@@ -2,6 +2,7 @@ import type { Json } from "../core/canonical";
 import { canonical } from "../core/canonical";
 import type { CaseSession } from "../core/session";
 import type { RunState } from "../core/state";
+import { latestDraft } from "../core/state";
 import type { Actor, EntryInput, Marking, ModelChoice } from "../core/types";
 import type { Providers, } from "../agents/providers";
 import type { Profile } from "../agents/context";
@@ -12,7 +13,7 @@ import type { RunnerDeps, RunQueryResult } from "../modules/runner";
 import type { Seeker } from "../modules/seeker";
 import type { Pipeline, Role, StageManifest } from "./manifests";
 import { nextStep } from "./next";
-import { acceptPlan, denyPlan, requestReplan } from "./plans";
+import { acceptPlan, denyPlan, requestReplan, spendPlanBudget } from "./plans";
 import { frameRunner } from "./stages/frame";
 import { planRunner } from "./stages/plan";
 import { researchRunner } from "./stages/research";
@@ -56,8 +57,6 @@ const firstLine = (text: string): string => text.split("\n")[0]!.slice(0, 300);
 export class Engine {
   private inflight: Promise<RunSummary> | null = null;
   private readonly runners: Partial<Record<Role, StageRunner>>;
-  /** Proposals the engine has tried to run with a plan budget: each is tried once. */
-  private readonly tried = new Set<string>();
 
   constructor(private readonly session: CaseSession, private readonly deps: EngineDeps, opts: { runners?: Partial<Record<Role, StageRunner>> } = {}) {
     this.runners = { frame: frameRunner, plan: planRunner, research: researchRunner, ...opts.runners };
@@ -87,13 +86,16 @@ export class Engine {
   }
 
   pause(actor: Actor): void {
-    this.session.commit((state) => (state.run.status === "none" || state.run.status === "finished" ? [] : [this.paused(actor, `paused by ${actor.id}`)]));
+    this.session.commit((state) => (["none", "finished", "paused"].includes(state.run.status) ? [] : [this.paused(actor, `paused by ${actor.id}`)]));
   }
 
   async resume(actor: Actor): Promise<RunSummary> {
+    if (actor.kind !== "human") throw new RunRefused("only a person may resume a run");
     this.session.commit((state) => (state.run.status === "paused" || state.run.status === "interrupted"
       ? [{ type: "run.resumed", actor, payload: {}, run: state.run.id }] : []));
-    return this.advance({ allow_capped: true });
+    // a drive still in flight ends on the stop it saw; the run is driven again once it has
+    const running = this.inflight;
+    return running === null ? this.advance({ allow_capped: true }) : running.then(() => this.advance({ allow_capped: true }));
   }
 
   /** A person accepts the proposed plan, whole or in part, with budgets for its costly steps. Throws PlanRefused; advances nothing. */
@@ -103,6 +105,7 @@ export class Engine {
 
   denyPlan(input: { reason: string; actor: Actor }): void {
     denyPlan(this.session, input);
+    this.anchorCase("closed");
   }
 
   /** Asks the planner to plan again with the person's note. */
@@ -131,8 +134,19 @@ export class Engine {
     return { type: "run.paused", actor, payload: { reason }, run: this.session.state.run.id };
   }
 
+  /** The hash of the pipeline the current run started with. */
+  private startedWith(): string | null {
+    const e = [...this.session.entries()].reverse().find((x) => x.type === "run.started");
+    return e !== undefined && e.type === "run.started" ? e.payload.pipeline_hash : null;
+  }
+
   private async drive(allowCapped: boolean): Promise<RunSummary> {
     let allow = allowCapped;
+    const { status } = this.session.state.run;
+    if (status === "running" && this.startedWith() !== this.deps.pipeline.hash) {
+      this.session.commit(() => [this.paused(ENGINE, "the pipeline has changed since this run started")]);
+      return this.summary();
+    }
     for (let i = 0; i < MAX_STEPS; i++) {
       const step = nextStep(this.session.state, this.deps.pipeline, { allow_capped: allow });
       allow = false;
@@ -172,7 +186,7 @@ export class Engine {
     let end: StageEnd;
     try {
       if (runner === undefined) end = { kind: "stalled", reason: `${title} has no runner for the role ${manifest.role}.` };
-      else end = await runner({ session: this.session, deps: this.deps, stage: manifest, attempt, onNeedsBudget: (p, s) => this.payFor(p, s) });
+      else end = await runner({ session: this.session, deps: this.deps, stage: manifest, attempt, onNeedsBudget: (p, s) => spendPlanBudget(this.session, this.deps.runner, p, s) });
     } catch (err) {
       end = { kind: "stalled", reason: `${title} failed unexpectedly: ${firstLine(err instanceof Error ? err.message : String(err))}` };
     }
@@ -181,6 +195,11 @@ export class Engine {
       type: "stage.finished", actor: ENGINE, ...link,
       payload: { stage: stageId, attempt, outcome, draft_hash, output: output === null ? null : this.session.blobs.put(canonical(output)), reason },
     });
+    // a review that does not name the draft it reviewed has reviewed nothing: it fails, rather than being run again for ever
+    if (end.kind === "finished" && end.outcome === "pass" && manifest.reviews) {
+      const latest = latestDraft(this.session.state)?.hash ?? null;
+      if (end.draft_hash === null || end.draft_hash !== latest) end = { kind: "finished", outcome: "fail", draft_hash: latest, output: end.output, reason: `${title} did not review the latest draft` };
+    }
     switch (end.kind) {
       case "finished":
         this.session.commit(() => [finish(end.outcome, end.draft_hash, end.output, end.reason)]);
@@ -204,25 +223,11 @@ export class Engine {
 
   private finish(outcome: "published" | "stopped"): void {
     this.session.commit((s) => [{ type: "run.finished", actor: ENGINE, payload: { outcome }, run: s.run.id }]);
-    const head = this.session.head();
-    this.deps.anchor?.({ case: this.session.id, seq: head.seq, hash: head.hash, why: outcome === "published" ? "published" : "closed" });
+    this.anchorCase(outcome === "published" ? "published" : "closed");
   }
 
-  /**
-   * Runs the proposal a costly plan step raised, as the person who accepted the plan and with exactly the budget they gave that step.
-   * The agent and its tools never supply a budget; this is the only place a plan budget is spent. Once per proposal.
-   */
-  private async payFor(proposalId: string, step: string | null): Promise<RunQueryResult | null> {
-    const state = this.session.state;
-    const proposal = Object.hasOwn(state.proposals, proposalId) ? state.proposals[proposalId]! : null;
-    if (step === null || proposal === null || proposal.kind !== "costly_query" || proposal.status !== "open" || proposal.step !== step) return null;
-    if (this.tried.has(proposalId) || !Object.hasOwn(state.plan.budgets, step) || state.plan.current === null || state.plan.status !== "accepted") return null;
-    const budget = state.plan.budgets[step]!;
-    const planId = state.plan.current.id;
-    const accepted = [...this.session.entries()].reverse().find((e) => e.type === "plan.accepted" && e.payload.plan === planId);
-    if (accepted === undefined || accepted.actor.kind !== "human") return null;
-    this.tried.add(proposalId);
-    const result = await runProposal(this.session, this.deps.runner, { proposal: proposalId, budget, actor: accepted.actor, cause: accepted.seq });
-    return result.status === "refused" || result.status === "needs_budget" ? null : result;
+  private anchorCase(why: "published" | "closed"): void {
+    const head = this.session.head();
+    this.deps.anchor?.({ case: this.session.id, seq: head.seq, hash: head.hash, why });
   }
 }

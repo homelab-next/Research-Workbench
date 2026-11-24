@@ -1,8 +1,10 @@
 import type { CaseState, StageState } from "../core/state";
-import { latestDraft } from "../core/state";
+import { blockers, latestDraft, publishable } from "../core/state";
 import type { Pipeline, StageManifest } from "./manifests";
 
 export const SEND_BACK_CAP = 3;
+/** A stage restarted this many times with no send-back in between pauses the run. */
+const MAX_REPEATS = 5;
 
 export type Step =
   | { kind: "idle" }
@@ -31,9 +33,16 @@ export function nextStep(state: Readonly<CaseState>, pipeline: Pipeline, opts: {
   if (run.status !== "running") return IDLE;
   const manifest = (id: string): StageManifest | null => pipeline.stages.find((s) => s.id === id) ?? null;
   const stateOf = (id: string): StageState | null => run.stages.find((s) => s.id === id) ?? null;
+  const title = (id: string): string => stateOf(id)?.title ?? id;
   const attemptsOf = (id: string): number => stateOf(id)?.attempts ?? 0;
-  const begin = (stage: string, sent_back: { from: string; to: string; reason: string; count: number } | null = null): Step =>
-    ({ kind: "start", stage, attempt: attemptsOf(stage) + 1, sent_back });
+  /** A stage the run does not know pauses; a stage run again with no send-back, five times already, pauses (a loop that goes nowhere). */
+  const begin = (stage: string, sent_back: { from: string; to: string; reason: string; count: number } | null = null, again = true): Step => {
+    if (stateOf(stage) === null) return { kind: "pause", reason: `the stage ${stage} is not part of this run` };
+    if (again && sent_back === null && stage === run.current && attemptsOf(stage) >= MAX_REPEATS && opts.allow_capped !== true) {
+      return { kind: "pause", reason: `${title(stage)} has run ${MAX_REPEATS} times` };
+    }
+    return { kind: "start", stage, attempt: attemptsOf(stage) + 1, sent_back };
+  };
 
   if (run.current === null) {
     const first = run.stages[0];
@@ -42,7 +51,6 @@ export function nextStep(state: Readonly<CaseState>, pipeline: Pipeline, opts: {
   const st = stateOf(run.current);
   const m = manifest(run.current);
   if (st === null || m === null) return { kind: "pause", reason: `the current stage ${run.current} is not in the pipeline` };
-  const title = (id: string): string => stateOf(id)?.title ?? id;
 
   switch (st.status) {
     case "running": return { kind: "exec", stage: st.id };
@@ -65,7 +73,7 @@ export function nextStep(state: Readonly<CaseState>, pipeline: Pipeline, opts: {
   if (m.gate === "plan") {
     switch (state.plan.status) {
       case "proposed": return { kind: "gate", gate: "plan" };
-      case "replanning": return begin(st.id);
+      case "replanning": return begin(st.id, null, false);
       case "denied": return IDLE;
       case "none": return { kind: "pause", reason: "the plan stage finished without a plan" };
       case "accepted": break;
@@ -75,7 +83,9 @@ export function nextStep(state: Readonly<CaseState>, pipeline: Pipeline, opts: {
   if (m.gate === "publish" && !(draft !== null && state.published.some((p) => p.draft_hash === draft.hash))) {
     if (draft === null) return { kind: "pause", reason: "there is no draft to review" };
     const unpassed = firstUnpassedReview(state, pipeline);
-    return unpassed === null ? { kind: "gate", gate: "publish" } : begin(unpassed);
+    if (unpassed !== null) return begin(unpassed);
+    // every review passed; a failed check, a failed evaluation or an open must-address challenge still stops it
+    return publishable(state as CaseState, draft.hash) ? { kind: "gate", gate: "publish" } : { kind: "pause", reason: `${blockers(state as CaseState, draft.hash).join(". ")}.` };
   }
   if (m.on_pass === null) return { kind: "finish", outcome: state.published.length > 0 ? "published" : "stopped" };
   const target = manifest(m.on_pass);

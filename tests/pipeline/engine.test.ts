@@ -31,7 +31,8 @@ const PASS: Extract<StageEnd, { kind: "finished" }> = { kind: "finished", outcom
 let f: Fixture;
 let dir: string;
 let extra: (() => void)[] = [];
-beforeEach(() => { f = fixture(false); dir = mkdtempSync(join(tmpdir(), "engine-")); });
+let anchors: string[] | null = null;
+beforeEach(() => { anchors = []; f = fixture(false); dir = mkdtempSync(join(tmpdir(), "engine-")); });
 afterEach(() => {
   expect(f.s.state.skipped).toEqual([]);
   for (const x of extra.reverse()) x();
@@ -62,6 +63,7 @@ interface Rig { engine: Engine; s: CaseSession; log: string[]; runners: Partial<
 
 /** Stub runners for every role: each passes, the plan stub proposes a plan, the assemble stub revises the draft, review stubs pass the latest draft. */
 function rig(over: Partial<Record<Role, StageRunner>> = {}, s: CaseSession = f.s, deps: EngineDeps = depsOf(f.sample)): Rig {
+  if (deps.anchor === undefined && anchors !== null) deps = { ...deps, anchor: (a) => { anchors!.push(a.why); } };
   const log: string[] = [];
   const draftPass = (): StageEnd => ({ ...PASS, draft_hash: latestDraft(s.state)?.hash ?? null });
   const runners: Partial<Record<Role, StageRunner>> = {
@@ -425,4 +427,68 @@ test("a costly step with no budget stays an open proposal", async () => {
   expect(results).toEqual(["waiting for a person's budget (proposal p1)", null]);
   expect(f.s.state.proposals.p1!.status).toBe("open");
   expect(f.s.entries().filter((e) => e.type === "proposal.accepted")).toEqual([]);
+});
+
+const waitFor = () => { let release!: () => void; const gate = new Promise<void>((r) => { release = r; }); return { gate, release }; };
+
+test("a changed pipeline pauses the run on resume instead of spinning", async () => {
+  const stall = rig({ frame: async () => ({ kind: "stalled", reason: "wait" }) });
+  stall.engine.start(person);
+  await stall.engine.advance();
+  const changed = { ...depsOf(f.sample), pipeline: { ...depsOf(f.sample).pipeline, hash: "somethingelse" } };
+  const r2 = rig({}, f.s, changed);
+  const before = types(f.s).length;
+  const sum = await r2.engine.resume(person);
+  expect(sum).toMatchObject({ status: "paused", pause_reason: "the pipeline has changed since this run started" });
+  expect(r2.log).toEqual([]);
+  expect(types(f.s).slice(before)).toEqual(["run.resumed", "run.paused"]);
+});
+
+test("a review runner that does not name the latest draft fails its stage, with a reason, and the run stays bounded", async () => {
+  const r = rig({ evaluate: async () => { return { ...PASS }; } });
+  r.engine.start(person);
+  await r.engine.advance();
+  acceptPlan(f.s);
+  const sum = await r.engine.advance();
+  expect(sum.status).toBe("paused");
+  const fin = f.s.entries().filter((e) => e.type === "stage.finished" && e.payload.stage === "evaluate");
+  expect(fin.length).toBeLessThan(10);
+  expect(fin[0]!.payload).toMatchObject({ outcome: "fail", reason: "Evaluate did not review the latest draft" });
+  expect(sum.pause_reason).toStartWith("Evaluate has sent work back to Assemble 3 times.");
+});
+
+test("pausing a paused run writes nothing, and only a person may resume", async () => {
+  const r = rig({ frame: async () => ({ kind: "stalled", reason: "wait" }) });
+  r.engine.start(person);
+  await r.engine.advance();
+  const before = types(f.s).length;
+  r.engine.pause(person);
+  expect(types(f.s).length).toBe(before);
+  await expect(r.engine.resume(planner)).rejects.toThrow(RunRefused);
+  expect(types(f.s).length).toBe(before);
+});
+
+test("a resume during an in-flight advance drives the run afterwards", async () => {
+  const w = waitFor();
+  let calls = 0;
+  const r = rig({ frame: async () => { r.log.push("frame"); if (calls++ === 0) { await w.gate; return { kind: "stopped" }; } return PASS; } });
+  r.engine.start(person);
+  const first = r.engine.advance();
+  await Promise.resolve();
+  r.engine.pause(person);
+  const resumed = r.engine.resume(person);
+  w.release();
+  await first;
+  const sum = await resumed;
+  expect(r.log).toEqual(["frame", "frame", "plan"]);
+  expect(sum.waiting).toBe("plan");
+});
+
+test("denying the plan anchors the case as closed", async () => {
+  const r = rig();
+  r.engine.start(person);
+  await r.engine.advance();
+  r.engine.denyPlan({ reason: "no", actor: person });
+  expect(f.s.state.run.status).toBe("finished");
+  expect(anchors).toEqual(["closed"]);
 });

@@ -96,6 +96,14 @@ export function loadPipeline(registry: Registry): { pipeline: Pipeline | null; p
       if (s[edge] !== null && !ids.has(s[edge]!)) return refuse(`stage "${s.id}": ${edge} names "${s[edge]}", which is not a stage`);
     }
   }
+  for (const start of stages) {
+    const walked = [start.id];
+    for (let at = start.on_pass; at !== null; at = stages.find((x) => x.id === at)!.on_pass) {
+      walked.push(at);
+      if (at === start.id) return refuse(`on_pass cycle: ${walked.join(" > ")}`);
+      if (walked.indexOf(at) !== walked.length - 1) break; // a cycle that does not return to start is reported from its own members
+    }
+  }
   for (const gate of GATES) {
     const n = stages.filter((s) => s.gate === gate).length;
     if (n !== 1) return refuse(`there must be exactly one stage for gate ${gate}; there are ${n}`);

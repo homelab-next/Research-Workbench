@@ -184,3 +184,33 @@ test("nextStep reads only the state: the same state gives the same step", () => 
   expect(nextStep(state, pipeline)).toEqual(nextStep(fold(new EntryBuilder().also((b) => { b.add("case.created", { id: "case-1", title: "t", asked: "a", why: "w", starting: [], window: { from: null, to: null }, objective: null, marking: "TLP:GREEN" }); b.add("run.started", { run: "run-1", pipeline: "default", pipeline_hash: "ph", stages: defs }); started(b, "frame"); }).entries), pipeline));
   expect(JSON.stringify(state)).toBe(frozen);
 });
+
+const atGate = (extra: (b: EntryBuilder) => void = () => {}) => {
+  const d1 = draft(1).hash;
+  return run((b) => { passed(b, "assemble"); revised(b, 1); reviewed(b, d1); passed(b, "publish"); extra(b); });
+};
+
+test("an open must-address challenge on the latest draft pauses instead of raising the publish gate", () => {
+  const d1 = draft(1).hash;
+  const state = atGate((b) => b.add("challenge.raised", { challenge: { id: "x1", draft_hash: d1, severity: "must_address", text: "t", cites: [] } }));
+  expect(nextStep(state, pipeline)).toEqual({ kind: "pause", reason: "Challenge x1 must be addressed." });
+  expect(nextStep(atGate((b) => b.add("check.run", { check: "c", script_hash: "h", input: { blob: "i", bytes: 1 }, output: { blob: "o", bytes: 1 }, draft_hash: d1, pass: false, findings: [] })), pipeline))
+    .toEqual({ kind: "pause", reason: "c failed on this revision." });
+});
+
+test("a target that is not one of the run's stages pauses, naming it", () => {
+  const ghost: Pipeline = { ...pipeline, stages: pipeline.stages.map((s) => (s.id === "frame" ? { ...s, on_pass: "ghost" } : s)).concat(sm("ghost", 10)) };
+  const state = run((b) => { passed(b, "frame"); });
+  expect(nextStep(state, ghost)).toEqual({ kind: "pause", reason: "the stage ghost is not part of this run" });
+});
+
+test("a review stage restarted without a send-back pauses after five runs", () => {
+  const d1 = draft(1).hash;
+  const stale = (n: number) => run((b) => {
+    passed(b, "assemble"); revised(b, 1); started(b, "checks"); finished(b, "checks", "pass", null, d1);
+    for (let i = 1; i <= n; i++) { b.add("stage.started", { stage: "evaluate", attempt: i }); b.add("stage.finished", { stage: "evaluate", attempt: i, outcome: "pass", draft_hash: null, output: null, reason: null }); }
+  });
+  expect(nextStep(stale(4), pipeline)).toMatchObject({ kind: "start", stage: "evaluate", attempt: 5 });
+  expect(nextStep(stale(5), pipeline)).toEqual({ kind: "pause", reason: "Evaluate has run 5 times" });
+  expect(nextStep(stale(5), pipeline, { allow_capped: true })).toMatchObject({ kind: "start", stage: "evaluate", attempt: 6 });
+});

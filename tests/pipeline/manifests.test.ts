@@ -134,3 +134,10 @@ test("the pipeline hash changes when a stage manifest changes", () => {
   edit("research", "title: Research", "title: Researching");
   expect(load().pipeline!.hash).not.toBe(a.hash);
 });
+
+test("an on_pass cycle is refused", () => {
+  edit("evaluate", "on_pass: challenge", "on_pass: checks");
+  const { pipeline, problems } = load();
+  expect(pipeline).toBeNull();
+  expect(problems.join("\n")).toMatch(/on_pass cycle.*checks.*evaluate.*checks/);
+});

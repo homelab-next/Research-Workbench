@@ -169,3 +169,45 @@ test("a step with no budget is not paid for", async () => {
   expect(f.s.state.proposals.p1!.status).toBe("open");
   expect(f.s.entries().some((e) => e.type === "proposal.accepted")).toBe(false);
 });
+
+const plain = (): void => {
+  f.s.commit((_st, ids) => [{ type: "plan.proposed", actor: agent, payload: { plan: PLAN(ids.next("plan")) } }]);
+};
+const proposalFor = async (): Promise<void> => {
+  const r = await f.call("run_step", { step: "s3", why: "reputation" });
+  expect(r.view).toMatchObject({ status: "needs_budget", proposal: "p1" });
+};
+
+test("a plan budget is spent with the plan.accepted entry as the cause of proposal.accepted", async () => {
+  await costly({ s3: 1 });
+  const accepted = f.s.entries().find((e) => e.type === "plan.accepted")!;
+  await spendPlanBudget(f.s, f.sample.deps, "p1", "s3");
+  expect(f.s.entries().find((e) => e.type === "proposal.accepted")!.cause).toBe(accepted.seq);
+  expect(await spendPlanBudget(f.s, f.sample.deps, "p1", "s3")).toBeNull();      // the proposal is no longer open
+});
+
+test("a plan.accepted by anything but a person pays for nothing", async () => {
+  plain();
+  f.s.commit(() => [{ type: "plan.accepted", actor: person, payload: { plan: "plan-1", steps: ["s1", "s2", "s3", "s4"], budgets: {} } }]);
+  await proposalFor();
+  f.s.commit(() => [{ type: "plan.accepted", actor: agent, payload: { plan: "plan-1", steps: ["s1", "s2", "s3", "s4"], budgets: { s3: 1 } } }]);
+  expect(await spendPlanBudget(f.s, f.sample.deps, "p1", "s3")).toBeNull();
+  expect(f.s.state.proposals.p1!.status).toBe("open");
+});
+
+test("a budget for a step that was not accepted pays for nothing", async () => {
+  plain();
+  f.s.commit(() => [{ type: "plan.accepted", actor: person, payload: { plan: "plan-1", steps: ["s1", "s2", "s3", "s4"], budgets: {} } }]);
+  await proposalFor();
+  f.s.commit(() => [{ type: "plan.accepted", actor: person, payload: { plan: "plan-1", steps: ["s1", "s2"], budgets: { s3: 1 } } }]);
+  expect(await spendPlanBudget(f.s, f.sample.deps, "p1", "s3")).toBeNull();
+  expect(f.s.state.proposals.p1!.status).toBe("open");
+});
+
+test("a proposal for another step is not paid with this step's budget", async () => {
+  plain();
+  f.s.commit(() => [{ type: "plan.accepted", actor: person, payload: { plan: "plan-1", steps: ["s1", "s2", "s3", "s4"], budgets: { s1: 1, s3: 1 } } }]);
+  await proposalFor();
+  expect(await spendPlanBudget(f.s, f.sample.deps, "p1", "s1")).toBeNull();
+  expect(f.s.state.proposals.p1!.status).toBe("open");
+});
