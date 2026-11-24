@@ -2,11 +2,12 @@ import { afterEach, expect, test } from "bun:test";
 import { initial } from "../../src/core/state";
 import type { CaseState } from "../../src/core/state";
 import type { Reference } from "../../src/core/wire";
-import { narrativeMarkdown } from "../../src/web/markdown";
+import { citedIds, narrativeMarkdown } from "../../src/web/markdown";
 import { served } from "../helpers/served";
 import type { Served } from "../helpers/served";
 
 let s: Served | null = null;
+const esc = (t: string): string => t.replace(/([\\`*_{}[\]()#+\-.!|>~<&])/g, "\\$1");
 afterEach(async () => { await s?.close(); s = null; });
 
 async function sample(): Promise<{ state: CaseState; ref: Reference; id: string }> {
@@ -37,12 +38,12 @@ test("the Markdown has the marking first and last, the five sections, and each c
   for (const id of cited) {
     const c = state.cards[id]!;
     const q = state.queries[c.query!]!;
-    expect(md).toContain(`### ${id}: ${c.title}`);
+    expect(md).toContain(`### ${id}: ${esc(c.title)}`);
     expect(md).toContain(q.text);
     expect(md).toContain(`Marking: ${c.marking}`);
     expect(md).toContain(`Rows: ${c.row_count}`);
     expect(md).toContain(q.issued_ts);
-    expect(md).toContain(`Source: ${ref.sources.find((x) => x.id === c.source)!.title}`);
+    expect(md).toContain(`Source: ${esc(ref.sources.find((x) => x.id === c.source)!.title)}`);
   }
   expect(md).toContain("Coverage: partial");
 });
@@ -54,6 +55,23 @@ test("a query holding backticks cannot break out of its fence", async () => {
   const hostile: CaseState = { ...state, queries: { ...state.queries, [q.id]: { ...q, text: "select ```; # heading" } } };
   const md = narrativeMarkdown(hostile, ref);
   expect(md).toContain("````\nselect ```; # heading\n````");
+});
+
+test("the provenance fields are plain text: nothing in them can start a heading, a list or a link, and newlines are gone", async () => {
+  const { state, ref } = await sample();
+  const id = state.drafts.at(-1)!.product.key_findings[0]!.cites[0]!;
+  const c = state.cards[id]!;
+  const q = state.queries[c.query!]!;
+  const evil = "x\n## Injected\n- [a](https://example.invalid)";
+  const hostile: CaseState = {
+    ...state, meta: { ...state.meta!, title: "T\n# Bad title" },
+    cards: { ...state.cards, [id]: { ...c, title: evil, why: evil } },
+    queries: { ...state.queries, [q.id]: { ...q, why: evil, by: { kind: "human", id: "a\n# who" } } },
+  };
+  const md = narrativeMarkdown(hostile, ref);
+  const heads = md.split("\n").filter((l) => l.startsWith("#"));
+  expect(heads).toEqual(["# T \\# Bad title", "## Summary", "## Key findings", "## Gaps and limits", "## Alternatives", "## Assessment", "## Provenance", ...citedIds(state.drafts.at(-1)!).map((x) => (x === id ? `### ${x}: x \\#\\# Injected \\- \\[a\\]\\(https://example\\.invalid\\)` : `### ${x}: ${esc(state.cards[x]!.title)}`))]);
+  expect(md.split("\n").some((l) => l.startsWith("- [a]") || l.startsWith("# who"))).toBe(false);
 });
 
 test("with no draft there is nothing to copy", () => {

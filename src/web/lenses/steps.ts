@@ -77,7 +77,7 @@ export function makeSteps(ui: Ui, open: Open): View {
     const steps = plan.steps.filter((x) => !unchecked.has(x.id));
     const given: Record<string, number> = {};
     for (const x of steps) if (!x.free) given[x.id] = budgetOf(budgets.get(x.id) ?? "")!;
-    void ui.act("accept_plan", { steps: steps.map((x) => x.id), budgets: given });
+    void ui.act("accept_plan", { plan: plan.id, steps: steps.map((x) => x.id), budgets: given });
   };
 
   // ---------- one line a person answers before something is sent ----------
@@ -180,7 +180,7 @@ export function makeSteps(ui: Ui, open: Open): View {
       acceptBtn = h("button", { type: "button", class: "primary", data: { action: "accept_plan" }, on: { click: () => accept(state()) } }, `Accept: run ${chosen.length} steps`) as HTMLButtonElement;
       freeBtn = h("button", {
         type: "button", data: { action: "free" }, disabled: ro() || free === 0, title: "Accept only the steps that cost nothing",
-        on: { click: () => { void ui.act("accept_plan", { steps: steps.filter((x) => x.free).map((x) => x.id) }); } },
+        on: { click: () => { void ui.act("accept_plan", { plan: plan.id, steps: steps.filter((x) => x.free).map((x) => x.id) }); } },
       }, `Run the free steps now (${free})`) as HTMLButtonElement;
       const decide = (key: "deny" | "replan", label: string, tip: string): HTMLElement =>
         h("button", { type: "button", data: { action: key }, disabled: ro(), title: tip, on: { click: () => { asking = key; focusAsk = true; render(); } } }, label);

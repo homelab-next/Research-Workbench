@@ -108,3 +108,33 @@ test("a refused revision leaves the proposal open", async () => {
   expect(r.status).toBe(409);
   expect(state(id).proposals[p]!.status).toBe("open");
 });
+
+test("approve carries the draft the person saw, and is refused when a newer one exists, writing nothing", async () => {
+  s = await served();
+  const id = await s.newCase();
+  cases.push(id);
+  await s.toPublishGate(id);
+  const seen = latestDraft(state(id))!.hash;
+  const p = propose(id, "summary", "A newer summary.");
+  expect((await s.command(id, "accept_proposal", { proposal: p })).status).toBe(200);
+  await s.app.hub.idle();
+  const before = s.entries(id).length;
+  const r = await s.command(id, "approve", { draft_hash: seen });
+  expect(r).toEqual({ status: 409, body: { ok: false, refused: ["a newer draft arrived; review it before approving"] } });
+  expect(s.entries(id).length).toBe(before);
+  expect((await s.command(id, "approve", { draft_hash: latestDraft(state(id))!.hash })).status).toBe(200);
+  await s.app.hub.idle();
+  expect(state(id).run.outcome).toBe("published");
+});
+
+test("accept_plan carries the plan the person saw, and is refused when it is not the current one", async () => {
+  s = await served();
+  const id = await s.newCase();
+  cases.push(id);
+  await s.toPlanGate(id);
+  const before = s.entries(id).length;
+  const r = await s.command(id, "accept_plan", { plan: "plan-99", budgets: { s3: 1 } });
+  expect(r).toEqual({ status: 409, body: { ok: false, refused: ["a newer plan arrived; review it before accepting"] } });
+  expect(s.entries(id).length).toBe(before);
+  expect((await s.command(id, "accept_plan", { plan: state(id).plan.current!.id, budgets: { s3: 1 } })).status).toBe(200);
+});

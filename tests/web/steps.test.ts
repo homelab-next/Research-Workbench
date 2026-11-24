@@ -309,3 +309,13 @@ test("a proposal whose query is running reads running…, found by its cause and
   await settled();
   expect(p.all(`[data-proposal=${r.proposal}]`).length).toBe(0);
 });
+
+test("Accept and Run the free steps carry the id of the plan on screen", async () => {
+  await atGate();
+  const log: { command: string; args: Record<string, unknown> }[] = [];
+  const real = p.ui.api.command.bind(p.ui.api);
+  p.ui.api.command = (id, name, args) => { log.push({ command: name, args }); return real(id, name, args); };
+  p.click("[data-action=free]");
+  await settled();
+  expect(log.filter((c) => c.command === "accept_plan").map((c) => c.args.plan)).toEqual([state().plan.current!.id]);
+});

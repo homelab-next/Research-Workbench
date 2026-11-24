@@ -124,7 +124,7 @@ test("Approve says what it will do, is enabled only when nothing blocks, and pub
   expect(state().run.outcome).toBe("published");
   expect(p.q(".lens .draft").classList.contains("proposed")).toBe(false);
   expect(p.q(".lens .draft-head").textContent).toContain("Published as product 1");
-  expect(p.all(".lens a[href*='/published/1/']").map((a) => a.textContent)).toEqual(["product.md", "product.json", "provenance.md", "provenance.json", "manifest.json"]);
+  expect(p.all(".lens a[href*='/published/1/']").map((a) => a.textContent)).toEqual(["product.json", "product.md", "provenance.json", "provenance.md", "manifest.json"]);   // the order the manifest records
   expect(p.all("[data-action=approve]").length).toBe(0);
 });
 
@@ -297,15 +297,17 @@ test("Reject needs a reason; with stop ticked the run ends", async () => {
   await settled();
   expect(state().reviews[latest().hash]!.rejected).toMatchObject({ reason: "not ready", stop: false });
   expect(state().run.outcome).toBeNull();
-  // again, this time stopping the run
-  if (state().run.waiting === "publish") {
-    p.click("[data-action=reject]");
-    p.fill("[aria-label='Reason for rejecting the draft']", "enough");
-    p.click("[aria-label='and stop the run']");
-    p.click("[data-action=confirm-reject]");
-    await settled();
-    expect(state().run).toMatchObject({ status: "finished", outcome: "stopped" });
-  }
+});
+
+test("with stop ticked, Reject ends the run", async () => {
+  await atGate();
+  p.click("[data-action=reject]");
+  p.fill("[aria-label='Reason for rejecting the draft']", "enough");
+  p.click("[aria-label='and stop the run']");
+  p.click("[data-action=confirm-reject]");
+  await settled();
+  expect(state().reviews[latest().hash]!.rejected).toMatchObject({ reason: "enough", stop: true });
+  expect(state().run).toMatchObject({ status: "finished", outcome: "stopped" });
 });
 
 test("a narrative proposal can be accepted, edited then accepted, or discarded", async () => {
@@ -405,4 +407,82 @@ test("with no draft the lens says so and shows open proposals", async () => {
   expect(p.q(".proposal").textContent).toContain("Early words.");
   expect(p.all("[data-action=approve]").length).toBe(0);
   expect(p.all("[data-action=edit]").length).toBe(0);
+});
+
+/** Records every command the page sends, and answers as the server does. */
+function sent(): { command: string; args: Record<string, unknown> }[] {
+  const log: { command: string; args: Record<string, unknown> }[] = [];
+  const real = p.ui.api.command.bind(p.ui.api);
+  p.ui.api.command = (id, name, args) => { log.push({ command: name, args }); return real(id, name, args); };
+  return log;
+}
+
+test("the published files are the ones the recorded manifest lists, and no others", async () => {
+  await atGate();
+  const d = latest();
+  const s = p.s.app.hub.read("CASE-1");
+  const blob = s.blobs.put(JSON.stringify({ manifest: { files: [{ name: "product.md", sha256: "x", bytes: 1 }] }, files: { "product.md": "x" } }));
+  s.commit(() => [{ type: "product.published", actor: { kind: "human", id: "analyst" }, payload: { n: 1, draft_hash: d.hash, head_hash: "h", dir: "published/1", bundle: blob } }]);
+  await settled();
+  expect(p.all(".lens a[href*='/published/1/']").map((a) => a.textContent)).toEqual(["product.md", "manifest.json"]);
+});
+
+test("Approve carries the draft it shows, and a second press while the first is in flight sends nothing", async () => {
+  await atGate();
+  const log = sent();
+  const hash = latest().hash;
+  p.click("[data-action=approve]");
+  p.click("[data-action=approve]");
+  await settled();
+  expect(log.filter((c) => c.command === "approve")).toEqual([{ command: "approve", args: { draft_hash: hash } }]);
+  expect(state().run.outcome).toBe("published");
+});
+
+test("Approve is disabled and says Checking while the preview has not come, and says it could not check when it failed", async () => {
+  p = await page();
+  const id = await p.s.newCase();
+  await p.s.toPublishGate(id);
+  const real = p.ui.api.preview.bind(p.ui.api);
+  p.ui.api.preview = () => new Promise(() => {});
+  p.win.location.hash = `#/case/${id}`;
+  await p.settle();
+  p.press("r");
+  await settled();
+  expect(approve().disabled).toBe(true);
+  expect(approve().title).toBe("Checking…");
+  p.ui.api.preview = () => Promise.reject(new Error("down"));
+  await p.s.command("CASE-1", "keep", { card: "c1" });
+  await settled();
+  expect(approve().disabled).toBe(true);
+  expect(approve().title).toBe("The draft could not be checked");
+  // retried on focus
+  p.ui.api.preview = real;
+  p.q(".lens-narrative").dispatchEvent(new p.win.Event("focusin", { bubbles: true }) as unknown as Event);
+  await settled();
+  expect(approve().disabled).toBe(false);
+});
+
+test("a proposal's Accept is sent once while the answer is awaited, and is disabled with no draft to put it in", async () => {
+  await atGate();
+  const log = sent();
+  const a = propose("summary", "Proposed summary.");
+  await settled();
+  p.click(`[data-proposal=${a}] [data-action=accept-proposal]`);
+  p.click(`[data-proposal=${a}] [data-action=accept-proposal]`);
+  await settled();
+  expect(log.filter((c) => c.command === "accept_proposal").length).toBe(1);
+});
+
+test("Accept on a proposal is disabled, with the reason, while there is no draft", async () => {
+  p = await page();
+  const id = await p.s.newCase();
+  await p.s.toPlanGate(id);
+  p.win.location.hash = `#/case/${id}`;
+  await p.settle();
+  p.press("r");
+  const a = propose("summary", "Early words.");
+  await settled();
+  const b = p.q(`[data-proposal=${a}] [data-action=accept-proposal]`) as HTMLButtonElement;
+  expect(b.disabled).toBe(true);
+  expect(b.title).toBe("There is no draft yet to put this in");
 });

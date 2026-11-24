@@ -17,8 +17,6 @@ export interface NarrativeView extends View {
   cite(card: string, section?: string): void;
 }
 
-/** What a published bundle holds (src/pipeline/publish.ts): each file the person may open. */
-const BUNDLE_FILES = ["product.md", "product.json", "provenance.md", "provenance.json", "manifest.json"];
 const TITLE = new Map<string, string>(SECTION_TITLES.map((s) => [s.id, s.title]));
 const isText = (x: string): x is TextSection => (TEXT_SECTIONS as string[]).includes(x);
 const byId = (a: string, b: string): number => a.localeCompare(b, "en", { numeric: true });
@@ -66,6 +64,12 @@ export function makeNarrative(ui: Ui, open: Open): NarrativeView {
   let preview: { seq: number; value: Preview | "failed" } | null = null;
   let asked = -1;
   let pickerAt: HTMLElement | null = null;
+  /** Commands sent and not yet seen: the answer's seq once it has come (the press stays off until that entry is here), null while the answer is awaited. */
+  const inflight = new Map<string, number | null>();
+  let inflightVersion = 0;
+  /** The files each published bundle's recorded manifest lists, by product number. */
+  const bundles = new Map<number, string[] | "loading" | "failed">();
+  let bundlesVersion = 0;
 
   const draftBox = h("div", { class: "draft" });
   const headBox = h("div", { class: "head-box" });
@@ -101,6 +105,30 @@ export function makeNarrative(ui: Ui, open: Open): NarrativeView {
         if (typeof t.setSelectionRange === "function" && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) { try { t.setSelectionRange(t.value.length, t.value.length); } catch { /* not a text field */ } }
       }
     }
+  };
+
+  /** Sends a command once: until the server has answered and its entries are here, the same press does nothing. */
+  const guarded = (key: string, command: string, args: Record<string, unknown>, then?: () => void): void => {
+    if (inflight.has(key)) return;
+    inflight.set(key, null); inflightVersion++;
+    render();
+    void ui.send(command, args).then((r) => {
+      if (r === null) inflight.delete(key); else { inflight.set(key, r.seq); then?.(); }
+      inflightVersion++;
+      render();
+    });
+  };
+  const loadBundle = (n: number): void => {
+    if (bundles.has(n)) return;
+    bundles.set(n, "loading");
+    const entry = [...store.entries].reverse().find((e) => e.type === "product.published" && e.payload.n === n);
+    const done = (v: string[] | "failed"): void => { bundles.set(n, v); bundlesVersion++; render(); };
+    if (entry === undefined || entry.type !== "product.published") { done("failed"); return; }
+    ui.api.blobText(store.id, entry.payload.bundle.blob).then((text) => {
+      const files = (JSON.parse(text) as { manifest?: { files?: { name?: unknown }[] } }).manifest?.files;
+      if (!Array.isArray(files)) { done("failed"); return; }
+      done([...files.flatMap((f) => (typeof f.name === "string" && /^[a-z0-9.]+$/.test(f.name) ? [f.name] : [])), "manifest.json"]);
+    }).catch(() => done("failed"));
   };
 
   // ---------- text with citations as chips ----------
@@ -286,8 +314,11 @@ export function makeNarrative(ui: Ui, open: Open): NarrativeView {
     const published = pub !== null && pub.draft_hash === d.hash ? pub : null;
     const kids: Child[] = [`Draft ${d.n} · ${d.hash.slice(0, 8)} · by ${names(d.author)}`, " ", markingChip(ui, d.product.marking)];
     if (published !== null) {
+      loadBundle(published.n);
+      const files = bundles.get(published.n);
       kids.push(h("span", { class: "published" }, ` Published as product ${published.n}`), " ",
-        BUNDLE_FILES.map((f) => [fileLink(h, ui.api.bundlePath(store.id, published.n, f), f), " "]));
+        files === undefined || files === "loading" ? "(reading the file list…)" : files === "failed" ? "(the file list could not be read)"
+          : files.map((f) => [fileLink(h, ui.api.bundlePath(store.id, published.n, f), f), " "]));
     }
     return [h("p", { class: "draft-head" }, kids)];
   };
@@ -380,11 +411,15 @@ export function makeNarrative(ui: Ui, open: Open): NarrativeView {
     const why = blockers(s, d.hash);
     const pv = currentPreview();
     const reasons = pv !== null && pv !== "failed" && "reasons" in pv ? pv.reasons : [];
-    const can = publishable(s, d.hash) && reasons.length === 0;
+    // fail closed: nothing is approved before the server's own check of this exact ledger has come back clean
+    const checked = pv !== null && pv !== "failed";
+    const can = why.length === 0 && checked && reasons.length === 0 && !inflight.has("approve");
+    const why2 = why.length > 0 ? [...why, ...reasons.filter((r) => !why.includes(r))].join("; ")
+      : pv === null ? "Checking…" : pv === "failed" ? "The draft could not be checked" : reasons.length > 0 ? reasons.join("; ") : inflight.has("approve") ? "Publishing…" : `Publish draft ${d.n} as it is`;
     const approve = h("button", {
       type: "button", class: "primary", data: { action: "approve" }, disabled: ro() || !can,
-      title: ro() ? REPLAY_REFUSAL : can ? `Publish draft ${d.n} as it is` : [...why, ...reasons.filter((r) => !why.includes(r))].join("; "),
-      on: { click: () => { void ui.act("approve"); } },
+      title: ro() ? REPLAY_REFUSAL : why2,
+      on: { click: () => { guarded("approve", "approve", { draft_hash: d.hash }); } },
     }, `Approve: publish draft ${d.n}`);
     const reject = h("button", {
       type: "button", data: { action: "reject" }, disabled: ro(), title: ro() ? REPLAY_REFUSAL : "Reject this draft and say why",
@@ -423,13 +458,18 @@ export function makeNarrative(ui: Ui, open: Open): NarrativeView {
       if (!editing) {
         kids.push(h("div", { class: "text" }, paragraphs(p.text)));
         kids.push(h("div", { class: "actions" },
-          h("button", { type: "button", class: "primary", data: { action: "accept-proposal" }, disabled: ro(), title: ro() ? REPLAY_REFUSAL : "Put this in the draft as a new revision; it goes back through review", on: { click: () => { void ui.act("accept_proposal", { proposal: p.id }); } } }, "Accept"),
+          h("button", {
+            type: "button", class: "primary", data: { action: "accept-proposal" }, disabled: ro() || !canEdit(s) || inflight.has(`accept:${p.id}`),
+            title: ro() ? REPLAY_REFUSAL : latestDraft(s) === null ? "There is no draft yet to put this in" : !canEdit(s) ? "A draft can be edited while a run is in progress" : "Put this in the draft as a new revision; it goes back through review",
+            on: { click: () => { guarded(`accept:${p.id}`, "accept_proposal", { proposal: p.id }); } },
+          }, "Accept"),
           h("button", { type: "button", data: { action: "edit-proposal" }, disabled: ro(), on: { click: () => { proposalEdit.add(p.id); proposalText.set(p.id, p.text); sigs.delete(proposalsBox); render(); } } }, "Edit"),
           h("button", { type: "button", data: { action: "discard-proposal" }, disabled: ro(), on: { click: () => { void ui.act("reject_proposal", { proposal: p.id, reason: "discarded" }); } } }, "Discard")));
       } else {
         const accept = h("button", {
-          type: "button", class: "primary", data: { action: "accept-edited" }, disabled: ro() || (proposalText.get(p.id) ?? "").trim() === "",
-          on: { click: () => { const t = proposalText.get(p.id) ?? ""; if (t.trim() !== "") void ui.act("accept_proposal", { proposal: p.id, text: t }); } },
+          type: "button", class: "primary", data: { action: "accept-edited" }, disabled: ro() || !canEdit(s) || inflight.has(`accept:${p.id}`) || (proposalText.get(p.id) ?? "").trim() === "",
+          title: latestDraft(s) === null ? "There is no draft yet to put this in" : undefined,
+          on: { click: () => { const t = proposalText.get(p.id) ?? ""; if (t.trim() !== "") guarded(`accept:${p.id}`, "accept_proposal", { proposal: p.id, text: t }); } },
         }, "Accept as edited") as HTMLButtonElement;
         kids.push(h("textarea", {
           name: `Text proposed in ${p.id}`, value: proposalText.get(p.id) ?? p.text, disabled: ro(),
@@ -451,11 +491,12 @@ export function makeNarrative(ui: Ui, open: Open): NarrativeView {
       if (d !== null && d.author.kind !== "human") ui.toast("A new draft arrived; what you typed was not saved");
       edit = null; closePicker();
     }
+    for (const [k, seq] of [...inflight]) if (seq !== null && store.live.seq >= seq) { inflight.delete(k); inflightVersion++; }
     ensurePreview(s);
     const published = d !== null && s.published.length > 0 && s.published[s.published.length - 1]!.draft_hash === d.hash;
     draftBox.classList.toggle("proposed", !published);
     draftBox.hidden = d === null;
-    paint(headBox, [d, s.published, store.id], () => (d === null ? [] : headView(s, d)));
+    paint(headBox, [d, s.published, store.id, bundlesVersion], () => (d === null ? [] : headView(s, d)));
     paint(bodyBox, edit !== null ? [edit] : [d, s.cards], () => (d === null ? [h("p", { class: "empty" }, "No draft yet.")] : edit !== null ? [edit.el] : readBody(d)));
     if (d === null) {
       paint(toolsBox, [null], () => []); paint(gateBox, [null], () => []); paint(reviewBox, [null], () => []); paint(previewBox, [null], () => []);
@@ -463,7 +504,7 @@ export function makeNarrative(ui: Ui, open: Open): NarrativeView {
     } else {
       el.querySelector(".no-draft")?.remove();
       paint(toolsBox, [d.hash, edit, ro(), s.run.status, s.cards === s.cards], () => toolsView(s, d));
-      paint(gateBox, [d.hash, s.run, s.reviews, s.challenges, s.published, preview, store.live.seq, rejecting, ro()], () => gateView(s, d));
+      paint(gateBox, [d.hash, s.run, s.reviews, s.challenges, s.published, preview, store.live.seq, rejecting, ro(), inflightVersion], () => gateView(s, d));
       paint(reviewBox, [d.hash, s.reviews, s.challenges, s.run, s.published, s.cards, ro()], () => reviewView(s, d));
       paint(previewBox, [wantsPreview(s), preview, store.live.seq, tab], () => (wantsPreview(s) ? previewView() : []));
     }
@@ -476,10 +517,12 @@ export function makeNarrative(ui: Ui, open: Open): NarrativeView {
       const ta = copyBox.querySelector("textarea") as HTMLTextAreaElement | null;
       if (ta !== null) { ta.focus(); ta.select(); }
     }
-    paint(proposalsBox, [s.proposals, proposalEdit.size, ro(), s.cards], () => proposalsView(s));
+    paint(proposalsBox, [s.proposals, proposalEdit.size, ro(), s.cards, s.run.status, s.drafts.length, inflightVersion], () => proposalsView(s));
     edit?.sync();
   };
 
+  // a preview that could not be read is asked for again when the person comes back to the lens
+  el.addEventListener("focusin", () => { if (preview !== null && preview.value === "failed" && preview.seq === store.live.seq) { asked = -1; preview = null; render(); } });
   return {
     el,
     update: render,

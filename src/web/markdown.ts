@@ -20,6 +20,9 @@ export function citedIds(draft: Draft): string[] {
   return [...ids].sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
 }
 
+/** Text shown as plain text in Markdown: nothing in it can start a heading, a list, a link or emphasis; newlines are gone (the same as the bundle's product.md). */
+const plain = (text: string): string => text.replace(/\s+/g, " ").trim().replace(/([\\`*_{}[\]()#+\-.!|>~<&])/g, "\\$1");
+
 /** A fence longer than any run of backticks in `text`, so the text cannot close it. */
 function fenced(text: string): string {
   let longest = 0;
@@ -33,7 +36,7 @@ export function narrativeMarkdown(state: CaseState, ref: Reference): string {
   const d = latestDraft(state);
   if (d === null) return "";
   const p = d.product;
-  const out: string[] = [p.marking, "", `# ${state.meta?.title ?? "Case"}`, ""];
+  const out: string[] = [p.marking, "", `# ${plain(state.meta?.title ?? "Case")}`, ""];
   for (const { id, title } of SECTION_TITLES) {
     out.push(`## ${title}`, "");
     if (id !== "key_findings") { out.push(p[id], ""); continue; }
@@ -52,14 +55,14 @@ export function narrativeMarkdown(state: CaseState, ref: Reference): string {
     if (c === null) { out.push(`### ${id}`, "", "This card is not in the record.", ""); continue; }
     const q = c.query !== null && Object.hasOwn(state.queries, c.query) ? state.queries[c.query]! : null;
     const coverage = c.coverage === null ? "not recorded" : c.coverage.kind === "full" ? "full" : `partial: ${c.coverage.reason}${c.coverage.detail === undefined ? "" : ` — ${c.coverage.detail}`}`;
-    out.push(`### ${id}: ${c.title}`, "");
-    out.push(`- Source: ${ref.sources.find((s) => s.id === c.source)?.title ?? c.source ?? "none"}`);
+    out.push(`### ${id}: ${plain(c.title)}`, "");
+    out.push(`- Source: ${plain(ref.sources.find((s) => s.id === c.source)?.title ?? c.source ?? "none")}`);
     out.push("- Query:", "", q === null ? "none" : fenced(q.text), "");
-    out.push(`- Why: ${q?.why ?? c.why}`);
-    out.push(`- By: ${q === null ? c.made_by : `${q.by.kind} ${q.by.id}`}`);
+    out.push(`- Why: ${plain(q?.why ?? c.why)}`);
+    out.push(`- By: ${plain(q === null ? c.made_by : `${q.by.kind} ${q.by.id}`)}`);
     out.push(`- When (UTC): ${q?.issued_ts ?? c.created_ts}`);
     out.push(`- Marking: ${c.marking}`);
-    out.push(`- Coverage: ${coverage}`);
+    out.push(`- Coverage: ${plain(coverage)}`);
     out.push(`- Rows: ${c.row_count}`, "");
   }
   out.push(p.marking);

@@ -1,6 +1,7 @@
 import type { Json } from "../core/canonical";
 import { Refused } from "../core/refused";
 import { validate } from "../core/schema";
+import { latestDraft } from "../core/state";
 import type { Schema } from "../core/schema";
 import type { CaseSession } from "../core/session";
 import { MARKINGS } from "../core/types";
@@ -59,9 +60,11 @@ defineCommand("resume", {
 });
 defineCommand("stop", { args: obj({ reason: str }), then: then("stop"), perform: ({ engine, actor }, a) => { engine.stop(actor, text(a, "reason")); } });
 defineCommand("accept_plan", {
-  args: obj({ steps: { type: "array", items: str }, budgets: { type: "object", additionalProperties: { type: "number" } } }, []),
+  args: obj({ plan: str, steps: { type: "array", items: str }, budgets: { type: "object", additionalProperties: { type: "number" } } }, []),
   then: then("acceptPlan"),
-  perform: ({ engine, actor }, a) => {
+  perform: ({ engine, session, actor }, a) => {
+    // the plan the person saw: a plan proposed since is not the one they accepted
+    if (a.plan !== undefined && session.state.plan.current?.id !== a.plan) throw new SettingRefused("a newer plan arrived; review it before accepting");
     engine.acceptPlan({
       actor,
       ...(a.steps === undefined ? {} : { steps: a.steps as string[] }),
@@ -85,7 +88,14 @@ defineCommand("answer_challenge", {
     engine.answerChallenge(actor, id, text(a, "answer"), a.action as "revised" | "rebutted");
   },
 });
-defineCommand("approve", { args: NONE, then: then("approve"), perform: ({ engine, actor }) => { engine.approve({ actor }); } });
+defineCommand("approve", {
+  args: obj({ draft_hash: str }, []), then: then("approve"),
+  perform: ({ engine, session, actor }, a) => {
+    // the draft the person saw: a newer one is not what they approved
+    if (a.draft_hash !== undefined && latestDraft(session.state)?.hash !== a.draft_hash) throw new SettingRefused("a newer draft arrived; review it before approving");
+    engine.approve({ actor });
+  },
+});
 defineCommand("reject", {
   args: obj({ reason: str, stop: { type: "boolean" } }), then: then("reject"),
   perform: ({ engine, actor }, a) => { engine.reject({ actor, reason: text(a, "reason"), stop: a.stop as boolean }); },
