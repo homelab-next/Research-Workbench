@@ -10,7 +10,7 @@ import type { DraftWork } from "../draft";
 import type { ToolSpec } from "../providers/types";
 import { ANALYSIS_TOOLS } from "./analysis";
 import { CARD_TOOLS } from "./cards";
-import { params, TOOL_VIEW_CHARS, ToolError, VIEW_ROWS } from "./kit";
+import { params, scrub, TOOL_VIEW_CHARS, ToolError, VIEW_ROWS } from "./kit";
 import { RESEARCH_TOOLS } from "./research";
 import { SOURCE_TOOLS } from "./sources";
 
@@ -70,13 +70,13 @@ const firstLine = (err: unknown): string => (err instanceof Error ? err.message 
 /** Runs a parsed call. Never throws: an error, from the parse or from the tool, is a result the model can read. */
 export async function execTool(ctx: ToolContext, parsed: ParsedCall): Promise<ToolResult> {
   if (parsed.error !== null || parsed.tool === null) {
-    const error = parsed.error ?? `unknown tool: ${parsed.name}`;
+    const error = scrub(ctx.deps.registry, parsed.error ?? `unknown tool: ${parsed.name}`);
     return { ok: false, summary: error, view: { error }, marking: null };
   }
   try {
     return await parsed.tool.call(ctx, parsed.args as Record<string, Json>);
   } catch (err) {
-    const error = firstLine(err);
+    const error = scrub(ctx.deps.registry, firstLine(err));
     return { ok: false, summary: error, view: { error }, marking: null };
   }
 }

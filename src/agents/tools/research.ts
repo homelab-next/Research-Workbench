@@ -8,7 +8,7 @@ import { previewCell, runQuery } from "../../modules/runner";
 import type { RunQueryResult } from "../../modules/runner";
 import { cardBrief } from "./cards";
 import type { ToolContext, ToolDef, ToolResult } from "./index";
-import { json, params, str, ToolError, VIEW_ROWS } from "./kit";
+import { idArg, json, MAX_BOUND_KEYS, MAX_BOUND_VALUE, MAX_TEXT, params, scrub, str, ToolError, VIEW_ROWS } from "./kit";
 
 /** What a finished query says in plain words. A partial result is never called a negative. */
 function describe(r: Extract<RunQueryResult, { status: "done" }>, empty: string | null): string {
@@ -23,6 +23,7 @@ function describe(r: Extract<RunQueryResult, { status: "done" }>, empty: string 
 /** The one view `run_pivot`, `run_step` and `run_query` share. `marking` is the source's when anything ran. */
 export function resultOf(ctx: ToolContext, r: RunQueryResult, pivot: PivotManifest | null, sourceId: string): ToolResult {
   const source = ctx.deps.registry.source(sourceId);
+  const hide = (t: string): string => scrub(ctx.deps.registry, t);
   const none = { outcome: null, card: null, rows: null, coverage: null, empty: null, columns: null, data: null, found: null, proposal: null, estimate: null, reasons: null };
   switch (r.status) {
     case "done": {
@@ -37,7 +38,7 @@ export function resultOf(ctx: ToolContext, r: RunQueryResult, pivot: PivotManife
     }
     case "failed":
       return {
-        ok: false, summary: `the query failed: ${r.error}`, view: json({ ...none, status: r.status, reasons: [r.error] }),
+        ok: false, summary: hide(`the query failed: ${r.error}`), view: json({ ...none, status: r.status, reasons: [hide(r.error)] }),
         marking: source === null ? null : source.marking,
       };
     case "needs_budget":
@@ -46,7 +47,7 @@ export function resultOf(ctx: ToolContext, r: RunQueryResult, pivot: PivotManife
         view: json({ ...none, status: r.status, proposal: r.proposal, estimate: r.estimate }), marking: null,
       };
     case "refused":
-      return { ok: false, summary: r.reasons.join("; "), view: json({ ...none, status: r.status, reasons: r.reasons }), marking: null };
+      return { ok: false, summary: hide(r.reasons.join("; ")), view: json({ ...none, status: r.status, reasons: r.reasons.map(hide) }), marking: null };
   }
 }
 
@@ -84,11 +85,13 @@ async function runStepTool(ctx: ToolContext, args: Record<string, Json>): Promis
   const step = plan.steps.find((s) => s.id === id);
   if (step === undefined) throw new ToolError(`unknown step: ${id}`);
   if (!ctx.session.state.plan.accepted_steps.includes(id)) throw new ToolError(`step ${id} was not accepted`);
+  const had = Object.hasOwn(ctx.session.state.plan.steps, id) ? ctx.session.state.plan.steps[id]! : null;
+  if (had !== null && had.status !== "pending" && had.status !== "running") throw new ToolError("this step has already run");
   if (ctx.subgoal !== null && step.subgoal !== ctx.subgoal) throw new ToolError(`step ${id} belongs to sub-goal ${step.subgoal}, not ${ctx.subgoal}`);
   const value = step.from.value !== "" ? step.from.value : str(args.value);
   if (value === "") throw new ToolError("this step needs a value from an earlier step");
   const pivot = ctx.deps.registry.pivot(step.pivot);
-  const earlier = ctx.session.state.plan.steps[id]?.cards ?? [];
+  const earlier = had === null ? [] : had.cards;
 
   ctx.session.commit(() => [{ type: "step.started", actor: ctx.actor, ...ctx.link, payload: { step: id } }]);
   const finish = (outcome: StepOutcome, cards: string[], note: string): void => {
@@ -102,20 +105,30 @@ async function runStepTool(ctx: ToolContext, args: Record<string, Json>): Promis
       const paid = await ctx.onNeedsBudget(r.proposal, id);
       if (paid !== null) r = paid;
     }
-    const result = resultOf(ctx, r, pivot, step.source);
+    // the marking is that of the pivot that ran, which the runner took from the registry, not of the source the step names
+    const result = resultOf(ctx, r, pivot, pivot === null ? step.source : pivot.source);
     const outcome: StepOutcome = r.status === "done" ? r.outcome : r.status === "failed" ? "failed" : "blocked";
-    finish(outcome, r.status === "done" && r.card !== null ? [...earlier, r.card] : earlier, result.summary);
+    const cards = r.status === "done" && r.card !== null ? [...earlier, r.card] : earlier;
+    finish(outcome, cards, result.summary);
     return result;
   } catch (err) {
-    finish("failed", earlier, (err instanceof Error ? err.message : String(err)).split("\n")[0]!);
+    // the step is never left running: one failed finish, in its own try, whatever went wrong above
+    try {
+      finish("failed", earlier, scrub(ctx.deps.registry, (err instanceof Error ? err.message : String(err)).split("\n")[0]!));
+    } catch {
+      // the record refused it as well; the original error is what the model is told
+    }
     throw err;
   }
 }
 
 async function runQueryTool(ctx: ToolContext, args: Record<string, Json>): Promise<ToolResult> {
   const source = str(args.source);
+  const bound = (args.bound ?? {}) as Record<string, string | number | null>;
+  if (Object.keys(bound).length > MAX_BOUND_KEYS) throw new ToolError(`bound may have at most ${MAX_BOUND_KEYS} values`);
+  if (Object.values(bound).some((v) => typeof v === "string" && [...v].length > MAX_BOUND_VALUE)) throw new ToolError(`a bound value may be at most ${MAX_BOUND_VALUE} characters`);
   const r = await runQuery(ctx.session, ctx.deps, {
-    source, text: str(args.text), bound: (args.bound ?? {}) as Record<string, string | number | null>, window: ctx.window, why: str(args.why),
+    source, text: str(args.text), bound, window: ctx.window, why: str(args.why),
     actor: ctx.actor, pivot: null, subgoal: ctx.subgoal, ...ctx.link,
   });
   return resultOf(ctx, r, null, source);
@@ -124,16 +137,16 @@ async function runQueryTool(ctx: ToolContext, args: Record<string, Json>): Promi
 export const RESEARCH_TOOLS: ToolDef[] = [
   {
     name: "run_step", description: "Run one accepted step of the plan. A later hop needs the value an earlier step found.",
-    parameters: params({ step: { type: "string", minLength: 1 }, value: { type: "string", minLength: 1 } }, ["step"]), call: runStepTool,
+    parameters: params({ step: idArg, value: idArg }, ["step"]), call: runStepTool,
   },
   {
     name: "run_pivot", description: "Run one free pivot on a value, if it leads to your sub-goal. Costly pivots must be plan steps.",
-    parameters: params({ pivot: { type: "string", minLength: 1 }, value: { type: "string", minLength: 1 } }, ["pivot", "value"]), call: runPivotTool,
+    parameters: params({ pivot: idArg, value: idArg }, ["pivot", "value"]), call: runPivotTool,
   },
   {
     name: "run_query", description: "Run a query you wrote, on a source that allows it. The bound values are strings, numbers or null.",
     parameters: params({
-      source: { type: "string", minLength: 1 }, text: { type: "string", minLength: 1 },
+      source: idArg, text: { type: "string", minLength: 1, maxLength: MAX_TEXT },
       bound: { type: "object", additionalProperties: { type: ["string", "number", "null"] } },
     }, ["source", "text"]),
     call: runQueryTool,

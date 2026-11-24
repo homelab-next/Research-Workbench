@@ -31,8 +31,7 @@ test("no file under src/agents/tools imports runProposal or names a budget", () 
   for (const f of files(join(SRC, "agents", "tools"))) {
     const text = readFileSync(f, "utf8");
     for (const spec of imports(text)) expect(`${f}: ${spec}`).not.toMatch(/modules\/proposals/);
-    expect(`${f}`).not.toMatch(/runProposal/);
-    expect(text).not.toContain("runProposal");
+    expect(`${f}: ${text.includes("runProposal")}`).toBe(`${f}: false`);
     expect(`${f}: ${text.match(/\bbudget\s*:/)?.[0] ?? ""}`).toBe(`${f}: `);
   }
 });

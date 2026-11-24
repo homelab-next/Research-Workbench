@@ -1,7 +1,7 @@
 import { pivotWeight } from "../../modules/manifests";
 import type { Json } from "../../core/canonical";
 import type { ToolContext, ToolDef, ToolResult } from "./index";
-import { json, params, str, ToolError } from "./kit";
+import { idArg, json, MAX_HAVE, MAX_ID, params, str, ToolError } from "./kit";
 
 const ok = (summary: string, view: Json): ToolResult => ({ ok: true, summary, view, marking: null });
 
@@ -39,13 +39,13 @@ export const SOURCE_TOOLS: ToolDef[] = [
   { name: "list_sources", description: "List the sources you may use, with their marking, whether they are free and how reliable they are.", parameters: params(), call: listSources },
   {
     name: "describe_source", description: "Describe one source: its tables, columns, limits, quality notes and the pivots that use it.",
-    parameters: params({ source: { type: "string", minLength: 1 } }, ["source"]), call: describeSource,
+    parameters: params({ source: idArg }, ["source"]), call: describeSource,
   },
   {
     name: "find_routes", description: "Find chains of pivots from observable types you have to a type you want. Contacts no source.",
     parameters: params({
-      have: { type: "array", minItems: 1, items: { type: "object", additionalProperties: false, required: ["type", "value"], properties: { type: { type: "string", minLength: 1 }, value: { type: "string" } } } },
-      want: { type: "string", minLength: 1 },
+      have: { type: "array", minItems: 1, maxItems: MAX_HAVE, items: { type: "object", additionalProperties: false, required: ["type", "value"], properties: { type: idArg, value: { type: "string", maxLength: MAX_ID } } } },
+      want: idArg,
     }, ["have", "want"]),
     call: findRoutes,
   },

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { Json } from "../../src/core/canonical";
+import { startStandin } from "../helpers/http-standin";
 import { runQuery } from "../../src/modules/runner";
 import { fixture, person, START, WINDOW } from "../helpers/tools-fixture";
 import type { Fixture } from "../helpers/tools-fixture";
@@ -85,4 +86,32 @@ test("verify_card on an unknown card is an error result", async () => {
   expect(r).toMatchObject({ ok: false, summary: "unknown card: c99" });
   expect((await f.call("read_card", { why: "w", card: "c99" })).summary).toBe("unknown card: c99");
   expect(f.s.head().seq).toBe(head);
+});
+
+test("read_card strips the whole location of an http source, base path included", async () => {
+  const standin = startStandin({ [`GET /base/path/v1/reputation/${START}`]: () => Response.json({ results: [{ address: START, verdict: "suspicious", first_seen: "2026-11-01" }] }) });
+  try {
+    const src = f.sample.registry.source("reputation")!;
+    Object.assign(src, { location: `${standin.url}/base/path/` });
+    const pivot = f.sample.registry.pivot("address_to_verdict")!;
+    const done = await runQuery(f.s, f.sample.deps, { source: "reputation", text: pivot.query, bound: { value: START }, window: WINDOW, why: "w", actor: person, pivot, budget: 10 });
+    expect(done.status).toBe("done");
+    expect(JSON.stringify(f.s.entries().find((e) => e.type === "query.issued")!.payload)).toContain("/base/path");
+    const r = await f.call("read_card", { why: "w", card: "c1" });
+    const text = JSON.stringify(r.view);
+    expect(text).not.toContain("/base/path");
+    expect(text).not.toContain("127.0.0.1");
+    expect((view(r).provenance as { text: string }).text).toBe(`GET /v1/reputation/${START}`);
+  } finally {
+    standin.stop();
+  }
+});
+
+test("verify_card scrubs a refusal's text", async () => {
+  await f.call("run_pivot", { pivot: "address_to_domains", value: START, why: "w" });
+  const { rmSync } = await import("node:fs");
+  rmSync(`${f.sample.root}/data/dns.jsonl`);
+  const r = await f.call("verify_card", { why: "w", card: "c1" });
+  expect(JSON.stringify(r)).not.toContain(f.sample.root);
+  expect(JSON.stringify(r)).toContain("[hidden]");
 });

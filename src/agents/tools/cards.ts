@@ -5,7 +5,7 @@ import type { Payloads } from "../../core/types";
 import { revalidateCard } from "../../modules/revalidate";
 import { previewCell } from "../../modules/runner";
 import type { ToolContext, ToolDef, ToolResult } from "./index";
-import { json, params, str, ToolError, VIEW_ROWS } from "./kit";
+import { idArg, json, params, scrub, str, ToolError, VIEW_ROWS } from "./kit";
 
 /** A card as a list entry: what a model needs to choose it, with no rows. */
 export function cardBrief(c: CardState): Json {
@@ -23,9 +23,12 @@ async function listCards(ctx: ToolContext, args: Record<string, Json>): Promise<
   return { ok: true, summary: `${cards.length} cards`, view: json({ cards: cards.map(cardBrief) }), marking: cards.length === 0 ? null : strictest(...cards.map((c) => c.marking)) };
 }
 
-/** `GET http://host:port/path?q body` shown as `GET /path?q body`. */
-function withoutOrigin(text: string): string {
-  return text.replace(/^([A-Z]+ )[a-z][a-z0-9+.-]*:\/\/[^/\s?#]*/i, "$1");
+/** `GET <location>/path?q body` shown as `GET /path?q body`: the source's whole location comes off, base path included, and any origin left. */
+function withoutLocation(text: string, location: string | null): string {
+  let out = text;
+  const base = location === null ? "" : location.replace(/\/+$/, "");
+  if (base !== "") out = out.split(base).join("");
+  return out.replace(/^([A-Z]+ )[a-z][a-z0-9+.-]*:\/\/[^/\s?#]*/i, "$1");
 }
 
 async function readCard(ctx: ToolContext, args: Record<string, Json>): Promise<ToolResult> {
@@ -41,7 +44,7 @@ async function readCard(ctx: ToolContext, args: Record<string, Json>): Promise<T
     if (entry !== undefined && entry.type === "query.issued") {
       const p = entry.payload as Payloads["query.issued"];
       provenance = json({
-        query: p.query, source: p.source, source_hash: p.source_hash, text: p.connector === "http" ? withoutOrigin(p.text) : p.text, bound: p.bound,
+        query: p.query, source: p.source, source_hash: p.source_hash, text: p.connector === "http" ? withoutLocation(p.text, ctx.deps.registry.source(p.source)?.location ?? null) : scrub(ctx.deps.registry, p.text), bound: p.bound,
         window: p.window, why: p.why, by: entry.actor.id, issued: entry.ts, result_sha256: q.result === null ? null : q.result.blob, rows_hash: q.rows_hash,
       });
     }
@@ -58,17 +61,18 @@ async function readCard(ctx: ToolContext, args: Record<string, Json>): Promise<T
 async function verifyCard(ctx: ToolContext, args: Record<string, Json>): Promise<ToolResult> {
   const id = str(args.card);
   const r = await revalidateCard(ctx.session, ctx.deps, { card: id, actor: ctx.actor, why: str(args.why) });
-  if (r.outcome === "refused") throw new ToolError(r.reasons.join("; "));
-  const c = ctx.session.state.cards[id];
+  if (r.outcome === "refused") throw new ToolError(scrub(ctx.deps.registry, r.reasons.join("; ")));
+  const c = Object.hasOwn(ctx.session.state.cards, id) ? ctx.session.state.cards[id] : undefined;
+  const detail = scrub(ctx.deps.registry, r.detail);
   return {
-    ok: true, summary: `${r.outcome}: ${r.detail}`, view: json({ outcome: r.outcome, detail: r.detail, rerun: r.rerun, proposal: r.proposal }),
+    ok: true, summary: `${r.outcome}: ${detail}`, view: json({ outcome: r.outcome, detail, rerun: r.rerun, proposal: r.proposal }),
     marking: c === undefined ? null : c.marking,
   };
 }
 
-const card = { type: "string", minLength: 1 } as const;
+const card = idArg;
 export const CARD_TOOLS: ToolDef[] = [
-  { name: "list_cards", description: "List the cards in the case (not discarded ones), optionally for one sub-goal.", parameters: params({ subgoal: { type: "string", minLength: 1 } }), call: listCards },
+  { name: "list_cards", description: "List the cards in the case (not discarded ones), optionally for one sub-goal.", parameters: params({ subgoal: idArg }), call: listCards },
   { name: "read_card", description: "Read one card: its rows, coverage, quality notes and the exact query behind it.", parameters: params({ card }, ["card"]), call: readCard },
   { name: "verify_card", description: "Re-run the query behind a card and say whether the result matches.", parameters: params({ card }, ["card"]), call: verifyCard },
 ];
