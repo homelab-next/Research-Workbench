@@ -1,0 +1,14 @@
+kind: stage
+id: checks
+title: Checks
+order: 5
+phase: processing
+runs: script
+role: checks
+gate: null
+reviews: true
+tools: []
+schema: null
+model: null
+on_pass: evaluate
+on_fail: assemble

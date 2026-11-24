@@ -1,0 +1,14 @@
+kind: stage
+id: frame
+title: Frame
+order: 1
+phase: direction
+runs: agent
+role: frame
+gate: null
+reviews: false
+tools: [list_sources, describe_source]
+schema: frame-output
+model: { provider: scripted, model: sample-run, effort: null }
+on_pass: plan
+on_fail: null

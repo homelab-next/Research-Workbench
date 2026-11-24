@@ -1,0 +1,14 @@
+kind: stage
+id: challenge
+title: Challenge
+order: 7
+phase: analysis
+runs: agent
+role: challenge
+gate: null
+reviews: true
+tools: [list_cards, read_card, verify_card, raise_challenge]
+schema: challenge-output
+model: { provider: scripted, model: sample-run, effort: null }
+on_pass: publish
+on_fail: assemble

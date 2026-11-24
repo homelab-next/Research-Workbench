@@ -1,0 +1,14 @@
+kind: stage
+id: research
+title: Research
+order: 3
+phase: collection
+runs: agent
+role: research
+gate: null
+reviews: false
+tools: [find_routes, run_step, run_pivot, run_query, list_cards, read_card]
+schema: research-output
+model: { provider: scripted, model: sample-run, effort: null }
+on_pass: assemble
+on_fail: plan

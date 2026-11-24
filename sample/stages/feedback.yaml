@@ -1,0 +1,14 @@
+kind: stage
+id: feedback
+title: Feedback
+order: 9
+phase: feedback
+runs: human
+role: feedback
+gate: null
+reviews: false
+tools: []
+schema: null
+model: null
+on_pass: null
+on_fail: null

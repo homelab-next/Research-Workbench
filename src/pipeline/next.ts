@@ -1,0 +1,89 @@
+import type { CaseState, StageState } from "../core/state";
+import { latestDraft } from "../core/state";
+import type { Pipeline, StageManifest } from "./manifests";
+
+export const SEND_BACK_CAP = 3;
+
+export type Step =
+  | { kind: "idle" }
+  | { kind: "start"; stage: string; attempt: number; sent_back: { from: string; to: string; reason: string; count: number } | null }
+  | { kind: "exec"; stage: string }
+  | { kind: "gate"; gate: "plan" | "publish" }
+  | { kind: "pause"; reason: string }
+  | { kind: "finish"; outcome: "published" | "stopped" };
+
+const IDLE: Step = { kind: "idle" };
+
+/** The first review stage, in pipeline order, that has not passed the latest draft; null when all have, or there is no draft. */
+export function firstUnpassedReview(state: Readonly<CaseState>, pipeline: Pipeline): string | null {
+  const draft = latestDraft(state as CaseState);
+  if (draft === null) return null;
+  const passed = Object.hasOwn(state.reviews, draft.hash) ? state.reviews[draft.hash]!.passed_stages : [];
+  return pipeline.stages.find((s) => s.reviews && !passed.includes(s.id))?.id ?? null;
+}
+
+/**
+ * What the engine does next, from the state alone, so a restart resumes exactly where the ledger says it was.
+ * Pure: it reads, never writes, and the same state gives the same step.
+ */
+export function nextStep(state: Readonly<CaseState>, pipeline: Pipeline, opts: { allow_capped?: boolean } = {}): Step {
+  const { run } = state;
+  if (run.status !== "running") return IDLE;
+  const manifest = (id: string): StageManifest | null => pipeline.stages.find((s) => s.id === id) ?? null;
+  const stateOf = (id: string): StageState | null => run.stages.find((s) => s.id === id) ?? null;
+  const attemptsOf = (id: string): number => stateOf(id)?.attempts ?? 0;
+  const begin = (stage: string, sent_back: { from: string; to: string; reason: string; count: number } | null = null): Step =>
+    ({ kind: "start", stage, attempt: attemptsOf(stage) + 1, sent_back });
+
+  if (run.current === null) {
+    const first = run.stages[0];
+    return first === undefined ? IDLE : { kind: "start", stage: first.id, attempt: 1, sent_back: null };
+  }
+  const st = stateOf(run.current);
+  const m = manifest(run.current);
+  if (st === null || m === null) return { kind: "pause", reason: `the current stage ${run.current} is not in the pipeline` };
+  const title = (id: string): string => stateOf(id)?.title ?? id;
+
+  switch (st.status) {
+    case "running": return { kind: "exec", stage: st.id };
+    case "idle":
+    case "blocked":
+    case "declined": return begin(st.id);
+    case "waiting": return IDLE;
+    case "failed": {
+      const reason = st.last_reason ?? "";
+      if (m.on_fail === null) return { kind: "pause", reason: `${st.title} failed: ${reason}` };
+      const n = Object.hasOwn(run.sendbacks, `${st.id}>${m.on_fail}`) ? run.sendbacks[`${st.id}>${m.on_fail}`]! : 0;
+      if (n >= SEND_BACK_CAP && opts.allow_capped !== true) {
+        return { kind: "pause", reason: `${st.title} has sent work back to ${title(m.on_fail)} ${SEND_BACK_CAP} times. Last reason: ${reason}` };
+      }
+      return begin(m.on_fail, { from: st.id, to: m.on_fail, reason, count: n + 1 });
+    }
+    case "passed": break;
+  }
+
+  if (m.gate === "plan") {
+    switch (state.plan.status) {
+      case "proposed": return { kind: "gate", gate: "plan" };
+      case "replanning": return begin(st.id);
+      case "denied": return IDLE;
+      case "none": return { kind: "pause", reason: "the plan stage finished without a plan" };
+      case "accepted": break;
+    }
+  }
+  const draft = latestDraft(state as CaseState);
+  if (m.gate === "publish" && !(draft !== null && state.published.some((p) => p.draft_hash === draft.hash))) {
+    if (draft === null) return { kind: "pause", reason: "there is no draft to review" };
+    const unpassed = firstUnpassedReview(state, pipeline);
+    return unpassed === null ? { kind: "gate", gate: "publish" } : begin(unpassed);
+  }
+  if (m.on_pass === null) return { kind: "finish", outcome: state.published.length > 0 ? "published" : "stopped" };
+  const target = manifest(m.on_pass);
+  if (target === null) return { kind: "pause", reason: `the stage after ${st.title} (${m.on_pass}) is not in the pipeline` };
+  if (target.reviews || target.gate === "publish") {
+    if (draft === null) return { kind: "pause", reason: "there is no draft to review" };
+    const unpassed = firstUnpassedReview(state, pipeline);
+    if (unpassed !== null) return begin(unpassed);
+  }
+  return begin(target.id);
+}

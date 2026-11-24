@@ -1,0 +1,14 @@
+kind: stage
+id: evaluate
+title: Evaluate
+order: 6
+phase: analysis
+runs: agent
+role: evaluate
+gate: null
+reviews: true
+tools: [list_cards, read_card, verify_card]
+schema: evaluate-output
+model: { provider: scripted, model: sample-run, effort: null }
+on_pass: challenge
+on_fail: assemble

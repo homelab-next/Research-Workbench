@@ -1,0 +1,14 @@
+kind: stage
+id: publish
+title: Publish
+order: 8
+phase: dissemination
+runs: agent
+role: publish
+gate: publish
+reviews: false
+tools: []
+schema: publish-output
+model: { provider: scripted, model: sample-run, effort: null }
+on_pass: feedback
+on_fail: assemble

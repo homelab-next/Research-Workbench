@@ -1,0 +1,14 @@
+kind: stage
+id: plan
+title: Plan
+order: 2
+phase: direction
+runs: agent
+role: plan
+gate: plan
+reviews: false
+tools: [list_sources, describe_source, find_routes]
+schema: plan-output
+model: { provider: scripted, model: sample-run, effort: null }
+on_pass: research
+on_fail: null

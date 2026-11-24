@@ -36,7 +36,7 @@ export interface RunQueryInput {
    * Set by runProposal: the proposal this query carries out. Honoured only for a person. The proposal.accepted entry is
    * written when the result query is about to be issued (so a refusal or needs_budget leaves the proposal open) and is that query's cause.
    */
-  accept?: { proposal: string } | null;
+  accept?: { proposal: string; cause?: number } | null;
 }
 
 export type RunQueryResult =
@@ -217,10 +217,11 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
   let resultCause = cause ?? input.cause ?? null;
   if (input.actor.kind === "human" && input.accept != null && budget !== null) {
     const id = input.accept.proposal;
+    const acceptCause = input.accept.cause;
     const p = Object.hasOwn(session.state.proposals, id) ? session.state.proposals[id]! : null;
     if (p === null || p.kind !== "costly_query" || p.status !== "open") return { status: "refused", reasons: [`proposal ${id} is not open`] };
     resultCause = session.commit(() => [{
-      type: "proposal.accepted", actor: input.actor, cause: p.seq, ...link, payload: { proposal: id, budget },
+      type: "proposal.accepted", actor: input.actor, cause: acceptCause ?? p.seq, ...link, payload: { proposal: id, budget },
     }])[0]!.seq;
   }
   const ran = await issueAndRun(session, deps, {

@@ -1,0 +1,428 @@
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { Json } from "../../src/core/canonical";
+import { canonical } from "../../src/core/canonical";
+import { sha256Hex } from "../../src/core/hash";
+import type { CaseSession } from "../../src/core/session";
+import { fold, latestDraft } from "../../src/core/state";
+import type { CaseState } from "../../src/core/state";
+import type { Actor, Draft, Entry, Product } from "../../src/core/types";
+import { Workbench } from "../../src/core/workbench";
+import { loadProfile } from "../../src/agents/context";
+import { Providers } from "../../src/agents/providers";
+import { execTool, parseCall, TOOL_NAMES } from "../../src/agents/tools";
+import type { ToolContext } from "../../src/agents/tools";
+import { loadConfig } from "../../src/modules/config";
+import { DEFAULT_LIMITS } from "../../src/modules/seeker";
+import { Engine, RunRefused } from "../../src/pipeline/engine";
+import type { EngineDeps, StageEnd, StageRunner } from "../../src/pipeline/engine";
+import { loadPipeline } from "../../src/pipeline/manifests";
+import type { Role } from "../../src/pipeline/manifests";
+import { fixture, PLAN, WINDOW, START } from "../helpers/tools-fixture";
+import type { Fixture } from "../helpers/tools-fixture";
+import { sampleRoot } from "../helpers/sample-root";
+
+const person: Actor = { kind: "human", id: "analyst" };
+const planner: Actor = { kind: "agent", id: "planner", stage: "plan", profile: "investigation", model: "m", effort: null, where: "machine" };
+const PASS: Extract<StageEnd, { kind: "finished" }> = { kind: "finished", outcome: "pass", draft_hash: null, output: null, reason: null };
+
+let f: Fixture;
+let dir: string;
+let extra: (() => void)[] = [];
+beforeEach(() => { f = fixture(false); dir = mkdtempSync(join(tmpdir(), "engine-")); });
+afterEach(() => {
+  expect(f.s.state.skipped).toEqual([]);
+  for (const x of extra.reverse()) x();
+  extra = [];
+  f.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+function depsOf(sample: Fixture["sample"]): EngineDeps {
+  const registry = sample.registry;
+  const { pipeline, problems } = loadPipeline(registry);
+  if (pipeline === null) throw new Error(problems.join("; "));
+  return {
+    config: loadConfig({ env: {}, home: dir, repoRoot: dir }), registry, runner: sample.deps, seeker: sample.seeker,
+    providers: new Providers([]), pipeline, profile: loadProfile(registry, "investigation"),
+  };
+}
+
+const product = (n: number): Product => ({
+  objective: "o", question: "q", marking: "TLP:GREEN", summary: `s${n}`, key_findings: [], gaps_and_limits: "", alternatives: "", assessment: "", sources: [], assumptions: [], change: "",
+});
+const makeDraft = (n: number): Draft => {
+  const p = product(n);
+  return { n, hash: sha256Hex(canonical(p as unknown as Json)), author: planner, product: p, reason: "r" };
+};
+
+interface Rig { engine: Engine; s: CaseSession; log: string[]; runners: Partial<Record<Role, StageRunner>> }
+
+/** Stub runners for every role: each passes, the plan stub proposes a plan, the assemble stub revises the draft, review stubs pass the latest draft. */
+function rig(over: Partial<Record<Role, StageRunner>> = {}, s: CaseSession = f.s, deps: EngineDeps = depsOf(f.sample)): Rig {
+  const log: string[] = [];
+  const draftPass = (): StageEnd => ({ ...PASS, draft_hash: latestDraft(s.state)?.hash ?? null });
+  const runners: Partial<Record<Role, StageRunner>> = {
+    frame: async () => { log.push("frame"); return PASS; },
+    plan: async () => {
+      log.push("plan");
+      s.commit((_st, ids) => [{ type: "plan.proposed", actor: planner, payload: { plan: PLAN(ids.next("plan")) } }]);
+      return PASS;
+    },
+    research: async () => { log.push("research"); return PASS; },
+    assemble: async () => {
+      log.push("assemble");
+      const n = s.state.drafts.length + 1;
+      s.commit(() => [{ type: "draft.revised", actor: planner, payload: { draft: makeDraft(n) } }]);
+      return PASS;
+    },
+    checks: async () => { log.push("checks"); return draftPass(); },
+    evaluate: async () => { log.push("evaluate"); return draftPass(); },
+    challenge: async () => { log.push("challenge"); return draftPass(); },
+    publish: async () => { log.push("publish"); return draftPass(); },
+    feedback: async () => { log.push("feedback"); return PASS; },
+    ...over,
+  };
+  return { engine: new Engine(s, deps, { runners }), s, log, runners };
+}
+
+const acceptPlan = (s: CaseSession, budgets: Record<string, number> = {}) => {
+  s.commit(() => [
+    { type: "plan.accepted", actor: person, payload: { plan: s.state.plan.current!.id, steps: ["s1", "s2", "s3", "s4"], budgets } },
+    { type: "gate.passed", actor: person, payload: { gate: "plan" } },
+  ]);
+};
+const publish = (s: CaseSession) => {
+  const draft = latestDraft(s.state)!;
+  s.commit(() => [
+    { type: "product.published", actor: person, payload: { n: 1, draft_hash: draft.hash, head_hash: "x", dir: "out", bundle: s.blobs.put("{}") } },
+    { type: "gate.passed", actor: person, payload: { gate: "publish" } },
+  ]);
+};
+const types = (s: CaseSession): string[] => s.entries().map((e) => e.type);
+
+test("a run goes stage to stage on its own and stops at the plan gate", async () => {
+  const r = rig();
+  r.engine.start(person);
+  const sum = await r.engine.advance();
+  expect(r.log).toEqual(["frame", "plan"]);
+  expect(sum).toEqual({ status: "waiting", waiting: "plan", current: "plan", pause_reason: null, outcome: null });
+  acceptPlan(f.s);
+  const next = await r.engine.advance();
+  expect(r.log).toEqual(["frame", "plan", "research", "assemble", "checks", "evaluate", "challenge", "publish"]);
+  expect(next.waiting).toBe("publish");
+  publish(f.s);
+  const done = await r.engine.advance();
+  expect(r.log.at(-1)).toBe("feedback");
+  expect(done).toEqual({ status: "finished", waiting: null, current: "feedback", pause_reason: null, outcome: "published" });
+  expect(r.engine.summary()).toEqual(done);
+});
+
+test("every transition is an entry", async () => {
+  const r = rig();
+  r.engine.start(person);
+  await r.engine.advance();
+  const flow = f.s.entries().flatMap((e): string[] => {
+    const pl = e.payload as { stage?: string; phase?: string };
+    if (e.type === "stage.started" || e.type === "stage.finished") return [`${e.type}:${pl.stage}`];
+    if (e.type === "case.phase_changed") return [`${e.type}:${pl.phase}`];
+    return /^(gate|run)\./.test(e.type) ? [e.type] : [];
+  });
+  expect(flow).toEqual([
+    "run.started", "case.phase_changed:direction", "stage.started:frame", "stage.finished:frame", "stage.started:plan", "stage.finished:plan", "gate.waiting",
+  ]);
+  const first = f.s.entries().find((e) => e.type === "run.started")!;
+  expect(first.actor).toEqual(person);
+  expect(first.payload).toMatchObject({ pipeline: "default", pipeline_hash: depsOf(f.sample).pipeline.hash });
+  const started = f.s.entries().find((e) => e.type === "stage.started")!;
+  expect(started.actor).toEqual({ kind: "system", id: "engine" });
+  expect(f.s.state.phase).toBe("direction");
+  acceptPlan(f.s);
+  await r.engine.advance();
+  expect(f.s.entries().filter((e) => e.type === "case.phase_changed").map((e) => e.payload)).toEqual([
+    { phase: "direction" }, { phase: "collection" }, { phase: "analysis" }, { phase: "processing" }, { phase: "analysis" }, { phase: "dissemination" },
+  ]);
+});
+
+test("a send-back and the restart of its target are one commit", async () => {
+  let fails = 1;
+  const r = rig({ checks: async () => { r.log.push("checks"); return fails-- > 0 ? { kind: "finished", outcome: "fail", draft_hash: latestDraft(f.s.state)!.hash, output: null, reason: "bad confidence" } : { ...PASS, draft_hash: latestDraft(f.s.state)!.hash }; } });
+  const batches: string[][] = [];
+  const commit = f.s.commit.bind(f.s);
+  f.s.commit = (build) => { const e = commit(build); batches.push(e.map((x) => x.type)); return e; };
+  r.engine.start(person);
+  await r.engine.advance();
+  acceptPlan(f.s);
+  await r.engine.advance();
+  expect(batches.filter((b) => b.includes("stage.sent_back"))).toEqual([["stage.sent_back", "case.phase_changed", "stage.started"]]);
+  const back = f.s.entries().find((e) => e.type === "stage.sent_back")!;
+  expect(back.payload).toEqual({ from: "checks", to: "assemble", reason: "bad confidence", count: 1 });
+  expect(f.s.state.run.sendbacks).toEqual({ "checks>assemble": 1 });
+  expect(r.log.filter((l) => l === "assemble").length).toBe(2);
+});
+
+const failingChecks = (r: () => Rig): StageRunner => async () => {
+  r().log.push("checks");
+  return { kind: "finished", outcome: "fail", draft_hash: latestDraft(f.s.state)!.hash, output: null, reason: "confidence-and-likelihood failed" };
+};
+
+test("three send-backs along one edge, then the run pauses and says why", async () => {
+  const r: Rig = rig({ checks: failingChecks(() => r) });
+  r.engine.start(person);
+  await r.engine.advance();
+  acceptPlan(f.s);
+  const sum = await r.engine.advance();
+  expect(sum.status).toBe("paused");
+  expect(sum.pause_reason).toStartWith("Checks has sent work back to Assemble 3 times.");
+  expect(sum.pause_reason).toContain("confidence-and-likelihood failed");
+  expect(f.s.state.run.sendbacks).toEqual({ "checks>assemble": 3 });
+  expect(r.log.filter((l) => l === "checks").length).toBe(4);
+});
+
+test("resuming after the cap allows one more send-back", async () => {
+  const r: Rig = rig({ checks: failingChecks(() => r) });
+  r.engine.start(person);
+  await r.engine.advance();
+  acceptPlan(f.s);
+  await r.engine.advance();
+  const sum = await r.engine.resume(person);
+  expect(f.s.state.run.sendbacks).toEqual({ "checks>assemble": 4 });
+  expect(sum.status).toBe("paused");
+  expect(sum.pause_reason).toStartWith("Checks has sent work back to Assemble 3 times.");
+  expect(r.log.filter((l) => l === "checks").length).toBe(5);
+});
+
+test("pause stops the next stage from starting, and resume continues", async () => {
+  const r = rig();
+  r.engine.start(person);
+  await r.engine.advance();
+  const off = f.s.subscribe((e) => { if (e.type === "stage.started" && e.payload.stage === "research") { off(); r.engine.pause(person); } });
+  acceptPlan(f.s);
+  const sum = await r.engine.advance();
+  expect(sum.status).toBe("paused");
+  expect(sum.pause_reason).toBe("paused by analyst");
+  expect(r.log).toEqual(["frame", "plan"]);
+  expect(f.s.state.run.stages.find((s) => s.id === "research")!.status).toBe("running");
+  expect((await r.engine.advance()).status).toBe("paused");
+  const after = await r.engine.resume(person);
+  expect(r.log).toEqual(["frame", "plan", "research", "assemble", "checks", "evaluate", "challenge", "publish"]);
+  expect(after.waiting).toBe("publish");
+});
+
+test("a stalled stage pauses the run and runs again on resume", async () => {
+  let calls = 0;
+  const r = rig({ frame: async () => { r.log.push("frame"); return calls++ === 0 ? { kind: "stalled", reason: "Frame could not reach the model." } : PASS; } });
+  r.engine.start(person);
+  const sum = await r.engine.advance();
+  expect(sum).toMatchObject({ status: "paused", pause_reason: "Frame could not reach the model.", current: "frame" });
+  expect(f.s.state.run.stages[0]!.status).toBe("running");
+  const again = await r.engine.resume(person);
+  expect(r.log).toEqual(["frame", "frame", "plan"]);
+  expect(again.waiting).toBe("plan");
+  expect(f.s.state.run.stages[0]!.attempts).toBe(1);
+});
+
+test("a declined model pauses the run; a new model and resume run the stage again", async () => {
+  let calls = 0;
+  const r = rig({ frame: async () => { r.log.push("frame"); return calls++ === 0 ? { kind: "declined", reason: "policy" } : PASS; } });
+  r.engine.start(person);
+  const sum = await r.engine.advance();
+  expect(sum.pause_reason).toBe("The model declined at Frame: policy. Choose another model and resume.");
+  expect(f.s.state.run.stages[0]).toMatchObject({ status: "declined" });
+  r.engine.setModel("frame", { provider: "scripted", model: "other", effort: null }, person);
+  expect(f.s.state.run.stages[0]!.model).toEqual({ provider: "scripted", model: "other", effort: null });
+  await r.engine.resume(person);
+  expect(r.log).toEqual(["frame", "frame", "plan"]);
+  expect(f.s.state.run.stages[0]!.attempts).toBe(2);
+});
+
+test("a blocked stage pauses the run with both ways on", async () => {
+  let calls = 0;
+  const r = rig({
+    frame: async () => {
+      r.log.push("frame");
+      if (calls++ > 0) return PASS;
+      f.s.commit(() => [{ type: "model.blocked", actor: planner, payload: { stage: "frame", marking: "TLP:RED", model: "m", where: "hosted" } }]);
+      return { kind: "blocked", marking: "TLP:RED" };
+    },
+  });
+  r.engine.start(person);
+  const sum = await r.engine.advance();
+  expect(sum.pause_reason).toBe("Frame: the chosen model may not receive data marked TLP:RED. Choose an allowed model, or leave the stricter items out, and resume.");
+  r.engine.setPackLimit("frame", "TLP:GREEN", person);
+  expect(f.s.state.pack_limits).toEqual({ frame: "TLP:GREEN" });
+  await r.engine.resume(person);
+  expect(r.log).toEqual(["frame", "frame", "plan"]);
+});
+
+test("a runner that throws pauses the run instead of crashing it", async () => {
+  const r = rig({ frame: async () => { throw new Error("boom\nsecond line"); } });
+  r.engine.start(person);
+  const sum = await r.engine.advance();
+  expect(sum).toMatchObject({ status: "paused", pause_reason: "Frame failed unexpectedly: boom" });
+});
+
+test("a stopped stage writes nothing and leaves the stage running", async () => {
+  const r = rig({ frame: async () => ({ kind: "stopped" }) });
+  r.engine.start(person);
+  await r.engine.advance();
+  const before = f.s.state.seq;
+  await r.engine.advance();
+  expect(types(f.s).slice(before)).toEqual([]);
+  expect(types(f.s).slice(-2)).toEqual(["case.phase_changed", "stage.started"]);
+  expect(f.s.state.run.stages[0]!.status).toBe("running");
+});
+
+test("budget, model and pack limit changes are entries", () => {
+  const r = rig();
+  r.engine.start(person);
+  r.engine.setBudget(5000, person);
+  expect(f.s.state.run.budget_tokens).toBe(5000);
+  r.engine.setBudget(null, person);
+  expect(f.s.state.run.budget_tokens).toBeNull();
+  r.engine.setPackLimit("plan", "TLP:AMBER", person);
+  r.engine.setPackLimit("plan", null, person);
+  expect(f.s.state.pack_limits).toEqual({});
+  expect(types(f.s).filter((t) => t === "budget.set" || t === "stage.pack_limit_set")).toHaveLength(4);
+});
+
+test("an interrupted run resumes at the stage it was in, and the case is recovered once on open", async () => {
+  const wbDir = join(dir, "wb2");
+  const sample = sampleRoot(join(dir, "s2"));
+  const wb1 = Workbench.open(wbDir, { onError: () => {} });
+  extra.push(() => sample.close());
+  let calls = 0;
+  const s1 = wb1.createCase({ title: "t", asked: "a", why: "w", starting: [{ type: "address", value: START }], window: WINDOW, objective: null, marking: "TLP:GREEN" }, person);
+  const deps = depsOf(sample);
+  const r1 = rig({ frame: async () => { r1.log.push("frame"); return calls++ === 0 ? { kind: "stopped" } : PASS; } }, s1, deps);
+  r1.engine.start(person);
+  await r1.engine.advance();
+  expect(s1.state.run.status).toBe("running");
+  s1.commit((_st, ids) => [{
+    type: "query.issued", actor: planner,
+    payload: { query: ids.next("query"), source: "x", source_hash: "h", pivot: null, pivot_hash: null, connector: "c", text: "t", bound: {}, window: WINDOW, why: "w", estimate: null, step: null, verifies: null, purpose: "result" },
+  }]);
+  wb1.close();
+
+  const wb2 = Workbench.open(wbDir, { onError: () => {} });
+  extra.push(() => wb2.close());
+  const s2 = wb2.session(s1.id);
+  expect(s2.state.run.status).toBe("running");
+  const r2 = rig({ frame: async () => { r2.log.push("frame"); return PASS; } }, s2, deps);
+  expect(s2.state.run.status).toBe("interrupted");
+  expect(s2.state.queries.q1!.status).toBe("failed");
+  expect(s2.entries().filter((e) => e.type === "run.interrupted")).toHaveLength(1);
+  expect(r2.engine.summary()).toMatchObject({ status: "interrupted", current: "frame" });
+  expect((await r2.engine.advance()).status).toBe("interrupted");
+  expect(r2.log).toEqual([]);
+
+  // a second engine on the same open session does not recover again: work begun since is not touched
+  s2.commit((_st, ids) => [{
+    type: "query.issued", actor: planner,
+    payload: { query: ids.next("query"), source: "x", source_hash: "h", pivot: null, pivot_hash: null, connector: "c", text: "t", bound: {}, window: WINDOW, why: "w", estimate: null, step: null, verifies: null, purpose: "result" },
+  }]);
+  rig({}, s2, deps);
+  expect(s2.state.queries.q2!.status).toBe("running");
+
+  const sum = await r2.engine.resume(person);
+  expect(r2.log).toEqual(["frame", "plan"]);
+  expect(sum.waiting).toBe("plan");
+  expect(s2.state.skipped).toEqual([]);
+});
+
+test("two advance calls at once do the work once", async () => {
+  const r = rig();
+  r.engine.start(person);
+  const a = r.engine.advance();
+  const b = r.engine.advance();
+  expect(a).toBe(b);
+  await Promise.all([a, b]);
+  expect(r.log).toEqual(["frame", "plan"]);
+  expect(types(f.s).filter((t) => t === "stage.started")).toHaveLength(2);
+});
+
+test("starting a second run while one is active is refused", async () => {
+  const r = rig();
+  r.engine.start(person);
+  expect(() => r.engine.start(person)).toThrow(RunRefused);
+  await r.engine.advance();
+  expect(() => r.engine.start(person)).toThrow(RunRefused);
+});
+
+test("a finished run may be followed by a new one", async () => {
+  const r = rig();
+  r.engine.start(person);
+  await r.engine.advance();
+  acceptPlan(f.s);
+  await r.engine.advance();
+  publish(f.s);
+  await r.engine.advance();
+  expect(f.s.state.run.status).toBe("finished");
+  r.engine.start(person);
+  expect(f.s.state.run.id).toBe("run-2");
+  expect(f.s.state.run.status).toBe("running");
+});
+
+test("the state at every entry of the run equals the fold to that entry", async () => {
+  const seen: [Entry, Readonly<CaseState>][] = [];
+  f.s.subscribe((e, state) => { seen.push([e, state]); });
+  const r = rig({ checks: failingChecks(() => r) });
+  r.engine.start(person);
+  await r.engine.advance();
+  acceptPlan(f.s);
+  await r.engine.advance();
+  await r.engine.resume(person);
+  expect(seen.length).toBe(f.s.entries().length - 1); // all but case.created, which came before the subscription
+  const all = f.s.entries();
+  for (const [e, state] of seen) {
+    expect(state).toEqual(fold(all.slice(0, e.seq)));
+    expect(f.s.stateAt(e.seq)).toEqual(state);
+  }
+});
+
+const costly = (s: CaseSession, budgets: Record<string, number>, results: unknown[]): { research: StageRunner; accepted: Entry } => {
+  s.commit((_st, ids) => [{ type: "plan.proposed", actor: planner, payload: { plan: PLAN(ids.next("plan")) } }]);
+  const accepted = s.commit(() => [{ type: "plan.accepted", actor: person, payload: { plan: "plan-1", steps: ["s1", "s2", "s3", "s4"], budgets } }])[0]!;
+  const research: StageRunner = async (env) => {
+    const agent: Extract<Actor, { kind: "agent" }> = { kind: "agent", id: "researcher-g3", stage: "research", profile: "investigation", model: "s", effort: null, where: "machine" };
+    const ctx: ToolContext = {
+      session: s, deps: f.sample.deps, seeker: f.sample.seeker, actor: agent, link: { run: s.state.run.id, stage: "research", job: null },
+      draft: null, draft_hash: null, subgoal: null, window: WINDOW, limits: DEFAULT_LIMITS, ...(env.onNeedsBudget ? { onNeedsBudget: env.onNeedsBudget } : {}),
+    };
+    results.push((await execTool(ctx, parseCall(TOOL_NAMES, "run_step", JSON.stringify({ step: "s3", why: "known bad?" })))).summary);
+    // the same proposal is not run a second time
+    results.push(env.onNeedsBudget ? await env.onNeedsBudget("p1", "s3") : "no hook");
+    return PASS;
+  };
+  return { research, accepted };
+};
+const noPlan: StageRunner = async () => PASS;
+
+test("an accepted costly step runs once, in the accepting person's name with their budget, caused by plan.accepted", async () => {
+  const results: unknown[] = [];
+  const { research, accepted } = costly(f.s, { s3: 100 }, results);
+  const r = rig({ research, plan: noPlan });
+  r.engine.start(person);
+  await r.engine.advance();
+  const entry = f.s.entries().filter((e) => e.type === "proposal.accepted");
+  expect(entry).toHaveLength(1);
+  expect(entry[0]).toMatchObject({ actor: person, cause: accepted.seq, payload: { proposal: "p1", budget: 100 } });
+  expect(f.s.state.proposals.p1).toMatchObject({ status: "accepted", budget: 100 });
+  expect(f.s.state.plan.steps.s3!.status).toBe("answered");
+  expect(results[0]).not.toMatch(/waiting for a person/);
+  expect(results[1]).toBeNull();
+  expect(f.s.entries().filter((e) => e.type === "query.result" && e.actor.kind === "human")).toEqual([]);
+});
+
+test("a costly step with no budget stays an open proposal", async () => {
+  const results: unknown[] = [];
+  const { research } = costly(f.s, {}, results);
+  const r = rig({ research, plan: noPlan });
+  r.engine.start(person);
+  await r.engine.advance();
+  expect(results).toEqual(["waiting for a person's budget (proposal p1)", null]);
+  expect(f.s.state.proposals.p1!.status).toBe("open");
+  expect(f.s.entries().filter((e) => e.type === "proposal.accepted")).toEqual([]);
+});

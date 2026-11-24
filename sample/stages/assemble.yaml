@@ -1,0 +1,14 @@
+kind: stage
+id: assemble
+title: Assemble
+order: 4
+phase: analysis
+runs: agent
+role: assemble
+gate: null
+reviews: false
+tools: [list_cards, read_card, propose_assessment, propose_narrative, request_research, answer_challenge]
+schema: assemble-output
+model: { provider: scripted, model: sample-run, effort: null }
+on_pass: checks
+on_fail: research
