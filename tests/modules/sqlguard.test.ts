@@ -165,3 +165,35 @@ test("a quoted alias is not a limit", () => {
 test("a quoted alias is not a time filter", () => {
   expect(checkGuardrails('select a as "event_time >= x" from lake.archive.events', gs).join(" ")).toContain("needs a time filter");
 });
+
+// ---------- the review's bypasses ----------
+test.each([
+  ["a CR ends a -- comment in the engine", `select a ${head} --\r or true\n`],
+  ["a CR ends a -- comment, in the middle", `select a ${head} --x\r or 1 = 1 --\n`],
+  ["a CR ends a -- comment at the where", `select a from lake.archive.events where --\r true or event_time >= ${lit.from} and event_time < ${lit.to}`],
+  ["explain analyze of a parenthesised select with a quoted alias", `EXPLAIN ANALYZE (SELECT a FROM lake.archive.events AS "x)select" WHERE event_time > TIMESTAMP '1970-01-01 00:00:00 UTC')`],
+  ["explain of a parenthesised select with a quoted alias", `EXPLAIN (SELECT a FROM lake.archive.events AS "x)select" WHERE event_time > TIMESTAMP '1970-01-01 00:00:00 UTC')`],
+  ["explain analyze of a conforming select", `explain analyze select a ${head}`],
+  ["explain analyze of any select", "explain analyze select a from other"],
+  ["a table function", "select a from table(lake.system.table_changes(schema_name => 'archive', table_name => 'events', start_snapshot_id => 1, end_snapshot_id => 2))"],
+  ["a table function on another table", "select a from table (other.system.query(query => 'select 1'))"],
+  ["limit all", `select a ${head} order by a limit all`],
+  ["a huge limit", `select a ${head} limit 999999999999`],
+  ["a huge fetch first", `select a ${head} fetch first 10000000 rows only`],
+  ["an offset", `select a ${head} offset 5`],
+])("the guarded shape refuses (review): %s", (_n, sql) => {
+  expect(checkGuardedShape(sql, gs, lit, 100).length).toBeGreaterThan(0);
+});
+test("control characters are refused by assertReadOnly", () => {
+  for (const c of ["\r", "\u000b", "\u000c", "\u0085", "\u007f", "\u009f", "\u2028", "\u2029", "\u0000"]) {
+    expect(() => assertReadOnly(`select 1${c}from t`)).toThrow(GuardError);
+  }
+  expect(() => assertReadOnly("select\t1\nfrom t")).not.toThrow();
+});
+test("a limit within the source's rows, an options-only explain and describe without a window are allowed", () => {
+  expect(checkGuardedShape(`select a ${head} limit 100`, gs, lit, 100)).toEqual([]);
+  expect(checkGuardedShape(`select a ${head} fetch first 100 rows only`, gs, lit, 100)).toEqual([]);
+  expect(checkGuardedShape(`explain (type io, format json) select a ${head}`, gs, lit, 100)).toEqual([]);
+  expect(checkGuardedShape("describe lake.archive.events", gs, null, 100)).toEqual([]);
+  expect(checkGuardedShape("show columns from lake.archive.events", gs, null, 100)).toEqual([]);
+});

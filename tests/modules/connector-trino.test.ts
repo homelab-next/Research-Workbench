@@ -491,3 +491,13 @@ test("rendered SQL renders to itself under its own window, and is refused under 
 test("the estimate request of a conforming query still renders", () => {
   expect(c.render(c.estimateRequest(req(TEXT))!)).toStartWith("EXPLAIN (TYPE IO, FORMAT JSON) select a from iceberg.s.events where ts >= TIMESTAMP '2026-11-20 00:00:00.000 UTC'");
 });
+
+test.each([
+  "select a from iceberg.s.events where ts >= {window.from} and ts < {window.to} --\r or true\n",
+  'EXPLAIN ANALYZE (SELECT a FROM iceberg.s.events AS "x)select" WHERE ts > TIMESTAMP \'1970-01-01 00:00:00 UTC\')',
+  "select a from table(iceberg.system.table_changes(schema_name => 's', table_name => 'events', start_snapshot_id => 1, end_snapshot_id => 2))",
+  "select a from iceberg.s.events where ts >= {window.from} and ts < {window.to} limit 6",
+])("render refuses a bypass: %s", (q) => {
+  expect(() => c.render(req(q))).toThrow(GuardError);
+  expect(t.statements).toEqual([]);
+});

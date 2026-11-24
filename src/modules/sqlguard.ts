@@ -70,11 +70,12 @@ function scan(sql: string): Scan {
       kept += sql.slice(i, j);
       i = j;
     } else if (c === "-" && sql[i + 1] === "-") {
-      const e = sql.indexOf("\n", i);
+      // the engine ends a -- comment at a carriage return as well as a newline
+      const e = sql.slice(i).search(/[\r\n]/);
       out += " ";
       kept += " ";
       marked += " ";
-      i = e === -1 ? n : e + 1;
+      i = e === -1 ? n : i + e + 1;
     } else if (c === "/" && sql[i + 1] === "*") {
       const e = sql.indexOf("*/", i + 2);
       out += " ";
@@ -114,8 +115,12 @@ const WRITE_WORD_RE = new RegExp(`\\b(?:${WRITE_WORDS.join("|")})\\b(?!\\()`, "g
 const ALWAYS_REFUSED_RE = /\bload_extension\b/g;
 const REPLACE_INTO = /\breplace\s+into\b/;
 
+const CONTROL_CHARS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029]/;
+
 /** Throws GuardError unless `sql` is exactly one read statement. */
 export function assertReadOnly(sql: string): void {
+  // Control and separator characters are read differently by different engines; none is written in a query by a person.
+  if (CONTROL_CHARS.test(sql)) throw new GuardError(["control characters are not allowed in a query"]);
   const { stripped: s, violations: scanned } = scan(sql);
   if (s === "" || s === ";") throw new GuardError(["empty statement"]);
   const violations: string[] = [...scanned];
@@ -222,32 +227,54 @@ function literalBody(l: string): string | null {
   return /^TIMESTAMP '(.*)'$/s.exec(l)?.[1] ?? null;
 }
 
+/** The only explain a source is sent: its options are a type and a format. `analyze` runs the statement, so it is never allowed. */
+const EXPLAIN_OPTIONS = /^explain(?:\s*\(\s*(?:type|format)\s+[a-z_]+(?:\s*,\s*(?:type|format)\s+[a-z_]+)*\s*\))?(?![\w$])\s*/;
+
 /**
  * The shape a statement that names a guarded table must have: one select over that table alone, whose where clause begins with
  * the time column compared to exactly the request's two window literals. Anything else is refused. Empty means allowed.
+ * `maxRows`, when given, is the most a limit on a guarded table may ask for. Two things are refused whatever the tables: an explain
+ * other than `explain (type ..., format ...)`, and `table (`, which reads a table under a name this guard never sees.
  */
-export function checkGuardedShape(sql: string, guards: TableGuard[], window: WindowLiterals | null): string[] {
+export function checkGuardedShape(sql: string, guards: TableGuard[], window: WindowLiterals | null, maxRows: number | null = null): string[] {
   const scanned = scan(sql);
-  const stripped = scanned.stripped.replace(EXPLAIN_PREFIX, "");
-  let marked = scanned.marked;
-  if (scanned.marked.startsWith("explain")) marked = scanned.marked.replace(EXPLAIN_PREFIX, "");
-  marked = marked.replace(/[\s;]+$/, "");
   const violations: string[] = [];
   const add = (v: string): void => { if (!violations.includes(v)) violations.push(v); };
+  let marked = scanned.marked.replace(/[\s;]+$/, "");
+  if (marked.startsWith("explain")) {
+    marked = marked.replace(EXPLAIN_OPTIONS, "");
+    if (/^(?:analyze|verbose|\()/.test(marked) || scanned.marked.replace(/\s+/g, " ").startsWith("explain analyze")) add("explain is allowed only as explain (type ..., format ...), never analyze");
+  }
+  const toks = tokens(marked, scanned);
+  for (let i = 0; i + 1 < toks.length; i++) {
+    if (toks[i]!.k === "w" && toks[i]!.v === "table" && toks[i + 1]!.k === "p" && toks[i + 1]!.v === "(") add("table functions are not allowed");
+  }
+  // table recognition reads the same text the rest of the shape does: quoted identifiers unquoted, literals emptied
+  const seen = marked.replace(/\u0002(\d+)\u0002/g, (_m, n: string) => scanned.quoted[Number(n)]!).replace(/\u0003\d+\u0003/g, "''");
   for (const g of guards) {
     const table = g.table.toLowerCase();
     const re = tablePattern(table);
     const meta = tablePattern(table, true);
-    if (!re.test(stripped) && !meta.test(stripped)) continue;
-    if (window === null) { add("a guarded table needs a bounded window"); continue; }
-    const body = stripped.replace(/[\s;]+$/, "");
+    if (!re.test(seen) && !meta.test(seen)) continue;
+    const body = seen.replace(/[\s;]+$/, "");
     if (new RegExp(`^(?:describe|desc|show\\s+columns\\s+from)\\s+${re.source}$`).test(body)) continue;
-    if (meta.test(stripped)) { add("metadata tables of a guarded table are not queried"); continue; }
-    const toks = tokens(marked, scanned);
+    if (window === null) { add("a guarded table needs a bounded window"); continue; }
+    if (meta.test(seen)) { add("metadata tables of a guarded table are not queried"); continue; }
     const words = (w: string): number => toks.filter(t => t.k === "w" && t.v === w).length;
-    const mentions = [...stripped.matchAll(new RegExp(re.source, "g"))].length;
+    const mentions = [...seen.matchAll(new RegExp(re.source, "g"))].length;
     if (mentions !== 1 || words("select") !== 1 || words("from") !== 1) add("a query on a guarded table names it once, in one select with one from");
     if (toks.some(t => t.k === "w" && BANNED_WORDS.has(t.v))) add("join, union, intersect, except, with and or are not allowed on a guarded table");
+    if (words("offset") > 0) add("offset is not allowed on a guarded table");
+    for (let i = 0; i < toks.length; i++) {
+      const t = toks[i]!;
+      const at = (j: number): Tok | undefined => toks[j];
+      let n: Tok | undefined;
+      if (t.k === "w" && t.v === "limit") n = at(i + 1);
+      else if (t.k === "w" && t.v === "fetch" && at(i + 1)?.k === "w" && (at(i + 1)!.v === "first" || at(i + 1)!.v === "next")) n = at(i + 2);
+      else continue;
+      if (n === undefined || !/^\d+$/.test(n.v) || n.k !== "w") add("a limit on a guarded table must be a number");
+      else if (maxRows !== null && Number(n.v) > maxRows) add(`a limit on a guarded table may not exceed ${maxRows} rows`);
+    }
     const clause = `the where clause must begin with ${g.time_column} >= {window.from} and ${g.time_column} < {window.to}`;
     if (!whereShape(toks, table, g.time_column, window)) add(clause);
   }

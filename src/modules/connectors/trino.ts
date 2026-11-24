@@ -65,7 +65,7 @@ export class TrinoConnector implements Connector {
     const window = req.window.from === null || req.window.to === null
       ? null
       : { from: renderLiteral("window.from", req.window.from), to: renderLiteral("window.to", req.window.to) };
-    const violations = [...checkGuardedShape(sql, guards, window), ...checkGuardrails(sql, guards)];
+    const violations = [...checkGuardedShape(sql, guards, window, this.source.limits.max_rows), ...checkGuardrails(sql, guards)];
     if (violations.length > 0) throw new GuardError(violations);
     return sql;
   }
