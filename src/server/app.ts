@@ -4,10 +4,12 @@ import { isMarking, MARKINGS } from "../core/types";
 import type { Actor, Observable } from "../core/types";
 import { CaseNotFoundError } from "../core/workbench";
 import type { NewCase, Workbench } from "../core/workbench";
-import type { Me } from "../core/wire";
+import type { CommandResult, Me } from "../core/wire";
 import type { Config } from "../modules/config";
 import type { EngineDeps } from "../pipeline/engine";
 import { MAX_BODY_BYTES, refusal, secure } from "./guard";
+import { argProblems, COMMANDS } from "./commands";
+import type { CommandContext } from "./commands";
 import { CaseHub } from "./hub";
 import { mayDo, mayRead } from "./roles";
 import type { Reading } from "./roles";
@@ -29,7 +31,7 @@ type Kind = "page" | "api";
 interface Route {
   method: "GET" | "POST"; path: RegExp;
   /** What the route reads, or the command it does: the one thing the role check looks at. */
-  needs: { read: Reading } | { command: string };
+  needs: { read: Reading } | { command: string } | { commandInBody: true };
   kind: Kind;
   handle(call: Call): Response | Promise<Response>;
 }
@@ -160,6 +162,43 @@ export function createApp(opts: AppOptions): App {
         return json(200, { id: session.id });
       },
     },
+    {
+      method: "POST", path: /^\/api\/cases\/([^/]+)\/commands$/, needs: { commandInBody: true }, kind: "api",
+      handle: async ({ params, body }) => {
+        const id = params[0]!;
+        const asked = await body();
+        const bad = (...reasons: string[]): Response => refused(400, ...reasons);
+        if (!isPlainObject(asked)) return bad("the body must be a JSON object");
+        if (Object.hasOwn(asked, "actor")) return bad("the server names the actor");
+        const extra = Object.keys(asked).find((k) => k !== "command" && k !== "args");
+        if (extra !== undefined) return bad(`the body has a field it should not have: ${extra.slice(0, 40)}`);
+        const name = asked.command;
+        if (typeof name !== "string") return bad("the body needs a command name");
+        if (!Object.hasOwn(COMMANDS, name)) return bad(`unknown command ${JSON.stringify(name.slice(0, 40))}`);
+        const def = COMMANDS[name]!;
+        const args = asked.args === undefined ? {} : asked.args;
+        if (!isPlainObject(args)) return bad("args must be a JSON object");
+        if (Object.hasOwn(args, "actor")) return bad("the server names the actor");
+        const problems = argProblems(def, args);
+        if (problems.length > 0) return bad(...problems);
+        hub.read(id); // an unknown case is 404 before anything is recovered
+        try {
+          // one at a time per case: a command never interleaves with another, and the drive it asks for starts after it has written
+          const result = await hub.serial(id, async (): Promise<CommandResult> => {
+            const engine = hub.engine(id);
+            const session = hub.read(id);
+            const ctx: CommandContext = { hub, case: id, session, engine, deps, actor: { kind: "human", id: config.user } };
+            await def.perform(ctx, args as Record<string, never>);
+            if (def.then === "advance") hub.drive(id);
+            return { ok: true, seq: session.head().seq };
+          });
+          return json(200, result);
+        } catch (error) {
+          if (error instanceof Refused) return refused(409, ...error.reasons.map((r) => shown(deps, r)));
+          throw error;
+        }
+      },
+    },
   ];
 
   async function route(req: Request): Promise<{ res: Response; kind: Kind }> {
@@ -168,24 +207,31 @@ export function createApp(opts: AppOptions): App {
     if (matching.length === 0) return { res: refused(404, "there is nothing at this address"), kind: "api" };
     const found = matching.find((r) => r.method === req.method);
     if (found === undefined) return { res: refused(405, `${req.method} is not answered at this address`), kind: "api" };
-    // the one place the role is checked, before the handler, for reads and commands alike
-    if ("read" in found.needs) {
-      if (!mayRead(config.role, found.needs.read)) return { res: refused(403, `the ${config.role} view may not read ${found.needs.read}`), kind: "api" };
-    } else if (!mayDo(config.role, found.needs.command)) {
-      return { res: refused(403, `the ${config.role} view may not do ${found.needs.command.replace(/_/g, " ")}`), kind: "api" };
-    }
     const params = (found.path.exec(url.pathname) ?? []).slice(1);
+    let parsed: Promise<unknown> | undefined;
     const call: Call = {
       req, url, params,
-      body: async () => {
-        const raw = await readText(req);
+      body: () => (parsed ??= readText(req).then((raw) => {
         try {
           return JSON.parse(raw) as unknown;
         } catch {
           throw new Declined(400, ["the body is not JSON"]);
         }
-      },
+      })),
     };
+    // the one place the role is checked, before the handler, for reads and commands alike
+    if ("read" in found.needs) {
+      if (!mayRead(config.role, found.needs.read)) return { res: refused(403, `the ${config.role} view may not read ${found.needs.read}`), kind: "api" };
+    } else {
+      let command: string;
+      if ("command" in found.needs) command = found.needs.command;
+      else {
+        // the command a body names; a body that names none is checked as "command" and left to the handler to refuse
+        const asked = await call.body().catch(() => null);
+        command = isPlainObject(asked) && typeof asked.command === "string" ? asked.command.slice(0, 40) : "command";
+      }
+      if (!mayDo(config.role, command)) return { res: refused(403, `the ${config.role} view may not do ${command.replace(/_/g, " ")}`), kind: "api" };
+    }
     return { res: await found.handle(call), kind: found.kind };
   }
 

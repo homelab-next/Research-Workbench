@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compose } from "../../src/cli/compose";
+import type { CommandResult } from "../../src/core/wire";
 import type { Entry } from "../../src/core/types";
 import { Workbench } from "../../src/core/workbench";
 import type { NewCase } from "../../src/core/workbench";
@@ -23,6 +24,11 @@ export interface Served {
   post(path: string, body: unknown, headers?: Record<string, string>): Promise<Response>;
   newCase(over?: Partial<NewCase>): Promise<string>;
   entries(id: string): Entry[];
+  command(id: string, name: string, args?: Record<string, unknown>): Promise<{ status: number; body: CommandResult }>;
+  /** start_run, then wait for the server to drive the run to the plan gate. */
+  toPlanGate(id: string): Promise<void>;
+  /** toPlanGate, accept_plan with a budget for the costly step, then wait for the run to reach the publish gate. */
+  toPublishGate(id: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -81,6 +87,21 @@ export async function served(opts: { role?: Role; listen?: boolean; credential?:
       return ((await res.json()) as { id: string }).id;
     },
     entries: (id) => app.hub.read(id).entries(),
+    async command(id, name, args = {}) {
+      const res = await s.post(`/api/cases/${id}/commands`, { command: name, args });
+      return { status: res.status, body: (await res.json()) as CommandResult };
+    },
+    async toPlanGate(id) {
+      const r = await s.command(id, "start_run");
+      if (r.status !== 200) throw new Error(`start_run failed: ${JSON.stringify(r)}`);
+      await app.hub.idle();
+    },
+    async toPublishGate(id) {
+      await s.toPlanGate(id);
+      const r = await s.command(id, "accept_plan", { budgets: { s3: 1 } });
+      if (r.status !== 200) throw new Error(`accept_plan failed: ${JSON.stringify(r)}`);
+      await app.hub.idle();
+    },
     async close() {
       if (closed) return;
       closed = true;

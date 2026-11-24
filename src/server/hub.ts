@@ -11,7 +11,7 @@ export class CaseHub {
   private readonly sessionOf = new WeakMap<Engine, CaseSession>();
   private readonly flying = new Set<Promise<unknown>>();
 
-  constructor(private readonly wb: Workbench, private readonly deps: EngineDeps, private readonly onError: (error: unknown) => void) {}
+  constructor(private readonly wb: Workbench, readonly deps: EngineDeps, private readonly onError: (error: unknown) => void) {}
 
   /** For reads: the session, with no engine and no recovery. Throws CaseNotFoundError. */
   read(id: string): CaseSession {
@@ -28,6 +28,18 @@ export class CaseHub {
     this.sessionOf.set(made, session);
     return made;
   }
+  private readonly lines = new Map<string, Promise<unknown>>();
+
+  /** Runs `work` after every earlier piece of work for this case has finished, so commands for a case never interleave. */
+  serial<T>(id: string, work: () => Promise<T> | T): Promise<T> {
+    const after = this.lines.get(id) ?? Promise.resolve();
+    const mine = after.then(work, work);
+    const tail = mine.then(() => undefined, () => undefined);
+    this.lines.set(id, tail);
+    void tail.then(() => { if (this.lines.get(id) === tail) this.lines.delete(id); });
+    return mine;
+  }
+
   create(input: NewCase, actor: Actor): CaseSession {
     return this.wb.createCase(input, actor);
   }

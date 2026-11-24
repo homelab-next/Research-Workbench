@@ -15,3 +15,5 @@ export interface Reference {
   phases: { id: string; title: string }[]; profile: { id: string; title: string };
 }
 export interface ModelView { provider: string; model: string; where: Where; efforts: string[]; context: number | null; allowed: boolean; reason: string | null }
+/** What a command returns: where the ledger now ends, or why it was refused. Never state. */
+export type CommandResult = { ok: true; seq: number } | { ok: false; refused: string[] };
