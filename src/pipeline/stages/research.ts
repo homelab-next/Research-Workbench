@@ -24,7 +24,8 @@ const describeStep = (s: PlanStep): string =>
 /**
  * Research: one researcher per sub-goal with an accepted step, at most `research.parallel` at once, each as its own job. When Assemble sent
  * the run back, one researcher per question asked for instead. A sub-goal is answered by what its steps finished as, not by what the
- * researcher says.
+ * researcher says: its last step answered (partly, or in full), or came back empty with full coverage from a source whose empty result is a
+ * proven negative (the answer is "no"). A partial or not-seen empty result is not an answer.
  */
 export async function researchRunner(env: StageEnv): Promise<StageEnd> {
   const { session, deps, stage } = env;
@@ -114,12 +115,21 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
     if (hit !== undefined && hit.kind !== "output") return hit;
   }
 
+  /** A step that came back empty from a source whose empty result is a proven negative, with full coverage: an answer, and the answer is no. */
+  const provenNegative = (step: string): boolean => {
+    if (statusOf(step) !== "empty") return false;
+    const ids = session.state.plan.steps[step]!.cards;
+    return ids.length > 0 && ids.every((id) => {
+      const c = Object.hasOwn(session.state.cards, id) ? session.state.cards[id]! : null;
+      return c !== null && c.row_count === 0 && c.empty === "proven-negative" && c.coverage !== null && c.coverage.kind === "full";
+    });
+  };
   const noteFor = (subgoal: string): string => noteOf(results[units.findIndex((u) => u.subgoal === subgoal)]);
   const subgoals: SubResult[] = goals.map((g) => {
     const steps = accepted(g);
     const last = steps[steps.length - 1]!;
     const cards = [...new Set(steps.flatMap((s) => (Object.hasOwn(session.state.plan.steps, s) ? session.state.plan.steps[s]!.cards : [])))];
-    const outcome = statusOf(last) === "answered" || statusOf(last) === "partial" ? "answered" : "blocked";
+    const outcome = statusOf(last) === "answered" || statusOf(last) === "partial" || provenNegative(last) ? "answered" : "blocked";
     return { id: g.id, title: g.title, outcome, cards, note: noteFor(g.id) };
   });
   const requested = [...answeredBefore.map((a) => ({ question: a.question, note: "" })), ...units.flatMap((u, i) => (u.question === null ? [] : [{ question: u.question, note: noteOf(results[i]) }]))];

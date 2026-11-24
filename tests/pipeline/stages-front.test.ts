@@ -321,3 +321,38 @@ test("a sent-back rerun does not redo a requested question whose researcher fini
   const out = lastOutput(f.s, "research") as { requested: { question: string }[] };
   expect(out.requested.map((x) => x.question)).toEqual(["Q one?", "Q two?"]);
 });
+
+/** One sub-goal: is 198.51.100.77 an asset (it is not). */
+const assetOnly = { goal: "is it ours", subgoals: [{ title: "Is it an asset", question: "Is it an asset?", have: [{ type: "address", value: "198.51.100.77" }], want: "asset", route: ["address_to_asset"] }] };
+const NOT_AN_ASSET: ScriptReply[] = [calls(call("run_step", { step: "s1" })), answered("not an asset")];
+
+test("a sub-goal whose step is a full-coverage proven negative is answered: the answer is no", async () => {
+  const r = rig({ orchestrator: [say(FRAME)], planner: [say(assetOnly)], "researcher-g1": NOT_AN_ASSET });
+  await toGate(r);
+  r.engine.acceptPlan({ actor: person, steps: ["s1"] });
+  await r.engine.advance();
+  expect(f.s.state.plan.steps.s1!.status).toBe("empty");
+  const card = f.s.state.cards[f.s.state.plan.steps.s1!.cards[0]!]!;
+  expect(card).toMatchObject({ row_count: 0, empty: "proven-negative", coverage: { kind: "full" } });
+  expect(finished("research")[0]!.payload.outcome).toBe("pass");
+  expect((output("research").subgoals as { id: string; outcome: string }[]).map((g) => [g.id, g.outcome])).toEqual([["g1", "answered"]]);
+});
+
+test("an empty result that is only not seen does not answer a sub-goal", async () => {
+  const r = rig({ orchestrator: [say(FRAME)], planner: [say(assetOnly), say(assetOnly)], "researcher-g1": NOT_AN_ASSET });
+  await toGate(r);
+  r.engine.acceptPlan({ actor: person, steps: ["s1"] });
+  // the pivot now says its empty result is only "not seen", and the step's card says so
+  const pivot = r.deps.registry.pivot("address_to_asset")!;
+  const was = pivot.empty_means;
+  pivot.empty_means = "not-seen";
+  try {
+    await r.engine.advance();
+  } finally { pivot.empty_means = was; }
+  // the step came back empty, its card says only "not seen", and Research sent the work back to Plan
+  expect(ofType("step.finished").map((e) => e.payload.outcome)).toEqual(["empty"]);
+  expect(Object.values(f.s.state.cards).map((c) => c.empty)).toEqual(["not-seen"]);
+  const fin = finished("research")[0]!.payload;
+  expect(fin.outcome).toBe("fail");
+  expect(JSON.parse(f.s.blobs.text(fin.output!.blob)).subgoals.map((g: { outcome: string }) => g.outcome)).toEqual(["blocked"]);
+});
