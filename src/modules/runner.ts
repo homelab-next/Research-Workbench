@@ -63,8 +63,10 @@ function overlaps(note: { from: string | null; to: string | null }, w: TimeWindo
   return before(w.from, note.to) && before(note.from, w.to);
 }
 
-function titleOf(input: RunQueryInput, source: SourceManifest, pivot: PivotManifest | null, bound: Bound): string {
+function titleOf(input: RunQueryInput, source: SourceManifest, pivot: PivotManifest | null, bound: Bound, trusted: boolean): string {
   if (input.title !== undefined) return input.title;
+  // a card title is shown to models: a manifest from an untrusted root does not get to write it
+  if (!trusted) return `result of ${source.id}`;
   if (pivot !== null) return `${pivot.title}: ${String(bound.value)}`;
   return `Query on ${source.title}`;
 }
@@ -151,7 +153,7 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
   } catch (err) {
     return refusedBy(err);
   }
-  const title = titleOf(input, source, pivot, bound);
+  const title = titleOf(input, source, pivot, bound, deps.registry.rootOf(source.dir)?.trusted === true);
   const base = { source, connector, actor: input.actor, step: input.step ?? null, subgoal: input.subgoal ?? null, link };
 
   const weight = pivot !== null ? pivotWeight(pivot, source) : source.cost.weight;

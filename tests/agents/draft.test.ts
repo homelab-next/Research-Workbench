@@ -180,3 +180,13 @@ test("CARD_REF and cardRefs live in src/core/state/cites.ts (browser-safe) and s
   expect(cites.cardRefs).toBe(cardRefs);
   expect(cites.cardRefs("see [c1, c2] and C3")).toEqual(["c1", "c2"]);
 });
+
+test("a source from an untrusted root contributes no free text to the product's sources", () => {
+  const w = new DraftWork(null);
+  w.setFinding(f("a"), null);
+  const cards = { c1: { ...card("c1", "dns", "TLP:GREEN"), quality_notes: ["n1"] } };
+  const p = buildProduct(w, facts(cards, { untrusted: (id: string) => id === "dns" }));
+  expect(p.sources).toEqual([{ source: "dns", quality: "quality text withheld: untrusted root" }]);
+  const trusted = buildProduct(w, facts(cards));
+  expect(trusted.sources[0]!.quality).toContain("good");
+});

@@ -16,10 +16,10 @@ export interface Seeker {
 
 const MAX_ROUTES = 5;
 
-function hopOf(p: PivotManifest, s: SourceManifest): Hop {
+function hopOf(p: PivotManifest, s: SourceManifest, trusted: boolean): Hop {
   const weight = pivotWeight(p, s);
   return {
-    pivot: p.id, title: p.title, source: s.id, from: p.from, to: p.to, free: weight === 0, weight,
+    pivot: p.id, title: trusted ? p.title : p.id, source: s.id, from: p.from, to: p.to, free: weight === 0, weight,
     needs_window: p.needs_window, empty_means: p.empty_means, confirmed: s.confirmed, marking: s.marking, unit: s.cost.unit,
   };
 }
@@ -38,7 +38,7 @@ export function cheapestSeeker(registry: Registry): Seeker {
         const s = registry.source(p.source);
         if (s === null || blocked.has(p.id) || (!s.confirmed && !limits.allow_unconfirmed)) continue;
         const list = edges.get(p.from) ?? [];
-        list.push(hopOf(p, s));
+        list.push(hopOf(p, s, registry.rootOf(s.dir)?.trusted === true));
         edges.set(p.from, list);
       }
       const found = new Map<string, Route>();

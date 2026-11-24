@@ -129,6 +129,7 @@ export async function assembleRunner(env: StageEnv): Promise<StageEnd> {
   try {
     product = buildProduct(work, {
       objective, question: m.asked, case_marking: m.marking, cards: now.cards, source: (id) => deps.registry.source(id),
+      untrusted: (id) => { const src = deps.registry.source(id); return src === null || deps.registry.rootOf(src.dir)?.trusted !== true; },
       assumptions: output.assumptions ?? [], change: output.change ?? "", written_at,
     });
   } catch (err) {

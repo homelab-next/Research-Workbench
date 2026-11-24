@@ -51,7 +51,10 @@ export class DraftWork {
 
 export function buildProduct(work: DraftWork, facts: {
   objective: string; question: string; case_marking: Marking; cards: Readonly<Record<string, CardState>>;
-  source: (id: string) => SourceManifest | null; assumptions: string[]; change: string;
+  source: (id: string) => SourceManifest | null;
+  /** True for a source whose manifest came from an untrusted root: its quality text is not carried into the product. */
+  untrusted?: (id: string) => boolean;
+  assumptions: string[]; change: string;
   /** The markings of the model requests that wrote this text: text a model wrote is as strict as everything that model had seen. */
   written_at?: readonly Marking[];
 }): Product {
@@ -69,6 +72,7 @@ export function buildProduct(work: DraftWork, facts: {
   for (const id of [...new Set(cited.flatMap((c) => (c.source === null ? [] : [c.source])))].sort()) {
     const m = facts.source(id);
     if (m === null) { sources.push({ source: id, quality: "source manifest not loaded" }); continue; }
+    if (facts.untrusted?.(id) === true) { sources.push({ source: id, quality: "quality text withheld: untrusted root" }); continue; }
     const named = [...new Set(cited.filter((c) => c.source === id).flatMap((c) => c.quality_notes))];
     const notes = named.map((nid) => m.quality_notes.find((n) => n.id === nid)?.text ?? `${nid} (note no longer in the source manifest)`);
     sources.push({ source: id, quality: [m.quality, ...notes].join(" ") });

@@ -40,7 +40,8 @@ async function readCard(ctx: ToolContext, args: Record<string, Json>): Promise<T
   if (c === null) throw new ToolError(`unknown card: ${id}`);
   const source = c.source === null ? null : ctx.deps.registry.source(c.source);
   const title = scrub(ctx.deps.registry, c.title), body = scrub(ctx.deps.registry, c.body);
-  const notes = source === null ? [] : source.quality_notes.filter((n) => c.quality_notes.includes(n.id)).map((n) => scrub(ctx.deps.registry, n.text));
+  const trusted = source !== null && ctx.deps.registry.rootOf(source.dir)?.trusted === true;
+  const notes = source === null ? [] : source.quality_notes.filter((n) => c.quality_notes.includes(n.id)).map((n) => (trusted ? scrub(ctx.deps.registry, n.text) : "quality note withheld: untrusted root"));
   let provenance: Json = null;
   const q = c.query !== null && Object.hasOwn(ctx.session.state.queries, c.query) ? ctx.session.state.queries[c.query]! : null;
   if (q !== null) {

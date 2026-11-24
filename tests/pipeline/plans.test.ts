@@ -344,7 +344,7 @@ test("a costly step that starts from an earlier step cannot be priced before tha
 test("a step the registry no longer prices as costly is refused with the plan's own words, and asked of nothing further", async () => {
   propose();
   const real = f.sample.deps.registry;
-  const free = { ...f.sample.deps, registry: { pivot: (id: string) => { const p = real.pivot(id); return p === null ? p : { ...p, weight: 0 }; }, source: (id: string) => { const x = real.source(id); return x === null ? x : { ...x, cost: { ...x.cost, weight: 0 } }; } } };
+  const free = { ...f.sample.deps, registry: { pivot: (id: string) => { const p = real.pivot(id); return p === null ? p : { ...p, weight: 0 }; }, source: (id: string) => { const x = real.source(id); return x === null ? x : { ...x, cost: { ...x.cost, weight: 0 } }; }, rootOf: real.rootOf.bind(real) } };
   const before = count();
   await expect(estimateStep(f.s, free as never, { step: "s3", actor: person })).rejects.toThrow("this step is no longer priced as the plan says");
   expect(f.s.state.plan.estimates).toEqual({});

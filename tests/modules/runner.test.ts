@@ -489,7 +489,7 @@ test("a pivot passed with other text lends neither its weight nor its proven neg
 test("an agent on an adhoc source with other text gets the source's weight, not the free pivot's", async () => {
   const adhoc = Registry.load([{ path: join(dir, "modules"), trusted: true, credentials: ["REP_KEY"] }]);
   const src = adhoc.source("rep")!;
-  const d: RunnerDeps = { ...deps, registry: { ...adhoc, source: (id: string) => (id === "rep" ? { ...src, adhoc: true } : adhoc.source(id)), pivot: (id: string) => adhoc.pivot(id) } as unknown as Registry };
+  const d: RunnerDeps = { ...deps, registry: { ...adhoc, source: (id: string) => (id === "rep" ? { ...src, adhoc: true } : adhoc.source(id)), pivot: (id: string) => adhoc.pivot(id), rootOf: adhoc.rootOf.bind(adhoc) } as unknown as Registry };
   const r = await runQuery(s, d, { ...repInput, actor: agent, pivot: adhoc.pivot("free_rep")!, text: "reputation" });
   expect(r.status).toBe("done"); // the pivot's own text: free
   const other = await runQuery(s, d, { ...repInput, actor: agent, pivot: adhoc.pivot("free_rep")!, text: "reputation2" });
