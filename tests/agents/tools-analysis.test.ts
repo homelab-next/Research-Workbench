@@ -334,3 +334,34 @@ test("a refused propose call gives the reason and the draft's state in one line"
   expect(view(one).error).toBe("refused: unknown card: c404; the draft now has finding f1 and summary, gaps_and_limits set");
   expect(view(one).error).not.toContain("\n");
 });
+
+// ---- the last two form failures (task 15 item 1) ----
+
+test("propose_narrative refuses summary, assessment and alternatives text that names a card which is not seen; gaps_and_limits may name it", async () => {
+  f.ctx.draft = drafting();
+  for (const [empty, coverage] of [["not-seen", { kind: "full" }], ["proven-negative", { kind: "partial", reason: "row_limit" }], ["proven-negative", null], [null, { kind: "full" }]] as const) {
+    f.ctx.draft = drafting();
+    const id = emptyCard(empty, coverage);
+    for (const section of ["summary", "assessment", "alternatives"]) {
+      // named in the text, as a whole word in any case, whether or not it is cited by tool
+      const r = await f.call("propose_narrative", { why: "w", section, text: `an outside actor, though ${id.toUpperCase()} shows nothing`, cites: ["c1"] });
+      expect(r.ok).toBe(false);
+      expect(view(r).error).toBe(`refused: ${id} is not seen (not proof of absence): name it only in gaps_and_limits; the draft now has no findings and no section set`);
+    }
+    expect(f.ctx.draft.sections.summary).toBe("");
+    expect(f.ctx.draft.sections.assessment).toBe("");
+    expect(f.ctx.draft.sections.alternatives).toBe("");
+    const gaps = await f.call("propose_narrative", { why: "w", section: "gaps_and_limits", text: `${id} returned no rows over the window`, cites: [id] });
+    expect(gaps.ok).toBe(true);
+  }
+});
+
+test("propose_narrative lets a section name a proven negative with full coverage, and a card id inside a longer word is not a name", async () => {
+  f.ctx.draft = drafting();
+  const id = emptyCard("proven-negative", { kind: "full" });
+  const ok = await f.call("propose_narrative", { why: "w", section: "alternatives", text: `an insider is ruled out: ${id} proves it`, cites: [id] });
+  expect(ok.ok).toBe(true);
+  const gap = emptyCard("not-seen", { kind: "full" });
+  const longer = await f.call("propose_narrative", { why: "w", section: "summary", text: `see ${gap}0 and x${gap}`, cites: ["c1"] });
+  expect(longer.ok).toBe(true);
+});

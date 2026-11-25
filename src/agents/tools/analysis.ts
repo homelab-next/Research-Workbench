@@ -3,6 +3,7 @@ import { ANSWER_ACTIONS, CONFIDENCES, SECTIONS, SEVERITIES } from "../../core/ty
 import type { Schema } from "../../core/schema";
 import { composeStatement, likelihoodMatches } from "../draft";
 import type { DraftWork, TextSection } from "../draft";
+import { escapeRe } from "../../modules/sqlguard";
 import type { ToolContext, ToolDef, ToolResult } from "./index";
 import { idArg, MAX_TEXT, params, str, ToolError } from "./kit";
 
@@ -24,6 +25,14 @@ function cardsExist(ctx: ToolContext, ids: string[]): void {
   }
 }
 
+/** An empty result is evidence only when it is a proven negative over full coverage; anything else is a gap (check 8 reads the same rule). */
+function notSeen(ctx: ToolContext, id: string): boolean {
+  const card = ctx.session.state.cards[id]!;
+  return card.row_count === 0 && !(card.empty === "proven-negative" && card.coverage !== null && card.coverage.kind === "full");
+}
+/** True when the text names the card, as a whole word in any case (as check 8 reads a section). */
+const names = (text: string, id: string): boolean => new RegExp(`(?<![\\w])${escapeRe(id)}(?![\\w])`, "i").test(text);
+
 async function proposeAssessment(ctx: ToolContext, a: Record<string, Json>): Promise<ToolResult> {
   const work = drafting(ctx);
   const terms = work.terms;
@@ -39,12 +48,8 @@ async function proposeAssessment(ctx: ToolContext, a: Record<string, Json>): Pro
   }
   const cites = strings(a.cites);
   cardsExist(ctx, cites);
-  // an empty result is evidence only when it is a proven negative over full coverage; anything else is a gap (check 8 reads the same rule)
   for (const c of cites) {
-    const card = ctx.session.state.cards[c]!;
-    if (card.row_count === 0 && !(card.empty === "proven-negative" && card.coverage !== null && card.coverage.kind === "full")) {
-      throw new ToolError(`${c} is not seen (not proof of absence): put it in gaps_and_limits, not in a finding`);
-    }
+    if (notSeen(ctx, c)) throw new ToolError(`${c} is not seen (not proof of absence): put it in gaps_and_limits, not in a finding`);
   }
   const id = work.setFinding({
     statement: composeStatement(likelihood, claim, terms), likelihood, confidence: str(a.confidence) as "low" | "moderate" | "high",
@@ -68,7 +73,14 @@ async function proposeNarrative(ctx: ToolContext, a: Record<string, Json>): Prom
   const cites = strings(a.cites);
   cardsExist(ctx, cites);
   const section = str(a.section) as TextSection;
-  work.setSection(section, str(a.text), cites);
+  const said = str(a.text);
+  // a section other than gaps_and_limits that names a card not seen would use it as evidence (check 8 fails it)
+  if (section !== "gaps_and_limits") {
+    for (const c of Object.values(ctx.session.state.cards)) {
+      if (c.place !== "discarded" && notSeen(ctx, c.id) && names(said, c.id)) throw new ToolError(`${c.id} is not seen (not proof of absence): name it only in gaps_and_limits`);
+    }
+  }
+  work.setSection(section, said, cites);
   return done(`section ${section}`, { section });
 }
 
@@ -145,7 +157,7 @@ export const ANALYSIS_TOOLS: ToolDef[] = [
     call: proposeAssessment, refused: refusedProposal,
   },
   {
-    name: "propose_narrative", description: "Write one section of the draft: summary, gaps_and_limits, alternatives or assessment.",
+    name: "propose_narrative", description: "Write one section of the draft: summary, gaps_and_limits, alternatives or assessment. A card with no rows that is not a proven negative with full coverage is a gap: name it only in gaps_and_limits.",
     parameters: params({ section: { type: "string", enum: SECTIONS.filter((s) => s !== "key_findings") }, text, cites }, ["section", "text", "cites"]),
     call: proposeNarrative, refused: refusedProposal,
   },
