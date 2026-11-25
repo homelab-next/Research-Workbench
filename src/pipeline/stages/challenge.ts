@@ -3,6 +3,7 @@ import { latestDraft } from "../../core/state";
 import type { PackPart } from "../../agents/context";
 import type { StageEnd, StageEnv } from "../engine";
 import { ContextError, packPart } from "../../agents/context";
+import { reviewPointsPart } from "../review-points";
 import { citedCardParts, draftPart, noSchema, stageAgent, titleOf } from "./agent";
 
 /** Challenge: the adversary argues against the draft pinned at the start. A must-address challenge still open against that hash fails the stage. */
@@ -26,6 +27,14 @@ export async function challengeRunner(env: StageEnv): Promise<StageEnd> {
       if (err instanceof ContextError) return { kind: "stalled", reason: `${titleOf(env)}: ${err.message}` };
       throw err;
     }
+  }
+  try {
+    // the other reviewer's latest points and the analyst's answer
+    const other = reviewPointsPart(session, deps.pipeline, "challenge");
+    if (other !== null) extras.push(other);
+  } catch (err) {
+    if (err instanceof ContextError) return { kind: "stalled", reason: `${titleOf(env)}: ${err.message}` };
+    throw err;
   }
   const task = [
     `Challenge draft ${d.n}.`,

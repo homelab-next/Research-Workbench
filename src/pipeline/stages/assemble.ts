@@ -9,11 +9,12 @@ import type { PackPart } from "../../agents/context";
 import { buildProduct, carriedCites, composeChange, DraftWork, draftOf, termsOf } from "../../agents/draft";
 import { ToolError } from "../../agents/tools/kit";
 import type { StageEnd, StageEnv } from "../engine";
+import { reviewPointsPart } from "../review-points";
 import { agentActor, lastPass, noSchema, requestsOfPass, stageAgent, stageOfRole, titleOf } from "./agent";
 
 /**
- * What is wrong with the latest draft, from the ledger: failed checks, a failed evaluation, open challenges and a person's rejection, as one part.
- * It is about that draft, so it has the draft's marking at least, and the marking of each model request that wrote any of it.
+ * What is wrong with the latest draft, from the ledger: failed checks and a person's rejection, as one part. The reviewers' points are a part of their own.
+ * It is about that draft, so it has the draft's marking at least.
  */
 function mustFix(session: CaseSession): PackPart | null {
   const state = session.state;
@@ -22,29 +23,17 @@ function mustFix(session: CaseSession): PackPart | null {
   const entries = session.entries();
   const r = state.reviews[d.hash]!;
   const out: string[] = [];
-  const by: Entry[] = [];
   for (const c of r.checks) {
     if (c.pass) continue;
     if (c.findings.length === 0) out.push(`Check ${c.check} failed`);
     for (const x of c.findings) out.push(`Check ${x.check} failed at ${x.where}: ${x.message}`);
   }
-  if (r.evaluation !== null && !r.evaluation.pass) {
-    for (const x of r.evaluation.findings) out.push(`Evaluation found at ${x.where}: ${x.message}`);
-    const made = entries.findLast((e) => e.type === "evaluation.made" && e.payload.draft_hash === d.hash);
-    if (made !== undefined) by.push(made);
-  }
-  for (const c of Object.values(state.challenges)) {
-    if (c.status === "open" && (c.draft_hash === d.hash || (c.run === state.run.id && c.severity === "must_address"))) {
-      out.push(`Open challenge ${c.id} (${c.severity}): ${c.text}`);
-      const raised = entries.find((e) => e.type === "challenge.raised" && e.payload.challenge.id === c.id);
-      if (raised !== undefined) by.push(raised);
-    }
-  }
+  // the reviewers' points are in their own part, one list labelled by reviewer (reviewPointsPart)
   if (r.rejected !== null) out.push(`The person rejected this revision: ${r.rejected.reason}`);
   if (out.length === 0) return null;
   return packPart({
     kind: "note", id: "must-fix", title: "What must be fixed in the latest draft", text: out.map((x) => `- ${x}`).join("\n"), fixed: true,
-    entries, written_by: by, floor: d.product.marking,
+    entries, written_by: [], floor: d.product.marking,
   });
 }
 
@@ -101,9 +90,11 @@ export async function assembleRunner(env: StageEnv): Promise<StageEnd> {
   let research: ReturnType<typeof lastPass> = null;
   try {
     fixes = mustFix(session);
+    const points = reviewPointsPart(session, deps.pipeline, "assemble");
     const researchStage = stageOfRole(env, "research");
     research = researchStage === null ? null : lastPass(session, researchStage);
     if (fixes !== null) extras.push(fixes);
+    if (points !== null) extras.push(points);
     if (research !== null) {
       // the researchers' notes are text models wrote: as strict as the requests of that pass
       const entries = session.entries();

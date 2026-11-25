@@ -2,7 +2,9 @@ import type { Json } from "../../core/canonical";
 import { latestDraft } from "../../core/state";
 import type { CheckFinding } from "../../core/types";
 import type { StageEnd, StageEnv } from "../engine";
-import { agentActor, citedCardParts, draftPart, noSchema, stageAgent } from "./agent";
+import { ContextError } from "../../agents/context";
+import { reviewPointsPart } from "../review-points";
+import { agentActor, citedCardParts, draftPart, noSchema, stageAgent, titleOf } from "./agent";
 
 /** Evaluate: checks the draft pinned at the start of the stage against the cards it cites. The verdict is recorded against that draft's hash. */
 export async function evaluateRunner(env: StageEnv): Promise<StageEnd> {
@@ -18,7 +20,16 @@ export async function evaluateRunner(env: StageEnv): Promise<StageEnd> {
     "Reply with pass, and for each problem the check, where it is and what is wrong.",
   ].join("\n");
   const actorId = deps.profile.stages[stage.id]?.agent ?? "evaluator";
-  const end = await stageAgent(env, { actor_id: actorId, task, extras: [draftPart(session, d), ...citedCardParts(session, deps.registry, d)] });
+  const extras = [draftPart(session, d), ...citedCardParts(session, deps.registry, d)];
+  try {
+    // the other reviewer's points and the analyst's answers
+    const other = reviewPointsPart(session, deps.pipeline, "evaluate");
+    if (other !== null) extras.push(other);
+  } catch (err) {
+    if (err instanceof ContextError) return { kind: "stalled", reason: `${titleOf(env)}: ${err.message}` };
+    throw err;
+  }
+  const end = await stageAgent(env, { actor_id: actorId, task, extras });
   if (end.kind !== "output") return end;
   const { pass, findings } = end.output as unknown as { pass: boolean; findings: CheckFinding[] };
   const actor = agentActor(session, actorId);

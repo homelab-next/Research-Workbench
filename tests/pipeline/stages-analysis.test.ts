@@ -642,3 +642,42 @@ test("once a judgment has been published in the case, the answer schema allows a
   expect(reask.content).not.toContain(RULED_OUT);
   expect(f.s.state.drafts[0]!.product.change).toBe("Consistent with detail.");
 });
+
+// ---- reviewers who disagree (task 17) ----
+
+/** The ids of the parts in the pack of the actor's request `ordinal`. */
+const packIds = (actor: string, ordinal: number): string[] => ofType("model.request").filter((e) => e.actor.id === actor)[ordinal]!.payload.pack.map((i) => i.id);
+/** Draft 3: f1 reworded again. */
+const THIRD: ScriptReply[] = [calls(finding("it is internal and managed by IT", ["c1"], { replaces: "f1" })), out("third")];
+const EVAL_F1 = say({ pass: false, findings: [{ check: "support", where: "f1", message: "f1 is not supported by c1" }] });
+
+test("the open review points of both reviewers are one list: Assemble sees each labelled by reviewer, with the analyst's earlier answers", async () => {
+  // draft 1: Challenge raises x1; draft 2 answers it; Evaluate fails draft 2 on f1; draft 3 answers that
+  const r = rig({ analyst: [...FIRST, ...SECOND_ANSWERING, ...THIRD], evaluator: [EVAL_PASS, EVAL_F1, EVAL_PASS], adversary: [MUST, CHALLENGE_PASS, CHALLENGE_PASS] });
+  expect(await go(r)).toMatchObject({ status: "waiting", waiting: "publish" });
+  expect(f.s.state.drafts.map((d) => d.n)).toEqual([1, 2, 3]);
+  // the third Assemble pass (requests 4 and 5)
+  expect(packIds("analyst", 4)).toContain("review-points");
+  const text = requestText("analyst", 4);
+  expect(text).toContain("Open review points, by reviewer");
+  expect(text).toContain("- Evaluate, on draft 2, at f1: f1 is not supported by c1");
+  expect(text).toContain("- Challenge x1 (must_address, on draft 1): the asset record may be stale. Answered (revised): f1 now says the record is managed");
+  // the first pass had nothing to answer
+  expect(packIds("analyst", 0)).not.toContain("review-points");
+});
+
+test("Evaluate's pack carries Challenge's points with the analyst's answers, and Challenge's pack carries Evaluate's latest points with the analyst's answer", async () => {
+  const r = rig({ analyst: [...FIRST, ...SECOND_ANSWERING, ...THIRD], evaluator: [EVAL_PASS, EVAL_F1, EVAL_PASS], adversary: [MUST, CHALLENGE_PASS, CHALLENGE_PASS] });
+  await go(r);
+  // Evaluate on draft 2 (its second request)
+  expect(packIds("evaluator", 0)).not.toContain("other-review");
+  expect(packIds("evaluator", 1)).toContain("other-review");
+  const ev = requestText("evaluator", 1);
+  expect(ev).toContain("Challenge's points and the analyst's answers");
+  expect(ev).toContain("- Challenge x1 (must_address, on draft 1): the asset record may be stale. Answered (revised): f1 now says the record is managed");
+  // Challenge on draft 3 (its third request)
+  expect(packIds("adversary", 2)).toContain("other-review");
+  const ch = requestText("adversary", 2);
+  expect(ch).toContain("Evaluate's latest points and the analyst's answers");
+  expect(ch).toContain("- Evaluate, on draft 2, at f1: f1 is not supported by c1. Answered in draft 3: f1 reworded");
+});
