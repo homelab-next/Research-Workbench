@@ -4,6 +4,8 @@ import type { Usage } from "../../core/state";
 import type { Where } from "../../core/types";
 import { assertNoEcho, CONTROL, LOOPBACK, loadCredential, NUMERIC_LOOPBACK, parseBase, readCapped, refuseOwnServer, scrub, TimedOut, TooBig } from "../../modules/connectors/shared";
 import type { Secrets } from "../../modules/secrets";
+import { mergeRequestExtra, requestExtraProblem } from "./extra";
+import type { RequestExtra } from "./extra";
 import { mergeSampling } from "./sampling";
 import type { ModelInfo, Provider, Sampling, ToolCall, Transient, TurnRequest, TurnResult } from "./types";
 
@@ -30,6 +32,8 @@ export interface LocalOptions {
   sampling?: Sampling;
   /** Whether a request may carry a json_schema response_format; true when absent. */
   structured_output?: boolean;
+  /** Extra fields merged into every chat request body (a request's own win key by key); may not name a key the workbench sends itself. */
+  request_extra?: RequestExtra;
   /** `host:port` of this workbench's own server, asked each time: a model endpoint may not point at it. */
   refuse_hosts?: () => readonly string[];
 }
@@ -53,6 +57,7 @@ export class LocalProvider implements Provider {
   readonly max_output_tokens: number;
   readonly structured_output: boolean;
   readonly sampling: Sampling;
+  readonly request_extra: RequestExtra;
   readonly #base: string;
   readonly #origin: string;
   readonly #secret: string | null;
@@ -84,6 +89,11 @@ export class LocalProvider implements Provider {
     this.max_output_tokens = opts.max_output_tokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
     this.structured_output = opts.structured_output ?? true;
     this.sampling = mergeSampling(undefined, opts.sampling);
+    if (opts.request_extra !== undefined) {
+      const problem = requestExtraProblem(opts.request_extra);
+      if (problem !== null) throw new Error(problem);
+    }
+    this.request_extra = mergeRequestExtra(undefined, opts.request_extra);
   }
 
   /** Throws a plain Error naming the cause when the endpoint is the workbench's own server. */
@@ -178,6 +188,8 @@ export class LocalProvider implements Provider {
     out.stream = false;
     out.max_tokens = req.max_output_tokens ?? this.max_output_tokens;
     Object.assign(out, mergeSampling(this.sampling, req.sampling));
+    // reserved keys are left out of both, so these add fields and never replace one the workbench set; a chosen effort below wins over a reasoning_effort here
+    Object.assign(out, mergeRequestExtra(this.request_extra, req.request_extra));
     if (req.effort !== null && this.#efforts.includes(req.effort)) out.reasoning_effort = req.effort;
     if (req.response_format !== undefined && this.structured_output) {
       const name = req.response_format.name.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64) || "output";

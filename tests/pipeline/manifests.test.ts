@@ -158,6 +158,19 @@ test("a stage may give sampling and max_output_tokens, validated; a stage withou
   }
 });
 
+test("a stage may give request_extra, a map that names no key the workbench sends itself; a stage without it has none", () => {
+  expect(load().pipeline!.stages.find((s) => s.id === "plan")!.request_extra).toBeNull();
+  const text = readFileSync(file("plan"), "utf8");
+  writeFileSync(file("plan"), text + "request_extra:\n  chat_template_kwargs: { enable_thinking: false }\n  reasoning_effort: low\n");
+  expect(load().pipeline!.stages.find((s) => s.id === "plan")!.request_extra).toEqual({ chat_template_kwargs: { enable_thinking: false }, reasoning_effort: "low" });
+  for (const bad of ["request_extra: [1]\n", "request_extra: on\n", "request_extra: { model: x }\n", "request_extra: { max_tokens: 5 }\n", "request_extra: { top_p: 0.5 }\n", "request_extra: { response_format: {} }\n"]) {
+    writeFileSync(file("plan"), text + bad);
+    const { pipeline, problems } = load();
+    expect(problems.some((p) => p.includes("plan") && p.includes("request_extra"))).toBe(true);
+    expect(pipeline === null || !pipeline.stages.some((s) => s.id === "plan")).toBe(true);
+  }
+});
+
 test("a stage may set max_turns, a positive integer; a stage without it has none", () => {
   expect(load().pipeline!.stages.find((s) => s.id === "plan")!.max_turns).toBeNull();
   const text = readFileSync(file("plan"), "utf8");

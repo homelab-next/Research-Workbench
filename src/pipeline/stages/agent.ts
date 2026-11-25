@@ -95,6 +95,7 @@ export async function stageAgent(env: StageEnv, opts: {
     ...(stage.sampling === null || stage.sampling === undefined ? {} : { sampling: stage.sampling }),
     ...(stage.max_output_tokens === null || stage.max_output_tokens === undefined ? {} : { max_output_tokens: stage.max_output_tokens }),
     ...(stage.max_turns === null || stage.max_turns === undefined ? {} : { max_turns: stage.max_turns }),
+    ...(stage.request_extra === null || stage.request_extra === undefined ? {} : { request_extra: stage.request_extra }),
     policy: deps.config.marking_policy, max_marking: Object.hasOwn(state.pack_limits, stage.id) ? state.pack_limits[stage.id]! : null,
     ctx: {
       session, deps: deps.runner, seeker: deps.seeker, actor: who.actor, link: { run: state.run.id, stage: stage.id, job: opts.job ?? null },

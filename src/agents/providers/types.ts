@@ -1,6 +1,7 @@
 import type { Schema } from "../../core/schema";
 import type { Usage } from "../../core/state";
 import type { Where } from "../../core/types";
+import type { RequestExtra } from "./extra";
 
 /** Sampling settings, sent in the chat request body under these names; only the ones given are sent. */
 export interface Sampling { temperature?: number; top_p?: number; top_k?: number; min_p?: number; presence_penalty?: number; frequency_penalty?: number; repeat_penalty?: number }
@@ -15,6 +16,8 @@ export interface ModelInfo { id: string; context: number | null; efforts: string
 export interface TurnRequest { model: string; effort: string | null; messages: ChatMessage[]; tools: ToolSpec[]; key: string; ordinal: number; response_format?: { name: string; schema: Schema };
   /** This request's own sampling and output limit (a stage's): each wins over the provider's. */
   sampling?: Sampling; max_output_tokens?: number;
+  /** This request's own extra body fields (a stage's request_extra): each wins over the provider's, key by key. */
+  request_extra?: RequestExtra;
   /** "none" on an agent's last turn: the reply may hold no tool call, only the answer. Sent only when the request has tools. */
   tool_choice?: "none" }
 export type TurnResult =

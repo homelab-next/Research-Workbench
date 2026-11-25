@@ -16,13 +16,14 @@ const standin = (replies: (StandinReply | ((b: Record<string, never>) => Standin
   stops.push(m.stop);
   return m;
 };
-const provider = (url: string, o: { credential?: string | null; context?: number | null; efforts?: string[]; timeout_ms?: number; max_bytes?: number; max_output_tokens?: number; structured_output?: boolean; sampling?: Record<string, number> } = {}) =>
+const provider = (url: string, o: { credential?: string | null; context?: number | null; efforts?: string[]; timeout_ms?: number; max_bytes?: number; max_output_tokens?: number; structured_output?: boolean; sampling?: Record<string, number>; request_extra?: Record<string, unknown> } = {}) =>
   new LocalProvider({
     id: "lm", base_url: url, where: "machine", credential: o.credential ?? null, secrets: new Secrets({ LM_KEY: KEY }, null),
     context: o.context ?? null, efforts: o.efforts ?? [], timeout_ms: o.timeout_ms ?? 5000, ...(o.max_bytes === undefined ? {} : { max_bytes: o.max_bytes }),
     ...(o.max_output_tokens === undefined ? {} : { max_output_tokens: o.max_output_tokens }),
     ...(o.structured_output === undefined ? {} : { structured_output: o.structured_output }),
     ...(o.sampling === undefined ? {} : { sampling: o.sampling }),
+    ...(o.request_extra === undefined ? {} : { request_extra: o.request_extra as never }),
   });
 const req = (over: Partial<TurnRequest> = {}): TurnRequest => ({
   model: "qwen/qwen3.6-35b-a3b", effort: null, key: "a", ordinal: 0,
@@ -322,4 +323,24 @@ test("every request turns off Bun's own idle timeout, so the manifest's timeout_
   }
   expect(inits.length).toBe(3);
   for (const init of inits) expect(init.timeout).toBe(false);
+});
+
+test("request_extra from the model and from the request go in the chat body, the request's winning key by key", async () => {
+  const m = standin([ok({ content: "a" }), ok({ content: "b" })]);
+  const p = provider(m.url, { request_extra: { chat_template_kwargs: { enable_thinking: true }, reasoning_effort: "high", seed: 7 } });
+  await p.turn(req());
+  await p.turn(req({ request_extra: { chat_template_kwargs: { enable_thinking: false }, reasoning_effort: "low" } }));
+  const [a, b] = sentBodies(m);
+  expect(a).toMatchObject({ chat_template_kwargs: { enable_thinking: true }, reasoning_effort: "high", seed: 7 });
+  expect(b).toMatchObject({ chat_template_kwargs: { enable_thinking: false }, reasoning_effort: "low", seed: 7 });
+  expect(JSON.parse(new TextDecoder().decode(provider(m.url).body(req()))) as Record<string, unknown>).not.toHaveProperty("seed");
+});
+
+test("request_extra cannot set a key the workbench sends itself: the model's is refused, a request's is left out", () => {
+  for (const k of ["model", "messages", "tools", "tool_choice", "response_format", "max_tokens", "stream", "temperature", "top_k", "repeat_penalty"]) {
+    expect(() => provider("http://127.0.0.1:9/v1", { request_extra: { [k]: 1 } })).toThrow(k);
+  }
+  const p = provider("http://127.0.0.1:9/v1", { sampling: { temperature: 0.5 }, max_output_tokens: 100 });
+  const sent = JSON.parse(new TextDecoder().decode(p.body(req({ request_extra: { model: "other", max_tokens: 1, temperature: 2, stream: true, seed: 3 } as never })))) as Record<string, unknown>;
+  expect(sent).toMatchObject({ model: "qwen/qwen3.6-35b-a3b", max_tokens: 100, temperature: 0.5, stream: false, seed: 3 });
 });

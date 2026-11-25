@@ -189,3 +189,17 @@ test("sampling is a map of known settings in sane ranges; the provider sends the
     expect(out.problems.map((p) => p.error).join()).toContain("sampling");
   }
 });
+
+test("request_extra is a map that may not name a key the workbench sends itself; the provider sends it", () => {
+  const sent = (text: string): Record<string, unknown> | null => {
+    const p = loadLocal(text).providers.get("lm");
+    return p === null ? null : (JSON.parse(new TextDecoder().decode(p.body({ model: "m", effort: null, messages: [], tools: [], key: "a", ordinal: 0 }))) as Record<string, unknown>);
+  };
+  expect(sent(local({ request_extra: "{ chat_template_kwargs: { enable_thinking: false }, reasoning_effort: low }" }))).toMatchObject({ chat_template_kwargs: { enable_thinking: false }, reasoning_effort: "low" });
+  expect(sent(local({ request_extra: "null" }))).not.toHaveProperty("chat_template_kwargs");
+  for (const bad of ["[1]", "3", "{ model: x }", "{ messages: [] }", "{ tools: [] }", "{ tool_choice: none }", "{ response_format: {} }", "{ max_tokens: 5 }", "{ temperature: 0.1 }", "{ stream: true }"]) {
+    const out = loadLocal(local({ request_extra: bad }));
+    expect(out.providers.get("lm")).toBeNull();
+    expect(out.problems.map((p) => p.error).join()).toContain("request_extra");
+  }
+});

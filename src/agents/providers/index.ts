@@ -7,6 +7,8 @@ import type { LoadedManifest } from "../../modules/manifests";
 import type { Problem, Registry } from "../../modules/registry";
 import type { Secrets } from "../../modules/secrets";
 import { LocalProvider } from "./local";
+import { requestExtraProblem } from "./extra";
+import type { RequestExtra } from "./extra";
 import { SAMPLING_SCHEMA } from "./sampling";
 import { ScriptedProvider, toScript } from "./scripted";
 import type { Script } from "./scripted";
@@ -53,6 +55,7 @@ const LOCAL_SCHEMA: Schema = {
     max_output_tokens: { type: "integer", minimum: 1 },
     structured_output: { type: "boolean" },
     sampling: SAMPLING_SCHEMA,
+    request_extra: { type: "object" },
   },
   additionalProperties: true,
 };
@@ -62,6 +65,10 @@ function buildLocal(m: LoadedManifest, registry: Registry, secrets: Secrets, own
   const body = withoutNulls(m.body as Json) as Record<string, Json>;
   const errors = validate(LOCAL_SCHEMA, body);
   if (errors.length > 0) return describeErrors(errors);
+  if (body.request_extra !== undefined) {
+    const problem = requestExtraProblem(body.request_extra);
+    if (problem !== null) return problem;
+  }
   const credential = typeof body.credential === "string" ? body.credential : null;
   if (credential !== null && !(registry.rootOf(m.path)?.credentials ?? []).includes(credential)) {
     return `model "${m.id}" names credential "${credential}", which this root's credentials do not include`;
@@ -79,6 +86,7 @@ function buildLocal(m: LoadedManifest, registry: Registry, secrets: Secrets, own
       ...(typeof body.max_output_tokens === "number" ? { max_output_tokens: body.max_output_tokens } : {}),
       ...(typeof body.structured_output === "boolean" ? { structured_output: body.structured_output } : {}),
       ...(isPlainObject(body.sampling) ? { sampling: body.sampling as Sampling } : {}),
+      ...(isPlainObject(body.request_extra) ? { request_extra: body.request_extra as RequestExtra } : {}),
       ...(own === undefined ? {} : { refuse_hosts: own }),
     });
   } catch (err) {

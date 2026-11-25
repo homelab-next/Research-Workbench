@@ -592,11 +592,12 @@ test("the conversational agent, which works beside the run, is not retried", asy
 });
 
 /** A local provider on a stand-in endpoint answering these contents in turn; `bodies` are the request bodies it received. */
-function onStandin(contents: string[], structured?: boolean) {
+function onStandin(contents: string[], structured?: boolean, request_extra?: Record<string, never>) {
   const m = startModelStandin({ replies: contents.map((content) => ({ json: { choices: [{ finish_reason: "stop", message: { content } }] } })) });
   const p = new LocalProvider({
     id: "lm", base_url: m.url, where: "machine", credential: null, secrets: new Secrets({}, null), context: null, efforts: [], timeout_ms: 5000,
     ...(structured === undefined ? {} : { structured_output: structured }),
+    ...(request_extra === undefined ? {} : { request_extra }),
   });
   const bodies = (): Record<string, unknown>[] => m.requests.filter((r) => r.method === "POST").map((r) => JSON.parse(r.body) as Record<string, unknown>);
   return { p, bodies, stop: m.stop };
@@ -688,6 +689,17 @@ test("what a stage's sampling and limit make the local provider send is what mod
     await runAgent(f.s, spec(sa.p, { schema: SCHEMA, sampling: { temperature: 0.3 }, max_output_tokens: 4096 }));
     const [sent] = sa.bodies();
     expect(sent).toMatchObject({ temperature: 0.3, max_tokens: 4096 });
+    const recorded = ofType("model.request").map((e) => JSON.parse(text(e.payload.messages)) as Record<string, unknown>);
+    expect(recorded).toEqual([sent!]);
+  } finally { sa.stop(); }
+});
+
+test("the model's and the stage's request_extra go in the local provider's body, the stage's winning, and model.request records it", async () => {
+  const sa = onStandin(['{"n":1}'], undefined, { chat_template_kwargs: { enable_thinking: true }, seed: 1 } as never);
+  try {
+    await runAgent(f.s, spec(sa.p, { schema: SCHEMA, request_extra: { chat_template_kwargs: { enable_thinking: false } } }));
+    const [sent] = sa.bodies();
+    expect(sent).toMatchObject({ chat_template_kwargs: { enable_thinking: false }, seed: 1 });
     const recorded = ofType("model.request").map((e) => JSON.parse(text(e.payload.messages)) as Record<string, unknown>);
     expect(recorded).toEqual([sent!]);
   } finally { sa.stop(); }

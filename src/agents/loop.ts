@@ -9,6 +9,7 @@ import { strictest } from "../core/types";
 import { mayGo, renderPack, tooStrict } from "./pack";
 import type { Pack } from "./pack";
 import type { ChatMessage, Provider, Sampling, TurnRequest, TurnResult } from "./providers/types";
+import type { RequestExtra } from "./providers/extra";
 import { execTool, parseCall, toolSpecs, viewText } from "./tools";
 import type { ToolContext, ToolName } from "./tools";
 
@@ -32,6 +33,8 @@ export interface AgentSpec {
   schema_id?: string;
   /** This agent's own sampling and output limit (the stage's): each wins over the model's. */
   sampling?: Sampling; max_output_tokens?: number;
+  /** This agent's own extra chat-body fields (the stage's request_extra): each wins over the model's, key by key. */
+  request_extra?: RequestExtra;
   policy: Record<Marking, Where[]>; max_marking: Marking | null; max_turns?: number;
   /** True for an agent that works beside the run (the conversational one): the run being paused, finished or out of budget does not stop it. The marking check and every entry written are the same. */
   outside_run?: boolean;
@@ -172,6 +175,7 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     const req: TurnRequest = { model: spec.model, effort: spec.effort, messages: sent, tools: toolSpecs(spec.tools, ctx), key: actor.id, ordinal };
     if (spec.sampling !== undefined) req.sampling = spec.sampling;
     if (spec.max_output_tokens !== undefined) req.max_output_tokens = spec.max_output_tokens;
+    if (spec.request_extra !== undefined) req.request_extra = spec.request_extra;
     if (last) req.tool_choice = "none";
     if ((reasked || last) && spec.schema !== null && provider.structured_output === true) req.response_format = { name: spec.schema_id ?? "output", schema: spec.schema };
     const body = provider.body(req);

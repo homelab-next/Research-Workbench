@@ -15,6 +15,8 @@ import { TOOL_NAMES } from "../agents/tools";
 import type { ToolName } from "../agents/tools";
 import { SAMPLING_SCHEMA } from "../agents/providers/sampling";
 import type { Sampling } from "../agents/providers/types";
+import { requestExtraProblem } from "../agents/providers/extra";
+import type { RequestExtra } from "../agents/providers/extra";
 
 export const ROLES = ["frame", "plan", "research", "assemble", "checks", "evaluate", "challenge", "publish", "feedback"] as const;
 export type Role = (typeof ROLES)[number];
@@ -22,6 +24,8 @@ export type Role = (typeof ROLES)[number];
 export interface StageManifest extends StageDef { hash: string; order: number; role: Role; tools: ToolName[]; schema: string | null; on_pass: string | null; on_fail: string | null;
   /** This stage's own sampling and output limit; each wins over the model manifest's. */
   sampling?: Sampling | null; max_output_tokens?: number | null;
+  /** Extra fields this stage's requests add to the chat body; each wins over the model manifest's, key by key. */
+  request_extra?: RequestExtra | null;
   /** The most turns this stage's agent has (the loop's MAX_TURNS when null). */
   max_turns?: number | null }
 export interface Pipeline { id: string; hash: string; stages: StageManifest[] }
@@ -57,13 +61,14 @@ const STAGE_SCHEMA: Schema = {
     sampling: { anyOf: [{ type: "null" }, SAMPLING_SCHEMA] },
     max_output_tokens: { anyOf: [{ type: "null" }, { type: "integer", minimum: 1 }] },
     max_turns: { anyOf: [{ type: "null" }, { type: "integer", minimum: 1 }] },
+    request_extra: { anyOf: [{ type: "null" }, { type: "object" }] },
   },
 };
 
 type Body = {
   id: string; title?: string; order: number; phase?: string | null; runs: StageDef["runs"]; role: string; gate?: StageDef["gate"]; reviews?: boolean;
   tools?: string[] | null; schema?: string | null; model?: { provider: string; model: string; effort?: string | null } | null; on_pass?: string | null; on_fail?: string | null;
-  sampling?: Sampling | null; max_output_tokens?: number | null; max_turns?: number | null;
+  sampling?: Sampling | null; max_output_tokens?: number | null; max_turns?: number | null; request_extra?: RequestExtra | null;
 };
 
 /** One manifest as a stage, or the reason it cannot be used. */
@@ -78,10 +83,15 @@ function toStage(m: LoadedManifest, registry: Registry): StageManifest | string 
   if (unknown !== undefined) return `tool "${unknown}" is not in the fixed tool list`;
   const model = b.model == null ? null : { provider: b.model.provider, model: b.model.model, effort: b.model.effort ?? null };
   if (b.runs === "agent" && model === null) return "a stage that runs an agent needs a model";
+  if (b.request_extra !== undefined && b.request_extra !== null) {
+    const problem = requestExtraProblem(b.request_extra);
+    if (problem !== null) return problem;
+  }
   return {
     id: b.id, title: b.title ?? m.title, phase: b.phase ?? null, runs: b.runs, gate: b.gate ?? null, reviews: b.reviews ?? false, model,
     hash: m.hash, order: b.order, role: b.role as Role, tools: tools as ToolName[], schema: b.schema ?? null, on_pass: b.on_pass ?? null, on_fail: b.on_fail ?? null,
     sampling: b.sampling ?? null, max_output_tokens: b.max_output_tokens ?? null, max_turns: b.max_turns ?? null,
+    request_extra: b.request_extra ?? null,
   };
 }
 
