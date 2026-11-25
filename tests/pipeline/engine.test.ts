@@ -183,17 +183,18 @@ test("three send-backs along one edge, then the run pauses and says why", async 
   expect(r.log.filter((l) => l === "checks").length).toBe(4);
 });
 
-test("resuming after the cap allows one more send-back", async () => {
+test("resuming after the cap grants a fresh allowance of three send-backs along that edge", async () => {
   const r: Rig = rig({ checks: failingChecks(() => r) });
   r.engine.start(person);
   await r.engine.advance();
   acceptPlan(f.s);
   await r.engine.advance();
+  expect(f.s.state.run.hold).toEqual({ kind: "send_back", edge: "checks>assemble" });
   const sum = await r.engine.resume(person);
-  expect(f.s.state.run.sendbacks).toEqual({ "checks>assemble": 4 });
+  expect(f.s.state.run.sendbacks).toEqual({ "checks>assemble": 6 });
   expect(sum.status).toBe("paused");
   expect(sum.pause_reason).toStartWith("Checks has sent work back to Assemble 3 times.");
-  expect(r.log.filter((l) => l === "checks").length).toBe(5);
+  expect(r.log.filter((l) => l === "checks").length).toBe(7);
 });
 
 test("pause stops the next stage from starting, and resume continues", async () => {
@@ -579,7 +580,7 @@ test("a very long reason is clipped, so the run pauses saying why instead of fai
   expect(again.pause_reason!.length).toBe(4000);
 });
 
-test("a resume that resumed nothing grants no extra send-back", async () => {
+test("a resume that resumed nothing grants no allowance of its own: the resume that did grants the only one", async () => {
   const r: Rig = rig({ checks: failingChecks(() => r) });
   r.engine.start(person);
   await r.engine.advance();
@@ -590,7 +591,8 @@ test("a resume that resumed nothing grants no extra send-back", async () => {
   const before = f.s.entries().filter((e) => e.type === "run.resumed").length;
   const sum = await r.engine.resume(person);
   expect(f.s.entries().filter((e) => e.type === "run.resumed").length).toBe(before);
-  expect(f.s.state.run.sendbacks).toEqual({ "checks>assemble": 3 });
+  // the other hand's resume granted three more; this one, which resumed nothing, granted none on top
+  expect(f.s.state.run.sendbacks).toEqual({ "checks>assemble": 6 });
   expect(sum.status).toBe("paused");
 });
 

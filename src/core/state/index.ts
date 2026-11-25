@@ -32,7 +32,7 @@ export function initial(): CaseState {
     pack_limits: {},
     run: {
       id: null, status: "none", outcome: null, pause_reason: null, waiting: null, stages: [], current: null,
-      sendbacks: {}, sent_back_to: {}, hold: null, usage: { input: 0, output: 0, reasoning: 0 }, model_calls: 0,
+      sendbacks: {}, repeats: {}, sendback_base: {}, sent_back_to: {}, hold: null, usage: { input: 0, output: 0, reasoning: 0 }, model_calls: 0,
       usage_at_start: { input: 0, output: 0, reasoning: 0 }, calls_at_start: 0, budget_tokens: null,
     },
     plan: { current: null, status: "none", accepted_steps: [], budgets: {}, estimates: {}, steps: {} },

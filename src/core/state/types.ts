@@ -35,6 +35,13 @@ export interface RunState {
   current: string | null;
   /** Keyed "from>to". */
   sendbacks: Record<string, number>;
+  /**
+   * Per stage, its starts on one draft (the latest when it started): `starts`, those that were send-backs (`sent_back`), and `base`, the count a person's
+   * resume past the run cap set aside. A start on another draft begins the count again.
+   */
+  repeats: Record<string, { draft: string | null; starts: number; sent_back: number; base: number }>;
+  /** Per edge "from>to", the send-backs a person's resume past the send-back cap set aside. */
+  sendback_base: Record<string, number>;
   /** The stage that last sent work back to each stage (keyed by the stage sent to), until that stage finishes. */
   sent_back_to: Record<string, string>;
   /** What a person's resume of the current pause does besides resuming; null for none. */

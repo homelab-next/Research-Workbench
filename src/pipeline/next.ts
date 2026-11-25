@@ -6,7 +6,10 @@ import type { ConflictFound } from "./conflict";
 import type { Pipeline, StageManifest } from "./manifests";
 
 export const SEND_BACK_CAP = 3;
-/** A stage that has been started this many times in a run, not counting the starts that were send-backs, pauses the run. */
+/**
+ * A stage started this many times on one draft, not counting the starts that were send-backs, pauses the run. A person's resume past it grants a
+ * fresh allowance of as many for that stage; a new draft begins the count again.
+ */
 const MAX_REPEATS = 5;
 
 export type Step =
@@ -40,14 +43,17 @@ export function nextStep(state: Readonly<CaseState>, pipeline: Pipeline, opts: {
   const stateOf = (id: string): StageState | null => run.stages.find((s) => s.id === id) ?? null;
   const title = (id: string): string => stateOf(id)?.title ?? id;
   const attemptsOf = (id: string): number => stateOf(id)?.attempts ?? 0;
-  /** Starts of the stage in this run that were not send-backs; send-backs are bounded by SEND_BACK_CAP. */
-  const startsWithoutSendBack = (id: string): number =>
-    attemptsOf(id) - Object.entries(run.sendbacks).reduce((n, [edge, count]) => (edge.endsWith(`>${id}`) ? n + count : n), 0);
-  /** A stage the run does not know pauses; a stage started again with no send-back, five times already in this run, pauses (a loop that goes nowhere). */
+  const latest = latestDraft(state as CaseState)?.hash ?? null;
+  /** Starts of the stage on the latest draft that were not send-backs, less those a person's resume set aside; send-backs are bounded by SEND_BACK_CAP. */
+  const startsWithoutSendBack = (id: string): number => {
+    const r = Object.hasOwn(run.repeats, id) ? run.repeats[id]! : null;
+    return r === null || r.draft !== latest ? 0 : r.starts - r.sent_back - r.base;
+  };
+  /** A stage the run does not know pauses; a stage started again with no send-back, five times already on this draft, pauses (a loop that goes nowhere). */
   const begin = (stage: string, sent_back: { from: string; to: string; reason: string; count: number } | null = null, again = true): Step => {
     if (stateOf(stage) === null) return { kind: "pause", reason: `the stage ${stage} is not part of this run` };
     if (again && sent_back === null && startsWithoutSendBack(stage) >= MAX_REPEATS && opts.allow_capped !== true) {
-      return { kind: "pause", reason: `${title(stage)} has run ${MAX_REPEATS} times` };
+      return { kind: "pause", reason: `${title(stage)} has run ${MAX_REPEATS} times`, hold: { kind: "stage_runs", stage } };
     }
     return { kind: "start", stage, attempt: attemptsOf(stage) + 1, sent_back };
   };
@@ -74,9 +80,12 @@ export function nextStep(state: Readonly<CaseState>, pipeline: Pipeline, opts: {
       if (conflict !== null && conflict.kind === "conflict") return { kind: "pause", reason: conflict.reason, conflicts: conflict.fresh };
       if (conflict !== null && conflict.kind === "only_ruled") return { kind: "pause", reason: conflict.reason, hold: { kind: "ruled", stage: st.id } };
       if (conflict !== null) reason = conflict.reason;
-      const n = Object.hasOwn(run.sendbacks, `${st.id}>${m.on_fail}`) ? run.sendbacks[`${st.id}>${m.on_fail}`]! : 0;
-      if (n >= SEND_BACK_CAP && opts.allow_capped !== true) {
-        return { kind: "pause", reason: `${st.title} has sent work back to ${title(m.on_fail)} ${SEND_BACK_CAP} times. Last reason: ${reason}` };
+      const edge = `${st.id}>${m.on_fail}`;
+      const n = Object.hasOwn(run.sendbacks, edge) ? run.sendbacks[edge]! : 0;
+      // the cap counts since a person's resume past it last set the count aside
+      const base = Object.hasOwn(run.sendback_base, edge) ? run.sendback_base[edge]! : 0;
+      if (n - base >= SEND_BACK_CAP && opts.allow_capped !== true) {
+        return { kind: "pause", reason: `${st.title} has sent work back to ${title(m.on_fail)} ${SEND_BACK_CAP} times. Last reason: ${reason}`, hold: { kind: "send_back", edge } };
       }
       return begin(m.on_fail, { from: st.id, to: m.on_fail, reason, count: n + 1 });
     }

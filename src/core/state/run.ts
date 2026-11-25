@@ -29,7 +29,17 @@ const isProposal = (x: unknown): x is Proposal => {
   return false;
 };
 
-const isHold = (x: unknown): x is RunHold => isObj(x) && x.kind === "ruled" && isStr(x.stage);
+const isHold = (x: unknown): x is RunHold =>
+  isObj(x) && (((x.kind === "ruled" || x.kind === "stage_runs") && isStr(x.stage)) || (x.kind === "send_back" && isStr(x.edge)));
+
+/** The stage's count on the latest draft, begun again when the draft is another. */
+function repeatsOn(s: CaseState, stage: string): CaseState["run"]["repeats"][string] {
+  const draft = s.drafts.length === 0 ? null : s.drafts[s.drafts.length - 1]!.hash;
+  const r = Object.hasOwn(s.run.repeats, stage) ? s.run.repeats[stage]! : null;
+  return r !== null && r.draft === draft ? r : { draft, starts: 0, sent_back: 0, base: 0 };
+}
+const withRepeats = (s: CaseState, stage: string, r: CaseState["run"]["repeats"][string]): CaseState =>
+  ({ ...s, run: { ...s.run, repeats: { ...s.run.repeats, [stage]: r } } });
 
 const OUTCOME_STATUS = { pass: "passed", fail: "failed", declined: "declined" } as const;
 
@@ -216,7 +226,7 @@ function applyPipeline(s: CaseState, entry: Entry): CaseState {
       }));
       return withRun(s, {
         id: run, status: "running", outcome: null, pause_reason: null, waiting: null, stages: built, current: null,
-        sendbacks: {}, sent_back_to: {}, hold: null, usage_at_start: s.run.usage, calls_at_start: s.run.model_calls,
+        sendbacks: {}, repeats: {}, sendback_base: {}, sent_back_to: {}, hold: null, usage_at_start: s.run.usage, calls_at_start: s.run.model_calls,
       });
     }
     case "run.paused": {
@@ -228,8 +238,18 @@ function applyPipeline(s: CaseState, entry: Entry): CaseState {
     case "run.resumed": {
       if (finished || !hasRun(s)) return s;
       // a person's resume does what the pause held besides: a reviewer that raised only ruled points reviews again
+      // a person's resume past a cap grants a fresh allowance of it: what was counted is set aside
       const hold = s.run.status === "paused" && entry.actor.kind === "human" ? s.run.hold : null;
-      const next = hold !== null && hold.kind === "ruled" ? withStage(s, hold.stage, (st) => (st.status === "failed" ? { ...st, status: "idle" } : st)) : s;
+      let next = s;
+      if (hold !== null && hold.kind === "ruled") next = withStage(s, hold.stage, (st) => (st.status === "failed" ? { ...st, status: "idle" } : st));
+      if (hold !== null && hold.kind === "stage_runs" && Object.hasOwn(s.run.repeats, hold.stage)) {
+        const r = s.run.repeats[hold.stage]!;
+        next = withRepeats(s, hold.stage, { ...r, base: r.starts - r.sent_back });
+      }
+      if (hold !== null && hold.kind === "send_back") {
+        const n = Object.hasOwn(s.run.sendbacks, hold.edge) ? s.run.sendbacks[hold.edge]! : 0;
+        next = withRun(s, { sendback_base: { ...s.run.sendback_base, [hold.edge]: n } });
+      }
       return withRun(next, { status: s.run.waiting ? "waiting" : "running", pause_reason: null, hold: null });
     }
     case "run.interrupted":
@@ -257,8 +277,10 @@ function applyPipeline(s: CaseState, entry: Entry): CaseState {
       const { stage, attempt } = entry.payload;
       if (!isStr(stage) || !isNum(attempt)) return malformed(s, entry);
       if (finished) return s;
-      const next = withStage(s, stage, (st) => ({ ...st, status: "running", attempts: attempt }));
-      if (next === s) return s;
+      const started = withStage(s, stage, (st) => ({ ...st, status: "running", attempts: attempt }));
+      if (started === s) return s;
+      const r = repeatsOn(s, stage);
+      const next = withRepeats(started, stage, { ...r, starts: r.starts + 1 });
       // starting any stage but the gate's own takes the run out of its gate, waiting or paused there
       const leaving = s.run.waiting !== null && s.run.stages.find((x) => x.id === stage)?.gate !== s.run.waiting;
       return withRun(next, { current: stage, status: s.run.status === "paused" ? "paused" : "running", waiting: leaving ? null : s.run.waiting });
@@ -276,8 +298,10 @@ function applyPipeline(s: CaseState, entry: Entry): CaseState {
       const { from, to, count, reason } = entry.payload;
       if (!isStr(from) || !isStr(to) || !isNum(count) || !isStr(reason)) return malformed(s, entry);
       if (finished || !s.run.stages.some((x) => x.id === from)) return s;
-      const next = withStage(s, to, (st) => ({ ...st, status: "idle" }));
-      if (next === s) return s;
+      const idle = withStage(s, to, (st) => ({ ...st, status: "idle" }));
+      if (idle === s) return s;
+      const r = repeatsOn(s, to);
+      const next = withRepeats(idle, to, { ...r, sent_back: r.sent_back + 1 });
       return withRun(next, { sendbacks: { ...s.run.sendbacks, [`${from}>${to}`]: count }, sent_back_to: { ...s.run.sent_back_to, [to]: from } });
     }
     case "gate.waiting": {

@@ -81,7 +81,7 @@ const failedChecks = (b: EntryBuilder, sendbacks: Record<string, number> = { "ch
 test("the fourth send-back along one edge pauses instead", () => {
   const state = run((b) => { failedChecks(b); });
   expect(state.run.sendbacks).toEqual({ "checks>assemble": 3 });
-  expect(nextStep(state, pipeline)).toEqual({ kind: "pause", reason: "Checks has sent work back to Assemble 3 times. Last reason: no good" });
+  expect(nextStep(state, pipeline)).toEqual({ kind: "pause", reason: "Checks has sent work back to Assemble 3 times. Last reason: no good", hold: { kind: "send_back", edge: "checks>assemble" } });
 });
 
 test("allow_capped lets one more through", () => {
@@ -211,7 +211,7 @@ test("a review stage restarted without a send-back pauses after five runs", () =
     for (let i = 1; i <= n; i++) { b.add("stage.started", { stage: "evaluate", attempt: i }); b.add("stage.finished", { stage: "evaluate", attempt: i, outcome: "pass", draft_hash: null, output: null, reason: null }); }
   });
   expect(nextStep(stale(4), pipeline)).toMatchObject({ kind: "start", stage: "evaluate", attempt: 5 });
-  expect(nextStep(stale(5), pipeline)).toEqual({ kind: "pause", reason: "Evaluate has run 5 times" });
+  expect(nextStep(stale(5), pipeline)).toEqual({ kind: "pause", reason: "Evaluate has run 5 times", hold: { kind: "stage_runs", stage: "evaluate" } });
   expect(nextStep(stale(5), pipeline, { allow_capped: true })).toMatchObject({ kind: "start", stage: "evaluate", attempt: 6 });
 });
 
@@ -225,7 +225,7 @@ test("a stage's attempts are counted across the run, not only its restarts of th
     b.add("stage.started", { stage: "assemble", attempt: 2 }); b.add("stage.finished", { stage: "assemble", attempt: 2, outcome: "pass", draft_hash: d1, output: null, reason: null });
   });
   expect(nextStep(stale(4), pipeline)).toMatchObject({ kind: "start", stage: "challenge", attempt: 5 });
-  expect(nextStep(stale(5), pipeline)).toEqual({ kind: "pause", reason: "Challenge has run 5 times" });
+  expect(nextStep(stale(5), pipeline)).toEqual({ kind: "pause", reason: "Challenge has run 5 times", hold: { kind: "stage_runs", stage: "challenge" } });
   expect(nextStep(stale(5), pipeline, { allow_capped: true })).toMatchObject({ kind: "start", stage: "challenge", attempt: 6 });
   // attempts that began with a send-back are bounded by the send-back cap, not by this rule
   expect(nextStep(stale(5, 2), pipeline)).toMatchObject({ kind: "start", stage: "challenge", attempt: 6 });
@@ -340,4 +340,58 @@ test("a ruled point is not raised again: no new conflict on it, and a review tha
   // with another point beside it, that point is sent back as usual
   const mixed = later([EV_F25, { check: "support", where: "f26", message: "f26 cites too little" }]);
   expect(nextStep(mixed, roled, { likelihood: LIKELIHOOD })).toMatchObject({ kind: "start", stage: "assemble", sent_back: { from: "evaluate" } });
+});
+
+// ---- caps per draft, and a fresh allowance on a person's resume (task 17 item 3) ----
+
+const person = { actor: { kind: "human", id: "analyst" } as const };
+
+test("a stage's run cap counts the runs on the same draft: each new draft starts the count again", () => {
+  // Checks run once on each of six drafts: never five times on one
+  const rounds = run((b) => {
+    for (let n = 1; n <= 6; n++) { revised(b, n); b.add("stage.started", { stage: "checks", attempt: n }); b.add("stage.finished", { stage: "checks", attempt: n, outcome: "pass", draft_hash: draft(n).hash, output: null, reason: null }); }
+    started(b, "evaluate"); finished(b, "evaluate", "pass", null, draft(6).hash);
+    revised(b, 7);
+  });
+  expect(rounds.run.stages.find((s) => s.id === "checks")!.attempts).toBe(6);
+  expect(nextStep(rounds, pipeline)).toMatchObject({ kind: "start", stage: "checks", attempt: 7, sent_back: null });
+  // five runs on the one draft still pause, and say what a resume does
+  const same = run((b) => {
+    revised(b, 1);
+    for (let n = 1; n <= 5; n++) { b.add("stage.started", { stage: "checks", attempt: n }); b.add("stage.finished", { stage: "checks", attempt: n, outcome: "pass", draft_hash: null, output: null, reason: null }); }
+  });
+  expect(nextStep(same, pipeline)).toEqual({ kind: "pause", reason: "Checks has run 5 times", hold: { kind: "stage_runs", stage: "checks" } });
+});
+
+test("a person's resume past the stage cap grants a fresh allowance of the cap for that stage", () => {
+  const runs = (n: number, from = 1) => (b: EntryBuilder) => {
+    for (let i = from; i < from + n; i++) { b.add("stage.started", { stage: "evaluate", attempt: i }); b.add("stage.finished", { stage: "evaluate", attempt: i, outcome: "pass", draft_hash: null, output: null, reason: null }); }
+  };
+  const capped = (b: EntryBuilder) => {
+    passed(b, "assemble"); revised(b, 1); started(b, "checks"); finished(b, "checks", "pass", null, draft(1).hash);
+    runs(5)(b);
+    b.add("run.paused", { reason: "Evaluate has run 5 times", hold: { kind: "stage_runs", stage: "evaluate" } });
+    b.add("run.resumed", {}, person);
+  };
+  expect(nextStep(run(capped), pipeline)).toMatchObject({ kind: "start", stage: "evaluate", attempt: 6 });
+  expect(nextStep(run((b) => { capped(b); runs(4, 6)(b); }), pipeline)).toMatchObject({ kind: "start", stage: "evaluate", attempt: 10 });
+  expect(nextStep(run((b) => { capped(b); runs(5, 6)(b); }), pipeline)).toEqual({ kind: "pause", reason: "Evaluate has run 5 times", hold: { kind: "stage_runs", stage: "evaluate" } });
+  // the allowance is that stage's: another stage's count is untouched
+  expect(run(capped).run.repeats.checks).toMatchObject({ starts: 1, base: 0 });
+});
+
+test("the send-back cap per edge stays three; a person's resume past it grants three more along that edge", () => {
+  const capped = run((b) => { failedChecks(b); });
+  expect(nextStep(capped, pipeline)).toEqual({ kind: "pause", reason: "Checks has sent work back to Assemble 3 times. Last reason: no good", hold: { kind: "send_back", edge: "checks>assemble" } });
+  const resumed = (more: number) => run((b) => {
+    failedChecks(b);
+    b.add("run.paused", { reason: "capped", hold: { kind: "send_back", edge: "checks>assemble" } });
+    b.add("run.resumed", {}, person);
+    for (let i = 1; i <= more; i++) b.add("stage.sent_back", { from: "checks", to: "assemble", reason: "r", count: SEND_BACK_CAP + i });
+    // the latest send-back's target ran and Checks failed again
+    if (more > 0) { started(b, "assemble", 2); finished(b, "assemble", "pass"); started(b, "checks", 2); finished(b, "checks", "fail", "no good"); }
+  });
+  expect(nextStep(resumed(0), pipeline)).toMatchObject({ kind: "start", stage: "assemble", sent_back: { count: 4 } });
+  expect(nextStep(resumed(2), pipeline)).toMatchObject({ kind: "start", stage: "assemble", sent_back: { count: 6 } });
+  expect(nextStep(resumed(3), pipeline)).toEqual({ kind: "pause", reason: "Checks has sent work back to Assemble 3 times. Last reason: no good", hold: { kind: "send_back", edge: "checks>assemble" } });
 });

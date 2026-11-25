@@ -95,8 +95,11 @@ export interface ReviewConflict {
   id: string; draft_hash: string; finding: string; change: "likelihood" | "confidence" | "dropped" | "added";
   earlier: string | null; now: string | null; raised_by: string; changed_for: string; asks: string; asked: string; points: string[]; reason: string;
 }
-/** Why the engine paused, when a person's resume of that pause changes what comes next: a reviewer whose only points were on ruled findings runs again. */
-export type RunHold = { kind: "ruled"; stage: string };
+/**
+ * Why the engine paused, when a person's resume of that pause changes what comes next: a reviewer whose only points were on ruled findings runs
+ * again; a stage at its run cap on the draft, or an edge at its send-back cap, gets a fresh allowance of that cap.
+ */
+export type RunHold = { kind: "ruled"; stage: string } | { kind: "stage_runs"; stage: string } | { kind: "send_back"; edge: string };
 /** Why a query was issued: for its result, to price another query (an estimate), or to re-run an earlier one (a verify). */
 export type QueryPurpose = "result" | "estimate" | "verify";
 export type Proposal =
