@@ -528,3 +528,56 @@ test("a check.run whose blocking is not a boolean is malformed", () => {
   expect(s.skipped).toHaveLength(1);
   expect(s.reviews.h1!.checks).toEqual([]);
 });
+
+// ---- reviewers who disagree (task 17) ----
+
+const person = { kind: "human", id: "analyst" } as const;
+const conflict = (over: Record<string, unknown> = {}) => ({
+  id: "k1", draft_hash: "h2", finding: "f25", change: "likelihood", earlier: "almost certain", now: "likely", raised_by: "evaluate", changed_for: "challenge",
+  asks: "almost certain", asked: "lower", points: ["f25: understates it"], reason: "Evaluate and Challenge disagree on f25", ...over,
+});
+
+test("a revision made after a reviewer's send-back records which reviewer it answered; one made otherwise records none", () => {
+  const b = run();
+  b.add("draft.revised", { draft: draft(1, "h1") }, { stage: "assemble" });
+  b.add("stage.sent_back", { from: "challenge", to: "assemble", reason: "x1", count: 1 });
+  b.add("draft.revised", { draft: draft(2, "h2") }, { stage: "assemble" });
+  pass(b, "assemble", "h2");
+  b.add("draft.revised", { draft: draft(3, "h3") }, { stage: "assemble" });
+  b.add("draft.revised", { draft: draft(4, "h4") }, { actor: person });
+  const s = fold(b.entries);
+  expect(s.made_for).toEqual({ h2: "challenge" });
+  expect(s.skipped).toEqual([]);
+});
+
+test("review.conflict records the conflict in the run; review.ruled records the person's ruling once", () => {
+  const b = run();
+  revise(b, 1, "h1"); revise(b, 2, "h2");
+  b.add("review.conflict", { conflict: conflict() as never });
+  let s = fold(b.entries);
+  expect(s.counters.conflict).toBe(1);
+  expect(s.conflicts.k1).toMatchObject({ finding: "f25", run: "run-1", ruling: null });
+  b.add("review.ruled", { conflict: "k1", follow: "challenge", note: "one event" }, { actor: person });
+  const ruledAt = b.entries.at(-1)!;
+  b.add("review.ruled", { conflict: "k1", follow: "evaluate", note: "" }, { actor: person });
+  s = fold(b.entries);
+  expect(s.conflicts.k1!.ruling).toEqual({ follow: "challenge", note: "one event", by: "analyst", seq: ruledAt.seq, ts: ruledAt.ts });
+  expect(s.skipped).toEqual([]);
+});
+
+test("a malformed conflict or ruling is recorded as skipped; a ruling not by a person, or for a stage not party to it, or with neither side nor note, is too", () => {
+  const b = run();
+  revise(b, 1, "h1"); revise(b, 2, "h2");
+  const bad1 = b.add("review.conflict", { conflict: conflict({ change: "sideways" }) as never });
+  b.add("review.conflict", { conflict: conflict() as never });
+  const bad2 = b.add("review.ruled", { conflict: "k1", follow: 5 as never, note: "" }, { actor: person });
+  const bad3 = b.add("review.ruled", { conflict: "k1", follow: "challenge", note: "" }, { actor: { kind: "system", id: "engine" } });
+  const bad4 = b.add("review.ruled", { conflict: "k1", follow: "checks", note: "" }, { actor: person });
+  const bad5 = b.add("review.ruled", { conflict: "k1", follow: null, note: "  " }, { actor: person });
+  const s = fold(b.entries);
+  expect(s.conflicts.k1!.ruling).toBeNull();
+  expect(s.skipped.map((x) => [x.seq, x.reason])).toEqual([
+    [bad1.seq, "malformed review.conflict"], [bad2.seq, "malformed review.ruled"], [bad3.seq, "a ruling is a person's"],
+    [bad4.seq, "a ruling follows one of the two reviewers in the conflict"], [bad5.seq, "a ruling follows one of the two reviewers, or gives a note"],
+  ]);
+});

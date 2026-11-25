@@ -1,12 +1,12 @@
 import type {
   Actor, BlobRef, Card, Cost, Marking, Challenge, CheckFinding, Coverage, Draft, ModelChoice, Payloads,
-  Place, Plan, Proposal, QueryPurpose, StageDef, StepOutcome, TimeWindow,
+  Place, Plan, Proposal, QueryPurpose, ReviewConflict, RunHold, StageDef, StepOutcome, TimeWindow,
 } from "../types";
 
-export type IdKind = "card" | "lane" | "query" | "job" | "proposal" | "challenge" | "request" | "call" | "turn" | "run" | "plan";
+export type IdKind = "card" | "lane" | "query" | "job" | "proposal" | "challenge" | "request" | "call" | "turn" | "run" | "plan" | "conflict";
 export const ID_PREFIX: Record<IdKind, string> = {
   card: "c", lane: "l", query: "q", job: "j", proposal: "p", challenge: "x",
-  request: "r", call: "t", turn: "u", run: "run-", plan: "plan-",
+  request: "r", call: "t", turn: "u", run: "run-", plan: "plan-", conflict: "k",
 };
 
 export interface CardState extends Card {
@@ -35,6 +35,10 @@ export interface RunState {
   current: string | null;
   /** Keyed "from>to". */
   sendbacks: Record<string, number>;
+  /** The stage that last sent work back to each stage (keyed by the stage sent to), until that stage finishes. */
+  sent_back_to: Record<string, string>;
+  /** What a person's resume of the current pause does besides resuming; null for none. */
+  hold: RunHold | null;
   /** Case totals: every model.response in the case, in or out of a run. */
   usage: Usage;
   model_calls: number;
@@ -76,6 +80,8 @@ export interface ReviewState {
   /** The latest publish.rejected for this hash: the person's verdict, shown in the Narrative lens. It clears passed_stages. */
   rejected: { reason: string; stop: boolean; seq: number; ts: string } | null;
 }
+/** `run` is the run in progress when the conflict was found; `ruling` is the person's, once made. */
+export type ConflictState = ReviewConflict & { run: string | null; seq: number; ruling: { follow: string | null; note: string; by: string; seq: number; ts: string } | null };
 /** `run` is the run in progress when the challenge was raised (null when none). */
 export type ChallengeState = Challenge & { run: string | null; status: "open" | "answered"; answer: string | null; action: "revised" | "rebutted" | null };
 
@@ -107,6 +113,9 @@ export interface CaseState {
   drafts: Draft[];
   reviews: Record<string, ReviewState>;
   challenges: Record<string, ChallengeState>;
+  /** For each draft hash made after a reviewer sent work back, that reviewer's stage id (the latest revision with the hash wins). */
+  made_for: Record<string, string>;
+  conflicts: Record<string, ConflictState>;
   published: { n: number; draft_hash: string; head_hash: string; dir: string; seq: number; ts: string }[];
   feedback: Payloads["feedback.recorded"][];
   /** `asked_seq` is the seq of the turn's agent.asked entry; `ended` is why it will not be answered (agent.ended), else null. */

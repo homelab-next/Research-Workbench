@@ -1,5 +1,5 @@
 import type { CaseSession } from "../core/session";
-import { latestDraft } from "../core/state";
+import { latestDraft, runConflicts, rulingText } from "../core/state";
 import type { CaseState } from "../core/state";
 import type { CheckFinding, Entry, Finding, Product } from "../core/types";
 import { packPart } from "../agents/context";
@@ -175,6 +175,9 @@ export function reviewPointsPart(session: CaseSession, pipeline: Pipeline, view:
       by.push(last.entry);
     }
   }
+  // the person's rulings are fixed, for the analyst and for both reviewers
+  const rulings = runConflicts(state).filter((c) => c.ruling !== null).map((c) => `- ${c.finding}: ${c.reason}. Ruled: ${rulingText(state, c)}`);
+  if (rulings.length > 0) sections.push(["Rulings by the person (fixed; neither reviewer may reopen them):", ...rulings].join("\n"));
   if (sections.length === 0) return null;
   return packPart({ kind: "note", id, title, text: sections.join("\n\n"), fixed: true, entries, written_by: by, floor: d.product.marking });
 }

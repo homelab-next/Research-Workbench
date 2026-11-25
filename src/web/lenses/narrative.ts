@@ -1,5 +1,5 @@
-import { blockers, CARD_REF, latestDraft, notedExceptions, proposalMarking, publishable } from "../../core/state";
-import type { CaseState } from "../../core/state";
+import { blockers, CARD_REF, keepText, latestDraft, notedExceptions, proposalMarking, publishable, rulingText, runConflicts } from "../../core/state";
+import type { CaseState, ConflictState } from "../../core/state";
 import { CONFIDENCES } from "../../core/types";
 import type { Actor, Draft, Finding, Product } from "../../core/types";
 import type { Preview } from "../../core/wire";
@@ -55,6 +55,7 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
   let rejectReason = "";
   let rejectStop = false;
   const answers = new Map<string, string>();
+  const ruleNotes = new Map<string, string>();
   const kinds = new Map<string, string>();
   const proposalText = new Map<string, string>();
   const proposalEdit = new Set<string>();
@@ -95,7 +96,7 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
   const sigs = new Map<HTMLElement, unknown[]>();
   const keyOf = (n: Element | null): string | null => n === null ? null : [
     n.tagName, n.getAttribute("aria-label") ?? "", n.getAttribute("data-action") ?? "",
-    n.closest("[data-challenge]")?.getAttribute("data-challenge") ?? "", n.closest("[data-proposal]")?.getAttribute("data-proposal") ?? "", n.getAttribute("data-tab") ?? "", n.getAttribute("data-pick") ?? "",
+    n.closest("[data-challenge]")?.getAttribute("data-challenge") ?? "", n.closest("[data-conflict]")?.getAttribute("data-conflict") ?? "", n.closest("[data-proposal]")?.getAttribute("data-proposal") ?? "", n.getAttribute("data-tab") ?? "", n.getAttribute("data-pick") ?? "",
   ].join("|");
   const paint = (box: HTMLElement, sig: unknown[], build: () => Node[]): void => {
     const was = sigs.get(box);
@@ -355,6 +356,42 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
     void s;
     return h("div", { class: "answer-form" }, box, kind, button);
   };
+  /**
+   * Reviewers who disagree: both positions and the points behind them, and the person's three ways to rule (follow one reviewer, follow the other, or a
+   * note of their own). A ruling is shown in place of the buttons once it is recorded.
+   */
+  const conflictView = (s: CaseState, c: ConflictState): HTMLElement => {
+    const title = (id: string): string => s.run.stages.find((x) => x.id === id)?.title ?? id;
+    const kids: Child[] = [
+      tag(ui, c.ruling === null ? "attention" : "done", c.ruling === null ? "reviewers disagree" : "ruled"), ` ${c.finding}`,
+      h("p", { class: "text" }, c.reason),
+      c.points.length === 0 ? null : h("ul", { class: "points" }, c.points.map((x) => h("li", null, x))),
+    ];
+    if (c.ruling !== null) {
+      kids.push(h("p", { class: "ruling" }, `Ruled: ${rulingText(s, c)}`));
+    } else {
+      const busy = inflight.has(`rule:${c.id}`);
+      const rule = (follow: string | null): void => { guarded(`rule:${c.id}`, "rule_conflict", { conflict: c.id, follow, note: (ruleNotes.get(c.id) ?? "").trim() }, () => { ruleNotes.delete(c.id); }); };
+      const noted = (): boolean => (ruleNotes.get(c.id) ?? "").trim() !== "";
+      const byNote = h("button", {
+        type: "button", data: { action: "rule-note" }, disabled: ro() || busy || !noted(), title: ro() ? REPLAY_REFUSAL : "Rule with your note alone; it is fixed for the rest of the run",
+        on: { click: () => { if (noted()) rule(null); } },
+      }, "Rule with this note") as HTMLButtonElement;
+      const follow = (stage: string, says: string): HTMLElement => h("button", {
+        type: "button", class: "primary", data: { action: `follow-${stage}` }, disabled: ro() || busy,
+        title: ro() ? REPLAY_REFUSAL : `Follow ${title(stage)} (${says}); with your note if you wrote one. The ruling is fixed for the rest of the run`,
+        on: { click: () => { rule(stage); } },
+      }, `Follow ${title(stage)}: ${says}`);
+      kids.push(h("div", { class: "rule-form" },
+        follow(c.raised_by, c.asks), follow(c.changed_for, keepText(c)),
+        h("textarea", {
+          name: `Ruling note on ${c.id}`, value: ruleNotes.get(c.id) ?? "", disabled: ro(), placeholder: "Your note (optional with a reviewer, enough on its own)",
+          on: { input: (e) => { ruleNotes.set(c.id, (e.target as HTMLTextAreaElement).value); byNote.disabled = ro() || busy || !noted(); } },
+        }),
+        byNote));
+    }
+    return h("div", { class: `conflict${c.ruling === null ? " open" : ""}`, data: { conflict: c.id } }, kids);
+  };
   const reviewView = (s: CaseState, d: Draft): Node[] => {
     const r = owns(s.reviews, d.hash) ? s.reviews[d.hash]! : null;
     const out: Child[] = [h("h3", { class: "section-title" }, "Review of this revision")];
@@ -377,6 +414,7 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
           ? h("p", { class: "answer" }, tag(ui, "done", c.action ?? "answered"), ` ${c.answer ?? ""}`)
           : answerForm(s, id)));
     }
+    for (const c of runConflicts(s)) out.push(conflictView(s, c));
     const pub = s.published.length > 0 && s.published[s.published.length - 1]!.draft_hash === d.hash;
     if (!pub) {
       const why = blockers(s, d.hash);
@@ -520,7 +558,7 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
       el.querySelector(".no-draft")?.remove();
       paint(toolsBox, [d.hash, edit, ro(), s.run.status, s.cards === s.cards], () => toolsView(s, d));
       paint(gateBox, [d.hash, s.run, s.reviews, s.challenges, s.published, preview, store.live.seq, rejecting, ro(), inflightVersion], () => gateView(s, d));
-      paint(reviewBox, [d.hash, s.reviews, s.challenges, s.run, s.published, s.cards, ro()], () => reviewView(s, d));
+      paint(reviewBox, [d.hash, s.reviews, s.challenges, s.conflicts, s.run, s.published, s.cards, ro(), inflightVersion], () => reviewView(s, d));
       paint(previewBox, [wantsPreview(s), preview, store.live.seq, tab], () => (wantsPreview(s) ? previewView() : []));
     }
     // the first time Approve can be pressed, a person who came here for the gate is on it (Approve waits for the server's check, so this cannot be done on opening)

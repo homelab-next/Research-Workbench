@@ -1,5 +1,8 @@
 import type { CaseState, StageState } from "../core/state";
 import { blockers, latestDraft, publishable } from "../core/state";
+import type { RunHold } from "../core/types";
+import { reviewConflict } from "./conflict";
+import type { ConflictFound } from "./conflict";
 import type { Pipeline, StageManifest } from "./manifests";
 
 export const SEND_BACK_CAP = 3;
@@ -11,7 +14,8 @@ export type Step =
   | { kind: "start"; stage: string; attempt: number; sent_back: { from: string; to: string; reason: string; count: number } | null }
   | { kind: "exec"; stage: string }
   | { kind: "gate"; gate: "plan" | "publish" }
-  | { kind: "pause"; reason: string }
+  /** `conflicts`: reviewers' disagreements found now, to be recorded with the pause; `hold`: what a person's resume of it does besides. */
+  | { kind: "pause"; reason: string; conflicts?: ConflictFound[]; hold?: RunHold }
   | { kind: "finish"; outcome: "published" | "stopped" };
 
 const IDLE: Step = { kind: "idle" };
@@ -26,9 +30,10 @@ export function firstUnpassedReview(state: Readonly<CaseState>, pipeline: Pipeli
 
 /**
  * What the engine does next, from the state alone, so a restart resumes exactly where the ledger says it was.
- * Pure: it reads, never writes, and the same state gives the same step.
+ * Pure: it reads, never writes, and the same state gives the same step. `likelihood` is the standard's terms, least likely first, which a conflict
+ * between reviewers is described with.
  */
-export function nextStep(state: Readonly<CaseState>, pipeline: Pipeline, opts: { allow_capped?: boolean } = {}): Step {
+export function nextStep(state: Readonly<CaseState>, pipeline: Pipeline, opts: { allow_capped?: boolean; likelihood?: readonly string[] } = {}): Step {
   const { run } = state;
   if (run.status !== "running") return IDLE;
   const manifest = (id: string): StageManifest | null => pipeline.stages.find((s) => s.id === id) ?? null;
@@ -62,8 +67,13 @@ export function nextStep(state: Readonly<CaseState>, pipeline: Pipeline, opts: {
     case "declined": return begin(st.id);
     case "waiting": return IDLE;
     case "failed": {
-      const reason = st.last_reason ?? "";
+      let reason = st.last_reason ?? "";
       if (m.on_fail === null) return { kind: "pause", reason: `${st.title} failed: ${reason}` };
+      // reviewers who disagree go to the person, not back to the analyst; a person's ruling goes back to the analyst
+      const conflict = reviewConflict(state, pipeline, st.id, opts.likelihood ?? null);
+      if (conflict !== null && conflict.kind === "conflict") return { kind: "pause", reason: conflict.reason, conflicts: conflict.fresh };
+      if (conflict !== null && conflict.kind === "only_ruled") return { kind: "pause", reason: conflict.reason, hold: { kind: "ruled", stage: st.id } };
+      if (conflict !== null) reason = conflict.reason;
       const n = Object.hasOwn(run.sendbacks, `${st.id}>${m.on_fail}`) ? run.sendbacks[`${st.id}>${m.on_fail}`]! : 0;
       if (n >= SEND_BACK_CAP && opts.allow_capped !== true) {
         return { kind: "pause", reason: `${st.title} has sent work back to ${title(m.on_fail)} ${SEND_BACK_CAP} times. Last reason: ${reason}` };

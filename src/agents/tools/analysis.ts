@@ -1,4 +1,5 @@
 import type { Json } from "../../core/canonical";
+import { namesFinding, ruledFindings, rulingText } from "../../core/state";
 import { ANSWER_ACTIONS, CONFIDENCES, SECTIONS, SEVERITIES } from "../../core/types";
 import type { Schema } from "../../core/schema";
 import { composeStatement, likelihoodMatches } from "../draft";
@@ -98,6 +99,11 @@ async function raiseChallenge(ctx: ToolContext, a: Record<string, Json>): Promis
   if (!Object.hasOwn(ctx.session.state.reviews, hash)) throw new ToolError("no draft is under review in this stage");
   const cites = strings(a.cites);
   cardsExist(ctx, cites);
+  // a finding the person has ruled on is fixed for the run: neither reviewer reopens it
+  const said = str(a.text);
+  for (const [finding, c] of ruledFindings(ctx.session.state)) {
+    if (namesFinding(said, finding)) throw new ToolError(`the person has ruled on ${finding} (${rulingText(ctx.session.state, c)}): it may not be reopened`);
+  }
   let id = "";
   ctx.session.commit((_s, ids) => {
     id = ids.next("challenge");

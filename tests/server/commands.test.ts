@@ -303,3 +303,35 @@ test("a command's then is the contract's: no command file says advance as a lite
   const literal = readdirSync(dir).filter((f) => f.endsWith(".ts")).filter((f) => /then:\s*"advance"\s*[,}]/.test(readFileSync(join(dir, f), "utf8")));
   expect(literal).toEqual([]);
 });
+
+test("rule_conflict records the person's ruling in the server's name and resumes the run; a requester may not rule", async () => {
+  s = await served();
+  const id = await s.newCase();
+  await s.toPublishGate(id);
+  const session = s.app.hub.read(id);
+  const d = session.state.drafts.at(-1)!;
+  const engine = { kind: "system", id: "engine" } as const;
+  session.commit((st, ids) => [
+    { type: "review.conflict", actor: engine, run: st.run.id, payload: { conflict: {
+      id: ids.next("conflict"), draft_hash: d.hash, finding: "f1", change: "likelihood", earlier: "almost certain", now: "likely", raised_by: "evaluate", changed_for: "challenge",
+      asks: "almost certain", asked: "lower", points: ["f1: x"], reason: "Evaluate and Challenge disagree on f1",
+    } } },
+    { type: "run.paused", actor: engine, run: st.run.id, payload: { reason: "Evaluate and Challenge disagree on f1" } },
+  ]);
+  expect((await s.command(id, "rule_conflict", { conflict: "k9", follow: "evaluate", note: "" }))).toEqual({ status: 409, body: { ok: false, refused: ["there is no conflict k9"] } });
+  const r = await s.command(id, "rule_conflict", { conflict: "k1", follow: "evaluate", note: "the card shows it" });
+  expect(r.status).toBe(200);
+  await s.app.hub.idle();
+  const after = s.entries(id);
+  const ruled = after.find((e) => e.type === "review.ruled")!;
+  expect(ruled.actor).toEqual({ kind: "human", id: s.config.user });
+  expect(ruled.payload).toEqual({ conflict: "k1", follow: "evaluate", note: "the card shows it" });
+  expect(after.slice(after.indexOf(ruled)).some((e) => e.type === "run.resumed" && e.actor.kind === "human")).toBe(true);
+  expect(s.app.hub.read(id).state.skipped).toEqual([]);
+});
+
+test("a requester may not rule on a conflict", async () => {
+  s = await served({ role: "requester" });
+  const id = s.app.hub.create({ title: "T", asked: "A", why: "W", starting: [], window: { from: "2026-11-17T00:00:00.000Z", to: "2026-11-24T00:00:00.000Z" }, objective: null, marking: "TLP:GREEN" }, { kind: "human", id: "x" }).id;
+  expect(await s.command(id, "rule_conflict", { conflict: "k1", follow: null, note: "n" })).toEqual({ status: 403, body: { ok: false, refused: ["the requester view may not do rule conflict"] } });
+});

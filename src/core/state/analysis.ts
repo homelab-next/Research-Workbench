@@ -3,6 +3,7 @@ import type { Challenge, CheckFinding, Draft, Entry, Marking, Payloads } from ".
 import { canonical } from "../canonical";
 import type { Json } from "../canonical";
 import { has, isBool, isNum, isObj, isOneOf, isStr, isStrList, malformed, recordSkip } from "./guards";
+import { applyConflicts } from "./conflicts";
 import { stageFinishedCounts } from "./run";
 import { isBlobRefShape } from "./shapes";
 import type { CaseState, ChallengeState, ReviewState } from "./types";
@@ -154,8 +155,9 @@ function applyOutputs(s: CaseState, entry: Entry): CaseState {
   }
 }
 
+/** Drafts and their review, challenges, reviewers who disagree, and what comes out. */
 export function applyAnalysis(s: CaseState, entry: Entry): CaseState {
-  return applyOutputs(applyChallenges(applyDrafts(s, entry), entry), entry);
+  return applyOutputs(applyConflicts(applyChallenges(applyDrafts(s, entry), entry), entry), entry);
 }
 
 export function latestDraft(state: CaseState): Draft | null {

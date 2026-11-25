@@ -84,6 +84,8 @@ const TABLE: Record<EntryType, [string | ((p: Loose) => string), Say]> = {
   "evaluation.made": ["evaluation made", (p) => (p.pass === true ? "passed" : p.pass === false ? "failed" : "")],
   "challenge.raised": ["challenge raised", (p) => { const c = loose(p.challenge); return join(str(c.id), str(c.severity), str(c.text)); }],
   "challenge.answered": ["challenge answered", (p) => join(str(p.challenge), str(p.action), str(p.answer))],
+  "review.conflict": ["reviewers disagree", (p) => { const c = loose(p.conflict); return join(str(c.id), str(c.reason)); }],
+  "review.ruled": ["conflict ruled on", (p) => join(str(p.conflict), p.follow === null || p.follow === undefined ? "" : `follow ${str(p.follow)}`, str(p.note))],
   "publish.rejected": ["publishing rejected", (p) => str(p.reason)],
   "product.published": ["product published", (p) => join(typeof p.n === "number" ? `product ${p.n}` : "", str(p.dir))],
   "feedback.recorded": ["feedback recorded", (p) => join(str(p.measure), str(p.value), str(p.note))],

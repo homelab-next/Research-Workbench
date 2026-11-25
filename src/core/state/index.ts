@@ -7,13 +7,14 @@ export type { Reducer } from "./apply";
 export { applyRun, runUsage, stageFinishedCounts, subgoalAnswered } from "./run";
 export { applyAnalysis, blockers, latestDraft, notedExceptions, openMustAddress, proposalMarking, publishable } from "./analysis";
 export { applyCards, cardLocation } from "./cards";
+export { applyConflicts, keepText, namesFinding, ruledFindings, rulingText, runConflicts } from "./conflicts";
 export { CARD_REF, cardRefs } from "./cites";
 export { cardFields, caseFields, isCard, isCaseCreated, isCoverage, isObservable, isTimeWindow } from "./shapes";
 export * from "./types";
 
 export function initial(): CaseState {
   const counters = {} as Record<IdKind, number>;
-  for (const k of ["card", "lane", "query", "job", "proposal", "challenge", "request", "call", "turn", "run", "plan"] as const) counters[k] = 0;
+  for (const k of ["card", "lane", "query", "job", "proposal", "challenge", "request", "call", "turn", "run", "plan", "conflict"] as const) counters[k] = 0;
   return {
     seq: 0,
     head_ts: null,
@@ -31,7 +32,7 @@ export function initial(): CaseState {
     pack_limits: {},
     run: {
       id: null, status: "none", outcome: null, pause_reason: null, waiting: null, stages: [], current: null,
-      sendbacks: {}, usage: { input: 0, output: 0, reasoning: 0 }, model_calls: 0,
+      sendbacks: {}, sent_back_to: {}, hold: null, usage: { input: 0, output: 0, reasoning: 0 }, model_calls: 0,
       usage_at_start: { input: 0, output: 0, reasoning: 0 }, calls_at_start: 0, budget_tokens: null,
     },
     plan: { current: null, status: "none", accepted_steps: [], budgets: {}, estimates: {}, steps: {} },
@@ -41,6 +42,8 @@ export function initial(): CaseState {
     drafts: [],
     reviews: {},
     challenges: {},
+    made_for: {},
+    conflicts: {},
     published: [],
     feedback: [],
     conversation: [],

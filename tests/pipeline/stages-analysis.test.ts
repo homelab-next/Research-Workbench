@@ -681,3 +681,63 @@ test("Evaluate's pack carries Challenge's points with the analyst's answers, and
   expect(ch).toContain("Evaluate's latest points and the analyst's answers");
   expect(ch).toContain("- Evaluate, on draft 2, at f1: f1 is not supported by c1. Answered in draft 3: f1 reworded");
 });
+
+// draft 1 says almost certain; Challenge says that overclaims; draft 2 lowers it to likely; Evaluate says likely understates it
+const SURE: ScriptReply[] = [calls(finding("ws-17 held the address", ["c1"], { likelihood: "almost certain" })), out("first")];
+const OVERCLAIMS = calls(call("raise_challenge", { severity: "must_address", text: "almost certain on f1 overclaims: one event", cites: ["c1"] }));
+const LOWERED: ScriptReply[] = [calls(
+  finding("ws-17 held the address", ["c1"], { likelihood: "likely", replaces: "f1" }),
+  call("answer_challenge", { challenge: "x1", answer: "lowered f1 to likely", action: "revised" }),
+), out("second")];
+const UNDERSTATES = say({ pass: false, findings: [{ check: "support", where: "f1", message: "c1 shows the address directly, so likely understates it" }] });
+const KEPT: ScriptReply[] = [calls(finding("ws-17 held the address, seen once", ["c1"], { likelihood: "likely", replaces: "f1" })), out("third")];
+const DISAGREE = "Evaluate and Challenge disagree on f1: Evaluate asks almost certain, Challenge asked lower";
+
+test("reviewers who disagree: the engine does not send back; it pauses naming both positions and records the conflict", async () => {
+  const r = rig({ analyst: [...SURE, ...LOWERED], evaluator: [EVAL_PASS, UNDERSTATES], adversary: [OVERCLAIMS, CHALLENGE_PASS] });
+  const sends = (): number => ofType("stage.sent_back").length;
+  const sum = await go(r);
+  expect(sum).toMatchObject({ status: "paused", pause_reason: `${DISAGREE}. The person rules on it in the Narrative lens: follow one reviewer, or write a note.` });
+  // the one send-back is Challenge's; Evaluate's was not made
+  expect(ofType("stage.sent_back").map((e) => e.payload.from)).toEqual(["challenge"]);
+  expect(sends()).toBe(1);
+  const [c] = ofType("review.conflict");
+  expect(c!.actor).toEqual({ kind: "system", id: "engine" });
+  expect(c!.payload.conflict).toMatchObject({ id: "k1", finding: "f1", change: "likelihood", earlier: "almost certain", now: "likely", raised_by: "evaluate", changed_for: "challenge", reason: DISAGREE });
+  // the conflict and the pause are one commit, in that order
+  const paused = ofType("run.paused").at(-1)!;
+  expect(paused.seq).toBe(c!.seq + 1);
+  expect(f.s.state.conflicts.k1).toMatchObject({ run: f.s.state.run.id, ruling: null });
+  // a resume without a ruling pauses again, and records nothing more
+  await r.engine.resume(person);
+  expect(r.engine.summary().status).toBe("paused");
+  expect(ofType("review.conflict")).toHaveLength(1);
+  expect(sends()).toBe(1);
+});
+
+test("the person's ruling is recorded in their name, goes to Assemble as a fixed ruling, and both reviewers see it", async () => {
+  const r = rig({ analyst: [...SURE, ...LOWERED, ...KEPT], evaluator: [EVAL_PASS, UNDERSTATES, EVAL_PASS], adversary: [OVERCLAIMS, CHALLENGE_PASS, CHALLENGE_PASS] });
+  await go(r);
+  expect(() => r.engine.rule(planner, "k1", "challenge", "")).toThrow("only a person may rule on a conflict");
+  expect(() => r.engine.rule(person, "k9", "challenge", "")).toThrow("there is no conflict k9");
+  expect(() => r.engine.rule(person, "k1", "checks", "")).toThrow("a ruling follows Evaluate or Challenge, or gives a note");
+  expect(() => r.engine.rule(person, "k1", null, " ")).toThrow("a ruling follows Evaluate or Challenge, or gives a note");
+  r.engine.rule(person, "k1", "challenge", "one event is not enough for almost certain");
+  expect(() => r.engine.rule(person, "k1", "evaluate", "")).toThrow("conflict k1 has already been ruled on");
+  const ruled = ofType("review.ruled");
+  expect(ruled.map((e) => [e.actor, e.payload])).toEqual([[person, { conflict: "k1", follow: "challenge", note: "one event is not enough for almost certain" }]]);
+  // a ruling is not a gate pass: nothing moves until the run is resumed
+  expect(r.engine.summary().status).toBe("paused");
+  const sum = await r.engine.resume(person);
+  expect(sum).toMatchObject({ status: "waiting", waiting: "publish" });
+  const ruling = "f1: Evaluate and Challenge disagree on f1: Evaluate asks almost certain, Challenge asked lower. Ruled: follow Challenge: keep likely. Note: one event is not enough for almost certain";
+  expect(ofType("stage.sent_back").at(-1)!.payload).toMatchObject({ from: "evaluate", to: "assemble", reason: `the person ruled on f1 (${DISAGREE}): follow Challenge: keep likely. Note: one event is not enough for almost certain` });
+  // Assemble's third pass (requests 4 and 5), then Evaluate and Challenge on draft 3
+  for (const [actor, ordinal] of [["analyst", 4], ["evaluator", 2], ["adversary", 2]] as const) {
+    const text = requestText(actor, ordinal);
+    expect(text).toContain("Rulings by the person (fixed; neither reviewer may reopen them)");
+    expect(text).toContain(ruling);
+  }
+  expect(f.s.state.drafts.at(-1)!.product.key_findings[0]!.likelihood).toBe("likely");
+  expect(ofType("review.conflict")).toHaveLength(1);
+});

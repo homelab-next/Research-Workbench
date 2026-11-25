@@ -16,6 +16,7 @@ const COUNTED: Partial<Record<Entry["type"], IdKind>> = {
   "job.started": "job",
   "proposal.created": "proposal",
   "challenge.raised": "challenge",
+  "review.conflict": "conflict",
   "model.request": "request",
   "tool.called": "call",
   "agent.asked": "turn",

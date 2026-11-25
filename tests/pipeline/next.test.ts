@@ -4,7 +4,7 @@ import { canonical } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
 import { fold } from "../../src/core/state";
 import type { CaseState } from "../../src/core/state";
-import type { Draft, Plan, Product, StageDef } from "../../src/core/types";
+import type { Draft, Finding, Plan, Product, ReviewConflict, StageDef } from "../../src/core/types";
 import { firstUnpassedReview, nextStep, SEND_BACK_CAP } from "../../src/pipeline/next";
 import type { Pipeline, StageManifest } from "../../src/pipeline/manifests";
 import { EntryBuilder } from "../helpers/entries";
@@ -229,4 +229,115 @@ test("a stage's attempts are counted across the run, not only its restarts of th
   expect(nextStep(stale(5), pipeline, { allow_capped: true })).toMatchObject({ kind: "start", stage: "challenge", attempt: 6 });
   // attempts that began with a send-back are bounded by the send-back cap, not by this rule
   expect(nextStep(stale(5, 2), pipeline)).toMatchObject({ kind: "start", stage: "challenge", attempt: 6 });
+});
+
+// ---- reviewers who disagree (task 17 item 2) ----
+
+const roled: Pipeline = { ...pipeline, stages: pipeline.stages.map((s) => (s.id === "evaluate" ? { ...s, role: "evaluate" as const } : s.id === "challenge" ? { ...s, role: "challenge" as const } : s)) };
+const LIKELIHOOD = ["almost no chance", "very unlikely", "unlikely", "roughly even chance", "likely", "very likely", "almost certain"];
+const fnd = (id: string, likelihood: string, confidence: Finding["confidence"] = "high"): Finding =>
+  ({ id, statement: `We assess it is ${likelihood} that the address was assigned.`, likelihood, confidence, confidence_basis: "b", cites: ["c19"], assumptions: [], reasoning: "r" });
+const draftWith = (n: number, findings: Finding[]): Draft => {
+  const p = { ...product(n), key_findings: findings };
+  return { n, hash: sha256Hex(canonical(p as unknown as Json)), author: { kind: "system", id: "t" }, product: p, reason: "r" };
+};
+const D15 = draftWith(1, [fnd("f25", "almost certain"), fnd("f26", "likely")]);
+const D16 = draftWith(2, [fnd("f25", "likely"), fnd("f26", "likely")]);
+const EV_F25 = { check: "support", where: "f25", message: "c19 shows the address directly, so likely understates it" };
+const CONFLICT_REASON = "Evaluate and Challenge disagree on f25: Evaluate asks almost certain, Challenge asked lower";
+const RULE_HINT = "The person rules on it in the Narrative lens: follow one reviewer, or write a note.";
+
+/** CASE-1, drafts 15 and 16: Challenge x1 says almost certain overclaims; the analyst lowers f25 to likely for it; Evaluate then fails draft 16 on f25. */
+function disagreement(evFindings = [EV_F25], extra: (b: EntryBuilder) => void = () => {}, second: Draft = D16): CaseState {
+  return run((b) => {
+    passed(b, "assemble"); b.add("draft.revised", { draft: D15 }, { stage: "assemble" });
+    reviewed(b, D15.hash, ["checks", "evaluate"]);
+    started(b, "challenge");
+    b.add("challenge.raised", { challenge: { id: "x1", draft_hash: D15.hash, severity: "must_address", text: "almost certain on f25 overclaims: one event", cites: ["c19"] } });
+    finished(b, "challenge", "fail", "challenge x1 must be addressed", D15.hash);
+    b.add("stage.sent_back", { from: "challenge", to: "assemble", reason: "challenge x1 must be addressed", count: 1 });
+    started(b, "assemble", 2);
+    b.add("draft.revised", { draft: second }, { stage: "assemble" });
+    b.add("challenge.answered", { challenge: "x1", answer: "lowered to likely", action: "revised" });
+    finished(b, "assemble", "pass", null, second.hash, 2);
+    started(b, "checks", 2); finished(b, "checks", "pass", null, second.hash, 2);
+    started(b, "evaluate", 2);
+    b.add("evaluation.made", { draft_hash: second.hash, pass: false, findings: evFindings });
+    finished(b, "evaluate", "fail", evFindings[0]!.message, second.hash, 2);
+    extra(b);
+  });
+}
+const conflictOf = (over: Partial<ReviewConflict> = {}): ReviewConflict => ({
+  id: "k1", draft_hash: D16.hash, finding: "f25", change: "likelihood", earlier: "almost certain", now: "likely", raised_by: "evaluate", changed_for: "challenge",
+  asks: "almost certain", asked: "lower", points: [`f25: ${EV_F25.message}`], reason: CONFLICT_REASON, ...over,
+});
+
+test("a send-back that would reverse the analyst's change for the other reviewer pauses, naming both positions", () => {
+  const { id: _id, ...found } = conflictOf();
+  expect(nextStep(disagreement(), roled, { likelihood: LIKELIHOOD })).toEqual({ kind: "pause", reason: `${CONFLICT_REASON}. ${RULE_HINT}`, conflicts: [found] });
+  // without the standard's scale, the position is the value the analyst moved to
+  expect(nextStep(disagreement(), roled)).toMatchObject({ kind: "pause", reason: `Evaluate and Challenge disagree on f25: Evaluate asks almost certain, Challenge asked likely. ${RULE_HINT}` });
+});
+
+test("no conflict when the point names a finding the analyst did not move, or the draft was made for the same reviewer", () => {
+  const other = [{ check: "support", where: "f26", message: "f26 cites too little" }];
+  expect(nextStep(disagreement(other), roled, { likelihood: LIKELIHOOD })).toMatchObject({ kind: "start", stage: "assemble", sent_back: { from: "evaluate", reason: "f26 cites too little" } });
+  // the same story where Evaluate had sent draft 15 back: the change was its own
+  const own = run((b) => {
+    passed(b, "assemble"); b.add("draft.revised", { draft: D15 }, { stage: "assemble" });
+    started(b, "checks"); finished(b, "checks", "pass", null, D15.hash);
+    started(b, "evaluate"); finished(b, "evaluate", "fail", "x", D15.hash);
+    b.add("stage.sent_back", { from: "evaluate", to: "assemble", reason: "x", count: 1 });
+    started(b, "assemble", 2); b.add("draft.revised", { draft: D16 }, { stage: "assemble" }); finished(b, "assemble", "pass", null, D16.hash, 2);
+    started(b, "checks", 2); finished(b, "checks", "pass", null, D16.hash, 2);
+    started(b, "evaluate", 2); b.add("evaluation.made", { draft_hash: D16.hash, pass: false, findings: [EV_F25] }); finished(b, "evaluate", "fail", EV_F25.message, D16.hash, 2);
+  });
+  expect(own.made_for[D16.hash]).toBe("evaluate");
+  expect(nextStep(own, roled, { likelihood: LIKELIHOOD })).toMatchObject({ kind: "start", stage: "assemble", sent_back: { from: "evaluate" } });
+  // a stage that is not a reviewer (checks) never makes a conflict
+  expect(nextStep(disagreement(), pipeline, { likelihood: LIKELIHOOD })).toMatchObject({ kind: "start", stage: "assemble" });
+});
+
+test("a finding dropped for one reviewer that the other asks to restore is a conflict too, and so is a confidence moved back", () => {
+  const dropped = draftWith(2, [fnd("f26", "likely")]);
+  expect(nextStep(disagreement([{ check: "support", where: "key_findings", message: "f25 was dropped though c19 shows it" }], () => {}, dropped), roled, { likelihood: LIKELIHOOD }))
+    .toMatchObject({ kind: "pause", reason: `Evaluate and Challenge disagree on f25: Evaluate asks to restore f25, Challenge asked to drop it. ${RULE_HINT}`, conflicts: [{ change: "dropped", earlier: "almost certain", now: null }] });
+  const lower = draftWith(2, [fnd("f25", "almost certain", "moderate"), fnd("f26", "likely")]);
+  expect(nextStep(disagreement([EV_F25], () => {}, lower), roled, { likelihood: LIKELIHOOD }))
+    .toMatchObject({ kind: "pause", reason: `Evaluate and Challenge disagree on f25: Evaluate asks high confidence, Challenge asked lower confidence. ${RULE_HINT}` });
+});
+
+test("a recorded conflict still open pauses again without recording another; once ruled, the work goes back with the ruling", () => {
+  const recorded = (b: EntryBuilder) => { b.add("review.conflict", { conflict: conflictOf() }); b.add("run.paused", { reason: "x" }); b.add("run.resumed", {}); };
+  expect(nextStep(disagreement([EV_F25], recorded), roled, { likelihood: LIKELIHOOD })).toEqual({ kind: "pause", reason: `${CONFLICT_REASON}. ${RULE_HINT}`, conflicts: [] });
+  const ruled = disagreement([EV_F25], (b) => { recorded(b); b.add("review.ruled", { conflict: "k1", follow: "challenge", note: "one event is not enough" }, { actor: { kind: "human", id: "analyst" } }); });
+  expect(ruled.conflicts.k1!.ruling).toMatchObject({ follow: "challenge", note: "one event is not enough", by: "analyst" });
+  expect(nextStep(ruled, roled, { likelihood: LIKELIHOOD })).toEqual({ kind: "start", stage: "assemble", attempt: 3, sent_back: {
+    from: "evaluate", to: "assemble", count: 1,
+    reason: `the person ruled on f25 (${CONFLICT_REASON}): follow Challenge: keep likely. Note: one event is not enough`,
+  } });
+});
+
+test("a ruled point is not raised again: no new conflict on it, and a review that objects only to it pauses until the person resumes", () => {
+  const D17 = draftWith(3, [fnd("f25", "likely"), fnd("f26", "very likely")]);
+  const later = (evFindings: { check: string; where: string; message: string }[], after: (b: EntryBuilder) => void = () => {}) => disagreement([EV_F25], (b) => {
+    b.add("review.conflict", { conflict: conflictOf() });
+    b.add("review.ruled", { conflict: "k1", follow: "challenge", note: "" }, { actor: { kind: "human", id: "analyst" } });
+    b.add("stage.sent_back", { from: "evaluate", to: "assemble", reason: "ruled", count: 1 });
+    started(b, "assemble", 3); b.add("draft.revised", { draft: D17 }, { stage: "assemble" }); finished(b, "assemble", "pass", null, D17.hash, 3);
+    started(b, "checks", 3); finished(b, "checks", "pass", null, D17.hash, 3);
+    started(b, "evaluate", 3); b.add("evaluation.made", { draft_hash: D17.hash, pass: false, findings: evFindings }); finished(b, "evaluate", "fail", evFindings[0]!.message, D17.hash, 3);
+    after(b);
+  });
+  const only = later([EV_F25]);
+  const reason = "Evaluate objects only to f25, which the person has ruled on; a ruled point is not sent back. Edit the draft, or resume for Evaluate to review it again.";
+  expect(nextStep(only, roled, { likelihood: LIKELIHOOD })).toEqual({ kind: "pause", reason, hold: { kind: "ruled", stage: "evaluate" } });
+  expect(Object.keys(only.conflicts)).toEqual(["k1"]);
+  // the person's resume after that pause runs the reviewer again
+  const resumed = later([EV_F25], (b) => { b.add("run.paused", { reason, hold: { kind: "ruled", stage: "evaluate" } }); b.add("run.resumed", {}, { actor: { kind: "human", id: "analyst" } }); });
+  expect(resumed.run.hold).toBeNull();
+  expect(nextStep(resumed, roled, { likelihood: LIKELIHOOD })).toEqual({ kind: "start", stage: "evaluate", attempt: 4, sent_back: null });
+  // with another point beside it, that point is sent back as usual
+  const mixed = later([EV_F25, { check: "support", where: "f26", message: "f26 cites too little" }]);
+  expect(nextStep(mixed, roled, { likelihood: LIKELIHOOD })).toMatchObject({ kind: "start", stage: "assemble", sent_back: { from: "evaluate" } });
 });

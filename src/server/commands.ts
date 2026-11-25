@@ -1,7 +1,7 @@
 import type { Json } from "../core/canonical";
 import { Refused } from "../core/refused";
 import { validate } from "../core/schema";
-import { latestDraft } from "../core/state";
+import { latestDraft, runConflicts } from "../core/state";
 import type { Schema } from "../core/schema";
 import type { CaseSession } from "../core/session";
 import { MARKINGS } from "../core/types";
@@ -92,6 +92,19 @@ defineCommand("answer_challenge", {
     const c = Object.hasOwn(state.challenges, id) ? state.challenges[id]! : null;
     if (c !== null && c.run !== state.run.id) throw new SettingRefused(`challenge ${id} is from an earlier run`);
     engine.answerChallenge(actor, id, text(a, "answer"), a.action as "revised" | "rebutted");
+  },
+});
+defineCommand("rule_conflict", {
+  args: obj({ conflict: str, follow: { type: ["string", "null"] }, note: str }), then: then("rule"),
+  perform: ({ hub, engine, session, actor }, a) => {
+    const id = text(a, "conflict");
+    engine.rule(actor, id, a.follow as string | null, text(a, "note"));
+    // the run paused on this disagreement goes on once every disagreement it paused on is ruled: the person's resume, by their ruling
+    const s = session.state;
+    const c = s.conflicts[id]!;
+    const paused = s.run.status === "paused" && (s.run.pause_reason ?? "").includes(c.reason);
+    const open = runConflicts(s).some((x) => x.ruling === null && (s.run.pause_reason ?? "").includes(x.reason));
+    if (paused && !open) hub.background(engine.resume(actor));
   },
 });
 defineCommand("approve", {

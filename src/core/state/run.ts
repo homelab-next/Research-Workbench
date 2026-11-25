@@ -1,5 +1,5 @@
 import { EMPTY_MEANS, isMarking, GATES, JOB_KINDS, JOB_OUTCOMES, QUERY_PURPOSES, ROUTE_OUTCOMES, RUN_OUTCOMES, SECTIONS, STAGE_RUNS, STEP_OUTCOMES, VERIFY_OUTCOMES } from "../types";
-import type { Cost, Entry, ModelChoice, Plan, PlanStep, Proposal, StageDef, SubGoal } from "../types";
+import type { Cost, Entry, ModelChoice, Plan, PlanStep, Proposal, RunHold, StageDef, SubGoal } from "../types";
 import { has, isBool, isNum, isObj, isOneOf, isStr, isStrList, isStrOrNull, malformed } from "./guards";
 import { isBlobRefShape, isCard, isCount, isCoverage, isObservable, isStageFinishedShape, isTimeWindow } from "./shapes";
 import type { CaseState, JobState, PlanState, ProposalState, QueryState, RunState, StageState, Usage } from "./types";
@@ -28,6 +28,8 @@ const isProposal = (x: unknown): x is Proposal => {
   if (x.kind === "narrative") return isOneOf(x.section, SECTIONS) && isStr(x.text) && isStrList(x.cites);
   return false;
 };
+
+const isHold = (x: unknown): x is RunHold => isObj(x) && x.kind === "ruled" && isStr(x.stage);
 
 const OUTCOME_STATUS = { pass: "passed", fail: "failed", declined: "declined" } as const;
 
@@ -214,16 +216,22 @@ function applyPipeline(s: CaseState, entry: Entry): CaseState {
       }));
       return withRun(s, {
         id: run, status: "running", outcome: null, pause_reason: null, waiting: null, stages: built, current: null,
-        sendbacks: {}, usage_at_start: s.run.usage, calls_at_start: s.run.model_calls,
+        sendbacks: {}, sent_back_to: {}, hold: null, usage_at_start: s.run.usage, calls_at_start: s.run.model_calls,
       });
     }
     case "run.paused": {
-      if (!isStr(entry.payload.reason)) return malformed(s, entry);
+      const { reason, hold } = entry.payload;
+      if (!isStr(reason) || !(hold === undefined || isHold(hold))) return malformed(s, entry);
       if (finished || !hasRun(s)) return s;
-      return withRun(s, { status: "paused", pause_reason: entry.payload.reason });
+      return withRun(s, { status: "paused", pause_reason: reason, hold: hold === undefined ? null : { ...hold } });
     }
-    case "run.resumed":
-      return !finished && hasRun(s) ? withRun(s, { status: s.run.waiting ? "waiting" : "running", pause_reason: null }) : s;
+    case "run.resumed": {
+      if (finished || !hasRun(s)) return s;
+      // a person's resume does what the pause held besides: a reviewer that raised only ruled points reviews again
+      const hold = s.run.status === "paused" && entry.actor.kind === "human" ? s.run.hold : null;
+      const next = hold !== null && hold.kind === "ruled" ? withStage(s, hold.stage, (st) => (st.status === "failed" ? { ...st, status: "idle" } : st)) : s;
+      return withRun(next, { status: s.run.waiting ? "waiting" : "running", pause_reason: null, hold: null });
+    }
     case "run.interrupted":
       return !finished && hasRun(s) ? withRun(s, { status: "interrupted" }) : s;
     case "run.finished": {
@@ -259,7 +267,10 @@ function applyPipeline(s: CaseState, entry: Entry): CaseState {
       const verdict = stageFinishedCounts(s, entry.payload);
       if (verdict !== "counts") return verdict === "malformed" ? malformed(s, entry) : s;
       const { stage, outcome, reason } = entry.payload;
-      return withStage(s, stage, (st) => ({ ...st, status: OUTCOME_STATUS[outcome], last_reason: reason }));
+      const next = withStage(s, stage, (st) => ({ ...st, status: OUTCOME_STATUS[outcome], last_reason: reason }));
+      if (!Object.hasOwn(next.run.sent_back_to, stage)) return next;
+      const { [stage]: _done, ...rest } = next.run.sent_back_to;
+      return withRun(next, { sent_back_to: rest });
     }
     case "stage.sent_back": {
       const { from, to, count, reason } = entry.payload;
@@ -267,7 +278,7 @@ function applyPipeline(s: CaseState, entry: Entry): CaseState {
       if (finished || !s.run.stages.some((x) => x.id === from)) return s;
       const next = withStage(s, to, (st) => ({ ...st, status: "idle" }));
       if (next === s) return s;
-      return withRun(next, { sendbacks: { ...s.run.sendbacks, [`${from}>${to}`]: count } });
+      return withRun(next, { sendbacks: { ...s.run.sendbacks, [`${from}>${to}`]: count }, sent_back_to: { ...s.run.sent_back_to, [to]: from } });
     }
     case "gate.waiting": {
       const { gate } = entry.payload;

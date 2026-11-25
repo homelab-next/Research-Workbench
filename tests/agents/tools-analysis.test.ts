@@ -365,3 +365,22 @@ test("propose_narrative lets a section name a proven negative with full coverage
   const longer = await f.call("propose_narrative", { why: "w", section: "summary", text: `see ${gap}0 and x${gap}`, cites: ["c1"] });
   expect(longer.ok).toBe(true);
 });
+
+test("raise_challenge refuses to reopen a finding the person has ruled on", async () => {
+  const hash = reviewable();
+  f.ctx.draft_hash = hash;
+  f.s.commit((_s, ids) => [{ type: "run.started", actor: person, payload: { run: ids.next("run"), pipeline: "p", pipeline_hash: "h", stages: [
+    { id: "evaluate", title: "Evaluate", phase: null, runs: "agent", gate: null, reviews: true, model: null },
+    { id: "challenge", title: "Challenge", phase: null, runs: "agent", gate: null, reviews: true, model: null },
+  ] } }]);
+  f.s.commit((_s, ids) => [{ type: "review.conflict", actor: { kind: "system", id: "engine" }, payload: { conflict: {
+    id: ids.next("conflict"), draft_hash: hash, finding: "f1", change: "likelihood", earlier: "almost certain", now: "likely", raised_by: "evaluate", changed_for: "challenge",
+    asks: "almost certain", asked: "lower", points: ["f1: understates it"], reason: "Evaluate and Challenge disagree on f1: Evaluate asks almost certain, Challenge asked lower",
+  } } }]);
+  f.s.commit(() => [{ type: "review.ruled", actor: person, payload: { conflict: "k1", follow: "evaluate", note: "" } }]);
+  const r = await f.call("raise_challenge", { why: "w", severity: "must_address", text: "F1 still overclaims", cites: ["c1"] });
+  expect(view(r).error).toBe("the person has ruled on f1 (follow Evaluate: almost certain): it may not be reopened");
+  expect(Object.keys(f.s.state.challenges)).toEqual([]);
+  // another point may still be raised
+  expect((await f.call("raise_challenge", { why: "w", severity: "consider", text: "the peer is unexplained", cites: ["c1"] })).ok).toBe(true);
+});

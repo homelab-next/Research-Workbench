@@ -87,6 +87,16 @@ export interface Product {
 export interface Draft { n: number; hash: string; author: Actor; product: Product; reason: string; cited?: string[] }
 export interface CheckFinding { check: string; where: string; message: string }
 export interface Challenge { id: string; draft_hash: string; severity: "must_address" | "consider"; text: string; cites: string[] }
+/**
+ * Two reviewers who disagree on a finding: `raised_by`'s point on the latest draft would move back a change the analyst made in it for `changed_for`'s
+ * send-back. `asks` and `asked` are the two positions in a few words; `points` are `raised_by`'s points that name the finding; `reason` names both.
+ */
+export interface ReviewConflict {
+  id: string; draft_hash: string; finding: string; change: "likelihood" | "confidence" | "dropped" | "added";
+  earlier: string | null; now: string | null; raised_by: string; changed_for: string; asks: string; asked: string; points: string[]; reason: string;
+}
+/** Why the engine paused, when a person's resume of that pause changes what comes next: a reviewer whose only points were on ruled findings runs again. */
+export type RunHold = { kind: "ruled"; stage: string };
 /** Why a query was issued: for its result, to price another query (an estimate), or to re-run an earlier one (a verify). */
 export type QueryPurpose = "result" | "estimate" | "verify";
 export type Proposal =
@@ -106,7 +116,8 @@ export interface Payloads {
   "case.created": { id: string; title: string; asked: string; why: string; starting: Observable[]; window: TimeWindow; objective: string | null; marking: Marking };
   "case.phase_changed": { phase: string };
   "run.started": { run: string; pipeline: string; pipeline_hash: string; stages: StageDef[] };
-  "run.paused": { reason: string };
+  /** `hold`: what a person's resume of this pause does besides resuming (see RunHold). */
+  "run.paused": { reason: string; hold?: RunHold };
   "run.resumed": Record<string, never>;
   "run.interrupted": Record<string, never>;
   /** `reason` is a person's, when they stopped the run with Engine.stop. */
@@ -175,6 +186,10 @@ export interface Payloads {
   "evaluation.made": { draft_hash: string; pass: boolean; findings: CheckFinding[] };
   "challenge.raised": { challenge: Challenge };
   "challenge.answered": { challenge: string; answer: string; action: "revised" | "rebutted" };
+  /** The engine found the reviewers disagree and paused instead of sending the work back. */
+  "review.conflict": { conflict: ReviewConflict };
+  /** A person's ruling on a conflict: follow one of its two reviewers (a stage id), or none, with a note. Fixed for the rest of the run. */
+  "review.ruled": { conflict: string; follow: string | null; note: string };
   // product and feedback
   "publish.rejected": { draft_hash: string; reason: string; stop: boolean };
   "product.published": { n: number; draft_hash: string; head_hash: string; dir: string; bundle: BlobRef };
@@ -277,6 +292,7 @@ export const CARD_KINDS = listOf<Card["kind"]>({ result: true, assessment: true,
 export const CARD_MAKERS = listOf<Card["made_by"]>({ agent: true, human: true, system: true });
 export const CONFIDENCES = listOf<Finding["confidence"]>({ low: true, moderate: true, high: true });
 export const SEVERITIES = listOf<Challenge["severity"]>({ must_address: true, consider: true });
+export const CONFLICT_CHANGES = listOf<ReviewConflict["change"]>({ likelihood: true, confidence: true, dropped: true, added: true });
 export const ANSWER_ACTIONS = listOf<Payloads["challenge.answered"]["action"]>({ revised: true, rebutted: true });
 export const FEEDBACK_KINDS = listOf<Payloads["feedback.recorded"]["kind"]>({ mop: true, moe: true });
 
@@ -293,7 +309,7 @@ export const ENTRY_TYPES = listOf<EntryType>({
   "card.pinned": true, "lane.created": true, "lane.renamed": true, "lane.removed": true, "lane.target_set": true,
   "undo": true, "proposal.created": true, "proposal.accepted": true, "proposal.rejected": true, "proposal.repriced": true,
   "assessment.made": true, "research.requested": true, "draft.revised": true, "check.run": true,
-  "evaluation.made": true, "challenge.raised": true, "challenge.answered": true, "publish.rejected": true,
+  "evaluation.made": true, "challenge.raised": true, "challenge.answered": true, "review.conflict": true, "review.ruled": true, "publish.rejected": true,
   "product.published": true, "feedback.recorded": true, "agent.asked": true, "agent.answered": true, "agent.ended": true,
   "module.loaded": true, "module.rejected": true, "setting.changed": true, "case.anchored": true,
 });

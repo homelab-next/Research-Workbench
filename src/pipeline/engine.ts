@@ -4,7 +4,8 @@ import { canonical } from "../core/canonical";
 import type { CaseSession } from "../core/session";
 import type { CaseState, RunState } from "../core/state";
 import { latestDraft } from "../core/state";
-import type { Actor, Draft, EntryInput, Marking, ModelChoice, Product } from "../core/types";
+import type { Actor, Draft, EntryInput, Marking, ModelChoice, Product, RunHold } from "../core/types";
+import { termsOf } from "../agents/draft";
 import { mayGo, tooStrict } from "../agents/pack";
 import type { Providers } from "../agents/providers";
 import type { Profile } from "../agents/context";
@@ -169,6 +170,25 @@ export class Engine {
     answerChallenge(this.session, actor, id, answer, action);
   }
 
+  /**
+   * A person rules on reviewers who disagree: follow one of the two (its stage id), or neither, with a note. The ruling is fixed for the rest of the run:
+   * it goes to the analyst, and both reviewers see it. It passes no gate and advances nothing. Throws RunRefused.
+   */
+  rule(actor: Actor, conflict: string, follow: string | null, note: string): void {
+    if (actor.kind !== "human") throw new RunRefused("only a person may rule on a conflict");
+    this.session.commit((s) => {
+      const c = Object.hasOwn(s.conflicts, conflict) ? s.conflicts[conflict]! : null;
+      if (c === null) throw new RunRefused(`there is no conflict ${conflict}`);
+      if (c.ruling !== null) throw new RunRefused(`conflict ${conflict} has already been ruled on`);
+      if (c.run !== s.run.id || s.run.status === "finished" || s.run.status === "none") throw new RunRefused(`conflict ${conflict} is from a run that is over`);
+      const title = (id: string): string => s.run.stages.find((x) => x.id === id)?.title ?? id;
+      if ((follow !== null && follow !== c.raised_by && follow !== c.changed_for) || (follow === null && note.trim() === "")) {
+        throw new RunRefused(`a ruling follows ${title(c.raised_by)} or ${title(c.changed_for)}, or gives a note`);
+      }
+      return [{ type: "review.ruled", actor, run: s.run.id, payload: { conflict, follow, note } }];
+    });
+  }
+
   /** A person approves the draft at the publish gate. Throws PublishRefused and writes nothing when it may not be published. Advances nothing; the anchor is made here. */
   approve(input: { actor: Actor }): { n: number; dir: string; draft_hash: string } {
     return approve(this.session, this.deps, input);
@@ -202,8 +222,15 @@ export class Engine {
     return { status: run.status, waiting: run.waiting, current: run.current, pause_reason: run.pause_reason, outcome: run.outcome };
   }
 
-  private paused(actor: Actor, reason: string): EntryInput {
-    return { type: "run.paused", actor, payload: { reason: clipReason(reason) }, run: this.session.state.run.id };
+  private paused(actor: Actor, reason: string, hold?: RunHold): EntryInput {
+    return { type: "run.paused", actor, payload: { reason: clipReason(reason), ...(hold === undefined ? {} : { hold }) }, run: this.session.state.run.id };
+  }
+
+  /** The profile standard's likelihood terms, least likely first: what a disagreement between reviewers is described with. */
+  private likelihood(): readonly string[] | undefined {
+    const { profile, registry } = this.deps;
+    const standard = profile.standard === null ? null : registry.get("standard", profile.standard);
+    return termsOf(standard?.body ?? null)?.likelihood;
   }
 
   /** The hash of the pipeline the current run started with. */
@@ -219,20 +246,29 @@ export class Engine {
       this.session.commit(() => [this.paused(ENGINE, "the pipeline has changed since this run started")]);
       return this.summary();
     }
+    const likelihood = this.likelihood();
     for (let i = 0; i < MAX_STEPS; i++) {
-      const step = nextStep(this.session.state, this.deps.pipeline, { allow_capped: allow });
+      const step = nextStep(this.session.state, this.deps.pipeline, { allow_capped: allow, ...(likelihood === undefined ? {} : { likelihood }) });
       allow = false;
       switch (step.kind) {
         case "idle": return this.summary();
         case "start": this.begin(step); break;
         case "exec": if (!(await this.exec(step.stage))) return this.summary(); break;
         case "gate": this.session.commit((s) => [{ type: "gate.waiting", actor: ENGINE, payload: { gate: step.gate }, run: s.run.id }]); break;
-        case "pause": this.session.commit(() => [this.paused(ENGINE, step.reason)]); break;
+        case "pause": this.pauseFor(step); break;
         case "finish": this.finish(step.outcome); return this.summary();
       }
     }
     this.session.commit(() => [this.paused(ENGINE, "the run took more steps than expected and was paused")]);
     return this.summary();
+  }
+
+  /** The pause, and the disagreements between reviewers that made it, in one commit: what the person rules on is there when the run stops. */
+  private pauseFor(step: Extract<ReturnType<typeof nextStep>, { kind: "pause" }>): void {
+    this.session.commit((s, ids) => [
+      ...(step.conflicts ?? []).map((c): EntryInput => ({ type: "review.conflict", actor: ENGINE, run: s.run.id, stage: c.raised_by, payload: { conflict: { id: ids.next("conflict"), ...c } } })),
+      this.paused(ENGINE, step.reason, step.hold),
+    ]);
   }
 
   private begin(step: Extract<ReturnType<typeof nextStep>, { kind: "start" }>): void {

@@ -599,3 +599,55 @@ test("a failed non-blocking check is listed at the gate as a noted exception and
   expect(p.all(".review .noted li").map((l) => l.textContent)).toEqual(["change failed on this revision (noted, not blocking): the change is empty"]);
   expect(approve().disabled).toBe(false);
 });
+
+/** Records a conflict between Evaluate and Challenge on the latest draft's first finding, and the pause it makes, as the engine would. */
+async function conflictRecorded(): Promise<string> {
+  const s = p.s.app.hub.read("CASE-1");
+  const d = latest();
+  const f = d.product.key_findings[0]!.id;
+  let id = "";
+  s.commit((st, ids) => {
+    id = ids.next("conflict");
+    const reason = `Evaluate and Challenge disagree on ${f}: Evaluate asks almost certain, Challenge asked lower`;
+    return [
+      { type: "review.conflict", actor: { kind: "system", id: "engine" }, run: st.run.id, payload: { conflict: {
+        id, draft_hash: d.hash, finding: f, change: "likelihood", earlier: "almost certain", now: "likely", raised_by: "evaluate", changed_for: "challenge",
+        asks: "almost certain", asked: "lower", points: [`${f}: c1 shows it directly`], reason,
+      } } },
+      { type: "run.paused", actor: { kind: "system", id: "engine" }, run: st.run.id, payload: { reason: `${reason}. The person rules on it in the Narrative lens: follow one reviewer, or write a note.` } },
+    ];
+  });
+  await settled();
+  return id;
+}
+
+test("when reviewers conflict the lens shows both positions and the person follows one, and the ruling is shown", async () => {
+  await atGate();
+  const id = await conflictRecorded();
+  const box = (): HTMLElement => p.q(`[data-conflict=${id}]`);
+  expect(box().textContent).toContain("Evaluate and Challenge disagree on");
+  expect(box().textContent).toContain("c1 shows it directly");
+  const buttons = (): string[] => [...box().querySelectorAll("button")].map((b) => b.textContent ?? "");
+  expect(buttons()).toEqual(["Follow Evaluate: almost certain", "Follow Challenge: keep likely", "Rule with this note"]);
+  const log = sent();
+  p.click(box().querySelector("[data-action=follow-challenge]") as HTMLElement);
+  await settled();
+  expect(log.filter((c) => c.command === "rule_conflict")).toEqual([{ command: "rule_conflict", args: { conflict: id, follow: "challenge", note: "" } }]);
+  expect(state().conflicts[id]!.ruling).toMatchObject({ follow: "challenge", by: p.s.config.user });
+  expect(box().textContent).toContain("Ruled: follow Challenge: keep likely");
+  expect(box().querySelectorAll("button").length).toBe(0);
+});
+
+test("a ruling may be a note alone; with no note the note button does nothing", async () => {
+  await atGate();
+  const id = await conflictRecorded();
+  const box = (): HTMLElement => p.q(`[data-conflict=${id}]`);
+  const note = (): HTMLButtonElement => box().querySelector("[data-action=rule-note]") as HTMLButtonElement;
+  expect(note().disabled).toBe(true);
+  p.fill(`[aria-label='Ruling note on ${id}']`, "Say likely, and name the one event in gaps.");
+  expect(note().disabled).toBe(false);
+  p.click(note());
+  await settled();
+  expect(state().conflicts[id]!.ruling).toMatchObject({ follow: null, note: "Say likely, and name the one event in gaps." });
+  expect(box().textContent).toContain("Ruled: Note: Say likely, and name the one event in gaps.");
+});
