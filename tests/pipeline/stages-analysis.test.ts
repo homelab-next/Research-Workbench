@@ -172,7 +172,7 @@ test("Assemble composes the change from the analyst's change_kind and change_det
   expect(called).toEqual(["it is internal", "it talks to the proxy"]);
 });
 
-test("a revision starts from the previous draft and changes only what was proposed again", async () => {
+test("a revision starts from the previous draft's sections and holds only the findings proposed again", async () => {
   const r = rig({ analyst: [...FIRST, ...SECOND], evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
   r.checks.fail = 1;
   await go(r);
@@ -180,11 +180,58 @@ test("a revision starts from the previous draft and changes only what was propos
   expect(f.s.state.drafts).toHaveLength(2);
   expect(d2!.n).toBe(2);
   expect(d2!.product.key_findings[0]!.statement).toBe("We assess it is likely that it is internal and managed.");
-  expect(d2!.product.key_findings[1]).toEqual(d1!.product.key_findings[1]!);
+  // f2 was not proposed again, so it is not carried
+  expect(d2!.product.key_findings.map((x) => x.id)).toEqual(["f1"]);
+  expect(d1!.product.key_findings.map((x) => x.id)).toEqual(["f1", "f2"]);
   expect(d2!.product.summary).toBe("all clear");
   expect(d2!.product.change).toBe("First judgment: second.");
   expect(d2!.reason).toBe("revised after Checks: f1 cites too little");
-  expect(ofType("assessment.made").map((e) => e.payload.draft_hash)).toEqual([d1!.hash, d1!.hash, d2!.hash, d2!.hash]);
+  expect(ofType("assessment.made").map((e) => e.payload.draft_hash)).toEqual([d1!.hash, d1!.hash, d2!.hash]);
+});
+
+/** A run whose Research stage leaves a person's draft of sixteen findings, f7 among them, for Assemble to start from. */
+function sixteen(analyst: ScriptReply[]): Rig {
+  let engine: Engine | null = null;
+  const research: StageRunner = async () => {
+    const findings = Array.from({ length: 16 }, (_, i) => ({
+      id: `f${i + 1}`, statement: i === 6 ? "We judge that the device likely connected to the address." : `We assess it is likely that old claim ${i + 1} holds.`,
+      likelihood: "likely", confidence: "low" as const, confidence_basis: "b", cites: ["c1"], assumptions: [], reasoning: "r",
+    }));
+    engine!.revise({ product: {
+      objective: "o", question: "q", marking: "TLP:GREEN", summary: "all clear", key_findings: findings, gaps_and_limits: "", alternatives: "", assessment: "",
+      sources: [], assumptions: [], change: "First judgment.",
+    }, reason: "an earlier analysis", actor: person });
+    return PASS;
+  };
+  const r = rig({ analyst, evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] }, { research });
+  engine = r.engine;
+  return r;
+}
+
+test("a draft holds only the findings of its own Assemble pass: f17-f20 proposed, and an old f7 does not reappear", async () => {
+  const pass: ScriptReply[] = [calls(...[17, 18, 19, 20].map((n) => finding(`new claim ${n} holds`, ["c1"]))), out("second")];
+  await go(sixteen(pass));
+  const [d1, d2] = f.s.state.drafts;
+  expect(d1!.product.key_findings).toHaveLength(16);
+  expect(d2!.product.key_findings.map((x) => x.id)).toEqual(["f17", "f18", "f19", "f20"]);
+  expect(d2!.product.key_findings.map((x) => x.statement).join(" ")).not.toContain("device");
+  expect(d2!.product.summary).toBe("all clear");
+  expect(ofType("assessment.made").filter((e) => e.payload.draft_hash === d2!.hash).map((e) => e.payload.finding.id)).toEqual(["f17", "f18", "f19", "f20"]);
+  // the pack shows the previous draft's findings as reference, f7 among them
+  const sent = requestText("analyst", 0);
+  expect(sent).toContain("restate the ones you keep");
+  expect(sent).toContain("We judge that the device likely connected to the address.");
+});
+
+test("a finding of the previous draft is kept only when it is proposed again in the pass, by id, the latest proposal winning", async () => {
+  const pass: ScriptReply[] = [calls(
+    finding("old claim 3 holds, restated", ["c1"], { replaces: "f3" }), finding("a new claim holds", ["c1"]), finding("old claim 3 holds, restated again", ["c1"], { replaces: "f3" }),
+  ), out("second")];
+  await go(sixteen(pass));
+  const d2 = f.s.state.drafts[1]!;
+  expect(d2.product.key_findings.map((x) => [x.id, x.statement])).toEqual([
+    ["f3", "We assess it is likely that old claim 3 holds, restated again."], ["f17", "We assess it is likely that a new claim holds."],
+  ]);
 });
 
 test("a revision keeps the cards a carried-over section cited by tool only", async () => {
@@ -203,7 +250,7 @@ test("a revision keeps the cards a carried-over section cited by tool only", asy
 
 test("a revision that rewrites every section does not carry their old cards", async () => {
   const first: ScriptReply[] = [calls(finding("it is internal", ["c1"]), section("summary", "all clear", ["c2"])), out("first")];
-  const second: ScriptReply[] = [calls(...["summary", "gaps_and_limits", "alternatives", "assessment"].map((s) => section(s, "rewritten"))), out("second")];
+  const second: ScriptReply[] = [calls(finding("it is internal", ["c1"], { replaces: "f1" }), ...["summary", "gaps_and_limits", "alternatives", "assessment"].map((s) => section(s, "rewritten"))), out("second")];
   const r = rig({ analyst: [...first, ...second], evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
   r.checks.fail = 1;
   await go(r);
@@ -298,8 +345,11 @@ test("a must-address challenge fails the stage on that draft", async () => {
 
 test("an answered challenge no longer blocks the same draft", async () => {
   const must = calls(call("raise_challenge", { severity: "must_address", text: "the asset record may be stale", cites: ["c1"] }));
-  // rebutted, and the draft is not changed: the same hash goes back to the adversary, who raises nothing more
-  const rebut: ScriptReply[] = [calls(call("answer_challenge", { challenge: "x1", answer: "the record is from this week", action: "rebutted" })), out("first")];
+  // rebutted, and the draft is not changed (its findings are restated as they were): the same hash goes back to the adversary, who raises nothing more
+  const rebut: ScriptReply[] = [calls(
+    finding("it is internal", ["c1"], { replaces: "f1" }), finding("it talks to the proxy", ["c2"], { replaces: "f2" }),
+    call("answer_challenge", { challenge: "x1", answer: "the record is from this week", action: "rebutted" }),
+  ), out("first")];
   const r = rig({ analyst: [...FIRST, ...rebut], evaluator: [EVAL_PASS], adversary: [must, CHALLENGE_PASS, CHALLENGE_PASS] });
   const sum = await go(r);
   expect(sum).toMatchObject({ status: "waiting", waiting: "publish" });

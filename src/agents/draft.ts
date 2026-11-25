@@ -102,7 +102,10 @@ export class DraftWork {
   readonly narrativeCites: Record<TextSection, string[]> = { summary: [], gaps_and_limits: [], alternatives: [], assessment: [] };
   readonly research: { question: string; why: string }[] = [];
 
-  /** The revision this one starts from: its marking is a floor and its sources are kept (narrative cites are not stored in a product). */
+  /**
+   * The revision this one starts from: its marking is a floor, its sections and sources are kept (narrative cites are not stored in a product).
+   * Its findings are reference only: a new revision holds the findings proposed for it, and an earlier one is kept only when proposed again.
+   */
   readonly previous: Product | null;
   /** The profile standard's terms, which a finding's wording is composed from; null when the profile names none. */
   readonly terms: StandardTerms | null;
@@ -110,21 +113,27 @@ export class DraftWork {
   constructor(previous: Product | null, terms: StandardTerms | null = null) {
     this.previous = previous;
     this.terms = terms;
-    this.findings = previous === null ? [] : previous.key_findings.map((f) => ({ ...f, cites: [...f.cites], assumptions: [...f.assumptions] }));
+    this.findings = [];
     this.sections = previous === null
       ? { summary: "", gaps_and_limits: "", alternatives: "", assessment: "" }
       : { summary: previous.summary, gaps_and_limits: previous.gaps_and_limits, alternatives: previous.alternatives, assessment: previous.assessment };
   }
 
-  /** Adds a finding as f<n>, or replaces the one named. Throws ToolError when `replaces` names none. */
+  /**
+   * Adds a finding as f<n>, numbered after every id of this revision and the previous one, or replaces the one named: one proposed for this
+   * revision, or one of the previous revision's, which is then proposed again under its id (the latest proposal wins). Throws ToolError when
+   * `replaces` names neither.
+   */
   setFinding(f: Omit<Finding, "id">, replaces: string | null): string {
+    const earlier = this.previous?.key_findings ?? [];
     if (replaces !== null) {
       const i = this.findings.findIndex((x) => x.id === replaces);
-      if (i < 0) throw new ToolError(`no such finding to replace: ${replaces}`);
-      this.findings[i] = { id: replaces, ...f };
+      if (i >= 0) this.findings[i] = { id: replaces, ...f };
+      else if (earlier.some((x) => x.id === replaces)) this.findings.push({ id: replaces, ...f });
+      else throw new ToolError(`no such finding to replace: ${replaces}`);
       return replaces;
     }
-    const used = this.findings.map((x) => Number(/^f(\d+)$/.exec(x.id)?.[1] ?? 0));
+    const used = [...earlier, ...this.findings].map((x) => Number(/^f(\d+)$/.exec(x.id)?.[1] ?? 0));
     const id = `f${Math.max(0, ...used) + 1}`;
     this.findings.push({ id, ...f });
     return id;

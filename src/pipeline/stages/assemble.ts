@@ -1,6 +1,6 @@
 import type { Json } from "../../core/canonical";
 import { latestDraft, openMustAddress } from "../../core/state";
-import type { Actor, Entry, EntryInput } from "../../core/types";
+import type { Actor, Draft, Entry, EntryInput } from "../../core/types";
 import type { CaseSession } from "../../core/session";
 import { ContextError, packPart } from "../../agents/context";
 import type { PackPart } from "../../agents/context";
@@ -43,6 +43,14 @@ function mustFix(session: CaseSession): PackPart | null {
   return packPart({
     kind: "note", id: "must-fix", title: "What must be fixed in the latest draft", text: out.map((x) => `- ${x}`).join("\n"), fixed: true,
     entries, written_by: by, floor: d.product.marking,
+  });
+}
+
+/** The previous draft's findings, shown as reference to an Assemble pass whose draft holds only what it proposes. As strict as that draft. */
+function previousFindings(session: CaseSession, d: Draft): PackPart {
+  return packPart({
+    kind: "draft", id: `draft-${d.n}-findings`, title: `Draft ${d.n}'s findings, for reference: they are not carried into the new draft; restate the ones you keep`,
+    text: JSON.stringify(d.product.key_findings, null, 2), fixed: true, entries: session.entries(), written_by: [], floor: d.product.marking,
   });
 }
 
@@ -96,13 +104,15 @@ export async function assembleRunner(env: StageEnv): Promise<StageEnd> {
     if (err instanceof ContextError) return { kind: "stalled", reason: `${titleOf(env)}: ${err.message}` };
     throw err;
   }
+  // the previous draft's findings are reference: this pass's draft holds only the findings proposed in it
+  if (latest !== null && latest.product.key_findings.length > 0) extras.push(previousFindings(session, latest));
   const live = Object.values(state.cards).filter((c) => c.place !== "discarded").sort((a, b) => b.created_seq - a.created_seq);
   for (const c of live) extras.push(packPart({ card: c, registry: deps.registry }));
 
   const task = [
     "Assemble the draft.",
     `The question asked: ${m.asked}`,
-    latest === null ? "There is no draft yet." : `Start from draft ${latest.n}; change only what needs changing.`,
+    latest === null ? "There is no draft yet." : `Start from draft ${latest.n}; change only what needs changing. Its sections are kept unless you set them again. Its findings are not kept: this draft holds only the findings you propose now, so propose again each one you keep (name it in replaces to keep its id).`,
     "Propose one finding at a time, set each section, answer each open challenge, then reply with the output.",
     "A finding's claim is the plain assertion; its likelihood is one of the standard's terms; the statement is worded from them by code. The change from earlier judgments is a change_kind and a change_detail.",
   ].join("\n");

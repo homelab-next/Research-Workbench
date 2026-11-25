@@ -137,7 +137,7 @@ turns:
       content: |
         {"done": true, "change_kind": "first judgment", "change_detail": "on this question", "assumptions": ["The asset list is current."], "note": "First draft."}
 
-  # draft 2: the planted fault is fixed by keeping the first sentence only
+  # draft 2: the planted fault is fixed by keeping the first sentence only; f2 is restated, since a draft holds only the findings proposed for it
   - actor: analyst
     reply:
       tool_calls:
@@ -156,6 +156,17 @@ turns:
             cites: ["{{card:Hosts that connected to the address: 198.51.100.77}}", "{{card:Asset with the address, by asset list: 192.0.2.17}}", "{{card:Accounts that signed in to the asset: ws-17.example.net}}"]
             assumptions: ["The asset list is current."]
             reasoning: "ws-17.example.net connects every ten minutes, and j.doe signed in there shortly before it began."
+        - tool: propose_assessment
+          args:
+            why: "Keep the second finding: a draft holds only the findings proposed for it."
+            replaces: f2
+            claim: "198.51.100.77 is not an internal host"
+            likelihood: almost certain
+            confidence: high
+            confidence_basis: "The asset list is complete for internal hosts and had no row for the address."
+            cites: ["{{card:Asset with the address, by asset list: 198.51.100.77}}"]
+            assumptions: []
+            reasoning: "An address absent from a complete asset list is not internal."
   - actor: analyst
     reply:
       content: |

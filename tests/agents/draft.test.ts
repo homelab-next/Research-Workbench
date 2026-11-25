@@ -37,17 +37,33 @@ test("replacing a finding that does not exist is a ToolError", () => {
   expect(() => w.setFinding(f("a"), "f9")).toThrow(ToolError);
 });
 
-test("a new revision starts from the previous one", () => {
+test("a new revision starts from the previous one's sections; its findings are only those proposed for it", () => {
   const w = new DraftWork(null);
   w.setFinding(f("a"), null);
   w.setSection("summary", "sum");
   const p = buildProduct(w, facts({ c1: card("c1", "dns", "TLP:GREEN") }));
   const next = new DraftWork(p);
-  expect(next.findings.map((x) => x.statement)).toEqual(["a"]);
+  expect(next.findings).toEqual([]);
   expect(next.sections.summary).toBe("sum");
   expect(next.setFinding(f("b"), null)).toBe("f2");
   expect(w.findings).toHaveLength(1);
-  expect(next.findings).toHaveLength(2);
+  expect(next.findings.map((x) => x.statement)).toEqual(["b"]);
+});
+
+test("a new revision holds only the findings proposed for it: the previous ones are reference, an id is kept by replaces and new ids follow the previous ones", () => {
+  const w = new DraftWork(null);
+  w.setFinding(f("a"), null);
+  w.setFinding(f("b"), null);
+  const p = buildProduct(w, facts({ c1: card("c1", "dns", "TLP:GREEN") }));
+  const next = new DraftWork(p);
+  expect(next.findings).toEqual([]);
+  expect(next.previous!.key_findings.map((x) => x.id)).toEqual(["f1", "f2"]);
+  expect(next.setFinding(f("c"), null)).toBe("f3");
+  expect(next.setFinding(f("b2"), "f2")).toBe("f2");
+  expect(next.setFinding(f("b3"), "f2")).toBe("f2");
+  expect(next.findings.map((x) => [x.id, x.statement])).toEqual([["f3", "c"], ["f2", "b3"]]);
+  expect(() => next.setFinding(f("z"), "f9")).toThrow(ToolError);
+  expect(buildProduct(next, facts({ c1: card("c1", "dns", "TLP:GREEN") })).key_findings.map((x) => x.id)).toEqual(["f3", "f2"]);
 });
 
 test("the product's marking is the strictest of the case and the cited cards", () => {
@@ -93,12 +109,14 @@ test("the same work and facts always give the same hash", () => {
   expect(draftOf(p, 1, analyst, "r").hash).not.toBe(draftOf({ ...p, summary: "changed" }, 1, analyst, "r").hash);
 });
 
-test("a finding carried over that cites a card since discarded refuses the build, naming the finding", () => {
+test("a finding proposed again that cites a card since discarded refuses the build, naming the finding", () => {
   const w = new DraftWork(null);
   w.setFinding(f("a", ["c1"]), null);
   const prev = buildProduct(w, facts({ c1: card("c1", "dns", "TLP:GREEN") }));
   const gone = { ...card("c1", "dns", "TLP:GREEN"), place: "discarded" } as unknown as CardState;
-  expect(() => buildProduct(new DraftWork(prev), facts({ c1: gone }))).toThrow(/f1.*c1.*discarded/);
+  const again = new DraftWork(prev);
+  again.setFinding(f("a", ["c1"]), "f1");
+  expect(() => buildProduct(again, facts({ c1: gone }))).toThrow(/f1.*c1.*discarded/);
 });
 
 test("a narrative's citations count toward the product's marking and sources", () => {
