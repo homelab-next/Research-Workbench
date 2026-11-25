@@ -147,3 +147,12 @@ test("the run button follows the run", () => {
   b.add("run.finished", { outcome: "stopped" });
   expect(runButton(fold(b.entries))).toEqual({ label: "Run again", command: "start_run", lens: null, disabled: false });
 });
+
+test("while reviewers disagree, the run button opens the Narrative to settle it instead of resuming", () => {
+  const s = gate("paused");
+  const withConflict = { ...s, conflicts: { k1: { id: "k1", run: s.run.id, seq: 1, finding: "f1", ruling: null } } } as never;
+  expect(runButton(withConflict)).toEqual({ label: "Settle the disagreement", command: null, lens: "narrative", disabled: false });
+  expect(nextThing(withConflict)).toEqual({ label: "Settle the disagreement", lens: "narrative" });
+  const ruled = { ...s, conflicts: { k1: { id: "k1", run: s.run.id, seq: 1, finding: "f1", ruling: { follow: "evaluate" } } } } as never;
+  expect(runButton(ruled).command).toBe("resume");
+});

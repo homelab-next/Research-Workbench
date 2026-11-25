@@ -1,4 +1,4 @@
-import { blockers, latestDraft, publishable, subgoalAnswered } from "../core/state";
+import { blockers, latestDraft, publishable, runConflicts, subgoalAnswered } from "../core/state";
 import type { CardState, CaseState, StageState } from "../core/state";
 import type { LensId } from "./app";
 
@@ -107,6 +107,7 @@ export type NextThing = { label: string; command: "accept_plan" | "approve" | "r
 /** What Shift+Enter does now, with the words its button carries; null when the run waits on nothing a single key should do. */
 export function nextThing(state: CaseState): NextThing | null {
   const { run } = state;
+  if (unsettled(state)) return { label: "Settle the disagreement", lens: "narrative" };
   if (run.status === "paused" || run.status === "interrupted") return { label: "Resume the run", command: "resume" };
   if (run.status !== "waiting") return null;
   if (run.waiting === "plan" && state.plan.current !== null) {
@@ -124,8 +125,14 @@ export function nextThing(state: CaseState): NextThing | null {
   return null;
 }
 
+/** A disagreement between reviewers the person has not ruled on yet: Resume would only pause again, so the brief sends the person to rule. */
+function unsettled(state: CaseState): boolean {
+  return (state.run.status === "paused" || state.run.status === "interrupted") && runConflicts(state).some((c) => c.ruling === null);
+}
+
 export function runButton(state: CaseState): { label: string; command: "start_run" | "resume" | null; lens: LensId | null; disabled: boolean } {
   const { run } = state;
+  if (unsettled(state)) return { label: "Settle the disagreement", command: null, lens: "narrative", disabled: false };
   switch (run.status) {
     case "none": return { label: "Run", command: "start_run", lens: null, disabled: false };
     case "running": return { label: "Running", command: null, lens: null, disabled: true };
