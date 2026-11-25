@@ -113,7 +113,8 @@ export class LocalProvider implements Provider {
       const headers: Record<string, string> = {};
       if (body !== null) headers["content-type"] = "application/json";
       if (this.#secret !== null) headers.authorization = `Bearer ${this.#secret}`;
-      const res = await fetch(url, { method, headers, ...(body === null ? {} : { body: body as unknown as BodyInit }), redirect: "error", signal: ctl.signal });
+      // timeout: false turns off Bun's own idle timer (5 minutes by default), so timeout_ms above is the only deadline
+      const res = await fetch(url, { method, headers, ...(body === null ? {} : { body: body as unknown as BodyInit }), redirect: "error", signal: ctl.signal, timeout: false });
       const raw = await readCapped(res, ctl.signal, this.#max);
       let parsed: unknown;
       try { parsed = JSON.parse(dec.decode(raw)); } catch { parsed = undefined; }

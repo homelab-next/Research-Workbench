@@ -307,3 +307,19 @@ test("a request's own sampling and max_output_tokens win over the model's, key b
   await p.turn(req({ sampling: { temperature: 0.3, top_k: 40 }, max_output_tokens: 4096 }));
   expect(sentBodies(m)[0]).toMatchObject({ ...SAMPLING, temperature: 0.3, top_k: 40, max_tokens: 4096 });
 });
+
+test("every request turns off Bun's own idle timeout, so the manifest's timeout_ms is the only one", async () => {
+  const m = standin([ok({ content: "a" })], { models: [{ id: "m" }] });
+  const real = globalThis.fetch;
+  const inits: Record<string, unknown>[] = [];
+  globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: RequestInit) => { inits.push({ ...(init ?? {}) }); return real(input, init); }) as typeof fetch;
+  try {
+    const p = provider(m.url, { timeout_ms: 400000 });
+    await p.models();
+    expect((await p.turn(req())).kind).toBe("answer");
+  } finally {
+    globalThis.fetch = real;
+  }
+  expect(inits.length).toBe(3);
+  for (const init of inits) expect(init.timeout).toBe(false);
+});
