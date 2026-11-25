@@ -191,6 +191,24 @@ test("a likelihood that is not one of the standard's terms is refused, naming th
   expect(f.ctx.draft.findings).toEqual([]);
 });
 
+test("the claim re-check covers every term and variant of the standard, whole word and any case: the real run's f7 and f8 are refused", async () => {
+  f.ctx.draft = drafting();
+  const refused = async (claim: string): Promise<string> => {
+    const r = await f.call("propose_assessment", assess({ claim }));
+    expect(r.ok).toBe(false);
+    return String(view(r).error);
+  };
+  expect(await refused("the device likely connected to the address")).toContain('holds the likelihood term "likely":');
+  expect(await refused("We judge that this device probably connected to the address")).toContain('holds the likelihood term "likely" (as "probably")');
+  expect(await refused("the device PROBABLY connected")).toContain('(as "probably")');
+  expect(await refused("It is Likely that the device connected")).toContain('"likely"');
+  expect(await refused("the device very likely connected")).toContain('"very likely"');
+  // a term inside another word is not a term
+  const ok = await f.call("propose_assessment", assess({ claim: "the device connected to unlikelyhost.example.net and probablyfine.example.org" }));
+  expect(ok.ok).toBe(true);
+  expect(f.ctx.draft.findings.map((x) => x.statement)).toEqual(["We assess it is likely that the device connected to unlikelyhost.example.net and probablyfine.example.org."]);
+});
+
 test("a claim that holds a likelihood term of its own is refused: the likelihood is said once, by the likelihood field", async () => {
   f.ctx.draft = drafting();
   const r = await f.call("propose_assessment", assess({ claim: "the host was probably compromised" }));
