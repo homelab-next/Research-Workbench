@@ -1,6 +1,8 @@
 import type { Json } from "../../core/canonical";
+import { isPlainObject } from "../../core/canonical";
 import { latestDraft, openMustAddress } from "../../core/state";
 import type { Actor, Draft, Entry, EntryInput } from "../../core/types";
+import type { Schema } from "../../core/schema";
 import type { CaseSession } from "../../core/session";
 import { ContextError, packPart } from "../../agents/context";
 import type { PackPart } from "../../agents/context";
@@ -52,6 +54,16 @@ function previousFindings(session: CaseSession, d: Draft): PackPart {
     kind: "draft", id: `draft-${d.n}-findings`, title: `Draft ${d.n}'s findings, for reference: they are not carried into the new draft; restate the ones you keep`,
     text: JSON.stringify(d.product.key_findings, null, 2), fixed: true, entries: session.entries(), written_by: [], floor: d.product.marking,
   });
+}
+
+export const FIRST_JUDGMENT = "first judgment";
+/** Said when an answer carries a change kind the record rules out. */
+export const NOTHING_PUBLISHED = `nothing has been published in this case before, so the change is '${FIRST_JUDGMENT}'`;
+/** The answer schema with change_kind allowing only "first judgment": what a case with no earlier publication allows. Other schemas are unchanged. */
+export function firstJudgmentOnly(schema: Schema): Schema {
+  const kind = schema.properties?.change_kind;
+  if (kind === undefined || !Array.isArray(kind.enum) || !kind.enum.includes(FIRST_JUDGMENT)) return schema;
+  return { ...schema, properties: { ...schema.properties, change_kind: { ...kind, enum: [FIRST_JUDGMENT] } } };
 }
 
 /** The reason for the draft: why this revision exists. */
@@ -117,7 +129,11 @@ export async function assembleRunner(env: StageEnv): Promise<StageEnd> {
     "A finding's claim is the plain assertion; its likelihood is one of the standard's terms; the statement is worded from them by code. The change from earlier judgments is a change_kind and a change_detail.",
   ].join("\n");
   const actorId = deps.profile.stages[stage.id]?.agent ?? "analyst";
-  const end = await stageAgent(env, { actor_id: actorId, task, extras, draft: work, draft_hash: latest?.hash ?? null });
+  // the change follows the record: with nothing published in this case, the only change is a first judgment
+  const first = state.published.length === 0
+    ? { narrow: firstJudgmentOnly, explain: (a: Json): string[] => (isPlainObject(a) && typeof a.change_kind === "string" && a.change_kind !== FIRST_JUDGMENT ? [NOTHING_PUBLISHED] : []) }
+    : {};
+  const end = await stageAgent(env, { actor_id: actorId, task, extras, draft: work, draft_hash: latest?.hash ?? null, ...first });
   if (end.kind !== "output") return end;
   const output = end.output as { change_kind?: string; change_detail?: string; assumptions?: string[] };
 

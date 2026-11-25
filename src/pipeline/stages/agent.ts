@@ -1,5 +1,6 @@
 import type { Json } from "../../core/canonical";
 import { parseJson } from "../../core/canonical";
+import type { Schema } from "../../core/schema";
 import type { CaseSession } from "../../core/session";
 import { runUsage } from "../../core/state";
 import type { Actor, Draft, Entry, TimeWindow } from "../../core/types";
@@ -62,6 +63,10 @@ export async function resolveAgent(env: StageEnv, actorId: string): Promise<{ ac
 export async function stageAgent(env: StageEnv, opts: {
   actor_id: string; task: string; extras: PackPart[]; subgoal?: string | null; job?: string | null;
   draft?: DraftWork | null; draft_hash?: string | null; onNeedsBudget?: ToolContext["onNeedsBudget"]; omit_tools?: readonly ToolName[];
+  /** The output schema as this case's record allows it: applied to the schema in the pack and to the one the answer is held to (and sent as structured output). */
+  narrow?: (s: Schema) => Schema;
+  /** Sentences the re-ask adds for an answer that failed its schema. */
+  explain?: (answer: Json) => string[];
 }): Promise<AgentStageEnd> {
   const { session, deps, stage } = env;
   const title = titleOf(env);
@@ -73,8 +78,8 @@ export async function stageAgent(env: StageEnv, opts: {
   let pack: ReturnType<typeof assemblePack>;
   let schema: ReturnType<typeof schemaOf> | null = null;
   try {
-    const parts = [...stageParts(deps.registry, deps.profile, stage.id, { schema: stage.schema, objective: state.meta?.objective ?? null }), casePart(state), ...opts.extras];
-    if (stage.schema !== null) schema = schemaOf(deps.registry, stage.schema);
+    const parts = [...stageParts(deps.registry, deps.profile, stage.id, { schema: stage.schema, objective: state.meta?.objective ?? null, ...(opts.narrow === undefined ? {} : { narrow: opts.narrow }) }), casePart(state), ...opts.extras];
+    if (stage.schema !== null) schema = opts.narrow === undefined ? schemaOf(deps.registry, stage.schema) : opts.narrow(schemaOf(deps.registry, stage.schema));
     pack = assemblePack(parts, { budget: packBudget(who.context), case_marking: state.meta!.marking, max_marking: Object.hasOwn(state.pack_limits, stage.id) ? state.pack_limits[stage.id]! : null });
   } catch (err) {
     if (err instanceof ContextError) return { kind: "stalled", reason: `${title}: ${firstLine(err.message)}` };
@@ -86,6 +91,7 @@ export async function stageAgent(env: StageEnv, opts: {
   const end = await runAgent(session, {
     actor: who.actor, provider: who.provider, model: who.model, effort: who.effort, pack, task: opts.task, tools: stage.tools.filter((t) => !(opts.omit_tools ?? []).includes(t)), schema,
     ...(stage.schema === null ? {} : { schema_id: stage.schema }),
+    ...(opts.explain === undefined ? {} : { explain: opts.explain }),
     ...(stage.sampling === null || stage.sampling === undefined ? {} : { sampling: stage.sampling }),
     ...(stage.max_output_tokens === null || stage.max_output_tokens === undefined ? {} : { max_output_tokens: stage.max_output_tokens }),
     ...(stage.max_turns === null || stage.max_turns === undefined ? {} : { max_turns: stage.max_turns }),

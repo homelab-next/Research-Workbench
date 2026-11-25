@@ -14,6 +14,7 @@ import { loadProfile } from "../../src/agents/context";
 import { Providers } from "../../src/agents/providers";
 import { ScriptedProvider } from "../../src/agents/providers/scripted";
 import type { ScriptReply } from "../../src/agents/providers/scripted";
+import type { TurnRequest } from "../../src/agents/providers/types";
 import { loadConfig } from "../../src/modules/config";
 import { Engine } from "../../src/pipeline/engine";
 import type { EngineDeps, StageEnd, StageRunner } from "../../src/pipeline/engine";
@@ -28,7 +29,7 @@ import type { Fixture } from "../helpers/tools-fixture";
 
 let f: Fixture;
 let dir: string;
-beforeEach(() => { afterTurn = null; f = fixture(false); dir = mkdtempSync(join(tmpdir(), "analysis-")); });
+beforeEach(() => { afterTurn = null; structured = false; formats.length = 0; f = fixture(false); dir = mkdtempSync(join(tmpdir(), "analysis-")); });
 afterEach(() => {
   expect(f.s.state.skipped).toEqual([]);
   f.close();
@@ -57,6 +58,10 @@ const CHALLENGE_PASS = say({ done: true, summary: "nothing to add" });
 
 /** Called after each model answer the scripted provider gives, with its running count and the asking actor; a test uses it to act while a model is answering. */
 let afterTurn: ((n: number, actor: string) => void) | null = null;
+/** When true, the scripted provider says it takes structured output, so a re-ask carries the schema as `response_format`. */
+let structured = false;
+/** The response_format of each request the scripted provider was sent, with the asking actor. */
+const formats: { actor: string; format: TurnRequest["response_format"] | null }[] = [];
 interface Rig { engine: Engine; log: string[]; checks: { fail: number } }
 /** Real Assemble, Evaluate and Challenge; stubs for the rest. `checks.fail` is how many times the Checks stub fails before it passes. */
 function rig(replies: Record<string, ScriptReply[]>, over: Partial<Record<Role, StageRunner>> = {}, s: CaseSession = f.s): Rig {
@@ -67,7 +72,8 @@ function rig(replies: Record<string, ScriptReply[]>, over: Partial<Record<Role, 
   const scripted = new ScriptedProvider({ id: "scripted", scripts: [{ id: "sample-run", turns }] });
   const real = scripted.turn.bind(scripted);
   let turns_ = 0;
-  scripted.turn = async (req) => { const got = await real(req); afterTurn?.(++turns_, req.key); return got; };
+  if (structured) Object.assign(scripted, { structured_output: true });
+  scripted.turn = async (req) => { formats.push({ actor: req.key, format: req.response_format ?? null }); const got = await real(req); afterTurn?.(++turns_, req.key); return got; };
   const deps: EngineDeps = {
     config: loadConfig({ env: {}, home: dir, repoRoot: dir }), registry, runner: f.sample.deps, seeker: f.sample.seeker,
     providers: new Providers([scripted]), pipeline, profile: loadProfile(registry, "investigation"),
@@ -597,4 +603,42 @@ test("Evaluate writes no verdict after the run was stopped while its model was a
   const after = f.s.entries().filter((e) => e.seq > stopSeq).map((e) => e.type);
   expect(after).not.toContain("evaluation.made");
   expect(after).not.toContain("stage.finished");
+});
+
+// ---- the last two form failures (task 15 item 2) ----
+
+const answer = (kind: string, assumptions: string[] = ["the records are current"]) => say({ done: true, change_kind: kind, change_detail: "detail", assumptions, note: "n" });
+/** The change_kind enum of the output schema shown in the pack of the analyst's request `ordinal`. */
+function packedKinds(ordinal: number): unknown {
+  const system = (JSON.parse(requestText("analyst", ordinal)) as { messages: { content: string }[] }).messages[0]!.content;
+  const part = system.split("## Assemble output\n")[1]!;
+  const json = part.slice(part.indexOf("\n") + 1, part.indexOf("\nExample:"));
+  return (JSON.parse(json) as { properties: { change_kind: { enum: unknown } } }).properties.change_kind.enum;
+}
+const structuredKinds = (): unknown[] => formats.filter((x) => x.actor === "analyst" && x.format !== null).map((x) => (x.format!.schema.properties!.change_kind as { enum: unknown }).enum);
+const RULED_OUT = "nothing has been published in this case before, so the change is 'first judgment'";
+
+test("with nothing published in the case, the answer schema allows only 'first judgment', in the pack and as structured output, and the re-ask says why", async () => {
+  structured = true;
+  const r = rig({ analyst: [FIRST[0]!, answer("consistent with"), answer("first judgment")], evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
+  expect(await go(r)).toMatchObject({ status: "waiting", waiting: "publish" });
+  expect(packedKinds(0)).toEqual(["first judgment"]);
+  expect(structuredKinds()).toEqual([["first judgment"]]);
+  const reask = (JSON.parse(requestText("analyst", 2)) as { messages: { role: string; content: string }[] }).messages.at(-1)!;
+  expect(reask.role).toBe("user");
+  expect(reask.content).toContain(RULED_OUT);
+  expect(f.s.state.drafts[0]!.product.change).toBe("First judgment: detail.");
+});
+
+test("once a judgment has been published in the case, the answer schema allows all three change kinds and the re-ask does not rule one out", async () => {
+  structured = true;
+  f.s.commit(() => [{ type: "product.published", actor: person, payload: { n: 1, draft_hash: "0".repeat(64), head_hash: "0".repeat(64), dir: "bundle-1", bundle: f.s.blobs.put("{}") } }]);
+  const r = rig({ analyst: [FIRST[0]!, answer("consistent with", []), answer("consistent with")], evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
+  expect(await go(r)).toMatchObject({ status: "waiting", waiting: "publish" });
+  expect(packedKinds(0)).toEqual(["first judgment", "consistent with", "changes"]);
+  expect(structuredKinds()).toEqual([["first judgment", "consistent with", "changes"]]);
+  const reask = (JSON.parse(requestText("analyst", 2)) as { messages: { role: string; content: string }[] }).messages.at(-1)!;
+  expect(reask.content).toStartWith("Your reply did not match the required output: assumptions ");
+  expect(reask.content).not.toContain(RULED_OUT);
+  expect(f.s.state.drafts[0]!.product.change).toBe("Consistent with detail.");
 });

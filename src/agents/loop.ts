@@ -35,6 +35,8 @@ export interface AgentSpec {
   policy: Record<Marking, Where[]>; max_marking: Marking | null; max_turns?: number;
   /** True for an agent that works beside the run (the conversational one): the run being paused, finished or out of budget does not stop it. The marking check and every entry written are the same. */
   outside_run?: boolean;
+  /** What the stage knows of an answer that failed its schema: sentences added to the re-ask (and to the errors) for that answer. */
+  explain?: (answer: Json) => string[];
   /** The seq of the entry this work answers (a question): put on the agent's own request and block entries, so a reader links them to it by cause rather than by position. */
   cause?: number;
 }
@@ -336,6 +338,7 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     else {
       errors = validate(spec.schema, found.value).map((e) => `${e.path.replace(/^\$\.?/, "") || "output"} ${e.message}`);
       if (errors.length === 0) return { kind: "done", content: result.content, output: found.value, calls };
+      if (spec.explain !== undefined) errors.push(...spec.explain(found.value));
     }
     if (++failures >= 2) return { kind: "invalid", errors, returned: returnedWord(empty, found, spec.schema), calls };
     reasked = true;

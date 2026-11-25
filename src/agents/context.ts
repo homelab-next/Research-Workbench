@@ -70,7 +70,7 @@ export function partOf(registry: Registry, kind: string, id: string, fixed = fal
   return { kind, id, title: m.title, text, marking: markingOf(m), fixed };
 }
 
-export function stageParts(registry: Registry, profile: Profile, stage: string, opts: { schema: string | null; objective: string | null }): PackPart[] {
+export function stageParts(registry: Registry, profile: Profile, stage: string, opts: { schema: string | null; objective: string | null; narrow?: (s: Schema) => Schema }): PackPart[] {
   const s = profile.stages[stage];
   if (s === undefined) throw new ContextError(`profile "${profile.id}" has no stage "${stage}"`);
   // what the profile's own marking covers: its rules and its goals
@@ -80,7 +80,7 @@ export function stageParts(registry: Registry, profile: Profile, stage: string, 
   parts.push({ kind: "goal", id: `${stage}-goal`, title: "Goal", text: s.goal, marking: profile.marking, fixed: false });
   if (s.procedure !== null) parts.push(partOf(registry, "procedure", s.procedure));
   for (const id of s.skills) parts.push(partOf(registry, "skill", id));
-  if (opts.schema !== null) parts.push(schemaPart(registry, opts.schema));
+  if (opts.schema !== null) parts.push(schemaPart(registry, opts.schema, opts.narrow));
   for (const id of s.references) parts.push(partOf(registry, "reference", id));
   for (const id of s.gates) parts.push(partOf(registry, "gate", id));
   if (opts.objective !== null) parts.push(partOf(registry, "objective", opts.objective));
@@ -197,9 +197,9 @@ export function exampleOf(schema: Schema): Json {
 }
 
 /** A stage's output schema as a part: the lead line, the JSON Schema body alone (never the manifest's kind, id and title), and an example. */
-export function schemaPart(registry: Registry, id: string): PackPart {
+export function schemaPart(registry: Registry, id: string, narrow?: (s: Schema) => Schema): PackPart {
   const m = trustedManifest(registry, "schema", id);
-  const schema = schemaOf(registry, id);
+  const schema = narrow === undefined ? schemaOf(registry, id) : narrow(schemaOf(registry, id));
   const text = `${SCHEMA_LEAD}\n${JSON.stringify(schema, null, 2)}\nExample:\n${JSON.stringify(exampleOf(schema))}`;
   return { kind: "schema", id, title: m.title, text, marking: markingOf(m), fixed: true };
 }
