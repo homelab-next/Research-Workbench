@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { Engine } from "../../src/pipeline/engine";
 import type { EngineDeps } from "../../src/pipeline/engine";
 import { PlanRefused } from "../../src/pipeline/plans";
+import { createApp } from "../../src/server/app";
 import { LIMITS } from "../../src/server/views";
 import { startStandin } from "../helpers/http-standin";
 import { served, writeLocalModel } from "../helpers/served";
@@ -242,6 +243,27 @@ test("the first command on a case left running by a stopped process finds it int
   expect((await s.command(id, "pause")).status).toBe(200);
   expect(types(id)).toContain("run.interrupted");
   expect(s.app.hub.read(id).state.skipped).toEqual([]);
+});
+
+test("a case left running when the app closed reads interrupted as soon as a new app starts, with no command sent", async () => {
+  s = await served();
+  const id = await s.newCase();
+  const other = await s.newCase();
+  const deps = (s.app.hub as unknown as { deps: EngineDeps }).deps;
+  new Engine(s.wb.session(id), deps).start({ kind: "human", id: s.config.user });
+  expect(s.app.hub.read(id).state.run.status).toBe("running");
+  const idleBefore = s.entries(other).length;
+  s.wb.session(id).close();
+  expect(types(id)).not.toContain("run.interrupted");
+  const next = createApp({ config: s.config, wb: s.wb, deps, problems: [], assets: { html: "", js: "", css: "" }, origin: s.origin, onError: () => {} });
+  try {
+    expect(s.app.hub.read(id).state.run.status).toBe("interrupted");
+    expect(types(id).filter((t) => t === "run.interrupted")).toHaveLength(1);
+    await next.hub.idle();
+    expect(s.entries(other).length).toBe(idleBefore);
+  } finally {
+    await next.close();
+  }
 });
 
 test("a refusal that quotes a source error is scrubbed", async () => {

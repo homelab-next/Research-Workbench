@@ -118,6 +118,12 @@ export function createApp(opts: AppOptions): App {
   const { config, wb, deps, assets, origin } = opts;
   const onError = opts.onError ?? ((error: unknown) => { console.error("workbench server:", error); });
   const hub = new CaseHub(wb, deps, onError);
+  // a case left running by a process that stopped is recovered now, not at the next command: it reads interrupted at once. Nothing resumes it.
+  try {
+    for (const c of wb.listCases()) if (c.run_status === "running") hub.engine(c.id);
+  } catch (error) {
+    try { onError(error); } catch { /* a failing reporter must not stop the server */ }
+  }
   const open = new Set<() => void>();
   const human = (): Actor => ({ kind: "human", id: config.user });
   /** A module problem as this role may see it: the analyst's with its path made relative to its module root, the others' with no path. */
