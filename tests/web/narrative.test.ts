@@ -651,3 +651,11 @@ test("a ruling may be a note alone; with no note the note button does nothing", 
   expect(state().conflicts[id]!.ruling).toMatchObject({ follow: null, note: "Say likely, and name the one event in gaps." });
   expect(box().textContent).toContain("Ruled: Note: Say likely, and name the one event in gaps.");
 });
+
+test("while reviewers disagree the brief holds exactly one Settle the disagreement button", async () => {
+  await atGate();
+  await conflictRecorded();
+  const settle = p.all(".brief button").filter((b) => b.textContent === "Settle the disagreement");
+  expect(settle.length).toBe(1);
+  expect(p.all(".brief button").some((b) => /^Resume/.test(b.textContent ?? ""))).toBe(false);
+});

@@ -108,7 +108,7 @@ export function makeBrief(ui: Ui, open: Open): View {
     const rb = runButton(state);
     // One button per state: at a gate the next-thing button stands for the run button; a resume is the run button's alone.
     const atGate = run.status === "waiting" && next0 !== null;
-    const next = next0 !== null && "command" in next0 && next0.command === "resume" ? null : next0;
+    const next = next0 !== null && (("command" in next0 && next0.command === "resume") || next0.label === rb.label) ? null : next0;
     const status = (name: string, text: string, id: LensId): HTMLElement => h("button", { type: "button", class: "status", data: { status: name }, on: { click: () => lens(id) } }, text);
     into2([meta?.asked, g.done, g.of, state.plan.status, draft?.n, run.status, run.waiting, next?.label, ro, stopping], () => [
       h("span", { class: "asked" }, `Asked for: ${meta?.asked ?? ""}`),
