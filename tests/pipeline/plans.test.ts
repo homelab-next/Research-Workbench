@@ -391,7 +391,9 @@ test("a playbook sub-goal becomes one free plan step that names the playbook and
     id: "s1", subgoal: "g1", pivot: "", source: "", to: "asset", free: true, weight: 0,
     playbook: { id: "address-triage", hash: registry.playbook("address-triage")!.hash, inputs: [{ type: "address", value: START }] },
   })]);
-  expect(plan.steps[0]).toMatchObject({ from: { type: "address", value: START }, window: WINDOW, needs_window: true, estimate: null, empty_means: "proven-negative", warnings: [] });
+  expect(plan.steps[0]).toMatchObject({ from: { type: "address", value: START }, window: WINDOW, needs_window: true, estimate: null, empty_means: "proven-negative" });
+  // final review M2: the gate says which unconfirmed source a playbook uses, as it does for a route step
+  expect(plan.steps[0]!.warnings).toEqual(["uses the unconfirmed source leases"]);
   expect(plan.subgoals).toEqual([{ id: "g1", title: "Triage", question: "What is it?", steps: ["s1"] }]);
 });
 

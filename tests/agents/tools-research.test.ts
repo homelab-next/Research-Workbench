@@ -441,3 +441,15 @@ test("run_step on a playbook step is refused and writes nothing: the engine runs
   expect(r).toMatchObject({ ok: false, summary: "step s1 is a playbook; the engine runs it" });
   expect(f.s.head().seq).toBe(head);
 });
+
+test("a finished step read back with no card carries its source's marking", async () => {
+  // final review M1: the failure note is the source's words; reading it back must not drop the source's marking
+  f.s.commit(() => [
+    { type: "step.started", actor: agent, payload: { step: "s1" } },
+    { type: "step.finished", actor: agent, payload: { step: "s1", outcome: "failed", cards: [], note: "the query failed: the source's own error line" } },
+  ]);
+  (f.sample.registry.source("assets") as { marking: string }).marking = "TLP:AMBER";
+  const r = await f.call("run_step", { step: "s1", why: "w" });
+  expect(r).toMatchObject({ ok: true, view: { status: "already_run", outcome: "failed" } });
+  expect(r.marking).toBe("TLP:AMBER");
+});

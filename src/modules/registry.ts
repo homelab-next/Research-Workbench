@@ -147,6 +147,27 @@ export class Registry {
   inventory(id: string): InventoryManifest | null {
     return this.inventoryById.get(id) ?? null;
   }
+  /** The ids of the sources the playbook's pivots read that are not confirmed, in step order. */
+  unconfirmedSources(p: PlaybookManifest): string[] {
+    const ids: string[] = [];
+    for (const s of p.steps) {
+      const pivot = this.pivotById.get(s.pivot);
+      const source = pivot === undefined ? undefined : this.sourceById.get(pivot.source);
+      if (source !== undefined && !source.confirmed && !ids.includes(source.id)) ids.push(source.id);
+    }
+    return ids;
+  }
+  /**
+   * Why a planner may not name this playbook as a plan step under these limits, or null when it may: a costly lookup (a person starts one of
+   * those), or an unconfirmed source the frame does not allow.
+   */
+  whyNotPlannable(p: PlaybookManifest, limits: { allow_unconfirmed: boolean }): string | null {
+    const costly = this.costlyPivots(p);
+    if (costly.length > 0) return `it has costly lookups (${costly.join(", ")}); a person can start it from the Pivot panel`;
+    const unconfirmed = this.unconfirmedSources(p);
+    if (!limits.allow_unconfirmed && unconfirmed.length > 0) return `it uses the unconfirmed source ${unconfirmed[0]!}, which this frame does not allow`;
+    return null;
+  }
   /** The ids of the playbook's pivots whose weight is above zero. */
   costlyPivots(p: PlaybookManifest): string[] {
     const ids: string[] = [];

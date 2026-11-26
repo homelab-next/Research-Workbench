@@ -687,6 +687,26 @@ test("a playbook changed since the plan was accepted is not run", async () => {
   expect(ofType("job.started")).toEqual([]);
 });
 
+test("a playbook that no longer fits when Research starts it finishes its step blocked with the reason, and the stage does not throw", async () => {
+  // final review M4: beginPlaybook's refusal used to throw out of the stage
+  const r = rig({});
+  const out = pbPlan(pbGoal());
+  f.s.commit((_st, ids) => [{ type: "plan.proposed", actor: person, payload: { plan: buildPlan(ids.next("plan"), out as never, r.deps, { window: WINDOW, limits: { ...DEFAULT_LIMITS, allow_unconfirmed: true } }, null) as never } }]);
+  f.s.commit(() => [{ type: "plan.accepted", actor: person, payload: { plan: "plan-1", steps: ["s1"], budgets: {} } }]);
+  const obs = r.deps.runner.observables;
+  const real = obs.matches.bind(obs);
+  obs.matches = () => false;
+  try {
+    const stage = r.deps.pipeline.stages.find((x) => x.role === "research")!;
+    const end = await researchRunner({ session: f.s, deps: r.deps, stage, attempt: 1, onNeedsBudget: async () => null });
+    expect(end).toMatchObject({ kind: "finished", outcome: "fail" });
+  } finally { obs.matches = real; }
+  expect(ofType("step.finished")[0]!.payload).toMatchObject({ step: "s1", outcome: "blocked", cards: [] });
+  expect(ofType("step.finished")[0]!.payload.note).toStartWith("the playbook address-triage cannot run: ");
+  expect(ofType("job.started")).toEqual([]);
+  expect(ofType("query.issued")).toEqual([]);
+});
+
 // ---------- accepted steps run in code ----------
 
 test("a sub-goal's accepted steps run in code at the start of its job; the researcher reads their cards and calls no tool", async () => {
@@ -745,6 +765,26 @@ test("a step left running by an interrupted attempt is run in code on resume", a
   expect(finished("research")[0]!.payload.outcome).toBe("pass");
 });
 
+test("a step finished in an earlier job lists its note at its source's marking: under a pack limit it is left out", async () => {
+  // final review M1: the note of a step run before this job (here a failure, with no card) is the source's words
+  const one = { goal: "is it ours", subgoals: [
+    { title: "Is it an asset", question: "Is it an asset?", have: [{ type: "address", value: "192.0.2.17" }], want: "asset", route: ["address_to_asset"] },
+  ] };
+  const r = rig({ orchestrator: [say(FRAME)], planner: [say(one)], "researcher-g1": [answered("nothing")] });
+  await toGate(r);
+  r.engine.acceptPlan({ actor: person });
+  f.s.commit((st) => [
+    { type: "step.started", actor: { kind: "system", id: "test" }, run: st.run.id, stage: "research", payload: { step: "s1" } },
+    { type: "step.finished", actor: { kind: "system", id: "test" }, run: st.run.id, stage: "research", payload: { step: "s1", outcome: "failed", cards: [], note: "the query failed: the amber detail" } },
+  ]);
+  (f.sample.registry.source("assets") as { marking: string }).marking = "TLP:AMBER";
+  r.engine.setPackLimit("research", "TLP:GREEN", person);
+  await r.engine.advance();
+  const ask = ofType("model.request").find((e) => e.actor.id === "researcher-g1")!;
+  expect(ask.payload.left_out.map((i) => i.id)).toContain("steps-g1");
+  expect(f.s.blobs.text(ask.payload.messages.blob)).not.toContain("the amber detail");
+});
+
 // ---------- the planner's answer names only what exists ----------
 
 /** The sub-goal item schema of a plan-output schema. */
@@ -777,6 +817,9 @@ test("a playbook with a costly lookup is not one the planner may name, and with 
   const registry = Registry.load([{ path: f.sample.root, trusted: true, credentials: [] }]);
   expect(registry.playbook("rep-check")).not.toBeNull();
   expect(planChoices(registry).playbooks).toEqual(["address-triage"]);
+  // final review M6: a frame that rules out unconfirmed sources rules out the sample's playbook (it reads leases)
+  expect(planChoices(registry, { allow_unconfirmed: false }).playbooks).toEqual([]);
+  expect(planChoices(registry, { allow_unconfirmed: true }).playbooks).toEqual(["address-triage"]);
   const g = subgoalOf(planSchema(schemaOf(registry, "plan-output"), { ...planChoices(registry), playbooks: [] }));
   expect(Object.keys(g.properties!)).not.toContain("playbook");
   expect(g.properties!.want!.enum).toEqual(SAMPLE_TYPES);

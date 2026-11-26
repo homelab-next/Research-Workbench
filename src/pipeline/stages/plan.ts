@@ -18,12 +18,15 @@ function researchWhere(env: StageEnv): { where: Where } | null {
   return provider === null || provider === undefined ? null : { where: provider.where };
 }
 
-/** What the planner's answer may name: the registry's observable types, the playbooks it may plan (loaded, no costly lookup) and the pivots. */
+/**
+ * What the planner's answer may name: the registry's observable types, the playbooks it may plan (loaded, no costly lookup and, when `limits`
+ * is given, no unconfirmed source those limits rule out) and the pivots.
+ */
 export interface PlanChoices { types: string[]; playbooks: string[]; pivots: string[] }
-export function planChoices(registry: Registry): PlanChoices {
+export function planChoices(registry: Registry, limits: { allow_unconfirmed: boolean } = { allow_unconfirmed: true }): PlanChoices {
   return {
     types: registry.types().map((t) => t.id),
-    playbooks: registry.playbooks().filter((p) => registry.costlyPivots(p).length === 0).map((p) => p.id),
+    playbooks: registry.playbooks().filter((p) => registry.whyNotPlannable(p, limits) === null).map((p) => p.id),
     pivots: registry.pivots().map((p) => p.id),
   };
 }
@@ -120,7 +123,7 @@ export async function planRunner(env: StageEnv): Promise<StageEnd> {
   let errors: string[] = [];
   for (let attempt = 0; attempt < 2; attempt++) {
     // the answer names only what exists, read now: the registry may have been reloaded since the run began
-    const choices = planChoices(deps.registry);
+    const choices = planChoices(deps.registry, frame.limits);
     const end = await stageAgent(env, { actor_id: actorId, task, extras, narrow: (s) => planSchema(s, choices), explain: planExplain(choices) });
     if (end.kind !== "output") return end;
     const out = end.output as unknown as PlanOutput;

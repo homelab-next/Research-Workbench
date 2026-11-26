@@ -238,6 +238,7 @@ test("list_playbooks gives each playbook, the type it finds, its most lookups, a
   ].join("\n"));
   const registry = Registry.load([{ path: f.sample.root, trusted: true, credentials: [] }]);
   f.ctx.deps = { ...f.ctx.deps, registry };
+  f.ctx.limits = { ...f.ctx.limits, allow_unconfirmed: true };
   const r = await f.call("list_playbooks", { why: "which playbooks fit" });
   expect(r.ok).toBe(true);
   expect(r.marking).toBeNull();
@@ -245,8 +246,15 @@ test("list_playbooks gives each playbook, the type it finds, its most lookups, a
   expect(playbooks).toEqual([
     {
       id: "address-triage", title: "Triage an address", about: "Is the address a known asset, what names resolved to it, and who looked those names up.",
-      inputs: [{ name: "address", type: "address" }], finds: "asset", max_lookups: 8, may_plan: true,
+      inputs: [{ name: "address", type: "address" }], finds: "asset", max_lookups: 8, may_plan: true, why_not: null,
     },
-    { id: "rep-check", title: "Reputation check", about: "Ask the reputation service.", inputs: [{ name: "address", type: "address" }], finds: "verdict", max_lookups: 1, may_plan: false },
+    {
+      id: "rep-check", title: "Reputation check", about: "Ask the reputation service.", inputs: [{ name: "address", type: "address" }], finds: "verdict", max_lookups: 1,
+      may_plan: false, why_not: "it has costly lookups (address_to_verdict); a person can start it from the Pivot panel",
+    },
   ]);
+  // final review M6: under a frame that does not allow unconfirmed sources, the sample's playbook (it reads leases) is not offered
+  f.ctx.limits = { ...f.ctx.limits, allow_unconfirmed: false };
+  const strict = (await f.call("list_playbooks", { why: "again" })).view as { playbooks: Record<string, unknown>[] };
+  expect(strict.playbooks[0]).toMatchObject({ id: "address-triage", may_plan: false, why_not: "it uses the unconfirmed source leases, which this frame does not allow" });
 });

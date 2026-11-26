@@ -27,7 +27,8 @@ function startPlaybook(ctx: CommandContext, playbook: PlaybookManifest, inputs: 
   const start: PlaybookStart = { playbook, inputs, window, why, actor, ...(a.subgoal === undefined ? {} : { subgoal: a.subgoal as string }) };
   const job = beginPlaybook(session, deps.runner, start);   // refuses, writing nothing, if the inputs or window do not fit
   hub.running.add(key);
-  hub.background(runPlaybook(session, deps.runner, job, start).then(() => undefined, () => undefined).finally(() => hub.running.delete(key)));
+  // runPlaybook ends the job failed if it throws; the error itself goes to the hub's reporter, as a route's does
+  hub.background(runPlaybook(session, deps.runner, job, start).finally(() => hub.running.delete(key)));
 }
 
 defineCommand("run_playbook", {

@@ -1,5 +1,6 @@
 import type { Observable, TimeWindow } from "../../core/types";
 import type { PlaybookRunState } from "../../core/state/types";
+import { BELONGS_ID } from "../../core/wire";
 import type { Nav } from "../app";
 import { belongsLines, belongsVerdict } from "../belongs";
 import { cardChip } from "../chips";
@@ -10,8 +11,6 @@ import type { Ui, View } from "../ui";
 
 export interface PlaybookBlock extends View { setValues(values: Observable[]): void }
 
-/** The id the server gives its made-on-the-spot playbook (src/modules/inventories.ts BELONGS_ID); the browser does not import server code. */
-const BELONGS = "does-it-belong";
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
 /**
@@ -61,7 +60,7 @@ export function makePlaybookBlock(ui: Ui, store: CaseStore, nav: Pick<Nav, "focu
   function trail(run: PlaybookRunState): HTMLElement {
     const box = h("div", { class: "playbook-trail", role: "status" });
     const status = run.status === "interrupted" ? "Interrupted: the server stopped. Run it again; answered lookups are reused." : run.status === "running" ? "Running" : `Finished: ${run.status}`;
-    if (run.playbook === BELONGS && run.status !== "running") {
+    if (run.playbook === BELONGS_ID && run.status !== "running") {
       const v = belongsVerdict(run, ui.ref, store.shown.cards);
       box.append(h("p", { class: `belongs-verdict ${v.verdict.replace(/[^a-z]+/g, "-")}` }, v.text),
         h("div", { class: "belongs-lines" }, belongsLines(run, ui.ref, store.shown.cards).map((l) => h("p", { class: "belongs-line", data: { inventory: l.inventory } }, l.line))));
@@ -75,6 +74,8 @@ export function makePlaybookBlock(ui: Ui, store: CaseStore, nav: Pick<Nav, "focu
         s.status === "skipped" ? h("span", { class: "skipped" }, ` skipped: ${s.reason}`) : null,
         s.lookups.map((l) => h("div", { class: `lookup ${l.outcome}` },
           h("span", null, `${l.value}: ${l.outcome}`), l.reused ? h("span", { class: "reused" }, " · reused, no query sent") : null,
+          // what the lookup's answer means, as the record says: proven negative, not seen, the reuse, the failure
+          l.detail === "" ? null : h("span", { class: "detail" }, ` · ${l.detail}`),
           l.card === null ? null : " ", l.card === null ? null : cardChip(ui, l.card, (c) => nav.focusCard(c)))),
         s.left > 0 ? h("div", { class: "left" }, `${s.left} values not followed`) : null));
     }

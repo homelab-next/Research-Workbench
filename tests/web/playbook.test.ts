@@ -108,6 +108,10 @@ test("with the complete asset list it reads proven for its scope, and known for 
   await finished(q, 1);
   expect(q.q(".belongs-verdict").textContent).toBe("Not a known asset: proven for internal hosts");
   expect(q.q(".belongs-lines").textContent).toContain("Not in Asset list · proven: it is complete for internal hosts");
+  // final review M8: the trail says what each empty lookup means, from the record
+  const details = q.all(`${block} .playbook-trail .lookup .detail`).map((x) => x.textContent);
+  expect(details).toContain(" · proven negative");
+  expect(details).toContain(" · not seen");
   await q.close(); p = null;
   const r = await open({}, LISTED_CARD, "192.0.2.17");
   r.click(`[data-card=${LISTED_CARD}] .playbook-block button.belongs`);

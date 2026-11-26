@@ -120,14 +120,14 @@ function playbookStep(
   const pivots = p.steps.map((s) => deps.registry.pivot(s.pivot)!);
   const last = deps.registry.pivot(p.steps.find((s) => s.id === p.end[0])!.pivot)!;
   if (last.to !== sg.want) return `${name}: the playbook ${id} finds ${last.to}, not ${sg.want}`;
-  if (!frame.limits.allow_unconfirmed) {
-    const unconfirmed = pivots.map((x) => deps.registry.source(x.source)).find((s) => s !== null && !s.confirmed);
-    if (unconfirmed !== undefined && unconfirmed !== null) return `${name}: the playbook ${id} uses the unconfirmed source ${unconfirmed.id}`;
-  }
+  const unconfirmed = [...new Set(pivots.map((x) => x.source))].filter((src) => deps.registry.source(src)?.confirmed === false);
+  if (!frame.limits.allow_unconfirmed && unconfirmed.length > 0) return `${name}: the playbook ${id} uses the unconfirmed source ${unconfirmed[0]!}`;
+  // as for a route step, the gate says which unconfirmed sources the playbook asks
+  const warnings = unconfirmed.map((src) => `uses the unconfirmed source ${src}`);
   const first = have.find((h) => h.type === p.inputs[0]!.type)!;
   return {
     id: stepId, subgoal: goalId, pivot: "", source: "", from: { ...first }, to: sg.want, window: { ...frame.window },
-    needs_window: pivots.some((x) => x.needs_window), free: true, weight: 0, estimate: null, empty_means: last.empty_means, warnings: [],
+    needs_window: pivots.some((x) => x.needs_window), free: true, weight: 0, estimate: null, empty_means: last.empty_means, warnings,
     playbook: { id: p.id, hash: p.hash, inputs: have },
   };
 }

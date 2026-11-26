@@ -134,7 +134,10 @@ async function runStepTool(ctx: ToolContext, args: Record<string, Json>): Promis
     const cards = had.cards.flatMap((c) => (Object.hasOwn(ctx.session.state.cards, c) ? [ctx.session.state.cards[c]!] : []));
     const summary = `this step has already run${had.note === "" ? "" : `: ${scrub(ctx.deps.registry, had.note)}`}`;
     const view = { status: "already_run", step: id, outcome: had.status, note: summary, card: cards.map((c) => cardBrief(ctx.deps.registry, c)) };
-    return { ok: true, summary, view: json(view), marking: cards.length === 0 ? null : strictest(...cards.map((c) => c.marking)) };
+    // the note is the tools' words on what the source returned: as strict as that source, and as its cards
+    const sourceId = ctx.deps.registry.pivot(step.pivot)?.source ?? step.source;
+    const markings = [...cards.map((c) => c.marking), ...[ctx.deps.registry.source(sourceId)?.marking].filter((m) => m !== undefined)];
+    return { ok: true, summary, view: json(view), marking: markings.length === 0 ? null : strictest(...markings) };
   }
   if (ctx.subgoal !== null && step.subgoal !== ctx.subgoal) throw new ToolError(`step ${id} belongs to sub-goal ${step.subgoal}, not ${ctx.subgoal}`);
   const value = step.from.value !== "" ? step.from.value : str(args.value);

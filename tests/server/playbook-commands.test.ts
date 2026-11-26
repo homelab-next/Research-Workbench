@@ -60,6 +60,27 @@ test("run_playbook returns while the first lookup is still held, then the job fi
   expect(s.entries(id).filter((e) => e.type === "model.request")).toEqual([]);
 });
 
+test("an error in a playbook's background run is ended failed and reaches the server's error reporter", async () => {
+  // final review M9: run_playbook used to swallow every error of its background run
+  const id = await open();
+  const errors: unknown[] = [];
+  (s.app.hub as unknown as { onError: (e: unknown) => void }).onError = (e) => { errors.push(e); };
+  const gate = held();
+  expect((await s.command(id, "run_playbook", start())).status).toBe(200);
+  const obs = s.app.hub.deps.runner.observables;
+  const real = obs.matches.bind(obs);
+  obs.matches = () => { throw new Error("a programming error"); };
+  try {
+    gate.release(); await s.app.hub.idle();
+  } finally { obs.matches = real; }
+  expect(errors.map((e) => (e instanceof Error ? e.message : String(e)))).toContain("a programming error");
+  const job = Object.values(state(id).jobs).at(-1)!;
+  expect(job.status).toBe("failed");
+  // the key is released: the playbook can be started again
+  expect((await s.command(id, "run_playbook", start())).status).toBe(200);
+  await s.app.hub.idle();
+});
+
 test("a second start on the same value is refused while the first is running, and no lookup is sent twice", async () => {
   const id = await open();
   const gate = held();

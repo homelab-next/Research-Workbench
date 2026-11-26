@@ -73,6 +73,16 @@ for (const [name, yaml, fragment] of REFUSED) test(`a playbook with ${name} is r
   expect(registry.playbook("address-triage")).not.toBeNull();
 });
 
+test("a playbook manifest may not take the id of the workbench's own does-it-belong playbook", () => {
+  // final review M7: a root's playbook with that id would have its runs given a verdict
+  const registry = load(GOOD({ id: "does-it-belong" }));
+  expect(registry.playbook("does-it-belong")).toBeNull();
+  const mine = registry.problems.filter((p) => p.path.endsWith("extra.yaml"));
+  expect(mine.length).toBe(1);
+  expect(mine[0]!.error).toContain('the id "does-it-belong" is the workbench\'s own');
+  expect(registry.playbook("address-triage")).not.toBeNull();
+});
+
 test("a playbook in a root that is not trusted is refused", () => {
   const registry = load(GOOD(), false);
   expect(registry.playbook("extra")).toBeNull();

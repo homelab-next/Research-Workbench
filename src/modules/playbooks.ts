@@ -1,5 +1,6 @@
 import type { Json } from "../core/canonical";
 import type { Schema } from "../core/schema";
+import { BELONGS_ID } from "../core/wire";
 import { ManifestError } from "./manifests";
 
 export const MAX_PLAYBOOK_STEPS = 12, DEFAULT_STEP_VALUES = 5, MAX_STEP_VALUES = 20, MAX_PLAYBOOK_LOOKUPS = 50;
@@ -46,6 +47,7 @@ export const PLAYBOOK_SCHEMA: Schema = {
 /** Builds a playbook from a validated body. Throws ManifestError naming the step for a `from` or `when` outside the grammar. */
 export function toPlaybook(body: Record<string, Json>, hash: string): PlaybookManifest {
   const b = body as Record<string, any>; // validated against PLAYBOOK_SCHEMA by the caller
+  if (b.id === BELONGS_ID) throw new ManifestError(`the id "${BELONGS_ID}" is the workbench's own "does it belong?" playbook; choose another id`);
   const inputs: PlaybookInput[] = b.inputs.map((i: any): PlaybookInput => ({ name: i.name, type: i.type }));
   const inputNames = new Set<string>();
   const inputTypes = new Set<string>();

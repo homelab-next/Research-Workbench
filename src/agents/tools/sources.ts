@@ -52,14 +52,18 @@ async function findRoutes(ctx: ToolContext, args: Record<string, Json>): Promise
   return ok(`${routes.length} routes`, json({ routes: routes.map((r) => ({ weight: r.weight, hops: r.hops })) }));
 }
 
-/** The playbooks a planner may name: playbooks come from trusted roots only, so their text is shown. May be planned when every lookup is free. */
+/**
+ * The playbooks a planner may name: playbooks come from trusted roots only, so their text is shown. May be planned when every lookup is free
+ * and it uses no unconfirmed source the frame rules out; otherwise `why_not` says which.
+ */
 async function listPlaybooks(ctx: ToolContext): Promise<ToolResult> {
   const { registry } = ctx.deps;
   const playbooks = registry.playbooks().map((p) => {
     const end = p.steps.find((s) => s.id === p.end[0]);
+    const whyNot = registry.whyNotPlannable(p, ctx.limits);
     return {
       id: p.id, title: p.title, about: p.about, inputs: p.inputs.map((i) => ({ name: i.name, type: i.type })),
-      finds: end === undefined ? "" : registry.pivot(end.pivot)?.to ?? "", max_lookups: maxLookups(p), may_plan: registry.costlyPivots(p).length === 0,
+      finds: end === undefined ? "" : registry.pivot(end.pivot)?.to ?? "", max_lookups: maxLookups(p), may_plan: whyNot === null, why_not: whyNot,
     };
   });
   return ok(`${playbooks.length} playbooks`, json({ playbooks }));

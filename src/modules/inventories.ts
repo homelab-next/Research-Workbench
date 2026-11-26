@@ -1,6 +1,7 @@
 import type { Json } from "../core/canonical";
 import { canonical } from "../core/canonical";
 import { sha256Hex } from "../core/hash";
+import { BELONGS_ID } from "../core/wire";
 import type { Schema } from "../core/schema";
 import { ManifestError } from "./manifests";
 import { DEFAULT_STEP_VALUES } from "./playbooks";
@@ -38,7 +39,7 @@ export function toInventory(body: Record<string, Json>, hash: string): Inventory
   return { id: b.id, title: b.title, hash, holds: b.holds, scope: b.scope, complete: b.complete, basis, derived };
 }
 
-export const BELONGS_ID = "does-it-belong";
+export { BELONGS_ID };
 
 /**
  * A playbook made on the spot: one step per inventory pivot that takes `type`, in pivot-id order, steps named i1, i2, …; end is every step.

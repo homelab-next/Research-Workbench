@@ -1,4 +1,5 @@
 import type { Json } from "../../core/canonical";
+import { Refused } from "../../core/refused";
 import type { Actor, Entry } from "../../core/types";
 import type { Marking, PlanStep, StepOutcome } from "../../core/types";
 import { strictest } from "../../core/types";
@@ -149,12 +150,17 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
       const status = st === null ? "pending" : st.status;
       if (status === "pending") lines.push(`${step.id}: not yet run${step.from.value === "" ? " (it needs the value an earlier step found)" : ""}`);
       else if (status === "running") lines.push(`${step.id}: running`);
-      else lines.push(`${step.id}: ${st!.note === "" ? status : st!.note}`);
+      else {
+        lines.push(`${step.id}: ${st!.note === "" ? status : st!.note}`);
+        // a note listed, from this job or an earlier one, is the source's words: as strict as that source
+        const source = deps.registry.source(deps.registry.pivot(step.pivot)?.source ?? step.source);
+        if (source !== null) markings.push(source.marking);
+      }
     }
     const fresh = session.entries();
     const cards = [...new Set(steps.flatMap((s) => (Object.hasOwn(session.state.plan.steps, s.id) ? session.state.plan.steps[s.id]!.cards : [])))]
       .flatMap((c) => (Object.hasOwn(session.state.cards, c) ? [packPart({ card: session.state.cards[c]!, registry: deps.registry })] : []));
-    // the notes are the tools' words on what the source returned: as strict as the planner's values and the sources they came from
+    // the notes are the tools' words on what the source returned: as strict as the planner's values and the sources of every step listed
     const said = packPart({
       kind: "note", id: `steps-${g.id}`, title: "What the accepted steps returned", text: lines.join("\n"), fixed: false,
       entries: fresh, written_by: planRequests, floor: markings.length === 0 ? null : strictest(...markings),
@@ -210,7 +216,19 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
       return output(note);
     }
     const start = { playbook: p, inputs: ref.inputs, window: step.window, why: question, actor: PLAYBOOK, ...link, subgoal: step.subgoal, plan_step: step.id };
-    const job = beginPlaybook(session, deps.runner, start);
+    let job: string;
+    try {
+      job = beginPlaybook(session, deps.runner, start);
+    } catch (err) {
+      if (!(err instanceof Refused)) throw err;
+      // a playbook that no longer fits (a pivot that now needs a window, say) is not run: its step finishes blocked with the reason
+      const note = `the playbook ${ref.id} cannot run: ${err.message}`;
+      session.commit(() => [
+        { type: "step.started", actor: PLAYBOOK, ...link, payload: { step: step.id } },
+        { type: "step.finished", actor: PLAYBOOK, ...link, payload: { step: step.id, outcome: "blocked", cards: [], note } },
+      ]);
+      return output(note);
+    }
     session.commit(() => [{ type: "step.started", actor: PLAYBOOK, ...link, job, payload: { step: step.id } }]);
     let stopped = false;
     const stop = (): boolean => {
