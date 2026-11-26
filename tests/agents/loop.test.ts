@@ -751,3 +751,87 @@ test("on the last turn a local model is sent tool_choice none and structured out
     expect(recorded).toEqual(bodies);
   } finally { m.stop(); }
 });
+
+// ---- the fast decision model: tool-choosing turns only, never the answer ----
+function named(id: string, model: string, replies: ScriptReply[], where: Where = "machine"): Spy {
+  const inner = new ScriptedProvider({ id, scripts: [{ id: model, turns: replies.map((reply) => ({ actor: agent.id, reply })) }] });
+  const s: Spy = {
+    id, kind: "scripted", where, turns: 0, seen: [], atTurn: [],
+    models: () => inner.models(), body: (r) => inner.body(r),
+    turn: async (r) => { s.turns++; s.seen.push(r); return inner.turn(r); },
+  };
+  return s;
+}
+const BIG = { ...agent, model: "big" };
+const PIVOT = { tool: "list_sources", args: { why: "look" } };
+const requests = () => ofType("model.request");
+
+test("with a fast model, tool turns go to it and the answer comes from the stage's model", async () => {
+  const fast = named("fast", "small", [{ tool_calls: [PIVOT] }, { tool_calls: [PIVOT] }, { content: "done" }]);
+  const main = named("main", "big", [{ content: '{"n":1}' }]);
+  const end = await runAgent(f.s, spec(main, { model: "big", actor: BIG, schema: SCHEMA, fast: { provider: fast, model: "small", effort: null } }));
+  expect(end.kind).toBe("done");
+  const reqs = requests();
+  expect(reqs.map((e) => [e.payload.provider, e.payload.model, (e.actor as { model: string }).model])).toEqual([["fast", "small", "small"], ["fast", "small", "small"], ["fast", "small", "small"], ["main", "big", "big"]]);
+  expect(JSON.parse(text(reqs[3]!.payload.messages)).tool_choice).toBe("none");
+  expect((end as { content: string }).content).not.toContain("done");
+  expect(fast.turns).toBe(3);
+  expect(main.turns).toBe(1);
+});
+
+test("a routing turn's request and response carry the agent's actor with the fast model's model and where", async () => {
+  const fast = named("fast", "small", [{ content: "go" }], "network");
+  const main = named("main", "big", [{ content: "ok" }]);
+  await runAgent(f.s, spec(main, { model: "big", actor: BIG, fast: { provider: fast, model: "small", effort: "low" } }));
+  for (const e of [requests()[0]!, ofType("model.response")[0]!]) expect(e.actor).toEqual({ ...BIG, model: "small", where: "network", effort: "low" });
+  expect(requests()[0]!.payload).toMatchObject({ provider: "fast", model: "small", where: "network", effort: "low" });
+  expect(requests()[1]!.actor).toEqual(BIG);
+  expect(requests()[1]!.payload).toMatchObject({ provider: "main", model: "big", where: "machine" });
+});
+
+test("without a fast model nothing changes", async () => {
+  const main = named("main", "big", [{ tool_calls: [PIVOT] }, { content: "done" }]);
+  const end = await runAgent(f.s, spec(main, { model: "big", actor: BIG }));
+  expect(end).toMatchObject({ kind: "done", content: "done" });
+  expect(requests().map((e) => [e.payload.provider, e.payload.model])).toEqual([["main", "big"], ["main", "big"]]);
+  expect(requests().every((e) => (e.actor as { model: string }).model === "big")).toBe(true);
+});
+
+test("a pack the fast model may not receive blocks the stage and makes no call", async () => {
+  const fast = named("fast", "small", [{ content: "x" }], "hosted");
+  const main = named("main", "big", [{ content: "ok" }]);
+  const end = await runAgent(f.s, spec(main, { model: "big", actor: BIG, pack: pack("TLP:AMBER"), fast: { provider: fast, model: "small", effort: null } }));
+  expect(end).toEqual({ kind: "blocked", marking: "TLP:AMBER" });
+  expect(ofType("model.blocked").length).toBe(1);
+  expect(ofType("model.blocked")[0]!.payload.where).toBe("hosted");
+  expect(requests().length).toBe(0);
+  expect(fast.turns + main.turns).toBe(0);
+});
+
+test("a re-ask and the last turn go to the stage's model", async () => {
+  const fast = named("fast", "small", [{ tool_calls: [PIVOT] }, { content: "" }]);
+  const main = named("main", "big", [{ content: "" }, { content: '{"n":1}' }]);
+  // the fast model's second reply holds no call: answer now; the stage's model answers empty once and is re-asked, still on the stage's model
+  const end = await runAgent(f.s, spec(main, { model: "big", actor: BIG, schema: SCHEMA, fast: { provider: fast, model: "small", effort: null } }));
+  expect(end).toMatchObject({ kind: "done", output: { n: 1 } });
+  expect(requests().map((e) => e.payload.provider)).toEqual(["fast", "fast", "main", "main"]);
+  // the last turn
+  const fast2 = named("fast", "small", [{ tool_calls: [PIVOT] }]);
+  const main2 = named("main", "big", [{ content: "final" }]);
+  f.close(); f = fixture(true);
+  const end2 = await runAgent(f.s, spec(main2, { model: "big", actor: BIG, max_turns: 2, fast: { provider: fast2, model: "small", effort: null } }));
+  expect(end2).toMatchObject({ kind: "done", content: "final" });
+  expect(requests().map((e) => e.payload.provider)).toEqual(["fast", "main"]);
+});
+
+test("an error or a decline on a routing turn ends the agent as on any turn, recorded as the fast model's", async () => {
+  for (const [reply, kind] of [[{ error: "boom" }, "error"], [{ declined: "no" }, "declined"]] as const) {
+    f.close(); f = fixture(true);
+    const fast = named("fast", "small", [reply]);
+    const main = named("main", "big", [{ content: "ok" }]);
+    const end = await runAgent(f.s, spec(main, { model: "big", actor: BIG, fast: { provider: fast, model: "small", effort: null } }));
+    expect(end.kind).toBe(kind);
+    expect(requests().map((e) => e.payload.provider)).toEqual(["fast"]);
+    expect(main.turns).toBe(0);
+  }
+});

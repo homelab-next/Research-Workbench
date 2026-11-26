@@ -220,11 +220,16 @@ export async function preflight(
   }
 
   // the models the stages name
-  const stages: StageManifest[] = (pipeline?.stages ?? []).filter((s) => s.runs === "agent" && s.model !== null);
+  const agents: StageManifest[] = (pipeline?.stages ?? []).filter((s) => s.runs === "agent" && s.model !== null);
+  // each model a stage uses: its own, and a fast one when its manifest names one (named `research (fast)`)
+  const stages: { id: string; model: { provider: string; model: string }; max_output_tokens: number | null | undefined }[] = agents.flatMap((s) => [
+    { id: s.id, model: s.model!, max_output_tokens: s.max_output_tokens },
+    ...(s.fast_model == null ? [] : [{ id: `${s.id} (fast)`, model: s.fast_model, max_output_tokens: s.max_output_tokens }]),
+  ]);
   const pairs = new Map<string, { provider: string; model: string; stages: string[] }>();
   for (const s of stages) {
-    const key = JSON.stringify([s.model!.provider, s.model!.model]);
-    const have = pairs.get(key) ?? { provider: s.model!.provider, model: s.model!.model, stages: [] };
+    const key = JSON.stringify([s.model.provider, s.model.model]);
+    const have = pairs.get(key) ?? { provider: s.model.provider, model: s.model.model, stages: [] };
     have.stages.push(s.id);
     pairs.set(key, have);
   }
@@ -262,8 +267,8 @@ export async function preflight(
         if (slot < p.min_context) add("context", "fail", `${who}${slot} tokens${share} is below the ${p.min_context} a run needs; load it with a larger context`);
         else add("context", "ok", `${who}${slot} tokens${share}; a turn's pack may use ${packBudget(slot)} characters`);
         slotOf = slot;
-        const mine = stages.filter((s) => s.model!.provider === pair.provider && s.model!.model === pair.model);
-        const cap = (s: StageManifest): number | undefined => s.max_output_tokens ?? provider.max_output_tokens;
+        const mine = stages.filter((s) => s.model.provider === pair.provider && s.model.model === pair.model);
+        const cap = (s: { max_output_tokens?: number | null }): number | undefined => s.max_output_tokens ?? provider.max_output_tokens;
         let fitBad = 0;
         for (const s of mine) {
           const c = cap(s);
@@ -279,7 +284,7 @@ export async function preflight(
   // the marking policy
   let markBad = 0;
   for (const s of stages) {
-    const provider = loaded.providers.get(s.model!.provider);
+    const provider = loaded.providers.get(s.model.provider);
     if (provider === null) continue;
     for (const src of registry.sources()) {
       if (!mayGo(src.marking, provider.where, config.marking_policy)) {

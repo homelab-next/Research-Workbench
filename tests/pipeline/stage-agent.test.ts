@@ -18,6 +18,7 @@ import { Engine } from "../../src/pipeline/engine";
 import type { EngineDeps, StageEnv } from "../../src/pipeline/engine";
 import { loadPipeline } from "../../src/pipeline/manifests";
 import { frameOf, lastOutput, stageAgent } from "../../src/pipeline/stages/agent";
+import { packBudget } from "../../src/agents/pack";
 import { fixture, person, WINDOW } from "../helpers/tools-fixture";
 import type { Fixture } from "../helpers/tools-fixture";
 
@@ -282,4 +283,54 @@ test("an over-context refusal pauses the stage saying what to change", async () 
     expect(end).toEqual({ kind: "stalled", reason: "Frame: the request did not fit the model's context (the endpoint said: Context size has been exceeded.). Lower this stage's max_output_tokens, or load the model with a larger context in one slot, and resume." });
     expect(ofType("model.request")).toHaveLength(1);
   } finally { m.stop(); }
+});
+
+// ---- the optional fast decision model ----
+/** A scripted provider that reports a context, under its own id. */
+function sized(id: string, scripts: Script[], context: number | null): Provider {
+  const inner = new ScriptedProvider({ id, scripts });
+  return {
+    id, kind: "scripted", where: "machine", models: async () => (await inner.models()).map((m) => ({ ...m, context })),
+    body: (q) => inner.body(q), turn: (q) => inner.turn(q),
+  };
+}
+const FAST = { provider: "quick", model: "small", effort: null };
+const withFast = (r: ReturnType<typeof rig>, fast: { provider: string; model: string; effort: string | null }): StageEnv => {
+  const e = r.env();
+  return { ...e, stage: { ...e.stage, fast_model: fast } };
+};
+const fastScript = (...replies: ScriptReply[]): Script[] => [{ id: "small", turns: replies.map((reply) => ({ actor: "orchestrator", reply })) }];
+type Req = Extract<Entry, { type: "model.request" }>;
+
+test("a fast model the provider does not list is not used, and the stage completes on its own model", async () => {
+  const r = rig(script(say(FRAME)));
+  r.deps.providers = new Providers([new ScriptedProvider({ id: "scripted", scripts: script(say(FRAME)) }), new ScriptedProvider({ id: "quick", scripts: fastScript({ content: "x" }) })]);
+  r.engine.start(person);
+  const end = await stageAgent(withFast(r, { provider: "quick", model: "ghost", effort: null }), { actor_id: "orchestrator", task: "t", extras: [] });
+  expect(end).toMatchObject({ kind: "output", output: FRAME });
+  expect((ofType("model.request") as Req[]).map((e) => [e.payload.provider, e.payload.model])).toEqual([["scripted", "sample-run"]]);
+  const none = await stageAgent(withFast(r, { provider: "nowhere", model: "small", effort: null }), { actor_id: "orchestrator", task: "t", extras: [] });
+  expect(none.kind).toBe("stalled");
+});
+
+test("a listed fast model takes the tool turns and the stage's model gives the answer", async () => {
+  const r = rig(script(say(FRAME)));
+  r.deps.providers = new Providers([new ScriptedProvider({ id: "scripted", scripts: script(say(FRAME)) }), new ScriptedProvider({ id: "quick", scripts: fastScript({ tool_calls: [{ tool: "list_sources", args: { why: "look" } }] }, { content: "go" }) })]);
+  r.engine.start(person);
+  const end = await stageAgent(withFast(r, FAST), { actor_id: "orchestrator", task: "t", extras: [] });
+  expect(end).toMatchObject({ kind: "output", output: FRAME });
+  expect((ofType("model.request") as Req[]).map((e) => [e.payload.provider, e.payload.model])).toEqual([["quick", "small"], ["quick", "small"], ["scripted", "sample-run"]]);
+});
+
+test("with a fast model the pack budget is the smaller context's", async () => {
+  const big = (r: ReturnType<typeof rig>, fastCtx: number | null) => {
+    r.deps.providers = new Providers([sized("scripted", script(say(FRAME)), 40000), sized("quick", fastScript({ content: "x" }), fastCtx)]);
+  };
+  const card: PackPart = { kind: "card", id: "c1", title: "Card c1", text: "r".repeat(packBudget(40000) - 2000), marking: null, fixed: false };
+  const a = rig(script(say(FRAME)));
+  big(a, 8192);
+  a.engine.start(person);
+  await stageAgent(withFast(a, FAST), { actor_id: "orchestrator", task: "t", extras: [card] });
+  expect((ofType("model.request")[0] as Req).payload.left_out.map((i) => i.id)).toEqual(["c1"]);
+  expect((ofType("model.request")[0] as Req).payload.provider).toBe("quick");
 });

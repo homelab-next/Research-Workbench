@@ -42,6 +42,8 @@ export interface AgentSpec {
   explain?: (answer: Json) => string[];
   /** The seq of the entry this work answers (a question): put on the agent's own request and block entries, so a reader links them to it by cause rather than by position. */
   cause?: number;
+  /** An optional fast model that takes the tool-choosing turns only; the stage's model writes the answer. Absent: the stage's model takes every turn. */
+  fast?: { provider: Provider; model: string; effort: string | null };
 }
 export interface CallRecord { call: string; tool: string; args: Json; ok: boolean }
 export type AgentEnd =
@@ -138,7 +140,6 @@ function returnedWord(empty: boolean, found: { value: Json } | null, schema: Sch
  */
 export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<AgentEnd> {
   const { actor, provider, ctx } = spec;
-  const limit = spec.max_output_tokens ?? provider.max_output_tokens;
   const link = { run: ctx.link.run, stage: ctx.link.stage, job: ctx.link.job };
   const because = spec.cause === undefined ? {} : { cause: spec.cause };
   const messages: ChatMessage[] = [{ role: "system", content: renderPack(spec.pack) }, { role: "user", content: spec.task }];
@@ -147,6 +148,8 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
   let failures = 0;
   // set once the agent has been re-asked for its answer: from then on a provider that can is asked for output matching the schema
   let reasked = false;
+  // set when a routing turn's reply held no tool call: from then on the stage's model takes every turn, with no tool on offer
+  let answerNow = false;
   // the failed attempt of this turn that is being made once more, and the seq of its response, which causes the new request
   let failedOnce: Attempt | null = null;
   let retryCause: number | null = null;
@@ -161,37 +164,47 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
       const { usage } = runUsage(session.state);
       if (usage.input + usage.output >= run.budget_tokens) return { kind: "stopped", why: "budget" };
     }
+    // a routing turn goes to the fast model: not the last turn, not a re-ask, tools on offer, and not "answer now"
+    const last = turn === maxTurns - 1;
+    const routing = spec.fast !== undefined && !last && !reasked && !answerNow && spec.tools.length > 0;
+    const via = routing ? spec.fast!.provider : provider;
+    const viaModel = routing ? spec.fast!.model : spec.model;
+    const viaEffort = routing ? spec.fast!.effort : spec.effort;
+    // what the entries of this turn's request and response say the agent was
+    const who: typeof actor = routing ? { ...actor, model: viaModel, effort: viaEffort, where: via.where } : actor;
+    const limit = spec.max_output_tokens ?? via.max_output_tokens;
     // 2. marking: the strictest of the pack and every tool result so far. A fixed part over the stage's limit (what must be fixed, say) is
     // never left out, so the call is not made instead.
-    if (!mayGo(marking, provider.where, spec.policy) || tooStrict(marking, spec.max_marking)) {
-      session.commit(() => [{ type: "model.blocked", actor, ...link, ...because, payload: { stage: actor.stage, marking, model: spec.model, where: provider.where } }]);
+    if (!mayGo(marking, via.where, spec.policy) || tooStrict(marking, spec.max_marking)) {
+      session.commit(() => [{ type: "model.blocked", actor: who, ...link, ...because, payload: { stage: actor.stage, marking, model: viaModel, where: via.where } }]);
       return { kind: "blocked", marking };
     }
     // 3. request, written before the provider is contacted
-    const ordinal = session.entries().filter((e) => e.type === "model.request" && e.actor.kind === "agent" && e.actor.id === actor.id).length;
+    // a scripted provider is placed by how many requests this agent has made to it, so each of two models counts its own
+    const ordinal = session.entries().filter((e) => e.type === "model.request" && e.actor.kind === "agent" && e.actor.id === actor.id
+      && e.payload.provider === via.id && e.payload.model === viaModel).length;
     // the task text says which turn this is; on the last the reply can only be the answer: no tool is offered to run, and output is structured
-    const last = turn === maxTurns - 1;
     const sent = messages.map((m, i) => (i === 1 ? { ...m, content: `${spec.task}\n\n${turnLine(turn + 1, maxTurns)}` } : m));
-    const req: TurnRequest = { model: spec.model, effort: spec.effort, messages: sent, tools: toolSpecs(spec.tools, ctx), key: actor.id, ordinal };
+    const req: TurnRequest = { model: viaModel, effort: viaEffort, messages: sent, tools: toolSpecs(spec.tools, ctx), key: actor.id, ordinal };
     if (spec.sampling !== undefined) req.sampling = spec.sampling;
     if (spec.max_output_tokens !== undefined) req.max_output_tokens = spec.max_output_tokens;
     if (spec.request_extra !== undefined) req.request_extra = spec.request_extra;
-    if (last) req.tool_choice = "none";
-    if ((reasked || last) && spec.schema !== null && provider.structured_output === true) req.response_format = { name: spec.schema_id ?? "output", schema: spec.schema };
-    const body = provider.body(req);
+    if (last || answerNow) req.tool_choice = "none";
+    if ((reasked || last || answerNow) && spec.schema !== null && via.structured_output === true) req.response_format = { name: spec.schema_id ?? "output", schema: spec.schema };
+    const body = via.body(req);
     const messagesBlob = put(body);
     let requestId = "";
     const [requested] = session.commit((_s, ids) => {
       requestId = ids.next("request");
       return [{
-        type: "model.request", actor, ...link, ...(retryCause === null ? because : { cause: retryCause }),
-        payload: { request: requestId, provider: provider.id, model: spec.model, effort: spec.effort, where: provider.where, marking, pack: spec.pack.items, left_out: spec.pack.left_out, messages: messagesBlob, tools: [...spec.tools] },
+        type: "model.request", actor: who, ...link, ...(retryCause === null ? because : { cause: retryCause }),
+        payload: { request: requestId, provider: via.id, model: viaModel, effort: viaEffort, where: via.where, marking, pack: spec.pack.items, left_out: spec.pack.left_out, messages: messagesBlob, tools: [...spec.tools] },
       }];
     });
     // 4. turn
     let result: TurnResult;
     try {
-      result = await provider.turn(req);
+      result = await via.turn(req);
     } catch (err) {
       result = { kind: "error", message: err instanceof Error ? err.message : String(err), raw: null };
     }
@@ -202,8 +215,8 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
         if (responded) return { kind: "error", message: clip(message, 500) };
         const raw = put(JSON.stringify({ error: clip(message, 500) }));
         session.commit(() => [{
-          type: "model.response", actor, ...link, cause: requested!.seq,
-          payload: { request: requestId, response: raw, stop: "error", usage: { input: 0, output: 0, reasoning: 0 }, served_by: clip(spec.model, NAME_CHARS), reasoning: null },
+          type: "model.response", actor: who, ...link, cause: requested!.seq,
+          payload: { request: requestId, response: raw, stop: "error", usage: { input: 0, output: 0, reasoning: 0 }, served_by: clip(viaModel, NAME_CHARS), reasoning: null },
         }]);
       } catch {
         // the ledger refused even that; the end still says what happened
@@ -221,7 +234,7 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     };
     if (result.kind === "declined") {
       const reason = result.reason.slice(0, DECLINE_CHARS);
-      if (!guarded(() => [{ type: "model.declined", actor, ...link, cause: requested!.seq, payload: { request: requestId, reason } }])) return failed("the ledger refused the declined entry");
+      if (!guarded(() => [{ type: "model.declined", actor: who, ...link, cause: requested!.seq, payload: { request: requestId, reason } }])) return failed("the ledger refused the declined entry");
       return { kind: "declined", reason };
     }
     retryCause = null;
@@ -238,8 +251,8 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
       const raw = put(result.raw ?? JSON.stringify({ error: message }));
       let seq = -1;
       const wrote = guarded(() => [{
-        type: "model.response", actor, ...link, cause: requested!.seq,
-        payload: { request: requestId, response: raw, stop: "error", usage: { input: 0, output: 0, reasoning: 0 }, served_by: clip(spec.model, NAME_CHARS), reasoning: null },
+        type: "model.response", actor: who, ...link, cause: requested!.seq,
+        payload: { request: requestId, response: raw, stop: "error", usage: { input: 0, output: 0, reasoning: 0 }, served_by: clip(viaModel, NAME_CHARS), reasoning: null },
       }], (s) => { seq = s; });
       if (!wrote) return failed(message);
       const t = result.transient;
@@ -265,10 +278,10 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     let responseSeq = -1;
     if (!guarded(() => [
       {
-        type: "model.response", actor, ...link, cause: requested!.seq,
+        type: "model.response", actor: who, ...link, cause: requested!.seq,
         payload: { request: requestId, response, stop, usage, served_by: clip(String(result.served_by), NAME_CHARS), reasoning },
       },
-      ...(extra > 0 ? [{ type: "tool.skipped" as const, actor, ...link, cause: requested!.seq, payload: { request: requestId, count: extra, note: skippedNote } }] : []),
+      ...(extra > 0 ? [{ type: "tool.skipped" as const, actor: who, ...link, cause: requested!.seq, payload: { request: requestId, count: extra, note: skippedNote } }] : []),
     ], (s) => { responseSeq = s; })) return failed("the ledger refused the model response");
     responded = true;
 
@@ -281,6 +294,11 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     }
     failedOnce = null;
 
+    // a routing turn that called no tool is not the answer: whatever it said is not used, and the stage's model is asked to answer now
+    if (routing && toRun.length === 0) {
+      answerNow = true;
+      continue;
+    }
     // 6. the tool calls that are present decide, not the finish label
     if (toRun.length > 0) {
       const results: ChatMessage[] = [];

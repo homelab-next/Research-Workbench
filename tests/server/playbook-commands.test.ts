@@ -96,3 +96,45 @@ test("a requester may not run a playbook", async () => {
   s = await served({ role: "requester" });
   expect((await s.command("CASE-1", "run_playbook", start())).status).toBe(403);
 });
+
+const belongs = (over: Record<string, unknown> = {}) => ({ type: "address", value: SAMPLE_START.value, window: SAMPLE_WINDOW, why: "is it ours", ...over });
+
+test("check_belongs returns at once, then the job asks each inventory once with purpose playbook", async () => {
+  const id = await open();
+  const gate = held();
+  const r = await s.command(id, "check_belongs", belongs());
+  expect(r.status).toBe(200);
+  const job = Object.values(state(id).jobs).at(-1)!;
+  expect(job).toMatchObject({ kind: "playbook", status: "running" });
+  expect(s.entries(id).filter((e) => e.type === "query.result")).toEqual([]);
+  expect((await s.command(id, "check_belongs", belongs())).body).toEqual({ ok: false, refused: ["this playbook is already running on this value"] });
+  gate.release(); await s.app.hub.idle();
+  expect(state(id).jobs[job.id]!.status).toBe("done");
+  const steps = s.entries(id).filter((e) => e.type === "playbook.step" && e.payload.job === job.id);
+  expect(steps.map((e) => (e.type === "playbook.step" ? [e.payload.step, e.payload.pivot] : []))).toEqual([["i1", "address_to_asset"], ["i2", "address_to_asset_by_lease"]]);
+  const issued = s.entries(id).filter((e) => e.type === "query.issued" && e.job === job.id);
+  expect(issued.length).toBe(2);
+  expect(issued.every((e) => e.type === "query.issued" && e.payload.purpose === "playbook")).toBe(true);
+  expect(s.entries(id).some((e) => e.type === "playbook.started" && e.payload.playbook === "does-it-belong")).toBe(true);
+  expect(s.entries(id).filter((e) => e.type === "model.request")).toEqual([]);
+});
+
+test("check_belongs on a type no inventory takes is refused with nothing written", async () => {
+  const id = await open();
+  const n = s.entries(id).length;
+  const r = await s.command(id, "check_belongs", belongs({ type: "domain", value: "example.com" }));
+  expect(r.status).toBe(409);
+  expect(r.body).toEqual({ ok: false, refused: ["no inventory takes a domain"] });
+  expect(s.entries(id).length).toBe(n);
+});
+
+test("the reference lists both inventories and each pivot says which inventory it asks", async () => {
+  await open();
+  const ref = (await (await s.get("/api/reference")).json()) as Reference;
+  expect(ref.inventories).toEqual([
+    { id: "assets", title: "Asset list", holds: "asset", scope: "internal hosts", complete: true },
+    { id: "leases", title: "Lease records", holds: "asset", scope: "addresses handed out by lease", complete: false },
+  ]);
+  expect(ref.pivots.find((p) => p.id === "address_to_asset")!.inventory).toBe("assets");
+  expect(ref.pivots.find((p) => p.id === "address_to_domains")!.inventory).toBeNull();
+});

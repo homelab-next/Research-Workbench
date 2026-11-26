@@ -183,3 +183,14 @@ test("a stage may set max_turns, a positive integer; a stage without it has none
     expect(pipeline === null || !pipeline.stages.some((s) => s.id === "plan")).toBe(true);
   }
 });
+
+test("a stage's fast_model loads with effort null; a malformed one is a problem naming fast_model; absent is null", () => {
+  edit("research", "on_pass: assemble", "fast_model: { provider: scripted, model: x }\non_pass: assemble");
+  const ok = load();
+  expect(ok.pipeline!.stages.find((s) => s.id === "research")!.fast_model).toEqual({ provider: "scripted", model: "x", effort: null });
+  expect(ok.pipeline!.stages.find((s) => s.id === "frame")!.fast_model).toBeNull();
+  edit("research", "fast_model: { provider: scripted, model: x }", "fast_model: { provider: scripted }");
+  const bad = load();
+  expect(bad.problems.some((p) => p.includes("research") && p.includes("fast_model"))).toBe(true);
+  expect(bad.pipeline?.stages.map((s) => s.id) ?? []).not.toContain("research");
+});

@@ -395,3 +395,32 @@ test("preflight's question is sized to the per-request context the manifest clai
   const body = JSON.parse(m.requests.find((q) => q.path.endsWith("/chat/completions"))!.body) as { max_tokens: number };
   expect(body.max_tokens).toBe(65536 - 2048);
 });
+
+test("a fast_model is one more model for the checks, named with its stage", async () => {
+  const m = standin([GOOD(), GOOD()], [{ id: "example/model-a", loaded_context_length: 65536 }, { id: "example/small", loaded_context_length: 65536 }]);
+  const e = env(m.url);
+  const file = join(e.root, "stages", "research.yaml");
+  const text = readFileSync(file, "utf8");
+  // a fast model the provider lists and one it does not
+  writeFileSync(file, text.replace(/^on_pass:/m, "fast_model: { provider: local, model: example/small }\non_pass:"));
+  const good = await run(e);
+  expect(by(good, "model listed").map((c) => c.detail)).toContain("example/small at local; sampling temperature 0.6, top_p 0.95, top_k 20, min_p 0, presence_penalty 1.5; up to 16384 output tokens");
+  expect(by(good, "model answers").filter((c) => c.level === "ok").length).toBe(2);
+  expect(good.ok).toBe(true);
+  writeFileSync(file, text.replace(/^on_pass:/m, "fast_model: { provider: nowhere, model: example/small }\non_pass:"));
+  const bad = await run(e);
+  const listed = by(bad, "model listed").filter((c) => c.level === "fail");
+  expect(listed).toHaveLength(1);
+  expect(listed[0]!.detail).toContain("research (fast)");
+  expect(bad.ok).toBe(false);
+});
+
+test("a fast model's marking is checked against the policy, named with its stage", async () => {
+  const m = standin([GOOD()]);
+  const e = env(m.url);
+  const file = join(e.root, "stages", "research.yaml");
+  writeFileSync(file, readFileSync(file, "utf8").replace(/^on_pass:/m, "fast_model: { provider: local, model: example/model-a }\non_pass:"));
+  const r = await run(e);
+  expect(by(r, "context fit").some((c) => c.detail.includes("fast"))).toBe(false);
+  expect(r.ok).toBe(true);
+});

@@ -27,10 +27,16 @@ export interface StageManifest extends StageDef { hash: string; order: number; r
   /** Extra fields this stage's requests add to the chat body; each wins over the model manifest's, key by key. */
   request_extra?: RequestExtra | null;
   /** The most turns this stage's agent has (the loop's MAX_TURNS when null). */
-  max_turns?: number | null }
+  max_turns?: number | null;
+  /** An optional fast model for this stage's tool-choosing turns; null (the default) means the stage's model takes every turn. */
+  fast_model?: { provider: string; model: string; effort: string | null } | null }
 export interface Pipeline { id: string; hash: string; stages: StageManifest[] }
 
 const nullableString: Schema = { type: ["string", "null"] };
+const MODEL_CHOICE_SCHEMA: Schema = {
+  type: "object", additionalProperties: false, required: ["provider", "model"],
+  properties: { provider: { type: "string", minLength: 1 }, model: { type: "string", minLength: 1 }, effort: nullableString },
+};
 const STAGE_SCHEMA: Schema = {
   type: "object",
   additionalProperties: false,
@@ -56,6 +62,7 @@ const STAGE_SCHEMA: Schema = {
         },
       ],
     },
+    fast_model: { anyOf: [{ type: "null" }, MODEL_CHOICE_SCHEMA] },
     on_pass: nullableString,
     on_fail: nullableString,
     sampling: { anyOf: [{ type: "null" }, SAMPLING_SCHEMA] },
@@ -69,6 +76,7 @@ type Body = {
   id: string; title?: string; order: number; phase?: string | null; runs: StageDef["runs"]; role: string; gate?: StageDef["gate"]; reviews?: boolean;
   tools?: string[] | null; schema?: string | null; model?: { provider: string; model: string; effort?: string | null } | null; on_pass?: string | null; on_fail?: string | null;
   sampling?: Sampling | null; max_output_tokens?: number | null; max_turns?: number | null; request_extra?: RequestExtra | null;
+  fast_model?: { provider: string; model: string; effort?: string | null } | null;
 };
 
 /** One manifest as a stage, or the reason it cannot be used. */
@@ -92,6 +100,7 @@ function toStage(m: LoadedManifest, registry: Registry): StageManifest | string 
     hash: m.hash, order: b.order, role: b.role as Role, tools: tools as ToolName[], schema: b.schema ?? null, on_pass: b.on_pass ?? null, on_fail: b.on_fail ?? null,
     sampling: b.sampling ?? null, max_output_tokens: b.max_output_tokens ?? null, max_turns: b.max_turns ?? null,
     request_extra: b.request_extra ?? null,
+    fast_model: b.fast_model == null ? null : { provider: b.fast_model.provider, model: b.fast_model.model, effort: b.fast_model.effort ?? null },
   };
 }
 

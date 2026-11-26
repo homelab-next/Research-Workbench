@@ -3,7 +3,7 @@ import { parseJson } from "../../core/canonical";
 import type { Schema } from "../../core/schema";
 import type { CaseSession } from "../../core/session";
 import { runUsage } from "../../core/state";
-import type { Actor, Draft, Entry, TimeWindow } from "../../core/types";
+import type { Actor, Draft, Entry, ModelChoice, TimeWindow } from "../../core/types";
 import { ContextError, casePart, packPart, schemaOf, stageParts } from "../../agents/context";
 import type { PackPart } from "../../agents/context";
 import type { CallRecord } from "../../agents/loop";
@@ -32,10 +32,10 @@ export const titleOf = (env: StageEnv): string => env.session.state.run.stages.f
 const listedBefore = new WeakMap<Provider, Map<string, ModelInfo>>();
 
 /** The agent's actor and its provider and model, from the stage's chosen model; or why there is none. */
-export async function resolveAgent(env: StageEnv, actorId: string): Promise<{ actor: AgentActor; provider: Provider; model: string; effort: string | null; /** tokens each request has */ context: number } | { stalled: string }> {
+export async function resolveAgent(env: StageEnv, actorId: string, chosen?: ModelChoice): Promise<{ actor: AgentActor; provider: Provider; model: string; effort: string | null; /** tokens each request has */ context: number } | { stalled: string }> {
   const { state } = env.session;
   const title = titleOf(env);
-  const choice = state.run.stages.find((s) => s.id === env.stage.id)?.model ?? null;
+  const choice = chosen ?? state.run.stages.find((s) => s.id === env.stage.id)?.model ?? null;
   if (choice === null) return { stalled: `${title}: no model is chosen for this stage. Choose one and resume.` };
   const provider = env.deps.providers.get(choice.provider);
   if (provider === null) return { stalled: `${title}: the provider "${choice.provider}" is not available. Choose another model and resume.` };
@@ -77,6 +77,12 @@ export async function stageAgent(env: StageEnv, opts: {
     const problem = cap === undefined ? null : fitProblem(who.context, cap);
     if (problem !== null) return { kind: "stalled", reason: `${title}: ${problem}` };
   }
+  // the stage's fast model, when its manifest names one and it resolves; otherwise the stage's model takes every turn
+  let fast: { provider: Provider; model: string; effort: string | null; context: number } | null = null;
+  if (stage.fast_model != null) {
+    const got = await resolveAgent(env, opts.actor_id, stage.fast_model);
+    if (!("stalled" in got)) fast = { provider: got.provider, model: got.model, effort: got.effort, context: got.context };
+  }
   // read after the await: a person may have changed the case, the run or a stage limit while the model was being resolved
   const state = session.state;
 
@@ -85,7 +91,7 @@ export async function stageAgent(env: StageEnv, opts: {
   try {
     const parts = [...stageParts(deps.registry, deps.profile, stage.id, { schema: stage.schema, objective: state.meta?.objective ?? null, ...(opts.narrow === undefined ? {} : { narrow: opts.narrow }) }), casePart(state), ...opts.extras];
     if (stage.schema !== null) schema = opts.narrow === undefined ? schemaOf(deps.registry, stage.schema) : opts.narrow(schemaOf(deps.registry, stage.schema));
-    pack = assemblePack(parts, { budget: packBudget(who.context), case_marking: state.meta!.marking, max_marking: Object.hasOwn(state.pack_limits, stage.id) ? state.pack_limits[stage.id]! : null });
+    pack = assemblePack(parts, { budget: packBudget(fast === null ? who.context : Math.min(who.context, fast.context)), case_marking: state.meta!.marking, max_marking: Object.hasOwn(state.pack_limits, stage.id) ? state.pack_limits[stage.id]! : null });
   } catch (err) {
     if (err instanceof ContextError) return { kind: "stalled", reason: `${title}: ${firstLine(err.message)}` };
     throw err;
@@ -94,6 +100,7 @@ export async function stageAgent(env: StageEnv, opts: {
 
   const { window, limits } = frameOf(env);
   const end = await runAgent(session, {
+    ...(fast === null ? {} : { fast: { provider: fast.provider, model: fast.model, effort: fast.effort } }),
     actor: who.actor, provider: who.provider, model: who.model, effort: who.effort, pack, task: opts.task, tools: stage.tools.filter((t) => !(opts.omit_tools ?? []).includes(t)), schema,
     ...(stage.schema === null ? {} : { schema_id: stage.schema }),
     ...(opts.explain === undefined ? {} : { explain: opts.explain }),
