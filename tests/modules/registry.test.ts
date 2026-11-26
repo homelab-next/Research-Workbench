@@ -5,8 +5,8 @@ import { dirname, join } from "node:path";
 import { Ledger } from "../../src/core/ledger";
 import { sha256Hex } from "../../src/core/hash";
 import type { RootConfig } from "../../src/modules/config";
-import { Registry, staysInside } from "../../src/modules/registry";
-import { loadRegistry } from "../../src/modules/registry-record";
+import { PIVOT_TRUSTED_ONLY, Registry, staysInside, TRUSTED_ONLY_KINDS } from "../../src/modules/registry";
+import { loadRegistry, WORKBENCH_TRUSTED_ONLY } from "../../src/modules/registry-record";
 import { PATTERN_PROBE_LIMIT_MS, probePattern } from "../../src/modules/observables";
 
 const dirs: string[] = [];
@@ -135,6 +135,30 @@ test("a manifest hash that is not the workbench's own refuses the load and recor
   // a file changed after it was read is the same refusal: the hash would not be of the bytes on disk
   expect(loadSpoiled([rootA], () => { writeFileSync(join(rootA.path, "sources/dns-logs.yaml"), SOURCE + "quality: later\n"); }, c)).toThrow(/is not the workbench's own sha256/);
   expect(c.read()).toHaveLength(0);
+});
+
+// ---------- task 13 fix M2: the workbench's own trusted-only list, whatever pivot's default becomes ----------
+const KEPT_TO_TRUSTED = ["model", "script", "check", "stage", "profile", "rules", "persona", "procedure", "skill", "gate", "playbook", "inventory", "reference", "objective", "framework", "standard", "schema"];
+
+test("the workbench keeps its seventeen kinds to trusted roots itself", () => {
+  expect([...WORKBENCH_TRUSTED_ONLY]).toEqual(KEPT_TO_TRUSTED);
+  const files = Object.fromEntries(KEPT_TO_TRUSTED.map((k) => [`${k}.yaml`, `kind: ${k}\nid: x-${k}\ntitle: T\n`]));
+  const untrusted = root(files, { trusted: false });
+  const c = chain();
+  // as design R6 expects pivot's own default to become: only the kinds pivot reads; the workbench's list must still refuse all 17
+  const pivotDefault = (TRUSTED_ONLY_KINDS as string[]).splice(0, TRUSTED_ONLY_KINDS.length, ...PIVOT_TRUSTED_ONLY);
+  let r: Registry;
+  try {
+    r = loadRegistry([untrusted], { chain: c });
+  } finally {
+    (TRUSTED_ONLY_KINDS as string[]).splice(0, TRUSTED_ONLY_KINDS.length, ...pivotDefault);
+  }
+  expect([...TRUSTED_ONLY_KINDS]).toEqual(KEPT_TO_TRUSTED);
+  expect(r.manifests()).toEqual([]);
+  expect(r.problems.map((p) => [p.path.slice(untrusted.path.length + 1), p.error]).sort()).toEqual(
+    KEPT_TO_TRUSTED.map((k) => [`${k}.yaml`, `${/^[aeiou]/.test(k) ? "an" : "a"} ${k} manifest is accepted only from a trusted root`]).sort(),
+  );
+  expect(c.read().filter((e) => e.type === "module.rejected")).toHaveLength(17);
 });
 
 const withFile = (file: string): string => sourceWith("s", `tables:\n  - { name: t, file: "${file}", format: csv }\n`);

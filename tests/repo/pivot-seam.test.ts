@@ -65,6 +65,9 @@ function connectorCalls(text: string): string[] {
       if (m[1] === "run" && SQLITE_RUN.test(code.slice(0, m.index))) continue;
       out.push(`${i + 1}: ${line.trim()}`);
     }
+    // the evasions the line scan above cannot see: c["run"](…), and a method taken off its connector, then called
+    if (/\[\s*["'`](?:estimateRequest|estimate|run)["'`]\s*\]\s*\(/.test(code)) out.push(`${i + 1}: ${line.trim()}`);
+    else if (/\b(?:estimateRequest|estimate|run)\s*\.\s*(?:call|apply|bind)\s*\(/.test(code)) out.push(`${i + 1}: ${line.trim()}`);
   });
   return out;
 }
@@ -157,7 +160,7 @@ test("the workbench's canonical, hash and schema agree with pivot's on the vecto
   }
 });
 
-test("the installed pivot is the tagged commit the lock file names", () => {
+test("the installed pivot is the tag the lock file pins (by the tag object's hash)", () => {
   const pkg = JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")) as { dependencies?: Record<string, string> };
   expect(pkg.dependencies).toEqual({ pivot: "github:homelab-next/pivot#v0.1.0" });
   const installed = JSON.parse(readFileSync(join(PIVOT, "package.json"), "utf8")) as { name: string; version: string };

@@ -247,3 +247,11 @@ test("a route whose first hop ran dry blocks that hop, not the route's last one"
   expect(r.blocked).not.toContain("do1");
   expect(r.blocked).not.toContain("ro");
 });
+
+test("a budget wait stays where the walker put it among the caveats", async () => {
+  const agent: Actor = { kind: "agent", id: "a1", stage: "gather", profile: "p", model: "m", effort: null, where: "machine" };
+  const r = await go(addr("192.0.2.50"), "rating", { actor: agent, max_fanout: 3 });
+  expect(r.trail.map((t) => [t.hop.pivot, t.status])).toEqual([["ad", "done"], ["dq", "needs_budget"]]);
+  // the walker words the wait first and the fan-out after it; the workbench names the proposal in the wait's place
+  expect(r.caveats).toEqual(["dq: needs a budget (proposal p1)", "dq: 5 values not tried (fan-out limit 3)"]);
+});
