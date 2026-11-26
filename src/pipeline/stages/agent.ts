@@ -78,8 +78,8 @@ export async function stageAgent(env: StageEnv, opts: {
   const title = titleOf(env);
   const who = await resolveAgent(env, opts.actor_id);
   if ("stalled" in who) return { kind: "stalled", reason: who.stalled };
+  const cap = stage.max_output_tokens ?? who.provider.max_output_tokens;
   if (who.provider.kind === "local") {
-    const cap = stage.max_output_tokens ?? who.provider.max_output_tokens;
     const problem = cap === undefined ? null : fitProblem(who.context, cap);
     if (problem !== null) return { kind: "stalled", reason: `${title}: ${problem}` };
   }
@@ -88,6 +88,8 @@ export async function stageAgent(env: StageEnv, opts: {
   if (stage.fast_model != null) {
     const got = await resolveAgent(env, opts.actor_id, stage.fast_model);
     if (!("stalled" in got)) fast = { provider: got.provider, model: got.model, effort: got.effort, context: got.context };
+    // a local fast model that cannot take the stage's reply cap beside its context is not used: the stage's model takes every turn
+    if (fast !== null && fast.provider.kind === "local" && cap !== undefined && fitProblem(fast.context, cap) !== null) fast = null;
   }
   // read after the await: a person may have changed the case, the run or a stage limit while the model was being resolved
   const state = session.state;

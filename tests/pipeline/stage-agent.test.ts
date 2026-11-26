@@ -313,6 +313,17 @@ test("a fast model the provider does not list is not used, and the stage complet
   expect(none.kind).toBe("stalled");
 });
 
+test("a local fast model whose context cannot take the stage's reply cap is not used, and the stage completes on its own model", async () => {
+  const r = rig(script(say(FRAME)));
+  const quick = sized("quick", fastScript({ tool_calls: [{ tool: "list_sources", args: { why: "look" } }] }, { content: "go" }), 8192);
+  r.deps.providers = new Providers([sized("scripted", script(say(FRAME)), 40000), { ...quick, kind: "local" }]);
+  r.engine.start(person);
+  const e = withFast(r, FAST);
+  const end = await stageAgent({ ...e, stage: { ...e.stage, max_output_tokens: 16384 } }, { actor_id: "orchestrator", task: "t", extras: [] });
+  expect(end).toMatchObject({ kind: "output", output: FRAME });
+  expect((ofType("model.request") as Req[]).map((e) => [e.payload.provider, e.payload.model])).toEqual([["scripted", "sample-run"]]);
+});
+
 test("a listed fast model takes the tool turns and the stage's model gives the answer", async () => {
   const r = rig(script(say(FRAME)));
   r.deps.providers = new Providers([new ScriptedProvider({ id: "scripted", scripts: script(say(FRAME)) }), new ScriptedProvider({ id: "quick", scripts: fastScript({ tool_calls: [{ tool: "list_sources", args: { why: "look" } }] }, { content: "go" }) })]);
