@@ -25,7 +25,9 @@ export interface TurnRequest { model: string; effort: string | null; messages: C
 export type TurnResult =
   | { kind: "answer"; content: string; reasoning: string | null; tool_calls: ToolCall[]; stop: "end" | "tool_calls" | "length"; usage: Usage; served_by: string; raw: Uint8Array }
   | { kind: "declined"; reason: string; served_by: string; raw: Uint8Array }
-  | { kind: "error"; message: string; raw: Uint8Array | null; transient?: Transient };
+  | { kind: "error"; message: string; raw: Uint8Array | null; transient?: Transient;
+      /** "context": the endpoint refused the request as too big for the model's context. */
+      cause?: "context" };
 /** A failure that may not recur when the same request is made again: no answer in time, or the endpoint could not be reached. */
 export type Transient = { kind: "timeout"; ms: number } | { kind: "transport" };
 export interface Provider {

@@ -274,3 +274,12 @@ test("a stage whose reply cap does not fit the per-request context stalls before
     expect(ofType("model.request")).toEqual([]);
   } finally { m.stop(); }
 });
+
+test("an over-context refusal pauses the stage saying what to change", async () => {
+  const { r, m } = localRig({ context: 65536, parallel: 1, max_output_tokens: 8192 }, [{ status: 400, json: { error: { message: "Context size has been exceeded." } } }]);
+  try {
+    const end = await stageAgent(r.env(), { actor_id: "orchestrator", task: "t", extras: [] });
+    expect(end).toEqual({ kind: "stalled", reason: "Frame: the request did not fit the model's context (the endpoint said: Context size has been exceeded.). Lower this stage's max_output_tokens, or load the model with a larger context in one slot, and resume." });
+    expect(ofType("model.request")).toHaveLength(1);
+  } finally { m.stop(); }
+});

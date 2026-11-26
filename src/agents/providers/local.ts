@@ -45,8 +45,11 @@ const dec = new TextDecoder();
 const ECHOED = "the endpoint echoed the credential; response refused";
 
 class Failure extends Error {
-  constructor(message: string, readonly raw: Uint8Array | null = null, readonly transient: Transient | null = null) { super(message); }
+  constructor(message: string, readonly raw: Uint8Array | null = null, readonly transient: Transient | null = null, readonly cause_: "context" | null = null) { super(message); }
 }
+
+/** What an endpoint says a request got wrong. */
+const CONTEXT_RE = /context (?:size|length|window)|exceed\w* .{0,40}context|maximum context|n_ctx|too many tokens/i;
 
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 const oneLine = (s: string): string => s.replace(new RegExp(CONTROL.source, "g"), " ").trim().slice(0, 300);
@@ -98,6 +101,14 @@ export class LocalProvider implements Provider {
       if (problem !== null) throw new Error(problem);
     }
     this.request_extra = mergeRequestExtra(undefined, opts.request_extra);
+  }
+
+  /** The endpoint's own line about a refusal: `error.message`, else a string `error`, else a string `message`; "" when it gives none. */
+  #endpointSaid(parsed: unknown): string {
+    if (!isPlainObject(parsed)) return "";
+    const e = parsed.error;
+    const said = isPlainObject(e) && typeof e.message === "string" ? e.message : typeof e === "string" ? e : typeof parsed.message === "string" ? parsed.message : "";
+    return this.#redact(said);
   }
 
   /** Throws a plain Error naming the cause when the endpoint is the workbench's own server. */
@@ -206,7 +217,7 @@ export class LocalProvider implements Provider {
     try {
       return await this.#turn(req);
     } catch (err) {
-      if (err instanceof Failure) return { kind: "error", message: err.message, raw: err.raw, ...(err.transient === null ? {} : { transient: err.transient }) };
+      if (err instanceof Failure) return { kind: "error", message: err.message, raw: err.raw, ...(err.transient === null ? {} : { transient: err.transient }), ...(err.cause_ === null ? {} : { cause: err.cause_ }) };
       return { kind: "error", message: this.#redact(`the reply could not be read: ${(err as Error).message ?? String(err)}`), raw: null };
     }
   }
@@ -220,7 +231,11 @@ export class LocalProvider implements Provider {
       throw err;
     }
     const { raw, parsed } = r;
-    if (r.status !== 200) throw new Failure(`the endpoint answered ${r.status}`, raw);
+    if (r.status !== 200) {
+      const said = this.#endpointSaid(parsed);
+      if (said !== "" && CONTEXT_RE.test(said)) throw new Failure(`the request did not fit the model's context (the endpoint said: ${said})`, raw, null, "context");
+      throw new Failure(said === "" ? `the endpoint answered ${r.status}` : `the endpoint answered ${r.status}: ${said}`, raw);
+    }
     if (parsed === undefined) throw new Failure("the reply is not JSON", raw);
     const choice = isPlainObject(parsed) && Array.isArray(parsed.choices) ? parsed.choices[0] : undefined;
     if (!isPlainObject(choice) || !isPlainObject(choice.message)) throw new Failure("the reply has no choices", raw);

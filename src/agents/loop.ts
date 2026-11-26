@@ -50,7 +50,7 @@ export type AgentEnd =
   | { kind: "invalid"; errors: string[]; returned: string; calls: CallRecord[] }
   | { kind: "declined"; reason: string }
   | { kind: "blocked"; marking: Marking }
-  | { kind: "error"; message: string; retried?: true }
+  | { kind: "error"; message: string; retried?: true; cause?: "context" }
   | { kind: "stopped"; why: "paused" | "budget" | "turns" };
 
 const enc = new TextEncoder();
@@ -243,7 +243,7 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
       }], (s) => { seq = s; });
       if (!wrote) return failed(message);
       const t = result.transient;
-      if (t === undefined) return { kind: "error", message };
+      if (t === undefined) return { kind: "error", message, ...(result.cause === undefined ? {} : { cause: result.cause }) };
       const end = again(t.kind === "timeout" ? t : { kind: "transport", message }, seq, message);
       if (end !== null) return end;
       turn--;

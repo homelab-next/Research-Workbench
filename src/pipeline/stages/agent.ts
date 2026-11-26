@@ -113,7 +113,8 @@ export async function stageAgent(env: StageEnv, opts: {
     case "invalid": return { kind: "stalled", reason: `${title}'s output failed its schema twice: ${end.returned} (${end.errors.join("; ")})` };
     case "declined": return { kind: "declined", reason: end.reason };
     case "blocked": return { kind: "blocked", marking: end.marking };
-    case "error": return { kind: "stalled", reason: end.retried === true
+    case "error": if (end.cause === "context") return { kind: "stalled", reason: `${title}: ${end.message}. Lower this stage's max_output_tokens, or load the model with a larger context in one slot, and resume.` };
+      return { kind: "stalled", reason: end.retried === true
       ? `${title}: ${end.message}. Try a lower effort or another model, and resume.`
       : `${title}: the model call failed: ${end.message}` };
     case "stopped":

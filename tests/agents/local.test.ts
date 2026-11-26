@@ -344,3 +344,23 @@ test("request_extra cannot set a key the workbench sends itself: the model's is 
   const sent = JSON.parse(new TextDecoder().decode(p.body(req({ request_extra: { model: "other", max_tokens: 1, temperature: 2, stream: true, seed: 3 } as never })))) as Record<string, unknown>;
   expect(sent).toMatchObject({ model: "qwen/qwen3.6-35b-a3b", max_tokens: 100, temperature: 0.5, stream: false, seed: 3 });
 });
+
+test("a 400 about context size is reported as not fitting the context, with the endpoint's own line", async () => {
+  const m = standin([{ status: 400, json: { error: { message: "Context size has been exceeded." } } }]);
+  const r = await provider(m.url).turn(req());
+  expect(r).toMatchObject({ kind: "error", cause: "context" });
+  expect((r as { message: string }).message).toBe("the request did not fit the model's context (the endpoint said: Context size has been exceeded.)");
+  expect((r as { transient?: unknown }).transient).toBeUndefined();
+});
+
+test("another refusal shows its status and the endpoint's line, scrubbed to one line", async () => {
+  const m = standin([{ status: 400, json: { error: "bad\nrequest" } }]);
+  const r = await provider(m.url).turn(req());
+  expect(asError(r)).toBe("the endpoint answered 400: bad request");
+  expect(r).not.toHaveProperty("cause");
+});
+
+test("a refusal with no readable body keeps the old words", async () => {
+  const m = standin([{ status: 500, text: "x" }]);
+  expect(asError(await provider(m.url).turn(req()))).toBe("the endpoint answered 500");
+});
