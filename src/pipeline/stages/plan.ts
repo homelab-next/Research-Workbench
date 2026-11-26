@@ -1,5 +1,8 @@
 import type { Json } from "../../core/canonical";
+import { isPlainObject } from "../../core/canonical";
+import type { Schema } from "../../core/schema";
 import type { Actor, Where } from "../../core/types";
+import type { Registry } from "../../modules/registry";
 import { ContextError, packPart } from "../../agents/context";
 import type { PackPart } from "../../agents/context";
 import { buildPlan } from "../plans";
@@ -13,6 +16,66 @@ function researchWhere(env: StageEnv): { where: Where } | null {
   const choice = stage === undefined ? null : env.session.state.run.stages.find((s) => s.id === stage.id)?.model ?? null;
   const provider = choice === null ? null : env.deps.providers.get(choice.provider);
   return provider === null || provider === undefined ? null : { where: provider.where };
+}
+
+/** What the planner's answer may name: the registry's observable types, the playbooks it may plan (loaded, no costly lookup) and the pivots. */
+export interface PlanChoices { types: string[]; playbooks: string[]; pivots: string[] }
+export function planChoices(registry: Registry): PlanChoices {
+  return {
+    types: registry.types().map((t) => t.id),
+    playbooks: registry.playbooks().filter((p) => registry.costlyPivots(p).length === 0).map((p) => p.id),
+    pivots: registry.pivots().map((p) => p.id),
+  };
+}
+
+/**
+ * The plan-output schema narrowed to what exists: a sub-goal's want and each have's type are one of the types, a route's items one of the
+ * pivots, and the playbook one of the playbooks it may plan; with none, the sub-goal has no playbook property. A schema without these
+ * properties is unchanged where they are missing; the given schema is never changed.
+ */
+export function planSchema(schema: Schema, c: PlanChoices): Schema {
+  const goals = schema.properties?.subgoals;
+  const item = goals?.items;
+  if (goals === undefined || item?.properties === undefined) return schema;
+  const props: Record<string, Schema> = { ...item.properties };
+  const { want, have, route, playbook } = props;
+  if (want !== undefined) props.want = { ...want, enum: [...c.types] };
+  const haveType = have?.items?.properties?.type;
+  if (have !== undefined && haveType !== undefined) {
+    props.have = { ...have, items: { ...have.items!, properties: { ...have.items!.properties, type: { ...haveType, enum: [...c.types] } } } };
+  }
+  if (route?.items !== undefined) props.route = { ...route, items: { ...route.items, enum: [...c.pivots] } };
+  if (playbook !== undefined) {
+    if (c.playbooks.length === 0) delete props.playbook;
+    else props.playbook = { ...playbook, enum: [...c.playbooks] };
+  }
+  const required = item.required?.filter((r) => Object.hasOwn(props, r));
+  const narrowed: Schema = { ...item, properties: props, ...(required === undefined ? {} : { required }) };
+  return { ...schema, properties: { ...schema.properties, subgoals: { ...goals, items: narrowed } } };
+}
+
+/** The re-ask's sentences for a planner's answer that names what does not exist: each wrong value, with the values allowed there. */
+export function planExplain(c: PlanChoices): (answer: Json) => string[] {
+  const oneOf = (at: string, allowed: string[]): string => (allowed.length === 0 ? `${at} must be left out: there is none to name` : `${at} must be one of: ${allowed.join(", ")}`);
+  return (answer) => {
+    if (!isPlainObject(answer) || !Array.isArray(answer.subgoals)) return [];
+    const out: string[] = [];
+    answer.subgoals.forEach((g, i) => {
+      if (!isPlainObject(g)) return;
+      const at = `subgoals[${i}]`;
+      if (typeof g.want === "string" && !c.types.includes(g.want)) out.push(oneOf(`${at}.want`, c.types));
+      if (Array.isArray(g.have)) {
+        g.have.forEach((h, n) => {
+          if (isPlainObject(h) && typeof h.type === "string" && !c.types.includes(h.type)) out.push(oneOf(`${at}.have[${n}].type`, c.types));
+        });
+      }
+      if (Array.isArray(g.route)) {
+        g.route.forEach((p, n) => { if (typeof p === "string" && !c.pivots.includes(p)) out.push(oneOf(`${at}.route[${n}]`, c.pivots)); });
+      }
+      if (g.playbook !== undefined && !(typeof g.playbook === "string" && c.playbooks.includes(g.playbook))) out.push(oneOf(`${at}.playbook`, c.playbooks));
+    });
+    return out;
+  };
 }
 
 /** Plan: the planner names a route per sub-goal; code checks each against the route finder and builds the plan, which is only a proposal. */
@@ -56,7 +119,9 @@ export async function planRunner(env: StageEnv): Promise<StageEnd> {
 
   let errors: string[] = [];
   for (let attempt = 0; attempt < 2; attempt++) {
-    const end = await stageAgent(env, { actor_id: actorId, task, extras });
+    // the answer names only what exists, read now: the registry may have been reloaded since the run began
+    const choices = planChoices(deps.registry);
+    const end = await stageAgent(env, { actor_id: actorId, task, extras, narrow: (s) => planSchema(s, choices), explain: planExplain(choices) });
     if (end.kind !== "output") return end;
     const out = end.output as unknown as PlanOutput;
     const built = buildPlan("", out, deps, frame, research);
@@ -93,3 +158,4 @@ function lastAgentActor(session: StageEnv["session"], actorId: string): Extract<
   if (e === undefined || e.actor.kind !== "agent") throw new Error("the planner made no request");
   return e.actor;
 }
+

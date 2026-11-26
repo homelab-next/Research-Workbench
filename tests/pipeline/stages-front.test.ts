@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Json } from "../../src/core/canonical";
 import type { Entry } from "../../src/core/types";
-import { loadProfile } from "../../src/agents/context";
+import { loadProfile, schemaOf } from "../../src/agents/context";
 import { Providers } from "../../src/agents/providers";
 import { ScriptedProvider } from "../../src/agents/providers/scripted";
 import type { ScriptReply } from "../../src/agents/providers/scripted";
@@ -16,7 +16,8 @@ import type { EngineDeps, StageEnd, StageRunner } from "../../src/pipeline/engin
 import { loadPipeline } from "../../src/pipeline/manifests";
 import type { Role } from "../../src/pipeline/manifests";
 import { frameRunner } from "../../src/pipeline/stages/frame";
-import { planRunner } from "../../src/pipeline/stages/plan";
+import { planChoices, planSchema, planRunner } from "../../src/pipeline/stages/plan";
+import type { Schema } from "../../src/core/schema";
 import { researchRunner } from "../../src/pipeline/stages/research";
 import { buildPlan } from "../../src/pipeline/plans";
 import { frameOf, lastOutput } from "../../src/pipeline/stages/agent";
@@ -25,7 +26,7 @@ import type { Fixture } from "../helpers/tools-fixture";
 
 let f: Fixture;
 let dir: string;
-beforeEach(() => { afterTurn = null; f = fixture(false); dir = mkdtempSync(join(tmpdir(), "front-")); });
+beforeEach(() => { afterTurn = null; formats.length = 0; f = fixture(false); dir = mkdtempSync(join(tmpdir(), "front-")); });
 afterEach(() => {
   expect(f.s.state.skipped).toEqual([]);
   f.close();
@@ -55,7 +56,7 @@ const G2: ScriptReply[] = [calls(call("run_step", { step: "s3" })), answered("ve
 
 const hooked = (p: ScriptedProvider): ScriptedProvider => {
   const real = p.turn.bind(p);
-  p.turn = async (req) => { const got = await real(req); afterTurn?.(req.key); return got; };
+  p.turn = async (req) => { formats.push({ actor: req.key, format: req.response_format ?? null }); const got = await real(req); afterTurn?.(req.key); return got; };
   return p;
 };
 interface Rig { engine: Engine; deps: EngineDeps }
@@ -65,6 +66,8 @@ class NetworkProvider extends ScriptedProvider {
 }
 /** Called after each answer the scripted provider gives, with the asking actor; a test uses it to act while a model is answering. */
 let afterTurn: ((actor: string) => void) | null = null;
+/** The response_format of each request the scripted provider was sent, with the asking actor. */
+const formats: { actor: string; format: { name: string; schema: Schema } | null }[] = [];
 function rig(replies: Record<string, ScriptReply[]>, opts: { parallel?: number; runners?: Partial<Record<Role, StageRunner>>; network?: boolean } = {}): Rig {
   const registry = f.sample.registry;
   const { pipeline, problems } = loadPipeline(registry);
@@ -722,4 +725,61 @@ test("a step whose value an earlier step finds is left to the researcher's run_s
   const asks = ofType("model.request").filter((e) => e.actor.id === "researcher-g1");
   expect(asks).toHaveLength(2);
   expect(f.s.blobs.text(asks[0]!.payload.messages.blob)).toContain("s2: not yet run");
+});
+
+// ---------- the planner's answer names only what exists ----------
+
+/** The sub-goal item schema of a plan-output schema. */
+const subgoalOf = (s: Schema): Schema => s.properties!.subgoals!.items!;
+const SAMPLE_TYPES = ["address", "domain", "host", "account", "asset", "verdict"];
+/** The plan-output schema shown in the pack of the planner's request `ordinal`. */
+function packedPlanSchema(ordinal: number): Schema {
+  const blob = ofType("model.request").filter((e) => e.actor.id === "planner")[ordinal]!.payload.messages.blob;
+  const system = (JSON.parse(f.s.blobs.text(blob)) as { messages: { content: string }[] }).messages[0]!.content;
+  const part = system.split("## Plan output\n")[1]!;
+  return JSON.parse(part.slice(part.indexOf("\n") + 1, part.indexOf("\nExample:"))) as Schema;
+}
+
+test("the planner's answer schema names only the registry's types, the playbooks it may plan and the pivots", () => {
+  const r = rig({});
+  const choices = planChoices(r.deps.registry);
+  expect(choices).toEqual({ types: SAMPLE_TYPES, playbooks: ["address-triage"], pivots: r.deps.registry.pivots().map((p) => p.id) });
+  const base = schemaOf(r.deps.registry, "plan-output");
+  const g = subgoalOf(planSchema(base, choices));
+  expect(g.properties!.want!.enum).toEqual(SAMPLE_TYPES);
+  expect(g.properties!.have!.items!.properties!.type!.enum).toEqual(SAMPLE_TYPES);
+  expect(g.properties!.route!.items!.enum).toEqual(choices.pivots);
+  expect(g.properties!.playbook!.enum).toEqual(["address-triage"]);
+  // the manifest's schema is not changed
+  expect(subgoalOf(base).properties!.want!.enum).toBeUndefined();
+});
+
+test("a playbook with a costly lookup is not one the planner may name, and with none left the answer schema has no playbook", () => {
+  writeFileSync(join(f.sample.root, "playbooks", "rep-check.yaml"), "kind: playbook\nid: rep-check\ntitle: rep\nabout: a\ninputs:\n  - { name: address, type: address }\nsteps:\n  - { id: rep, pivot: address_to_verdict, from: input.address }\nend: [rep]\n");
+  const registry = Registry.load([{ path: f.sample.root, trusted: true, credentials: [] }]);
+  expect(registry.playbook("rep-check")).not.toBeNull();
+  expect(planChoices(registry).playbooks).toEqual(["address-triage"]);
+  const g = subgoalOf(planSchema(schemaOf(registry, "plan-output"), { ...planChoices(registry), playbooks: [] }));
+  expect(Object.keys(g.properties!)).not.toContain("playbook");
+  expect(g.properties!.want!.enum).toEqual(SAMPLE_TYPES);
+});
+
+test("a free-text want is refused by validation with the list of allowed types; the narrowed schema is in the pack and sent as structured output", async () => {
+  const free = { goal: "g", subgoals: [{ title: "Triage", question: "What is it?", have: [{ type: "address", value: "192.0.2.17" }], want: "Addresses and connection details", route: [], playbook: "address-triage" }] };
+  const r = rig({ orchestrator: [say(FRAME)], planner: [say(free), say(free)] });
+  Object.assign(r.deps.providers.get("scripted")!, { structured_output: true });
+  r.engine.start(person);
+  const sum = await r.engine.advance();
+  expect(sum.status).toBe("paused");
+  const list = `subgoals[0].want must be one of: ${SAMPLE_TYPES.join(", ")}`;
+  expect(sum.pause_reason).toContain(list);
+  const asks = ofType("model.request").filter((e) => e.actor.id === "planner");
+  expect(asks).toHaveLength(2);
+  const reask = (JSON.parse(f.s.blobs.text(asks[1]!.payload.messages.blob)) as { messages: { role: string; content: string }[] }).messages.at(-1)!;
+  expect(reask.role).toBe("user");
+  expect(reask.content).toContain(list);
+  expect(subgoalOf(packedPlanSchema(0)).properties!.want!.enum).toEqual(SAMPLE_TYPES);
+  const sent = formats.filter((x) => x.actor === "planner" && x.format !== null).map((x) => subgoalOf(x.format!.schema).properties!.want!.enum);
+  expect(sent).toEqual([SAMPLE_TYPES]);
+  expect(ofType("plan.proposed")).toEqual([]);
 });
