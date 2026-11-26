@@ -92,15 +92,6 @@ test("a card's row goes to the card and is muted until the card is kept", async 
   expect((p.doc.activeElement as HTMLElement).dataset.card).toBe(kept);
 });
 
-test("Timeline is on the shelf marked soon, opens its explanation, and makes no rows", async () => {
-  await published();
-  expect(p.q('.shelf [data-lens="timeline"]').textContent).toBe("Timeline T · soon");
-  expect(p.q('.shelf [data-lens="timeline"]').classList.contains("soon")).toBe(true);
-  p.press("t");
-  expect(p.q(".lens").textContent).toContain("on the data's own time axis");
-  expect(p.all(".timeline-row")).toEqual([]);
-});
-
 test("the Worklog takes in entries as they arrive and keeps the filter", async () => {
   await published();
   p.press("w");

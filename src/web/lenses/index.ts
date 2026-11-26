@@ -5,7 +5,7 @@ import { makeNarrative } from "./narrative";
 import { makePipeline } from "./pipeline";
 import { makeReplay } from "./replay";
 import { makeSteps } from "./steps";
-import { makeSoon } from "./soon";
+import { makeTimeline } from "./timeline";
 import { makeWorklog } from "./worklog";
 import type { LensId, Open } from "../app";
 import type { Ui, View } from "../ui";
@@ -16,7 +16,7 @@ export const LENSES: LensDef[] = [
   { id: "agent", key: "a", title: "Agent", make: (ui, open) => makeAgent(ui, open) },
   { id: "steps", key: "s", title: "Steps", make: (ui, open, arg) => makeSteps(ui, open, arg) },
   { id: "narrative", key: "r", title: "Narrative", make: (ui, open, arg) => makeNarrative(ui, open, arg) },
-  { id: "timeline", key: "t", title: "Timeline", soon: true, make: (ui) => makeSoon(ui, "Timeline", "Soon: what was observed, on the data's own time axis. What the system did is in the Worklog (W).") },
+  { id: "timeline", key: "t", title: "Timeline", make: (ui, open) => makeTimeline(ui, open) },
   { id: "worklog", key: "w", title: "Worklog", make: (ui, open) => makeWorklog(ui, open) },
   { id: "discarded", key: "d", title: "Discarded", make: (ui, open) => makeDiscarded(ui, open) },
   { id: "jobs", key: "b", title: "Jobs", make: (ui, open) => makeJobs(ui, open) },

@@ -282,3 +282,18 @@ kbd { font-family: var(--mono); font-size: 12px; background: var(--panel-2); bor
 .playbook-trail .lookup.partial, .playbook-trail .lookup.failed, .playbook-trail .lookup.refused, .playbook-trail .lookup.needs_budget, .playbook-trail .caveat, .playbook-trail .status.interrupted { color: var(--amber); }
 .playbook-trail .belongs-verdict { font-weight: 600; margin: 0 0 4px; }
 .playbook-trail .belongs-line { margin: 0; }
+
+/* ---------- Timeline lens ---------- */
+.lens-timeline .tl-head { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; justify-content: space-between; }
+.lens-timeline .tl-axis { margin: 0; color: var(--muted); font-variant-numeric: tabular-nums; }
+.lens-timeline .tl-notes p { margin: 2px 0; color: var(--amber); }
+.lens-timeline .tl-row { display: grid; grid-template-columns: minmax(120px, 22%) 1fr; gap: 2px 8px; align-items: center; padding: 2px 0; }
+.lens-timeline .tl-label { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-color: transparent; background: transparent; }
+.lens-timeline .tl-strip { width: 100%; height: 20px; background: var(--panel-2); border-radius: var(--radius); }
+.lens-timeline .tl-window { fill: var(--accent); opacity: 0.12; }
+.lens-timeline .tl-mark { cursor: pointer; }
+.lens-timeline .tl-span, .lens-timeline .tl-point { fill: var(--blue); }
+.lens-timeline .tl-subject .tl-span, .lens-timeline .tl-subject .tl-point { fill: var(--violet); }
+.lens-timeline .tl-mark:hover .tl-span, .lens-timeline .tl-mark:hover .tl-point { fill: var(--accent); }
+.lens-timeline .tl-detail { grid-column: 2; margin: 0; padding-left: 16px; overflow-wrap: anywhere; }
+.lens-timeline .tl-more { color: var(--muted); }
