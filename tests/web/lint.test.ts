@@ -22,6 +22,7 @@ const BANNED: [string, RegExp][] = [
 const HANDLER_ATTRIBUTE = /\bsetAttribute(?:NS)?\s*\([^)]*?["'`]\s*on/i;
 /** What dom.ts alone may use. */
 const DOM_ONLY = new Set(["setAttribute", "createElement", "href or src", "setAttributeNode"]);
+const SVG_ONLY = new Set(["setAttribute", "createElement"]);
 
 const SAMPLES: Record<string, string> = {
   innerHTML: "el.innerHTML = x", outerHTML: "el.outerHTML = x", insertAdjacentHTML: `el.insertAdjacentHTML("beforeend", x)`, "document.write": "document.write(x); document . writeln(x)",
@@ -61,9 +62,9 @@ test("nothing under src/web uses an HTML sink", () => {
   expect(scanned.length).toBeGreaterThan(5);
   for (const file of scanned) {
     const text = code(readFileSync(file, "utf8"));
-    const isDom = file === join(WEB, "dom.ts");
-    for (const [name, re] of BANNED) {
-      if (isDom && DOM_ONLY.has(name)) continue;
+        for (const [name, re] of BANNED) {
+      if (file === join(WEB, "dom.ts") && DOM_ONLY.has(name)) continue;
+      if (file === join(WEB, "svg.ts") && SVG_ONLY.has(name)) continue;
       if (re.test(text)) violations.push(`${relative(REPO, file)}: ${name}`);
     }
     if (HANDLER_ATTRIBUTE.test(text)) violations.push(`${relative(REPO, file)}: setAttribute("on...")`);
@@ -105,6 +106,14 @@ test("the dom helper's attribute names are a fixed list, none starting with on",
   const names = [...text.matchAll(/setAttribute\(\s*"([^"]+)"/g)].map((m) => m[1]!);
   expect(names.length).toBeGreaterThan(0);
   expect(names.filter((n) => /^on/i.test(n))).toEqual([]);
+});
+
+test("the svg helper writes attribute names from a fixed list, none starting with on", () => {
+  const text = code(readFileSync(join(WEB, "svg.ts"), "utf8"));
+  const names = [...text.matchAll(/setAttribute\(\s*"([^"]+)"/g)].map((m) => m[1]!);
+  expect(names.length).toBeGreaterThan(0);
+  expect(names.filter((n) => /^on/i.test(n))).toEqual([]);
+  expect(text).not.toMatch(/\bstyle\b|href/);
 });
 
 test("src/web imports only src/web, src/core/state and src/core/wire (and the shared type files)", () => {

@@ -1,0 +1,27 @@
+bun test v1.3.14 (0d9b296a)
+
+tests/web/svg.test.ts:
+
+# Unhandled error between tests
+-------------------------------
+error: Cannot find module '../../src/web/svg' from '/home/ansible/Research-Workbench/tests/web/svg.test.ts'
+-------------------------------
+
+
+tests/web/lint.test.ts:
+107 |   expect(names.length).toBeGreaterThan(0);
+108 |   expect(names.filter((n) => /^on/i.test(n))).toEqual([]);
+109 | });
+110 | 
+111 | test("the svg helper writes attribute names from a fixed list, none starting with on", () => {
+112 |   const text = code(readFileSync(join(WEB, "svg.ts"), "utf8"));
+                          ^
+error: ENOENT: no such file or directory, open '/home/ansible/Research-Workbench/src/web/svg.ts'
+      at <anonymous> (/home/ansible/Research-Workbench/tests/web/lint.test.ts:112:21)
+(fail) the svg helper writes attribute names from a fixed list, none starting with on [0.18ms]
+
+ 7 pass
+ 2 fail
+ 1 error
+ 50 expect() calls
+Ran 9 tests across 2 files. [278.00ms]
