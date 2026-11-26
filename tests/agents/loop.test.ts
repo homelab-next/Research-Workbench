@@ -443,11 +443,14 @@ test("a refused tool.called ends with error and the tool is not run", async () =
   for (const c of ofType("tool.called")) expect(ofType("tool.returned").filter((e) => e.cause === c.seq).length).toBe(1);
 });
 
-test("extractJson on 1 MiB of open braces is linear", () => {
-  const t0 = performance.now();
-  expect(extractJson("{".repeat(1024 * 1024))).toBeNull();
+test("extractJson on open braces grows with the input, not with its square", () => {
+  const best = (n: number): number => {
+    let ms = Infinity;
+    for (let i = 0; i < 3; i++) { const t0 = performance.now(); expect(extractJson("{".repeat(n))).toBeNull(); ms = Math.min(ms, performance.now() - t0); }
+    return Math.max(ms, 0.25);
+  };
+  expect(best(1024 * 1024) / best(128 * 1024)).toBeLessThan(24);   // linear is about 8; quadratic is about 64
   expect(extractJson("```\n".repeat(200_000))).toBeNull();
-  expect(performance.now() - t0).toBeLessThan(200);
 });
 
 test("negative, fractional and non-finite usage is clamped to non-negative integers", async () => {
