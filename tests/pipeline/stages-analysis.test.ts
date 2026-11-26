@@ -162,6 +162,10 @@ test("an answer with an empty required section is re-asked naming it, and the st
   await go(r);
   const reask = (JSON.parse(requestText("analyst", 2)) as { messages: { role: string; content: string }[] }).messages.at(-1)!;
   expect(reask).toEqual({ role: "user", content: "The draft still has no alternatives; propose them with propose_narrative, then answer" });
+  // the request after the re-ask forces propose_narrative, its section narrowed to the one missing
+  const forced = JSON.parse(requestText("analyst", 2)) as { tool_choice: unknown; tools: { name: string; parameters: { properties: { section?: { enum: string[] } } } }[] };
+  expect(forced.tool_choice).toEqual({ type: "function", function: { name: "propose_narrative" } });
+  expect(forced.tools.find((t) => t.name === "propose_narrative")!.parameters.properties.section!.enum).toEqual(["alternatives"]);
   expect(finished("assemble")[0]!.payload).toMatchObject({ outcome: "pass" });
   expect(f.s.state.drafts[0]!.product.alternatives).toBe("a misconfigured proxy");
 });

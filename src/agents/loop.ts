@@ -1,4 +1,5 @@
 import type { Json } from "../core/canonical";
+import type { Forced } from "./draft";
 import { isPlainObject, parseJson } from "../core/canonical";
 import type { Schema } from "../core/schema";
 import { validate } from "../core/schema";
@@ -45,6 +46,9 @@ export interface AgentSpec {
   lacking?: () => string[];
   /** The re-ask for an answer given while `lacking` names something. */
   lackingAsk?: (missing: string[]) => string;
+  /** After that re-ask, the tool each request makes the model call while `lacking` names something (tool_choice names it, its parameters
+   * narrowed); once nothing is missing the next request is the answer turn (tool_choice none, structured output). Absent: nothing is forced. */
+  force?: (missing: string[]) => Forced | null;
   /** The seq of the entry this work answers (a question): put on the agent's own request and block entries, so a reader links them to it by cause rather than by position. */
   cause?: number;
   /** An optional fast model that takes the tool-choosing turns only; the stage's model writes the answer. Absent: the stage's model takes every turn. */
@@ -155,6 +159,10 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
   let reasked = false;
   // set when a routing turn's reply held no tool call: from then on the stage's model takes every turn, with no tool on offer
   let answerNow = false;
+  // set by the re-ask over an unfinished draft when the spec can force a tool: from then on each request forces what is still missing
+  let forcing = false;
+  // set when the endpoint refused a tool_choice naming a tool (400): from then on a forced request sends "required"
+  let namedRefused = false;
   // the failed attempt of this turn that is being made once more, and the seq of its response, which causes the new request
   let failedOnce: Attempt | null = null;
   let retryCause: number | null = null;
@@ -189,13 +197,21 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     const ordinal = session.entries().filter((e) => e.type === "model.request" && e.actor.kind === "agent" && e.actor.id === actor.id
       && e.payload.provider === via.id && e.payload.model === viaModel).length;
     // the task text says which turn this is; on the last the reply can only be the answer: no tool is offered to run, and output is structured
-    const sent = messages.map((m, i) => (i === 1 ? { ...m, content: `${spec.task}\n\n${turnLine(turn + 1, maxTurns, spec.lacking?.() ?? [])}` } : m));
-    const req: TurnRequest = { model: viaModel, effort: viaEffort, messages: sent, tools: toolSpecs(spec.tools, ctx), key: actor.id, ordinal };
+    const missing = spec.lacking?.() ?? [];
+    const sent = messages.map((m, i) => (i === 1 ? { ...m, content: `${spec.task}\n\n${turnLine(turn + 1, maxTurns, missing)}` } : m));
+    // after the re-ask over an unfinished draft: what is missing is forced, one request at a time; when nothing is, this is the answer turn
+    const candidate = forcing && !last && !answerNow && missing.length > 0 ? spec.force?.(missing) ?? null : null;
+    const forced = candidate !== null && (spec.tools as readonly string[]).includes(candidate.tool) ? candidate : null;
+    const answerTurn = forcing && !last && missing.length === 0;
+    const offered = toolSpecs(spec.tools, ctx).map((t) => (forced?.narrow !== undefined && t.name === forced.tool ? { ...t, parameters: forced.narrow(t.parameters) } : t));
+    const req: TurnRequest = { model: viaModel, effort: viaEffort, messages: sent, tools: offered, key: actor.id, ordinal };
     if (spec.sampling !== undefined) req.sampling = spec.sampling;
     if (spec.max_output_tokens !== undefined) req.max_output_tokens = spec.max_output_tokens;
     if (spec.request_extra !== undefined) req.request_extra = spec.request_extra;
-    if (last || answerNow) req.tool_choice = "none";
-    if ((reasked || last || answerNow) && spec.schema !== null && via.structured_output === true) req.response_format = { name: spec.schema_id ?? "output", schema: spec.schema };
+    if (last || answerNow || answerTurn) req.tool_choice = "none";
+    else if (forced !== null) req.tool_choice = namedRefused ? "required" : { type: "function", function: { name: forced.tool } };
+    const note = forced !== null && namedRefused ? `the endpoint refused a tool_choice naming ${forced.tool} (400); "required" was sent instead` : null;
+    if ((reasked || last || answerNow) && forced === null && spec.schema !== null && via.structured_output === true) req.response_format = { name: spec.schema_id ?? "output", schema: spec.schema };
     const body = via.body(req);
     const messagesBlob = put(body);
     let requestId = "";
@@ -203,7 +219,7 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
       requestId = ids.next("request");
       return [{
         type: "model.request", actor: who, ...link, ...(retryCause === null ? because : { cause: retryCause }),
-        payload: { request: requestId, provider: via.id, model: viaModel, effort: viaEffort, where: via.where, marking, pack: spec.pack.items, left_out: spec.pack.left_out, messages: messagesBlob, tools: [...spec.tools] },
+        payload: { request: requestId, provider: via.id, model: viaModel, effort: viaEffort, where: via.where, marking, pack: spec.pack.items, left_out: spec.pack.left_out, messages: messagesBlob, tools: [...spec.tools], ...(note === null ? {} : { note }) },
       }];
     });
     // 4. turn
@@ -260,6 +276,13 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
         payload: { request: requestId, response: raw, stop: "error", usage: { input: 0, output: 0, reasoning: 0 }, served_by: clip(viaModel, NAME_CHARS), reasoning: null },
       }], (s) => { seq = s; });
       if (!wrote) return failed(message);
+      // an endpoint that refuses a named tool_choice is asked again, for this turn, with "required"
+      if (typeof req.tool_choice === "object" && result.status === 400 && !namedRefused) {
+        namedRefused = true;
+        retryCause = seq;
+        turn--;
+        continue;
+      }
       const t = result.transient;
       if (t === undefined) return { kind: "error", message, ...(result.cause === undefined ? {} : { cause: result.cause }) };
       const end = again(t.kind === "timeout" ? t : { kind: "transport", message }, seq, message);
@@ -370,6 +393,7 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
         // a complete-looking answer over an unfinished draft: it uses the one re-ask, and the work goes on with its tools
         if (++failures >= 2) return { kind: "invalid", errors: [`the draft still has no ${missing.join(", ")}`], returned: "an answer over an unfinished draft", calls };
         reasked = true;
+        forcing = spec.force !== undefined;
         messages.push({ role: "assistant", content: result.content }, { role: "user", content: spec.lackingAsk?.(missing) ?? `The draft still has no ${missing.join(", ")}; finish it, then answer` });
         continue;
       }

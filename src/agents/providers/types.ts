@@ -20,12 +20,16 @@ export interface TurnRequest { model: string; effort: string | null; messages: C
   sampling?: Sampling; max_output_tokens?: number;
   /** This request's own extra body fields (a stage's request_extra): each wins over the provider's, key by key. */
   request_extra?: RequestExtra;
-  /** "none" on an agent's last turn: the reply may hold no tool call, only the answer. Sent only when the request has tools. */
-  tool_choice?: "none" }
+  /** "none" on an agent's last turn: the reply may hold no tool call, only the answer. A named tool when the loop forces one (a draft's missing
+   * section), or "required" where the endpoint refused a named one. Sent only when the request has tools. */
+  tool_choice?: ToolChoice }
+export type ToolChoice = "none" | "required" | { type: "function"; function: { name: string } };
 export type TurnResult =
   | { kind: "answer"; content: string; reasoning: string | null; tool_calls: ToolCall[]; stop: "end" | "tool_calls" | "length"; usage: Usage; served_by: string; raw: Uint8Array }
   | { kind: "declined"; reason: string; served_by: string; raw: Uint8Array }
   | { kind: "error"; message: string; raw: Uint8Array | null; transient?: Transient;
+      /** The HTTP status when the endpoint answered with one other than 200. */
+      status?: number;
       /** "context": the endpoint refused the request as too big for the model's context. */
       cause?: "context" };
 /** A failure that may not recur when the same request is made again: no answer in time, or the endpoint could not be reached. */

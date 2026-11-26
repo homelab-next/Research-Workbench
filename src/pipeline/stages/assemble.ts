@@ -6,7 +6,7 @@ import type { Schema } from "../../core/schema";
 import type { CaseSession } from "../../core/session";
 import { ContextError, packPart } from "../../agents/context";
 import type { PackPart } from "../../agents/context";
-import { buildProduct, lackingOf, carriedCites, composeChange, DraftWork, draftOf, termsOf } from "../../agents/draft";
+import { buildProduct, forcedProposal, lackingOf, carriedCites, composeChange, DraftWork, draftOf, termsOf } from "../../agents/draft";
 import { ToolError } from "../../agents/tools/kit";
 import type { StageEnd, StageEnv } from "../engine";
 import { reviewPointsPart } from "../review-points";
@@ -140,7 +140,7 @@ export async function assembleRunner(env: StageEnv): Promise<StageEnd> {
     const tools = sections.length === 0 ? "propose_assessment" : sections.length === missing.length ? "propose_narrative" : "propose_narrative and propose_assessment";
     return `The draft still has no ${missing.join(", ")}; propose ${sections.length === 0 && missing.length === 1 ? "one" : "them"} with ${tools}, then answer`;
   };
-  const end = await stageAgent(env, { actor_id: actorId, task, extras, draft: work, draft_hash: latest?.hash ?? null, lacking, lackingAsk, ...narrowing });
+  const end = await stageAgent(env, { actor_id: actorId, task, extras, draft: work, draft_hash: latest?.hash ?? null, lacking, lackingAsk, force: forcedProposal, ...narrowing });
   if (end.kind !== "output") return end;
   const output = end.output as { change_kind?: string; change_detail?: string; assumptions?: string[] };
 

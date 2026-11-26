@@ -177,7 +177,9 @@ export interface Payloads {
   "playbook.finished": { job: string; outcome: StepOutcome; end_step: string | null; cards: string[]; end_cards: string[]; caveats: string[]; lookups: number; reused: number };
   "verify.run": { original: string; rerun: string | null; card: string; outcome: "matches" | "differs" | "could_not_run"; detail: string };
   // models
-  "model.request": { request: string; provider: string; model: string; effort: string | null; where: Where; marking: Marking; pack: PackItem[]; left_out: PackItem[]; messages: BlobRef; tools: string[] };
+  "model.request": { request: string; provider: string; model: string; effort: string | null; where: Where; marking: Marking; pack: PackItem[]; left_out: PackItem[]; messages: BlobRef; tools: string[];
+    /** What the request did other than as asked, in a line: an endpoint refused a named tool_choice, so "required" was sent. Absent otherwise. */
+    note?: string };
   "model.response": { request: string; response: BlobRef; stop: "end" | "tool_calls" | "length" | "error"; usage: { input: number; output: number; reasoning: number }; served_by: string; reasoning: BlobRef | null };
   "model.declined": { request: string; reason: string };
   "model.blocked": { stage: string; marking: Marking; model: string; where: Where };

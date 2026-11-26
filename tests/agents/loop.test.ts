@@ -8,6 +8,7 @@ import { EMPTY_REASK, extractJson, MAX_TURNS, runAgent, turnLine } from "../../s
 import type { AgentEnd, AgentSpec } from "../../src/agents/loop";
 import type { Pack } from "../../src/agents/pack";
 import { assemblePack } from "../../src/agents/pack";
+import { DraftWork, forcedProposal, REQUIRED_SECTIONS } from "../../src/agents/draft";
 import { ScriptedProvider } from "../../src/agents/providers/scripted";
 import type { ScriptReply } from "../../src/agents/providers/scripted";
 import type { Provider, TurnRequest } from "../../src/agents/providers/types";
@@ -841,4 +842,63 @@ test("the turn line names what the draft still lacks on the last two turns only"
   expect(turnLine(15, 16, ["alternatives", "findings"])).toBe("Turn 15 of 16. Two turns left: finish your proposals and give your final answer next turn. The draft still has no alternatives, findings.");
   expect(turnLine(16, 16, ["alternatives"])).toContain("The draft still has no alternatives.");
   expect(turnLine(16, 16, [])).not.toContain("still has no");
+});
+
+// ---- Task 13: a missing section is forced, not requested ----
+type Body = Record<string, Json>;
+const narrativeEnum = (b: Body): string[] => {
+  const tools = b.tools as { function: { name: string; parameters: { properties: { section: { enum: string[] } } } } }[];
+  return tools.find((t) => t.function.name === "propose_narrative")!.function.parameters.properties.section.enum;
+};
+const forcedCall = (b: Body) => ({ json: { choices: [{ finish_reason: "tool_calls", message: { content: "", tool_calls: [{ id: `c-${narrativeEnum(b)[0]}`, type: "function", function: { name: "propose_narrative", arguments: JSON.stringify({ why: "it is missing", section: narrativeEnum(b)[0], text: "stated", cites: [] }) } }] } }] } });
+const answer = (n: number) => ({ json: { choices: [{ finish_reason: "stop", message: { content: `{"n":${n}}` } }] } });
+const NAMED = { type: "function", function: { name: "propose_narrative" } };
+
+function drafting(): { work: DraftWork; over: Partial<AgentSpec> } {
+  const work = new DraftWork(null);
+  work.setSection("summary", "s", []);
+  work.setSection("gaps_and_limits", "g", []);
+  f.ctx.draft = work;
+  const lacking = (): string[] => REQUIRED_SECTIONS.filter((k) => work.sections[k].trim() === "");
+  return { work, over: { tools: [...ALL, "propose_narrative"], schema: SCHEMA, schema_id: "assemble-output", lacking, force: forcedProposal } };
+}
+
+test("an answer over missing sections forces propose_narrative, narrowed to what is missing, one at a time; then the answer turn is normal", async () => {
+  const { work, over } = drafting();
+  const m = startModelStandin({ replies: [answer(1), forcedCall, forcedCall, answer(2)] });
+  const p = new LocalProvider({ id: "lm", base_url: m.url, where: "machine", credential: null, secrets: new Secrets({}, null), context: null, efforts: [], timeout_ms: 5000 });
+  try {
+    const end = await runAgent(f.s, spec(p, over));
+    expect(end).toMatchObject({ kind: "done", output: { n: 2 } });
+    const bodies = m.requests.filter((r) => r.method === "POST").map((r) => JSON.parse(r.body) as Body);
+    expect(bodies).toHaveLength(4);
+    expect(bodies[1]!.tool_choice).toEqual(NAMED);
+    expect(narrativeEnum(bodies[1]!)).toEqual(["alternatives", "assessment"]);
+    expect(bodies[1]).not.toHaveProperty("response_format");
+    expect(bodies[2]!.tool_choice).toEqual(NAMED);
+    expect(narrativeEnum(bodies[2]!)).toEqual(["assessment"]);
+    expect(bodies[3]!.tool_choice).toBe("none");
+    expect(bodies[3]!.response_format).toMatchObject({ type: "json_schema", json_schema: { name: "assemble-output" } });
+    expect(narrativeEnum(bodies[3]!)).toEqual(["summary", "gaps_and_limits", "alternatives", "assessment"]);
+    expect(work.sections).toMatchObject({ alternatives: "stated", assessment: "stated" });
+    const recorded = ofType("model.request").map((e) => JSON.parse(text(e.payload.messages)) as Body);
+    expect(recorded).toEqual(bodies);
+  } finally { m.stop(); f.ctx.draft = null; }
+});
+
+test("an endpoint that refuses a named tool_choice (400) is sent required, and the request says so", async () => {
+  const { over } = drafting();
+  const m = startModelStandin({ replies: [answer(1), { status: 400, json: { error: { message: "tool_choice must be none, auto or required" } } }, forcedCall, forcedCall, answer(2)] });
+  const p = new LocalProvider({ id: "lm", base_url: m.url, where: "machine", credential: null, secrets: new Secrets({}, null), context: null, efforts: [], timeout_ms: 5000 });
+  try {
+    const end = await runAgent(f.s, spec(p, over));
+    expect(end).toMatchObject({ kind: "done", output: { n: 2 } });
+    const bodies = m.requests.filter((r) => r.method === "POST").map((r) => JSON.parse(r.body) as Body);
+    expect(bodies.map((b) => b.tool_choice ?? null)).toEqual([null, NAMED, "required", "required", "none"]);
+    expect(narrativeEnum(bodies[2]!)).toEqual(["alternatives", "assessment"]);
+    const reqs = ofType("model.request");
+    expect(reqs[1]!.payload.note).toBeUndefined();
+    expect(reqs[2]!.payload.note).toBe("the endpoint refused a tool_choice naming propose_narrative (400); \"required\" was sent instead");
+    expect(reqs[2]!.cause).toBe(ofType("model.response")[1]!.seq);
+  } finally { m.stop(); f.ctx.draft = null; }
 });

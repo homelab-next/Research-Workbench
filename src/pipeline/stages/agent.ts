@@ -11,7 +11,7 @@ import { runAgent } from "../../agents/loop";
 import { assemblePack, fitProblem, packBudget, slotContext } from "../../agents/pack";
 import { DEFAULT_CONTEXT } from "../../agents/providers/local";
 import type { ModelInfo, Provider } from "../../agents/providers/types";
-import type { DraftWork } from "../../agents/draft";
+import type { DraftWork, Forced } from "../../agents/draft";
 import type { ToolContext, ToolName } from "../../agents/tools";
 import type { SeekLimits } from "../../modules/seeker";
 import { DEFAULT_LIMITS } from "../../modules/seeker";
@@ -70,6 +70,8 @@ export async function stageAgent(env: StageEnv, opts: {
   /** What the work still lacks (names): see AgentSpec.lacking. */
   lacking?: () => string[];
   lackingAsk?: (missing: string[]) => string;
+  /** What is forced while something is lacking: see AgentSpec.force. */
+  force?: (missing: string[]) => Forced | null;
 }): Promise<AgentStageEnd> {
   const { session, deps, stage } = env;
   const title = titleOf(env);
@@ -109,6 +111,7 @@ export async function stageAgent(env: StageEnv, opts: {
     ...(opts.explain === undefined ? {} : { explain: opts.explain }),
     ...(opts.lacking === undefined ? {} : { lacking: opts.lacking }),
     ...(opts.lackingAsk === undefined ? {} : { lackingAsk: opts.lackingAsk }),
+    ...(opts.force === undefined ? {} : { force: opts.force }),
     ...(stage.sampling === null || stage.sampling === undefined ? {} : { sampling: stage.sampling }),
     ...(stage.max_output_tokens === null || stage.max_output_tokens === undefined ? {} : { max_output_tokens: stage.max_output_tokens }),
     ...(stage.max_turns === null || stage.max_turns === undefined ? {} : { max_turns: stage.max_turns }),

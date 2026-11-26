@@ -45,7 +45,7 @@ const dec = new TextDecoder();
 const ECHOED = "the endpoint echoed the credential; response refused";
 
 class Failure extends Error {
-  constructor(message: string, readonly raw: Uint8Array | null = null, readonly transient: Transient | null = null, readonly cause_: "context" | null = null) { super(message); }
+  constructor(message: string, readonly raw: Uint8Array | null = null, readonly transient: Transient | null = null, readonly cause_: "context" | null = null, readonly status: number | null = null) { super(message); }
 }
 
 /** What an endpoint says a request got wrong. */
@@ -198,7 +198,7 @@ export class LocalProvider implements Provider {
     };
     if (req.tools.length > 0) {
       out.tools = req.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters as Json } }));
-      if (req.tool_choice !== undefined) out.tool_choice = req.tool_choice;
+      if (req.tool_choice !== undefined) out.tool_choice = req.tool_choice as Json;
     }
     out.stream = false;
     out.max_tokens = req.max_output_tokens ?? this.max_output_tokens;
@@ -217,7 +217,7 @@ export class LocalProvider implements Provider {
     try {
       return await this.#turn(req);
     } catch (err) {
-      if (err instanceof Failure) return { kind: "error", message: err.message, raw: err.raw, ...(err.transient === null ? {} : { transient: err.transient }), ...(err.cause_ === null ? {} : { cause: err.cause_ }) };
+      if (err instanceof Failure) return { kind: "error", message: err.message, raw: err.raw, ...(err.transient === null ? {} : { transient: err.transient }), ...(err.cause_ === null ? {} : { cause: err.cause_ }), ...(err.status === null ? {} : { status: err.status }) };
       return { kind: "error", message: this.#redact(`the reply could not be read: ${(err as Error).message ?? String(err)}`), raw: null };
     }
   }
@@ -233,8 +233,8 @@ export class LocalProvider implements Provider {
     const { raw, parsed } = r;
     if (r.status !== 200) {
       const said = this.#endpointSaid(parsed);
-      if (said !== "" && CONTEXT_RE.test(said)) throw new Failure(`the request did not fit the model's context (the endpoint said: ${said})`, raw, null, "context");
-      throw new Failure(said === "" ? `the endpoint answered ${r.status}` : `the endpoint answered ${r.status}: ${said}`, raw);
+      if (said !== "" && CONTEXT_RE.test(said)) throw new Failure(`the request did not fit the model's context (the endpoint said: ${said})`, raw, null, "context", r.status);
+      throw new Failure(said === "" ? `the endpoint answered ${r.status}` : `the endpoint answered ${r.status}: ${said}`, raw, null, null, r.status);
     }
     if (parsed === undefined) throw new Failure("the reply is not JSON", raw);
     const choice = isPlainObject(parsed) && Array.isArray(parsed.choices) ? parsed.choices[0] : undefined;
