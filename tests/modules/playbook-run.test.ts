@@ -168,7 +168,7 @@ test("a step that could not be decided skips what depends on it", async () => {
   renameSync(join(sample.root, "data", "assets.csv"), join(sample.root, "data", "assets.gone"));
   const { job, end } = await run([{ type: "address", value: START }]);
   expect(step(job, "asset").lookups[0]!.outcome).toBe("failed");
-  expect(step(job, "lease")).toMatchObject({ status: "skipped", reason: "could not tell whether asset returned rows" });
+  expect(step(job, "lease")).toMatchObject({ status: "skipped", reason: "could not tell whether asset was empty" });
   expect(step(job, "names").status).toBe("ran");
   expect(end).toMatchObject({ outcome: "failed", end_step: "asset" });
 });
@@ -275,4 +275,60 @@ test("bad inputs are refused before anything is written", () => {
   expect(() => beginPlaybook(s, deps, startOf([address(START)], triage(), { actor: asAgent }))).toThrow(Refused);
   expect(playbookProblem(deps, triage(), [address(START)], WINDOW)).toBeNull();
   expect(entries().length).toBe(n);
+});
+
+/** The sample's asset list without the rows for these addresses (so a lookup of them comes back empty, a proven negative), reloaded. */
+const assetsWithout = (...gone: string[]): RunnerDeps => reloaded(() => {
+  const f = join(sample.root, "data", "assets.csv");
+  writeFileSync(f, readFileSync(f, "utf8").split("\n").filter((l) => !gone.some((g) => l.includes(`,${g},`))).join("\n"));
+});
+
+test("a fan-out step with values left unfollowed is not empty: it is blocked, and a branch on its empty is not taken", async () => {
+  // final review I1: twenty of twenty-one addresses were never asked, yet the step read empty and the sub-goal "no, proven"
+  const d = assetsWithout("192.0.2.28");
+  const fan = written("fan-left", {
+    inputs: [{ name: "address", type: "address" }],
+    steps: [
+      { id: "names", pivot: "address_to_domains", from: "input.address" },
+      { id: "clients", pivot: "domain_to_clients", from: "names" },
+      { id: "asset", pivot: "address_to_asset", from: "clients", max_values: 1 },
+      { id: "lease", pivot: "address_to_asset_by_lease", from: "clients", when: "asset.empty", max_values: 1 },
+    ],
+    end: ["asset"],
+  });
+  const start = startOf([{ type: "address", value: "203.0.113.30" }], fan);
+  const job = beginPlaybook(s, d, start);
+  const end = (await runPlaybook(s, d, job, start))!;
+  const a = step(job, "asset");
+  expect(a.left).toBeGreaterThan(0);
+  expect(a.lookups.every((l) => l.outcome === "empty")).toBe(true);
+  expect(end.outcome).toBe("blocked");
+  expect(end.caveats.some((c) => c.startsWith("asset: ") && c.includes("values not followed"))).toBe(true);
+  expect(step(job, "lease")).toMatchObject({ status: "skipped", reason: "could not tell whether asset was empty" });
+});
+
+test("a step fed by a partial step is not empty when every lookup comes back empty: it is blocked", async () => {
+  // final review I1: the upstream step was partial, so the list the end step walked may be short
+  const wide = "203.0.113.30";
+  const peers = await runPivot(s, deps, { pivot: "address_to_internal_peers", value: wide, window: WINDOW, why: "w", actor: agent });
+  const first = peers.status === "done" ? [...new Set(peers.data.flatMap((r) => r.map(String)))] : [];
+  expect(first.length).toBeGreaterThan(1);
+  const d = reloaded(() => {
+    const path = join(sample.root, "sources", "flows.yaml");
+    writeFileSync(path, readFileSync(path, "utf8").replace("max_rows: 200", "max_rows: 1"));
+    const f = join(sample.root, "data", "assets.csv");
+    writeFileSync(f, readFileSync(f, "utf8").split("\n").filter((l) => !first.some((g) => l.includes(`,${g},`))).join("\n"));
+  });
+  const fed = written("fed-partial", {
+    inputs: [{ name: "address", type: "address" }],
+    steps: [{ id: "peers", pivot: "address_to_internal_peers", from: "input.address" }, { id: "asset", pivot: "address_to_asset", from: "peers" }],
+    end: ["asset"],
+  });
+  const start = startOf([{ type: "address", value: wide }], fed);
+  const job = beginPlaybook(s, d, start);
+  const end = (await runPlaybook(s, d, job, start))!;
+  expect(step(job, "peers").lookups[0]!.outcome).toBe("partial");
+  expect(step(job, "asset").lookups.length).toBeGreaterThan(0);
+  expect(step(job, "asset").lookups.every((l) => l.outcome === "empty")).toBe(true);
+  expect(end.outcome).toBe("blocked");
 });

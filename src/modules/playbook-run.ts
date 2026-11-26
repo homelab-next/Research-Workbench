@@ -59,10 +59,16 @@ export function beginPlaybook(session: CaseSession, deps: RunnerDeps, start: Pla
   return job;
 }
 
-/** A step's lookups as the rules read them: rows when any lookup has a row; empty when it was walked whole and every lookup came back empty. */
+/**
+ * A step's lookups as the rules read them: rows when any lookup has a row; empty only when it was walked whole and every lookup came back
+ * empty. `whole` is false when the run halted in it, when values were left unfollowed, or when the step it starts from was not complete
+ * (a partial, failed, refused or waiting lookup, or values left there): the list it walked may be short, so nothing it did not find is proven.
+ */
 interface Walked { status: "ran" | "skipped"; lookups: PlaybookLookup[]; found: string[]; whole: boolean }
 const hasRows = (w: Walked): boolean => w.lookups.some((l) => l.rows !== null && l.rows > 0);
 const isEmpty = (w: Walked): boolean => w.whole && w.lookups.length > 0 && w.lookups.every((l) => l.outcome === "empty");
+/** Every value a step was given was looked up and answered in full: what it found is the whole list. */
+const complete = (w: Walked): boolean => w.status === "ran" && w.whole && w.lookups.every((l) => l.outcome === "answered" || l.outcome === "empty");
 
 function outcomeOf(w: Walked): StepOutcome {
   if (w.lookups.some((l) => l.outcome === "partial")) return "partial";
@@ -78,7 +84,7 @@ function skipReason(step: PlaybookStep, done: ReadonlyMap<string, Walked>, type:
     const dep = step.when.step;
     const w = done.get(dep)!;
     if (w.status === "skipped") return `${dep} was skipped`;
-    if (!hasRows(w) && !isEmpty(w)) return `could not tell whether ${dep} returned rows`;
+    if (!hasRows(w) && !isEmpty(w)) return step.when.is === "empty" ? `could not tell whether ${dep} was empty` : `could not tell whether ${dep} returned rows`;
     if (step.when.is === "rows" && !hasRows(w)) return `${dep} returned no rows`;
     if (step.when.is === "empty" && !isEmpty(w)) return `${dep} returned rows`;
   }
@@ -203,7 +209,11 @@ async function walk(
       if (r.status === "needs_budget") caveat(`${step.id}: ${step.pivot} needs a budget`);
       if (r.status === "done" && r.coverage.kind === "partial") caveat(`${step.id}: partial coverage (${partialText(r)})`);
     }
-    w.whole = !halted;
+    const upstream = "step" in step.from ? done.get(step.from.step)! : null;
+    w.whole = !halted && left === 0 && (upstream === null || complete(upstream));
+    if (!halted && !hasRows(w) && w.lookups.length > 0 && w.lookups.every((x) => x.outcome === "empty") && !w.whole) {
+      caveat(`${step.id}: every lookup came back empty, but not every value was looked up, so this proves nothing`);
+    }
     if (pivot !== null) {
       for (const r of results) for (const o of yielded(pivot, r, deps.observables)) if (!w.found.includes(o.value)) w.found.push(o.value);
     }
