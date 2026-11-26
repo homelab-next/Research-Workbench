@@ -5,6 +5,7 @@ import type { Schema } from "../core/schema";
 import { EMPTY_MEANS, MARKINGS, WHERES } from "../core/types";
 import type { Marking, Where } from "../core/types";
 import type { ObservableType } from "./observables";
+import { PLAYBOOK_SCHEMA } from "./playbooks";
 
 export class ManifestError extends Error {
   constructor(message: string) {
@@ -179,7 +180,7 @@ export function describeErrors(errors: { path: string; message: string }[]): str
 
 /** Checks a whole file's body against the schema for its kind. Returns null for kinds that are not validated here. */
 export function schemaFor(kind: string): Schema | null {
-  return kind === "source" ? SOURCE_SCHEMA : kind === "types" ? TYPES_SCHEMA : kind === "pivots" ? PIVOTS_SCHEMA : null;
+  return kind === "source" ? SOURCE_SCHEMA : kind === "types" ? TYPES_SCHEMA : kind === "pivots" ? PIVOTS_SCHEMA : kind === "playbook" ? PLAYBOOK_SCHEMA : null;
 }
 
 /** Drops object keys that were written with nothing after them, at any depth, so they take their defaults. */

@@ -6,20 +6,23 @@ import { sha256Hex } from "../core/hash";
 import type { Ledger } from "../core/ledger";
 import type { Actor } from "../core/types";
 import type { RootConfig } from "./config";
-import { ManifestError, parseManifestFile, toPivot, toSource, toType, validateBody } from "./manifests";
+import { ManifestError, parseManifestFile, pivotWeight, toPivot, toSource, toType, validateBody } from "./manifests";
 import type { LoadedManifest, PivotManifest, SourceManifest } from "./manifests";
 import { compileType, MAX_VALUE_LENGTH, PATTERN_PROBE_LIMIT_MS, probePattern } from "./observables";
 import type { ObservableType } from "./observables";
+import { fromText, toPlaybook } from "./playbooks";
+import type { PlaybookManifest } from "./playbooks";
 
 export type { LoadedManifest, PivotManifest, QualityNote, SourceManifest, TableManifest, EndpointManifest } from "./manifests";
 export type { ObservableType } from "./observables";
+export type { PlaybookManifest } from "./playbooks";
 
 export interface Problem { root: string; path: string; error: string }
 
 const DEFAULT_ACTOR: Actor = { kind: "system", id: "registry" };
 /** Kinds whose text or schema is put in front of a model or decides what a run does; an untrusted root may not supply them. */
 export const TRUSTED_ONLY_KINDS: readonly string[] = [
-  "model", "script", "check", "stage", "profile", "rules", "persona", "procedure", "skill", "gate", "reference", "objective", "framework", "standard", "schema",
+  "model", "script", "check", "stage", "profile", "rules", "persona", "procedure", "skill", "gate", "playbook", "reference", "objective", "framework", "standard", "schema",
 ];
 const MANIFEST_FILE = /\.(?:ya?ml|md)$/i;
 const key = (kind: string, id: string): string => `${kind}\0${id}`;
@@ -92,6 +95,7 @@ export class Registry {
   private readonly sourceById = new Map<string, SourceManifest>();
   private readonly typeById = new Map<string, ObservableType>();
   private readonly pivotById = new Map<string, PivotManifest>();
+  private readonly playbookById = new Map<string, PlaybookManifest>();
   private roots: RootConfig[] = [];
   private readonly conflicted = new Set<string>();
 
@@ -126,6 +130,22 @@ export class Registry {
   }
   pivot(id: string): PivotManifest | null {
     return this.pivotById.get(id) ?? null;
+  }
+  playbooks(): PlaybookManifest[] {
+    return [...this.playbookById.values()];
+  }
+  playbook(id: string): PlaybookManifest | null {
+    return this.playbookById.get(id) ?? null;
+  }
+  /** The ids of the playbook's pivots whose weight is above zero. */
+  costlyPivots(p: PlaybookManifest): string[] {
+    const ids: string[] = [];
+    for (const s of p.steps) {
+      const pivot = this.pivotById.get(s.pivot);
+      const source = pivot === undefined ? undefined : this.sourceById.get(pivot.source);
+      if (pivot !== undefined && source !== undefined && pivotWeight(pivot, source) > 0 && !ids.includes(pivot.id)) ids.push(pivot.id);
+    }
+    return ids;
   }
   /** The root a path lies in (the longest, if roots are nested), or null. */
   rootOf(path: string): RootConfig | null {
@@ -248,7 +268,9 @@ export class Registry {
         }
       }
     }
+    const playbook = parsed.kind === "playbook" ? toPlaybook(body, hash) : null;
     if (!this.add({ ...base, kind: parsed.kind, id, title, body })) return;
+    if (playbook !== null) this.playbookById.set(id, playbook);
     if (parsed.kind === "source") this.sourceById.set(id, toSource(body, hash, dir, resolve(root.path)));
   }
 
@@ -261,6 +283,7 @@ export class Registry {
     if (kind === "source") this.sourceById.delete(id);
     else if (kind === "pivot") this.pivotById.delete(id);
     else if (kind === "type") this.typeById.delete(id);
+    else if (kind === "playbook") this.playbookById.delete(id);
   }
 
   /** Checks what refers to what, once every file is read: columns to types, then pivots to sources and types. */
@@ -286,6 +309,33 @@ export class Registry {
       else if (missingType !== undefined) reject("pivot", p.id, `pivot "${p.id}": type "${missingType}" is not a known observable type`);
       else if (!Object.values(p.yields).includes(p.to)) reject("pivot", p.id, `pivot "${p.id}": yields maps no column to its target type "${p.to}"`);
     }
+    this.crossCheckPlaybooks();
+  }
+
+  /** A playbook is checked against the pivots it names, once pivots are settled. */
+  private crossCheckPlaybooks(): void {
+    for (const p of this.playbooks()) {
+      const problem = this.playbookProblem(p);
+      if (problem === null) continue;
+      const m = this.manifests.get(key("playbook", p.id))!;
+      this.reject(m.root, m.path, problem);
+      this.drop("playbook", p.id);
+    }
+  }
+
+  private playbookProblem(p: PlaybookManifest): string | null {
+    const typeOf = new Map<string, string>();
+    for (const i of p.inputs) {
+      if (!this.typeById.has(i.type)) return `playbook "${p.id}": input "${i.name}" is typed "${i.type}", which is not a known observable type`;
+    }
+    for (const s of p.steps) {
+      const pivot = this.pivotById.get(s.pivot);
+      if (pivot === undefined) return `playbook "${p.id}": step "${s.id}": pivot "${s.pivot}" is not loaded`;
+      const given = "input" in s.from ? p.inputs.find(i => i.name === (s.from as { input: string }).input)!.type : typeOf.get((s.from as { step: string }).step)!;
+      if (given !== pivot.from) return `playbook "${p.id}": step "${s.id}": pivot "${pivot.id}" takes a ${pivot.from}, but ${fromText(s)} is a ${given}`;
+      typeOf.set(s.id, pivot.to);
+    }
+    return null;
   }
 
   /** Appends module.loaded for each manifest whose content is new to the chain, and module.rejected for each problem not already recorded. */
