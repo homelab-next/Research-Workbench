@@ -3,6 +3,7 @@ import type { CaseState, ConflictState } from "../core/state";
 import { CONFIDENCES } from "../core/types";
 import type { Product, ReviewConflict } from "../core/types";
 import type { Pipeline, Role } from "./manifests";
+import { escapeRe } from "../modules/sqlguard";
 import { findingChanges } from "./review-points";
 
 /** A conflict found and not yet recorded: what `review.conflict` will hold, less its id. */
@@ -162,7 +163,7 @@ export function uncitableNote(state: Readonly<CaseState>, points: readonly strin
     const c = state.cards[id]!;
     if (c.place === "discarded" || c.row_count !== 0) return false;
     if (c.empty === "proven-negative" && c.coverage !== null && c.coverage.kind === "full") return false;
-    return points.some((p) => new RegExp(`(?<![\\w])${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w])`, "i").test(p));
+    return points.some((p) => new RegExp(`(?<![\\w])${escapeRe(id)}(?![\\w])`, "i").test(p));
   }).sort();
   if (ids.length === 0) return null;
   const list = ids.join(", ");
