@@ -2,7 +2,7 @@ import { timelineOf } from "../../core/state/timeline";
 import type { TimelineMark, TimelineModel, TimelineRow } from "../../core/state/timeline";
 import type { Open } from "../app";
 import { cardChip } from "../chips";
-import { clear } from "../dom";
+import { clear, keepFocus, syncList } from "../dom";
 import { makeS } from "../svg";
 import type { Ui, View } from "../ui";
 
@@ -47,7 +47,7 @@ export function makeTimeline(ui: Ui, open: Open): View {
   const empty = h("p", { class: "empty" }, "No card carries an observed time yet. A pivot gives one when its manifest declares times.");
   const el = h("div", { class: "lens lens-timeline", name: "Timeline" }, head, empty, notes, list, more);
   head.append(filter, axis);
-  let seen: unknown = null;
+  let seen: unknown[] | null = null;
   let filterKey = "";
 
   const typeTitle = (id: string): string => ui.ref.types.find((t) => t.id === id)?.title ?? id;
@@ -80,56 +80,76 @@ export function makeTimeline(ui: Ui, open: Open): View {
     return s("svg", { class: "tl-strip", viewBox: [0, 0, WIDTH, 20], stretch: true, hidden: true }, shade, marks);
   };
 
-  const makeRow = (model: TimelineModel, row: TimelineRow, x: (ts: string) => number): HTMLElement => {
+  // What the rows are painted from now: a row is repainted only when its own signature changes.
+  let model: TimelineModel | null = null;
+  let x: (ts: string) => number = () => 0;
+  const painted = new WeakMap<HTMLElement, string>();
+  const sigOf = (m: TimelineModel, row: TimelineRow): string => JSON.stringify([m.from, m.to, m.window, row, expanded.has(row.key)]);
+
+  const fill = (wrap: HTMLElement, row: TimelineRow): void => {
+    const m = model!;
+    const sig = sigOf(m, row);
+    if (painted.get(wrap) === sig) return;
+    painted.set(wrap, sig);
     const full = `${typeTitle(row.type)} ${row.value}`;
-    const detail = h("ul", { class: "tl-detail", hidden: !expanded.has(row.key) },
-      row.marks.map((m) => h("li", null, cardChip(ui, m.card, (c) => nav.focusCard(c)), line(m).slice(m.card.length))));
+    const open = expanded.has(row.key);
+    const detail = h("ul", { class: "tl-detail", hidden: !open },
+      row.marks.map((mk) => h("li", null, cardChip(ui, mk.card, (c) => nav.focusCard(c)), line(mk).slice(mk.card.length))));
     const button = h("button", {
-      type: "button", class: "tl-label", title: full, aria: { expanded: String(expanded.has(row.key)) },
+      type: "button", class: "tl-label", title: full, aria: { expanded: String(open) },
       on: { click: () => {
         if (expanded.has(row.key)) expanded.delete(row.key); else expanded.add(row.key);
-        const again = makeRow(model, row, x);
-        wrap.replaceWith(again);
-        (again.querySelector(".tl-label") as HTMLElement).focus();
+        keepFocus(wrap, () => fill(wrap, row));
       } },
     }, cut(full));
-    const wrap = h("div", { class: "tl-row", data: { key: row.key } }, button, strip(model, row, x), detail);
+    clear(wrap);
+    wrap.append(button, strip(m, row, x), detail);
+  };
+  const makeRow = (row: TimelineRow): HTMLElement => {
+    const wrap = h("div", { class: "tl-row", data: { key: row.key } });
+    fill(wrap, row);
     return wrap;
   };
 
   const note = (cls: string, text: string): HTMLElement => h("p", { class: cls }, text);
 
-  return {
+  const typeBox = (t: string): HTMLElement => h("label", null, h("input", {
+    type: "checkbox", checked: !hiddenTypes.has(t), name: typeTitle(t),
+    on: { change: (e) => { if ((e.target as HTMLInputElement).checked) hiddenTypes.delete(t); else hiddenTypes.add(t); view.update(); } },
+  }), ` ${typeTitle(t)}`);
+
+  const paint = (state: typeof store.shown): void => {
+    const m = timelineOf(state);
+    model = m;
+    empty.hidden = m.rows.length > 0;
+    axis.hidden = m.from === null;
+    axis.textContent = m.from === null || m.to === null ? "" : `${m.from} → ${m.to}`;
+    const types = [...new Set(m.rows.map((r) => r.type))].sort();
+    syncList(filter, types, (t) => t, typeBox, (label, t) => { (label.querySelector("input") as HTMLInputElement).checked = !hiddenTypes.has(t); });
+    clear(notes);
+    if (m.untimed > 0) notes.append(note("tl-untimed", `${m.untimed} ${plural(m.untimed, "value has", "values have")} no observed time (${plural(m.untimed, "its pivot declares none", "their pivots declare none")}); ${plural(m.untimed, "it is", "they are")} in the Graph.`));
+    if (m.unread > 0) notes.append(note("tl-unread", `${m.unread} ${plural(m.unread, "row had", "rows had")} a time that could not be read.`));
+    if (m.legacy) notes.append(note("tl-legacy", "Some cards were recorded before times were; their values are in the Graph only."));
+    const rows = m.rows.filter((r) => !hiddenTypes.has(r.type));
+    x = timelineScale(m);
+    syncList(list, rows.slice(0, TIMELINE_ROWS), (r) => r.key, makeRow, fill);
+    const left = rows.length - TIMELINE_ROWS;
+    more.hidden = left <= 0;
+    more.textContent = left > 0 ? `${left} more ${plural(left, "value", "values")}: narrow by type.` : "";
+  };
+
+  const view: View = {
     el,
     update() {
       const state = store.shown;
+      // the model reads the case's meta, its cards and its queries; an entry that changes none of them changes nothing here
+      const reads = [state.meta, state.cards, state.queries];
       const key = [...hiddenTypes].sort().join(",");
-      if (seen === state && filterKey === key) return;
-      seen = state;
+      if (seen !== null && reads.every((r, i) => r === seen![i]) && filterKey === key) return;
+      seen = reads;
       filterKey = key;
-      const model = timelineOf(state);
-      empty.hidden = model.rows.length > 0;
-      axis.hidden = model.from === null;
-      axis.textContent = model.from === null || model.to === null ? "" : `${model.from} → ${model.to}`;
-      const types = [...new Set(model.rows.map((r) => r.type))].sort();
-      clear(filter);
-      for (const t of types) {
-        filter.append(h("label", null, h("input", {
-          type: "checkbox", checked: !hiddenTypes.has(t), name: typeTitle(t),
-          on: { change: (e) => { if ((e.target as HTMLInputElement).checked) hiddenTypes.delete(t); else hiddenTypes.add(t); seen = null; this.update(); } },
-        }), ` ${typeTitle(t)}`));
-      }
-      clear(notes);
-      if (model.untimed > 0) notes.append(note("tl-untimed", `${model.untimed} ${plural(model.untimed, "value has", "values have")} no observed time (${plural(model.untimed, "its pivot declares none", "their pivots declare none")}); ${plural(model.untimed, "it is", "they are")} in the Graph.`));
-      if (model.unread > 0) notes.append(note("tl-unread", `${model.unread} ${plural(model.unread, "row had", "rows had")} a time that could not be read.`));
-      if (model.legacy) notes.append(note("tl-legacy", "Some cards were recorded before times were; their values are in the Graph only."));
-      const rows = model.rows.filter((r) => !hiddenTypes.has(r.type));
-      const x = timelineScale(model);
-      clear(list);
-      for (const r of rows.slice(0, TIMELINE_ROWS)) list.append(makeRow(model, r, x));
-      const left = rows.length - TIMELINE_ROWS;
-      more.hidden = left <= 0;
-      more.textContent = left > 0 ? `${left} more ${plural(left, "value", "values")}: narrow by type.` : "";
+      keepFocus(el, () => paint(state));
     },
   };
+  return view;
 }

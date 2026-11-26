@@ -115,3 +115,28 @@ export function syncList<T>(parent: HTMLElement, items: readonly T[], key: (item
     parent.insertBefore(el, at);
   }
 }
+
+/** What a focusable control is, in words a repaint keeps: its nearest keyed ancestor's key, its tag, its action, its card, and (unless it carries the key itself) its label and its text. */
+function focusId(el: Element): string {
+  const keyed = el.closest("[data-key]");
+  // a control that carries its own key is that key, whatever its label says now
+  const own = keyed === el;
+  return [keyed?.getAttribute("data-key") ?? "", el.tagName, el.getAttribute("data-action") ?? "", el.getAttribute("data-card") ?? "", own ? "" : el.getAttribute("aria-label") ?? "", own ? "" : el.textContent ?? ""].join("\u0000");
+}
+
+/**
+ * Runs `repaint` and keeps the keyboard focus where it was: on the same node when the repaint kept it, else on the control that replaced it
+ * (the same key, action, label and text). When focus was inside `root` and nothing replaces it, `lost` is called. Focus outside `root` is left alone.
+ */
+export function keepFocus(root: HTMLElement, repaint: () => void, lost?: () => void): void {
+  const doc = root.ownerDocument;
+  const was = doc.activeElement;
+  const inside = was !== null && was !== root && root.contains(was);
+  const id = inside ? focusId(was) : null;
+  repaint();
+  if (!inside || (doc.activeElement === was && root.contains(was))) return;
+  for (const c of root.querySelectorAll("button, input, select, textarea, [tabindex]")) {
+    if (focusId(c) === id) { (c as HTMLElement).focus(); return; }
+  }
+  lost?.();
+}

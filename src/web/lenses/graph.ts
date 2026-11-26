@@ -4,7 +4,7 @@ import type { Open } from "../app";
 import { belongsByValue } from "../belongs";
 import type { Verdict } from "../belongs";
 import { cardChip } from "../chips";
-import { clear } from "../dom";
+import { clear, keepFocus, syncList } from "../dom";
 import { layoutGraph } from "../graphlayout";
 import type { GraphLayout, PlacedNode } from "../graphlayout";
 import { makeS } from "../svg";
@@ -27,7 +27,7 @@ export function makeGraph(ui: Ui, open: Open): View {
   let selected: string | null = null;
   let focus: string | null = null;
   let cursor: string | null = null;
-  let seen: unknown = null;
+  let seen: unknown[] | null = null;
   let sig = "";
   let model: GraphModel = { nodes: [], edges: [], legacy: false };
   let layout: GraphLayout | null = null;
@@ -123,12 +123,39 @@ export function makeGraph(ui: Ui, open: Open): View {
       verdict === undefined ? null : h("p", { class: `belongs-verdict ${GLYPHS[verdict.verdict].cls}` }, verdict.text),
       h("div", { class: "node-cards" }, n.cards.length === 0 ? h("span", { class: "muted" }, "No card holds this value yet.") : n.cards.map((c) => cardChip(ui, c, (id) => nav.focusCard(id)))),
       h("ul", { class: "node-links" }, links.map((l) => h("li", null, `${l.arrow} `,
-        h("button", { type: "button", class: "link", data: { action: "focus" }, title: `Focus the graph on ${nameOf(l.other)}`, on: { click: () => { focus = l.other.key; selected = l.other.key; cursor = l.other.key; refresh(); } } }, nameOf(l.other)),
+        h("button", { type: "button", class: "link", data: { action: "focus", key: l.other.key }, title: `Focus the graph on ${nameOf(l.other)}`, on: { click: () => { focus = l.other.key; selected = l.other.key; cursor = l.other.key; refresh(); } } }, nameOf(l.other)),
         ` · ${titles(l.e)} · ${[...new Set(l.e.via.map((v) => v.card))].join(", ")}`))),
       n.more > 0 ? h("p", { class: "node-more" }, `Its cards hold ${n.more} more ${n.more === 1 ? "value" : "values"} than they list.`) : null,
       h("div", { class: "node-actions" },
         h("button", { type: "button", data: { action: "pivot" }, disabled: reason !== null, title: reason ?? "Pivot from this value", on: { click: () => { if (reason === null && last !== null) nav.pivot(last, [{ type: n.type, value: n.value }]); } } }, "Pivot…"),
         h("button", { type: "button", data: { action: "focus-self" }, on: { click: () => { focus = n.key; refresh(); } } }, "Focus on this value"))].filter((x) => x !== null));
+  };
+
+  const typeBox = (t: string): HTMLElement => h("label", null, h("input", {
+    type: "checkbox", checked: !hiddenTypes.has(t), name: typeTitle(t),
+    on: { change: (e) => { if ((e.target as HTMLInputElement).checked) hiddenTypes.delete(t); else hiddenTypes.add(t); refresh(); } },
+  }), ` ${typeTitle(t)}`);
+
+  const paint = (state: typeof store.shown, dock: "wide" | "tall"): void => {
+    model = graphOf(state);
+    const nodes = byKey();
+    if (selected !== null && !nodes.has(selected)) selected = null;
+    if (focus !== null && !nodes.has(focus)) focus = null;
+    const types = [...new Set(model.nodes.map((n) => n.type))].sort();
+    for (const t of [...hiddenTypes]) if (!types.includes(t)) hiddenTypes.delete(t);
+    const verdicts = belongsByValue(state, ui.ref);
+    layout = layoutGraph(model, { dir: dock, types: hiddenTypes.size === 0 ? null : new Set(types.filter((t) => !hiddenTypes.has(t))), focus });
+
+    syncList(filter, types, (t) => t, typeBox, (label, t) => { (label.querySelector("input") as HTMLInputElement).checked = !hiddenTypes.has(t); });
+    count.textContent = `Showing ${layout.shown} of ${layout.of} values`;
+    count.hidden = model.nodes.length === 0;
+    whole.hidden = focus === null;
+    empty.hidden = model.edges.length > 0;
+    clear(notes);
+    if (model.legacy) notes.append(h("p", { class: "graph-legacy" }, "Some cards were recorded before links were; their links are read from the first 50 rows."));
+    clear(scroll);
+    if (layout.nodes.length > 0) scroll.append(drawing(layout, nodes, types, verdicts));
+    details(selected === null ? undefined : nodes.get(selected), verdicts);
   };
 
   const view: View = {
@@ -137,36 +164,13 @@ export function makeGraph(ui: Ui, open: Open): View {
       const state = store.shown;
       const dock = ui.prefs.get<unknown>("dock", "bottom") === "right" ? "tall" : "wide";
       const key = [dock, [...hiddenTypes].sort().join(","), focus ?? "", selected ?? "", cursor ?? ""].join("|");
-      if (seen === state && sig === key) return;
-      seen = state;
+      // the models read the case's meta, cards, queries and playbook runs, and Pivot… reads whether this is a replay; nothing else changes the lens
+      const reads: unknown[] = [state.meta, state.cards, state.queries, state.playbooks, store.at];
+      if (seen !== null && reads.every((r, i) => r === seen![i]) && sig === key) return;
+      seen = reads;
       sig = key;
-      const hadFocus = el.contains(ui.doc.activeElement);
-      model = graphOf(state);
-      const nodes = byKey();
-      if (selected !== null && !nodes.has(selected)) selected = null;
-      if (focus !== null && !nodes.has(focus)) focus = null;
-      const types = [...new Set(model.nodes.map((n) => n.type))].sort();
-      for (const t of [...hiddenTypes]) if (!types.includes(t)) hiddenTypes.delete(t);
-      const verdicts = belongsByValue(state, ui.ref);
-      layout = layoutGraph(model, { dir: dock, types: hiddenTypes.size === 0 ? null : new Set(types.filter((t) => !hiddenTypes.has(t))), focus });
-
-      clear(filter);
-      for (const t of types) {
-        filter.append(h("label", null, h("input", {
-          type: "checkbox", checked: !hiddenTypes.has(t), name: typeTitle(t),
-          on: { change: (e) => { if ((e.target as HTMLInputElement).checked) hiddenTypes.delete(t); else hiddenTypes.add(t); refresh(); } },
-        }), ` ${typeTitle(t)}`));
-      }
-      count.textContent = `Showing ${layout.shown} of ${layout.of} values`;
-      count.hidden = model.nodes.length === 0;
-      whole.hidden = focus === null;
-      empty.hidden = model.edges.length > 0;
-      clear(notes);
-      if (model.legacy) notes.append(h("p", { class: "graph-legacy" }, "Some cards were recorded before links were; their links are read from the first 50 rows."));
-      clear(scroll);
-      if (layout.nodes.length > 0) scroll.append(drawing(layout, nodes, types, verdicts));
-      details(selected === null ? undefined : nodes.get(selected), verdicts);
-      if (hadFocus && cursor !== null) focusNode(cursor);
+      // focus that was on a control is kept on it (or its replacement); focus whose node is gone goes to the cursor's node
+      keepFocus(el, () => paint(state, dock), () => { if (cursor !== null) focusNode(cursor); });
     },
   };
   return view;

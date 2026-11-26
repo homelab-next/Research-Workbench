@@ -279,3 +279,40 @@ test("on a real page, G opens the Graph and the shelf reads Graph G", async () =
     expect(p.s.app.hub.read("CASE-1").state.skipped).toEqual([]);
   } finally { await p.close(); }
 });
+
+const active = (): Element | null => win.document.activeElement as unknown as Element | null;
+
+test("unticking a type keeps the focus on its checkbox, not on the cursor's node", () => {
+  const r = two();
+  key(node(r, "address|198.51.100.77"), "Enter");
+  const box = q(r, "[aria-label='Domain']") as HTMLInputElement;
+  box.focus(); box.click();
+  expect(all(r, "g.node").length).toBe(2);
+  expect(active()!.getAttribute("aria-label")).toBe("Domain");
+});
+
+test("a focused button in the detail keeps the focus when a card arrives; a focused node stays focused", () => {
+  const r = rig([["c1", { observed: C1 }]]);
+  click(node(r, "domain|a.example.com"));
+  (detail(r).querySelector(".node-cards .card-chip") as HTMLElement).focus();
+  r.b.add("card.created", { card: card("c2", { observed: C2 }) }); r.push(); r.v.update();
+  expect([...detail(r).querySelectorAll(".node-cards .card-chip")].map((b) => b.textContent)).toEqual(["c1", "c2"]);
+  expect(detail(r).contains(active())).toBe(true);
+  expect(active()!.textContent).toBe("c1");
+  (detail(r).querySelector('[data-action="focus-self"]') as HTMLElement).focus();
+  r.b.add("card.created", { card: card("c3", { observed: obs("p", DOM, [sight("address", "192.0.2.18")]) }) }); r.push(); r.v.update();
+  expect(active()!.getAttribute("data-action")).toBe("focus-self");
+  node(r, "address|192.0.2.17").focus();
+  r.b.add("card.created", { card: card("c4", { observed: obs("p", DOM, [sight("address", "192.0.2.19")]) }) }); r.push(); r.v.update();
+  expect(active()!.getAttribute("data-key")).toBe("address|192.0.2.17");
+});
+
+test("an entry that changes nothing the Graph reads repaints nothing", () => {
+  const r = two();
+  click(node(r, "domain|a.example.com"));
+  const svg = q(r, "svg"), h3 = detail(r).querySelector("h3");
+  r.b.add("lane.created", { lane: "L1", title: "a lane", subgoal: null }); r.push(); r.v.update();
+  expect(r.store.shown.skipped).toEqual([]);
+  expect(q(r, "svg") === svg).toBe(true);
+  expect(detail(r).querySelector("h3") === h3).toBe(true);
+});

@@ -219,3 +219,40 @@ test("on a real page, T opens the Timeline with rows and the shelf reads Timelin
     expect(p.s.app.hub.read("CASE-1").state.skipped).toEqual([]);
   } finally { await p.close(); }
 });
+
+const active = (): Element | null => win.document.activeElement as unknown as Element | null;
+
+test("a focused control keeps the focus when a card arrives: a row's card chip, a row's button, a type's checkbox", () => {
+  const r = rig([["c1", { observed: C1 }]]);
+  const row = (key: string): HTMLElement => q(r, `.tl-row[data-key="${key}"]`);
+  click(row("domain|a.example.com").querySelector(".tl-label")!);
+  (row("domain|a.example.com").querySelector(".tl-detail .card-chip") as HTMLElement).focus();
+  r.b.add("card.created", { card: card("c2", { observed: C2 }) }); r.push(); r.v.update();
+  expect(rows(r).length).toBe(3);
+  expect(r.v.el.contains(active())).toBe(true);
+  expect(active()!.classList.contains("card-chip")).toBe(true);
+  expect(active()!.textContent).toBe("c1");
+  expect(active()!.closest(".tl-row")!.getAttribute("data-key")).toBe("domain|a.example.com");
+  expect(row("domain|a.example.com").querySelectorAll(".tl-detail li").length).toBe(2);
+
+  (row("address|198.51.100.77").querySelector(".tl-label") as HTMLElement).focus();
+  r.b.add("card.created", { card: card("c3", { observed: obs("address_to_domains", ADDR, { first: T(16), last: T(16), count: 1 }, []) }) }); r.push(); r.v.update();
+  expect(active()!.classList.contains("tl-label")).toBe(true);
+  expect(active()!.closest(".tl-row")!.getAttribute("data-key")).toBe("address|198.51.100.77");
+
+  (q(r, "[aria-label='Domain']")).focus();
+  r.b.add("card.created", { card: card("c4", { observed: obs("p", { type: "domain", value: "b.example.com" }, { first: T(18), last: T(18), count: 1 }, []) }) }); r.push(); r.v.update();
+  expect(active()!.getAttribute("aria-label")).toBe("Domain");
+});
+
+test("an entry that changes nothing the Timeline reads repaints nothing", () => {
+  const r = two();
+  click(rows(r)[1]!.querySelector(".tl-label")!);
+  const before = rows(r);
+  const strips = all(r, "svg.tl-strip");
+  r.b.add("lane.created", { lane: "L1", title: "a lane", subgoal: null }); r.push(); r.v.update();
+  expect(r.store.shown.skipped).toEqual([]);
+  expect(rows(r).length).toBe(before.length);
+  expect(rows(r).every((x, i) => x === before[i])).toBe(true);
+  expect(all(r, "svg.tl-strip").every((x, i) => x === strips[i])).toBe(true);
+});
