@@ -149,7 +149,7 @@ test("serve wires refuse_hosts: a source that points at the server is refused wh
   const accepted = await post(`/api/cases/${id}/commands`, { command: "accept_plan", args: { plan: plan.id, budgets: { s3: 1 } } });
   expect(accepted.status).toBe(200);
   await waitFor(() => texts().includes("own server"));
-  expect(texts()).toContain("points at the workbench's own server");
+  expect(texts()).toContain("points at this service's own server");
 });
 
 test("on a signal, a clean shutdown exits 0 and a failed one prints every closer's error and exits 1", async () => {
