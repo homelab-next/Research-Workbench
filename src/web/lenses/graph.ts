@@ -17,6 +17,8 @@ const GLYPHS: Record<Verdict, { glyph: string; cls: string }> = {
   "could not tell": { glyph: "?", cls: "belongs-unknown" },
 };
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+/** The links a node's detail lists before it asks to show them all. */
+export const DETAIL_LINKS = 50;
 
 /** The Graph lens: the observed values as nodes and the pivots that found one from another as edges, laid out the same way every time. */
 export function makeGraph(ui: Ui, open: Open): View {
@@ -27,6 +29,7 @@ export function makeGraph(ui: Ui, open: Open): View {
   let selected: string | null = null;
   let focus: string | null = null;
   let cursor: string | null = null;
+  let allLinks: string | null = null;     // the node whose detail lists every link
   let seen: unknown[] | null = null;
   let sig = "";
   let model: GraphModel = { nodes: [], edges: [], legacy: false };
@@ -94,8 +97,9 @@ export function makeGraph(ui: Ui, open: Open): View {
 
   const drawing = (lay: GraphLayout, nodes: Map<string, GraphNode>, types: string[], verdicts: ReturnType<typeof belongsByValue>): SVGElement => {
     const first = lay.nodes.some((p) => p.key === cursor) ? cursor : lay.nodes[0]?.key ?? null;
+    const byEdge = new Map(model.edges.map((e) => [e.key, e]));
     const edges = lay.edges.map((pe) => {
-      const e = model.edges.find((x) => x.key === pe.key)!;
+      const e = byEdge.get(pe.key)!;
       const end = pe.points[pe.points.length - 1]!;
       const mine = selected !== null && (pe.from === selected || pe.to === selected);
       const mid = pe.points[Math.floor((pe.points.length - 1) / 2)]!;
@@ -126,9 +130,12 @@ export function makeGraph(ui: Ui, open: Open): View {
       ...[h("h3", null, nameOf(n)),
       verdict === undefined ? null : h("p", { class: `belongs-verdict ${GLYPHS[verdict.verdict].cls}` }, verdict.text),
       h("div", { class: "node-cards" }, n.cards.length === 0 ? h("span", { class: "muted" }, "No card holds this value yet.") : n.cards.map((c) => cardChip(ui, c, (id) => nav.focusCard(id)))),
-      h("ul", { class: "node-links" }, links.map((l) => h("li", null, `${l.arrow} `,
+      h("ul", { class: "node-links" }, (allLinks === n.key ? links : links.slice(0, DETAIL_LINKS)).map((l) => h("li", null, `${l.arrow} `,
         h("button", { type: "button", class: "link", data: { action: "focus", key: l.other.key }, title: `Focus the graph on ${nameOf(l.other)}`, on: { click: () => { focus = l.other.key; selected = l.other.key; cursor = l.other.key; refresh(); } } }, nameOf(l.other)),
         ` · ${titles(l.e)} · ${[...new Set(l.e.via.map((v) => v.card))].join(", ")}`))),
+      links.length > DETAIL_LINKS && allLinks !== n.key
+        ? h("button", { type: "button", class: "link", data: { action: "all-links" }, on: { click: () => { allLinks = n.key; refresh(); } } }, `Show all ${links.length} links`)
+        : null,
       n.more > 0 ? h("p", { class: "node-more" }, `Its cards hold ${n.more} more ${n.more === 1 ? "value" : "values"} than they list.`) : null,
       h("div", { class: "node-actions" },
         h("button", { type: "button", data: { action: "pivot" }, disabled: reason !== null, title: reason ?? "Pivot from this value", on: { click: () => { if (reason === null && last !== null) nav.pivot(last, [{ type: n.type, value: n.value }]); } } }, "Pivot…"),
@@ -153,7 +160,8 @@ export function makeGraph(ui: Ui, open: Open): View {
     syncList(filter, types, (t) => t, typeBox, (label, t) => { (label.querySelector("input") as HTMLInputElement).checked = !hiddenTypes.has(t); });
     count.textContent = `Showing ${layout.shown} of ${layout.of} values`;
     count.hidden = model.nodes.length === 0;
-    whole.hidden = focus === null;
+    // a focus on a value whose type is unticked does not apply, so the graph is whole and says so
+    whole.hidden = focus === null || hiddenTypes.has(nodes.get(focus)!.type);
     const far = layout.unreached.map((k) => nodes.get(k)!);
     unreached.hidden = far.length === 0;
     unreachedText.textContent = `${plural(far.length, "more value is", "more values are")} linked to nothing drawn`;

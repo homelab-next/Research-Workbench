@@ -90,3 +90,23 @@ test("everything at one instant gives an axis of that instant", () => {
   const m = timelineOf(build([["c1", { observed: o }]]).s);
   expect([m.from, m.to]).toEqual([T(17), T(17)]);
 });
+
+test("a found mark's count is its sighting's, not the card's", () => {
+  const o = obs("p", ADDR, { first: T(17), last: T(19), count: 9 }, [sight("domain", "a.example.com", T(17), T(18), 2)]);
+  const { s } = build([["c1", { observed: o }]]);
+  const m = timelineOf(s);
+  expect(m.rows.find((r) => r.key === "domain|a.example.com")!.marks.map((k) => [k.role, k.count])).toEqual([["found", 2]]);
+  expect(m.rows.find((r) => r.key === "address|198.51.100.77")!.marks.map((k) => [k.role, k.count])).toEqual([["subject", 9]]);
+});
+
+test("rows first seen together are ordered by type before value", () => {
+  // by value alone "0a.example.com" would come before "203.0.113.9"
+  const o = obs("p", { type: "address", value: "203.0.113.9" }, { first: T(17), last: T(17), count: 1 }, [sight("domain", "0a.example.com", T(17), T(17))]);
+  const { s } = build([["c1", { observed: o }]]);
+  expect(timelineOf(s).rows.map((r) => r.key)).toEqual(["address|203.0.113.9", "domain|0a.example.com"]);
+});
+
+test("unread rows summed over cards are held at the largest safe integer", () => {
+  const big = (id: string): [string, Partial<Card>] => [id, { observed: obs("p", ADDR, { first: null, last: null, count: null }, [], Number.MAX_SAFE_INTEGER) }];
+  expect(timelineOf(build([big("c1"), big("c2")]).s).unread).toBe(Number.MAX_SAFE_INTEGER);
+});

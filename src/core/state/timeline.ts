@@ -32,7 +32,7 @@ export function timelineOf(state: CaseState): TimelineModel {
     if (m.last > row.last) row.last = m.last;
   };
   for (const o of allObserved(state)) {
-    unread += o.unread;
+    unread = Math.min(Number.MAX_SAFE_INTEGER, unread + o.unread);
     if (o.legacy) legacy = true;
     seen.add(valueKey(o.from.type, o.from.value));
     if (o.span.first !== null && o.span.last !== null) {

@@ -447,7 +447,7 @@ test("extractJson on open braces grows with the input, not with its square", () 
   const best = (n: number): number => {
     let ms = Infinity;
     for (let i = 0; i < 3; i++) { const t0 = performance.now(); expect(extractJson("{".repeat(n))).toBeNull(); ms = Math.min(ms, performance.now() - t0); }
-    return Math.max(ms, 0.25);
+    return Math.max(ms, 0.02);
   };
   expect(best(1024 * 1024) / best(128 * 1024)).toBeLessThan(24);   // linear is about 8; quadratic is about 64
   expect(extractJson("```\n".repeat(200_000))).toBeNull();

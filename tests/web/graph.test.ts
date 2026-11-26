@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { makeGraph } from "../../src/web/lenses/graph";
+import { DETAIL_LINKS, makeGraph } from "../../src/web/lenses/graph";
 import type { View } from "../../src/web/ui";
 import { CaseStore } from "../../src/web/store";
 import type { Card, Observable, Observed, Sighting } from "../../src/core/types";
@@ -302,9 +302,12 @@ test("a focused button in the detail keeps the focus when a card arrives; a focu
   (detail(r).querySelector('[data-action="focus-self"]') as HTMLElement).focus();
   r.b.add("card.created", { card: card("c3", { observed: obs("p", DOM, [sight("address", "192.0.2.18")]) }) }); r.push(); r.v.update();
   expect(active()!.getAttribute("data-action")).toBe("focus-self");
-  node(r, "address|192.0.2.17").focus();
+  // a focused node whose name changes (it gains a card) keeps the focus: it is known by its key
+  click(node(r, "address|192.0.2.17"));
+  node(r, "domain|a.example.com").focus();
   r.b.add("card.created", { card: card("c4", { observed: obs("p", DOM, [sight("address", "192.0.2.19")]) }) }); r.push(); r.v.update();
-  expect(active()!.getAttribute("data-key")).toBe("address|192.0.2.17");
+  expect(node(r, "domain|a.example.com").getAttribute("aria-label")).toBe("Domain a.example.com, 4 cards");
+  expect(active()!.getAttribute("data-key")).toBe("domain|a.example.com");
 });
 
 test("an entry that changes nothing the Graph reads repaints nothing", () => {
@@ -331,6 +334,7 @@ test("past 60 values, a value linked to nothing drawn is listed, and its button 
   // every value is drawn, a link in a drawn node's detail, or in the list
   const reach = new Set(drawn);
   for (const k of drawn) { click(node(r, k)); for (const b of detail(r).querySelectorAll('[data-action="focus"]')) reach.add(b.getAttribute("data-key")!); }
+  expect(q(r, ".graph-unreached").hasAttribute("hidden")).toBe(false);
   const listed = all(r, ".graph-unreached button");
   for (const b of listed) reach.add(b.getAttribute("data-key")!);
   expect(listed.map((b) => b.textContent)).toEqual(["Address 203.0.113.9", "Domain lone-a.example.com", "Domain lone-b.example.com"]);
@@ -342,4 +346,28 @@ test("past 60 values, a value linked to nothing drawn is listed, and its button 
   expect(q(r, ".graph-whole").hasAttribute("hidden")).toBe(false);
   expect(q(r, ".graph-unreached").hasAttribute("hidden")).toBe(true);
   expect(q(two(), ".graph-unreached").hasAttribute("hidden")).toBe(true);
+});
+
+test("a focus on a value whose type is unticked does not apply, and Whole graph is hidden until it does", () => {
+  const r = two();
+  click(node(r, "domain|a.example.com"));
+  click(detail(r).querySelector('[data-action="focus-self"]')!);
+  expect(q(r, ".graph-whole").hasAttribute("hidden")).toBe(false);
+  (q(r, "[aria-label='Domain']")).click();
+  expect(q(r, ".graph-count").textContent).toBe("Showing 2 of 2 values");
+  expect(q(r, ".graph-whole").hasAttribute("hidden")).toBe(true);
+  (q(r, "[aria-label='Domain']")).click();
+  expect(q(r, ".graph-whole").hasAttribute("hidden")).toBe(false);
+});
+
+test("a node's detail lists its first 50 links and a button shows them all", () => {
+  const r = rig([["c1", { observed: obs("address_to_domains", { type: "address", value: "hub" }, Array.from({ length: 60 }, (_, i) => sight("domain", `h${String(i).padStart(2, "0")}.example.com`))) }]], [{ type: "address", value: "hub" }]);
+  click(node(r, "address|hub"));
+  expect(detail(r).querySelectorAll(".node-links li").length).toBe(DETAIL_LINKS);
+  const all_ = detail(r).querySelector('[data-action="all-links"]') as HTMLElement;
+  expect(all_.textContent).toBe("Show all 60 links");
+  click(all_);
+  expect(detail(r).querySelectorAll(".node-links li").length).toBe(60);
+  expect(detail(r).querySelector('[data-action="all-links"]')).toBeNull();
+  expect(DETAIL_LINKS).toBe(50);
 });

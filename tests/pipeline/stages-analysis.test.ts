@@ -357,14 +357,50 @@ test("Evaluate's pack holds a card the draft cites only in Gaps and limits", asy
 });
 
 test("Challenge's pack holds the same cards, the findings' cards first", async () => {
-  const r = rig({ analyst: CITING_GAPS(), evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
+  // the finding cites c3 and the gaps name c1 and c2, so citedOf's sorted order would put c3 last
+  const r = rig({ analyst: [calls(finding("it is internal", ["c3"]), section("summary", "all clear", ["c3"]), section("gaps_and_limits", "c1 and c2 were empty [c1, c2]"), section("alternatives", "stated"), section("assessment", "stated")), out("first")], evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
   cards();
   threeCards();
   r.engine.start(person);
   await r.engine.advance();
   accept();
   await r.engine.advance();
-  expect(packCards("challenge")).toEqual(["c1", "c2", "c3"]);
+  expect(packCards("challenge")).toEqual(["c3", "c1", "c2"]);
+  expect(packCards("evaluate")).toEqual(["c3", "c1", "c2"]);
+});
+
+test("a cited card left out of a reviewer's pack for size is named in its task", async () => {
+  const r = rig({ analyst: CITING_GAPS(), evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
+  cards();
+  f.s.commit((_st, ids) => [{ type: "card.created", actor: person, payload: { card: card(ids.next("card"), { title: "Leases", body: "no lease ".repeat(25_000), source: "assets", marking: "TLP:GREEN" }) } }]);
+  r.engine.start(person);
+  await r.engine.advance();
+  accept();
+  await r.engine.advance();
+  expect(packCards("evaluate")).toEqual(["c1", "c2"]);
+  const line = "Cited by the draft but left out of your context: c3. Read one you need with read_card; do not judge what you have not read.";
+  expect(requestText("evaluator", 0)).toContain(line);
+  expect(requestText("adversary", 0)).toContain(line);
+  expect(requestText("analyst", 0)).not.toContain("Cited by the draft but left out");
+});
+
+test("a cited card a person discarded after the draft is named as discarded in the reviewer's task", async () => {
+  const r = rig({ analyst: CITING_GAPS(), evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] }, {
+    checks: async () => {
+      f.s.commit(() => [{ type: "card.discarded", actor: person, payload: { card: "c3" } }]);
+      return { ...PASS, draft_hash: latestDraft(f.s.state)!.hash };
+    },
+  });
+  cards();
+  threeCards();
+  r.engine.start(person);
+  await r.engine.advance();
+  accept();
+  await r.engine.advance();
+  const line = "Cited by the draft but discarded from the case: c3. Say so where a finding rests on them.";
+  expect(requestText("evaluator", 0)).toContain(line);
+  expect(requestText("adversary", 0)).toContain(line);
+  expect(requestText("evaluator", 0)).not.toContain("no longer in the case");
 });
 
 test("a cited card that is no longer in the case is named in the reviewer's task", async () => {

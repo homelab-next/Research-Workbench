@@ -36,7 +36,7 @@ test("the starting values come first, then values in the order cards were made: 
 });
 
 test("an edge from the value a pivot ran on to each value it found, with the pivot and the card", () => {
-  expect(g.edges[0]).toEqual({ key: "address|198.51.100.77>domain|a.example.com", from: "address|198.51.100.77", to: "domain|a.example.com", via: [{ pivot: "address_to_domains", card: "c1" }] });
+  expect(g.edges[0]).toEqual({ key: JSON.stringify(["address|198.51.100.77", "domain|a.example.com"]), from: "address|198.51.100.77", to: "domain|a.example.com", via: [{ pivot: "address_to_domains", card: "c1" }] });
 });
 
 test("two cards saying the same link make one edge with both; the two directions are two edges; a value found from itself makes none", () => {
@@ -45,7 +45,7 @@ test("two cards saying the same link make one edge with both; the two directions
     c2: obs("q", A("B"), [A("A")]),
     c3: obs("p", A("A"), [A("B")]),
   }));
-  expect(t.edges.map((e) => [e.key, e.via.map((v) => v.card)])).toEqual([["address|A>address|B", ["c1", "c3"]], ["address|B>address|A", ["c2"]]]);
+  expect(t.edges.map((e) => [e.from, e.to, e.via.map((v) => v.card)])).toEqual([["address|A", "address|B", ["c1", "c3"]], ["address|B", "address|A", ["c2"]]]);
 });
 
 test("a node counts the values its cards could not list", () => {
@@ -72,4 +72,22 @@ test("a value holding the key's separator is still one node", () => {
 test("no case gives no nodes; the same state gives the same model", () => {
   expect(graphOf(initial())).toEqual({ nodes: [], edges: [], legacy: false });
   expect(graphOf(s)).toEqual(graphOf(s));
+});
+
+test("two different links never share an edge, whatever their values hold", () => {
+  // joined with ">" both would read "a|x>b|y>c|z"
+  const t = graphOf(build([], {
+    c1: obs("p", { type: "a", value: "x" }, [{ type: "b", value: "y>c|z" }]),
+    c2: obs("q", { type: "a", value: "x>b|y" }, [{ type: "c", value: "z" }]),
+  }));
+  expect(t.edges.length).toBe(2);
+  expect(new Set(t.edges.map((e) => e.key)).size).toBe(2);
+  expect(t.edges.map((e) => [e.from, e.to, e.via.map((v) => v.card)])).toEqual([["a|x", "b|y>c|z", ["c1"]], ["a|x>b|y", "c|z", ["c2"]]]);
+});
+
+test("a node's uncounted values are summed over its cards, and held at the largest safe integer", () => {
+  const t = graphOf(build([], { c1: obs("p", A("S"), [D("a.example.com")], 3), c2: obs("q", A("S"), [D("b.example.com")], 4) }));
+  expect(t.nodes[0]!.more).toBe(7);
+  const big = graphOf(build([], { c1: obs("p", A("S"), [], Number.MAX_SAFE_INTEGER), c2: obs("q", A("S"), [], Number.MAX_SAFE_INTEGER) }));
+  expect(big.nodes[0]!.more).toBe(Number.MAX_SAFE_INTEGER);
 });

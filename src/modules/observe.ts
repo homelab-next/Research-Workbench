@@ -57,6 +57,9 @@ const acc = (points: boolean): Acc => ({ first: null, last: null, count: 0, rows
 /** What one row says: when (a span, a point, or nothing readable) and how many times. */
 interface RowTime { first: number | null; last: number | null; count: number | null }
 
+/** A point's count past the safe integers is held at the largest one, so one source-controlled count cannot make the card malformed. */
+const capped = (n: number): number => Math.min(n, Number.MAX_SAFE_INTEGER);
+
 function add(a: Acc, r: RowTime): void {
   a.rows++;
   const sum = a.count === null || r.count === null ? null : a.count + r.count;
@@ -64,7 +67,7 @@ function add(a: Acc, r: RowTime): void {
   if (r.first === null || r.last === null) return;
   if (a.first === null || r.first < a.first) a.first = r.first;
   if (a.last === null || r.last > a.last) a.last = r.last;
-  if (a.at !== null && r.count !== null) a.at.set(r.first, (a.at.get(r.first) ?? 0) + r.count);
+  if (a.at !== null && r.count !== null) a.at.set(r.first, capped((a.at.get(r.first) ?? 0) + r.count));
 }
 
 const iso = (t: number | null): string | null => (t === null ? null : new Date(t).toISOString());
@@ -83,7 +86,7 @@ function pointsOf(a: Acc): [string, number][] {
   const slice = (t: number): number => Math.min(MAX_POINTS - 1, Math.floor(((t - first) * MAX_POINTS) / width));
   const startOf = (i: number): number => first + Math.floor((i * width) / MAX_POINTS);
   const sums = new Map<number, number>();
-  for (const t of times) sums.set(slice(t), (sums.get(slice(t)) ?? 0) + a.at.get(t)!);
+  for (const t of times) sums.set(slice(t), capped((sums.get(slice(t)) ?? 0) + a.at.get(t)!));
   return [...sums.keys()].sort((x, y) => x - y).map((i) => [new Date(startOf(i)).toISOString(), sums.get(i)!]);
 }
 

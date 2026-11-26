@@ -135,3 +135,8 @@ test("past the cap, the values with no drawn neighbour are reported in model ord
   expect(layoutGraph(base, WIDE).unreached).toEqual([]);
   expect(layoutGraph(model([...nodes, lone], edges), { dir: "wide", types: null, focus: "address|lone" }).unreached).toEqual([]);
 });
+
+test("a node's neighbours are walked in model order, not in the order the edges were made", () => {
+  const l = layoutGraph(model([S, a, b], [ed(S, b), ed(S, a)]), WIDE);
+  expect(l.nodes.map((n) => n.key)).toEqual(["address|S", "domain|a", "domain|b"]);
+});

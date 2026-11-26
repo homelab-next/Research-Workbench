@@ -245,14 +245,30 @@ test("a focused control keeps the focus when a card arrives: a row's card chip, 
   expect(active()!.getAttribute("aria-label")).toBe("Domain");
 });
 
-test("an entry that changes nothing the Timeline reads repaints nothing", () => {
-  const r = two();
+test("an entry that changes nothing the Timeline reads repaints nothing; a card repaints only the rows it changes", () => {
+  const untimed = obs("p", DOM, { first: null, last: null, count: null }, [sight("domain", "u.example.com", null, null)]);
+  const r = rig([["c1", { observed: C1 }], ["c2", { observed: C2 }], ["c0", { observed: untimed }]]);
   click(rows(r)[1]!.querySelector(".tl-label")!);
   const before = rows(r);
   const strips = all(r, "svg.tl-strip");
+  const noteEl = q(r, ".tl-untimed");
   r.b.add("lane.created", { lane: "L1", title: "a lane", subgoal: null }); r.push(); r.v.update();
   expect(r.store.shown.skipped).toEqual([]);
   expect(rows(r).length).toBe(before.length);
   expect(rows(r).every((x, i) => x === before[i])).toBe(true);
   expect(all(r, "svg.tl-strip").every((x, i) => x === strips[i])).toBe(true);
+  expect(q(r, ".tl-untimed") === noteEl).toBe(true);
+  // a card inside the axis on a new value: the other rows keep their strips
+  r.b.add("card.created", { card: card("c9", { observed: obs("p", { type: "domain", value: "n.example.com" }, { first: T(18), last: T(18), count: 1 }, []) }) }); r.push(); r.v.update();
+  expect(rows(r).length).toBe(before.length + 1);
+  for (const [i, row] of before.entries()) expect(row.querySelector("svg.tl-strip") === strips[i]).toBe(true);
+});
+
+test("a mark at the right end of the axis is drawn inside the strip", () => {
+  const o = obs("p", ADDR, { first: T(17), last: T(18), count: 2 }, [sight("domain", "a.example.com", T(18), T(18), 1, [[T(18), 1]]), sight("domain", "b.example.com", T(18), T(18), 1)]);
+  const r = rig([["c1", { observed: o }]]);
+  const point = q(r, '.tl-row[data-key="domain|a.example.com"] rect.tl-point');
+  expect([Number(point.getAttribute("x")), Number(point.getAttribute("width"))]).toEqual([996, 4]);
+  const span = q(r, '.tl-row[data-key="domain|b.example.com"] rect.tl-span');
+  expect([Number(span.getAttribute("x")), Number(span.getAttribute("width"))]).toEqual([996, 4]);
 });

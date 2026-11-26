@@ -3,7 +3,7 @@ import { parseJson } from "../../core/canonical";
 import type { Schema } from "../../core/schema";
 import type { CaseSession } from "../../core/session";
 import { runUsage } from "../../core/state";
-import type { Actor, Draft, Entry, ModelChoice, TimeWindow } from "../../core/types";
+import type { Actor, Draft, Entry, ModelChoice, PackItem, TimeWindow } from "../../core/types";
 import { ContextError, casePart, packPart, schemaOf, stageParts } from "../../agents/context";
 import type { PackPart } from "../../agents/context";
 import type { CallRecord } from "../../agents/loop";
@@ -73,6 +73,8 @@ export async function stageAgent(env: StageEnv, opts: {
   lackingAsk?: (missing: string[]) => string;
   /** What is forced while something is lacking: see AgentSpec.force. */
   force?: (missing: string[]) => Forced | null;
+  /** Cards the task is about (a reviewer's draft's cited cards): one the pack leaves out is named in the task. */
+  cited?: readonly string[];
 }): Promise<AgentStageEnd> {
   const { session, deps, stage } = env;
   const title = titleOf(env);
@@ -105,11 +107,13 @@ export async function stageAgent(env: StageEnv, opts: {
     throw err;
   }
   if ("too_big" in pack) return { kind: "stalled", reason: `${title}: the fixed context does not fit this model` };
+  const leftLine = citedLeftOutLine(pack.left_out, opts.cited ?? []);
+  const task = leftLine === null ? opts.task : `${opts.task}\n${leftLine}`;
 
   const { window, limits } = frameOf(env);
   const end = await runAgent(session, {
     ...(fast === null ? {} : { fast: { provider: fast.provider, model: fast.model, effort: fast.effort } }),
-    actor: who.actor, provider: who.provider, model: who.model, effort: who.effort, pack, task: opts.task, tools: stage.tools.filter((t) => !(opts.omit_tools ?? []).includes(t)), schema,
+    actor: who.actor, provider: who.provider, model: who.model, effort: who.effort, pack, task, tools: stage.tools.filter((t) => !(opts.omit_tools ?? []).includes(t)), schema,
     ...(stage.schema === null ? {} : { schema_id: stage.schema }),
     ...(opts.explain === undefined ? {} : { explain: opts.explain }),
     ...(opts.lacking === undefined ? {} : { lacking: opts.lacking }),
@@ -230,6 +234,23 @@ export function citedGone(session: CaseSession, draft: Draft): string[] {
 export function citedGoneLine(session: CaseSession, draft: Draft): string | null {
   const gone = citedGone(session, draft);
   return gone.length === 0 ? null : `Cited by the draft but no longer in the case: ${gone.join(", ")}. Say so; do not judge what they held.`;
+}
+
+/** The line a reviewer's task carries when cards the draft cites were left out of its pack (for size or by a limit); null when none was. */
+export function citedLeftOutLine(leftOut: readonly PackItem[], cited: readonly string[]): string | null {
+  const ids = leftOut.filter((i) => i.kind === "card" && cited.includes(i.id)).map((i) => i.id);
+  return ids.length === 0 ? null : `Cited by the draft but left out of your context: ${ids.join(", ")}. Read one you need with read_card; do not judge what you have not read.`;
+}
+
+/** The ids citedOf(draft) names whose cards a person has discarded, sorted as citedOf sorts. */
+export function citedDiscarded(session: CaseSession, draft: Draft): string[] {
+  return citedOf(draft).filter((id) => Object.hasOwn(session.state.cards, id) && session.state.cards[id]!.place === "discarded");
+}
+
+/** The line a reviewer's task carries when the draft cites cards a person has discarded; null when it cites none. */
+export function citedDiscardedLine(session: CaseSession, draft: Draft): string | null {
+  const gone = citedDiscarded(session, draft);
+  return gone.length === 0 ? null : `Cited by the draft but discarded from the case: ${gone.join(", ")}. Say so where a finding rests on them.`;
 }
 
 /** The draft's product as a part the model cannot lose from its context. It carries the product's marking. */

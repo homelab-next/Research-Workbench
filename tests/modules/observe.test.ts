@@ -3,6 +3,7 @@ import type { Json } from "../../src/core/canonical";
 import type { PivotManifest } from "../../src/modules/manifests";
 import { Observables } from "../../src/modules/observables";
 import { MAX_POINTS, MAX_SIGHTINGS, observe, readTime } from "../../src/modules/observe";
+import { isObserved } from "../../src/core/state/shapes";
 
 const observables = new Observables([
   { id: "address", title: "Address", pattern: "(?:\\d{1,3}\\.){3}\\d{1,3}" },
@@ -126,4 +127,17 @@ test("a value in two yielded columns of one row is one sighting counted once", (
   const p = pivotOf({ yields: { name: "domain", alias: "domain" }, times: { kind: "span", first: "first_seen", last: "last_seen", count: "events" } });
   const o = observe(p, ADDR, ["name", "alias", "first_seen", "last_seen", "events"], [["a.example.com", "a.example.com", "2026-11-18", "2026-11-19", 5]], observables);
   expect(o.found).toEqual([{ type: "domain", value: "a.example.com", first: "2026-11-18T00:00:00.000Z", last: "2026-11-19T00:00:00.000Z", count: 5, points: [] }]);
+});
+
+test("a point's count past the safe integers is held at the largest one, so the card stays well formed", () => {
+  const BIG = Number.MAX_SAFE_INTEGER;
+  const counted = pivotOf({ times: { kind: "points", at: "ts", count: "n" } });
+  const same = observe(counted, ADDR, ["name", "ts", "n"], [["a.example.com", "2026-11-20 00:00:00", BIG], ["a.example.com", "2026-11-20 00:00:00", BIG]], observables);
+  expect(same.found[0]!.points).toEqual([["2026-11-20T00:00:00.000Z", BIG]]);
+  expect(isObserved(same)).toBe(true);
+  const rows: Json[][] = Array.from({ length: 50 }, (_, i) => ["a.example.com", `2026-11-20 00:00:${String(i).padStart(2, "0")}`, BIG - 1]);
+  const sliced = observe(counted, ADDR, ["name", "ts", "n"], rows, observables);
+  expect(sliced.found[0]!.points.length).toBe(24);
+  expect(sliced.found[0]!.points.every((p) => p[1] === BIG)).toBe(true);
+  expect(isObserved(sliced)).toBe(true);
 });

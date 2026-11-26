@@ -25,12 +25,13 @@ export function graphOf(state: CaseState): GraphModel {
     if (o.legacy) legacy = true;
     const from = node(o.from.type, o.from.value);
     if (!from.cards.includes(o.card)) from.cards.push(o.card);
-    from.more += o.more;
+    from.more = Math.min(Number.MAX_SAFE_INTEGER, from.more + o.more);
     for (const f of o.found) {
       const to = node(f.type, f.value);
       if (!to.cards.includes(o.card)) to.cards.push(o.card);
       if (to.key === from.key) continue;
-      const key = `${from.key}>${to.key}`;
+      // a value may hold any character, so the two keys are joined as a JSON pair: two different links never share a key
+      const key = JSON.stringify([from.key, to.key]);
       let e = edges.get(key);
       if (e === undefined) {
         e = { key, from: from.key, to: to.key, via: [] };
