@@ -11,13 +11,14 @@ import type { ToolSpec } from "../providers/types";
 import { ANALYSIS_TOOLS } from "./analysis";
 import { CARD_TOOLS } from "./cards";
 import { params, scrub, TOOL_VIEW_CHARS, ToolError, VIEW_ROWS } from "./kit";
+import { PERSON_TOOLS } from "./person";
 import { RESEARCH_TOOLS } from "./research";
 import { SOURCE_TOOLS } from "./sources";
 
 export { TOOL_VIEW_CHARS, ToolError, VIEW_ROWS };
 
 export const TOOL_NAMES = ["list_sources", "describe_source", "find_routes", "list_playbooks", "run_step", "run_pivot", "run_query", "list_cards", "read_card", "verify_card",
-  "propose_assessment", "propose_narrative", "request_research", "raise_challenge", "answer_challenge"] as const;
+  "propose_assessment", "propose_narrative", "request_research", "raise_challenge", "answer_challenge", "ask_person"] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
 
 export interface ToolContext {
@@ -30,6 +31,8 @@ export interface ToolContext {
   onNeedsBudget?: (proposal: string, step: string | null) => Promise<RunQueryResult | null>;
   /** Set by Research when the workbench runs a step itself: the step is recorded as started by the workbench. */
   in_code?: boolean;
+  /** At most this many unanswered questions to the person in a run (the config's questions.max_open); DEFAULT_MAX_OPEN when absent. */
+  max_open_questions?: number;
 }
 /** `view` is what the model is given; `marking` is the marking of any source data in it. */
 export interface ToolResult { ok: boolean; summary: string; view: Json; marking: Marking | null }
@@ -48,7 +51,7 @@ const unavailable = (name: ToolName): ToolDef => ({
   call: async () => ({ ok: false, summary: "not available", view: { error: "not available" }, marking: null }),
 });
 
-const defs = new Map<string, ToolDef>([...SOURCE_TOOLS, ...RESEARCH_TOOLS, ...CARD_TOOLS, ...ANALYSIS_TOOLS].map((t) => [t.name, t]));
+const defs = new Map<string, ToolDef>([...SOURCE_TOOLS, ...RESEARCH_TOOLS, ...CARD_TOOLS, ...ANALYSIS_TOOLS, ...PERSON_TOOLS].map((t) => [t.name, t]));
 export const TOOLS = Object.fromEntries(TOOL_NAMES.map((n) => [n, defs.get(n) ?? unavailable(n)])) as Record<ToolName, ToolDef>;
 
 /** The specs a model is given; with the agent's context, each tool's parameters as they are in it. */
