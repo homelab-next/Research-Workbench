@@ -727,6 +727,24 @@ test("a step whose value an earlier step finds is left to the researcher's run_s
   expect(f.s.blobs.text(asks[0]!.payload.messages.blob)).toContain("s2: not yet run");
 });
 
+test("a step left running by an interrupted attempt is run in code on resume", async () => {
+  // final review I3: a server stopped mid-step leaves step.started with no step.finished (recovery closes queries and jobs, not steps)
+  const one = { goal: "is it ours", subgoals: [
+    { title: "Is it an asset", question: "Is it an asset?", have: [{ type: "address", value: "192.0.2.17" }], want: "asset", route: ["address_to_asset"] },
+  ] };
+  const r = rig({ orchestrator: [say(FRAME)], planner: [say(one)], "researcher-g1": [answered("it is ws-17")] });
+  await toGate(r);
+  r.engine.acceptPlan({ actor: person });
+  f.s.commit((st) => [{ type: "step.started", actor: { kind: "system", id: "test" }, run: st.run.id, stage: "research", payload: { step: "s1" } }]);
+  expect(f.s.state.plan.steps.s1!.status).toBe("running");
+  await r.engine.advance();
+  expect(ofType("query.issued").filter((e) => e.payload.step === "s1")).toHaveLength(1);
+  expect(f.s.state.plan.steps.s1!.status).toBe("answered");
+  const asks = ofType("model.request").filter((e) => e.actor.id === "researcher-g1");
+  expect(f.s.blobs.text(asks[0]!.payload.messages.blob)).toContain("s1: 1 row · full coverage");
+  expect(finished("research")[0]!.payload.outcome).toBe("pass");
+});
+
 // ---------- the planner's answer names only what exists ----------
 
 /** The sub-goal item schema of a plan-output schema. */

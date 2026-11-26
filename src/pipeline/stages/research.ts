@@ -119,7 +119,7 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
   const results: (AgentStageEnd | undefined)[] = units.map(() => undefined);
   /**
    * A sub-goal's accepted steps, run in code in plan order at the start of its job, before its researcher is asked: each step whose value
-   * the plan gives and that has not run, through run_step as the researcher's actor (an answered query is reused; a costly step spends only
+   * the plan gives and that has not finished (pending, or left running by an interrupted attempt), through run_step as the researcher's actor (an answered query is reused; a costly step spends only
    * the plan's budget). Returns the parts the researcher reads: what each step returned, then the cards. A step whose value an earlier step
    * finds is left to the researcher. Nothing is run when the researcher's model cannot be resolved (the agent then stalls with the reason).
    */
@@ -137,7 +137,10 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
     const lines: string[] = [];
     const markings: Marking[] = [];
     for (const step of steps) {
-      if (statusOf(step.id) === "pending" && step.from.value !== "" && session.state.run.status !== "paused" && session.state.run.status !== "finished") {
+      // a step left running is one an interrupted attempt started: at the start of its sub-goal's job no other job owns it, so it runs again
+      // (an answered lookup is read back, not sent again)
+      const unrun = statusOf(step.id) === "pending" || statusOf(step.id) === "running";
+      if (unrun && step.from.value !== "" && session.state.run.status !== "paused" && session.state.run.status !== "finished") {
         const args = { step: step.id, why: `accepted plan step ${step.id}, run by the workbench before the researcher was asked` };
         const r = await execTool(ctx, { tool: TOOLS.run_step, name: "run_step", args, why: args.why, error: null });
         if (r.marking !== null) markings.push(r.marking);
