@@ -116,7 +116,7 @@ nav.trail { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .stage-button.mark-passed { color: var(--green); border-color: var(--green); }
 .stage-button.mark-passed-earlier-draft { color: var(--muted); }
 .stage-button.mark-running { color: var(--accent); border-color: var(--accent); }
-.stage-button.mark-failed, .stage-button.mark-blocked, .stage-button.mark-declined, .stage-button.mark-waiting { color: var(--amber); border-color: var(--amber); }
+.stage-button.mark-failed, .stage-button.mark-blocked, .stage-button.mark-declined, .stage-button.mark-waiting, .stage-button.mark-sent-back { color: var(--amber); border-color: var(--amber); }
 .stop-reason { min-width: 200px; }
 
 .replay-banner { background: var(--panel-2); border: 1px dashed var(--accent); border-radius: var(--radius); padding: 6px 12px; color: var(--accent); }
@@ -148,6 +148,7 @@ nav.trail { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
 .shelf { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 6px 10px; display: flex; gap: 8px; align-items: center; justify-content: space-between; position: sticky; bottom: 8px; z-index: 5; box-shadow: 0 -6px 16px var(--bg); }
 .lens-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+.lens-button.soon { color: var(--muted); }
 .lens-button.active { border-color: var(--accent); color: var(--accent); }
 
 .toasts { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; align-items: center; z-index: 10; pointer-events: none; }
@@ -166,16 +167,16 @@ kbd { font-family: var(--mono); font-size: 12px; background: var(--panel-2); bor
 .ghost { z-index: 5; }
 .trail .pill, .trail .dot { transition: padding 160ms ease, max-width 160ms ease, width 160ms ease, height 160ms ease; }
 
-/* ---------- lenses: Steps, Timeline, Worklog, Discarded, Jobs ---------- */
+/* ---------- lenses: Steps, Worklog, Discarded, Jobs ---------- */
 .lens .plan { border: 1px solid var(--line); border-radius: var(--radius); padding: 8px; }
 .lens .plan.proposed { border-style: dashed; }
 .lens .subgoal { margin-top: 8px; }
 .lens .step { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 2px 0; }
-.lens .step.muted, .lens .timeline-row.muted { opacity: 0.55; }
+.lens .step.muted, .lens .worklog-row.muted { opacity: 0.55; }
 .lens .gate-buttons, .lens .ask { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .lens .waiting-budget .proposal { border: 1px dashed var(--line); border-radius: var(--radius); padding: 6px; margin-top: 6px; }
-.lens .timeline-row, .lens .worklog-row, .lens .job-row, .lens .discarded-row { padding: 2px 0; }
-.lens .timeline-row.card-row { cursor: pointer; }
+.lens .worklog-row, .lens .job-row, .lens .discarded-row { padding: 2px 0; }
+.lens .worklog-row.card-row { cursor: pointer; }
 .lens .worklog-row time { font-variant-numeric: tabular-nums; }
 .lens .filter label { margin-right: 12px; }
 

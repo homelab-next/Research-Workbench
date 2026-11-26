@@ -144,11 +144,11 @@ A "?" card lists all of this, grouped by area.
 - **Agent:** see section 6.
 - **Ticket:** who asked, what they asked, their indicators and questions.
 - **Steps:** the plan (planner proposal or hunt plan, see 7) and each question with its goal, status and Plan / Run.
-- **Timeline:** everything by time; not-yet-kept items muted.
+- **Timeline:** *soon* — what was observed, on the data's own time axis.
 - **Graph:** case at the top, lanes as branches, cards as nodes, links as edges; nodes are clickable and keyboard-reachable. A tall layout when docked right.
 - **Notes:** typed notes (note, to-do, question, decision), on the case or on a card; external links (https only).
 - **Narrative:** Summary, Key findings, Gaps and limits, Assessment. "#" in a section opens a picker to cite a kept card; dragging a card into a section cites it. Drafts (from the agent or the workbench) arrive as proposals to accept, edit or discard. "Copy as Markdown" expands every citation into its provenance and adds the marking.
-- **Worklog:** who did what, when (human, agent, system).
+- **Worklog:** what the system did, in the order of record (human, agent, system); every entry one toggle away.
 - **Discarded:** everything discarded, restorable.
 - **Jobs:** every background job with status, source and duration.
 

@@ -320,10 +320,10 @@ test("while replaying the custody chip does not fetch and says it is the live re
 test("opening another lens while replaying keeps the position; E keeps it too; the banner steps with J and K", async () => {
   const { q, total } = await open();
   await goto(q, 40);
-  q.press("t"); await q.settle();
-  expect(q.q(".lens-timeline")).toBeDefined();
+  q.press("w"); await q.settle();
+  expect(q.q(".lens-worklog")).toBeDefined();
   expect(store(q).at).toBe(40);
-  expect(q.all(".timeline-row").every((r) => Number(r.dataset.seq) <= 40)).toBe(true);
+  expect(q.all(".worklog-row").every((r) => Number(r.dataset.seq) <= 40)).toBe(true);
   q.press("e"); await q.settle();
   expect(store(q).at).toBe(40);
   q.press("t"); await q.settle();

@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { ACTIVITY } from "../../src/web/lenses/worklog";
 import { describe as describeEntry } from "../../src/web/describe";
 import { page } from "../helpers/dom";
 import type { Page } from "../helpers/dom";
@@ -21,9 +22,24 @@ async function published(): Promise<Page> {
 }
 const state = () => p.s.app.hub.read("CASE-1").state;
 
-test("the Worklog shows who did what in UTC with milliseconds and filters by kind of actor", async () => {
+const wanted = (entries: readonly { seq: number; type: string; payload: Record<string, unknown> }[]) =>
+  entries.filter((e) => ACTIVITY.has(e.type) || (e.type === "step.finished" && typeof e.payload.reused === "string"));
+const everyBox = () => p.q("[aria-label='Every entry']") as HTMLInputElement;
+
+test("the Worklog opens on what the system did, in the order of record, in UTC with milliseconds", async () => {
+  await published(); p.press("w");
+  const rows = p.all(".lens .worklog-row");
+  const want = wanted(p.s.entries("CASE-1") as never);
+  expect(rows.length).toBeGreaterThan(0);
+  expect(rows.map((r) => r.dataset.seq)).toEqual(want.map((e) => String(e.seq)));
+  expect(rows[0]!.querySelector("time")!.textContent).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  expect(everyBox().checked).toBe(false);
+});
+
+test("Every entry shows every entry, and the choice is remembered", async () => {
   await published();
   p.press("w");
+  p.click("[aria-label='Every entry']");
   const entries = p.s.entries("CASE-1");
   const rows = p.all(".lens .worklog-row");
   expect(rows.length).toBe(entries.length);
@@ -45,11 +61,49 @@ test("the Worklog shows who did what in UTC with milliseconds and filters by kin
   expect(p.all(".lens .worklog-row").length).toBe(0);
   p.click("[aria-label='Human']");
   expect(p.all(".lens .worklog-row").length).toBe(entries.filter((e) => e.actor.kind === "human").length);
+  p.press("a"); await p.settle(); p.press("w"); await p.settle();
+  expect(everyBox().checked).toBe(true);
+});
+
+test("the actor filters apply to both views", async () => {
+  await published(); p.press("w");
+  for (const every of [false, true]) {
+    if (everyBox().checked !== every) p.click("[aria-label='Every entry']");
+    expect(p.all(".lens .worklog-row .actor-kind").map((e) => e.textContent)).toContain("agent");
+    p.click("[aria-label='Agent']");
+    expect(p.all(".lens .worklog-row .actor-kind").map((e) => e.textContent)).not.toContain("agent");
+    p.click("[aria-label='Agent']");
+  }
+});
+
+test("a card's row goes to the card and is muted until the card is kept", async () => {
+  await published();
+  const id = state().incoming[0]!;
+  expect((await p.s.command("CASE-1", "discard", { card: id })).status).toBe(200);
+  await p.settle(); p.press("w");
+  const cardRows = p.all(".lens .worklog-row[data-about]");
+  expect(cardRows.length).toBe(Object.keys(state().cards).length);
+  for (const r of cardRows) expect(r.classList.contains("muted")).toBe(state().cards[r.dataset.about!]!.place !== "lane");
+  expect(cardRows.some((r) => r.classList.contains("muted"))).toBe(true);
+  const kept = state().lanes[0]!.cards[0]!;
+  p.click(`.lens .worklog-row[data-about=${kept}]`);
+  await p.settle();
+  expect((p.doc.activeElement as HTMLElement).dataset.card).toBe(kept);
+});
+
+test("Timeline is on the shelf marked soon, opens its explanation, and makes no rows", async () => {
+  await published();
+  expect(p.q('.shelf [data-lens="timeline"]').textContent).toBe("Timeline T · soon");
+  expect(p.q('.shelf [data-lens="timeline"]').classList.contains("soon")).toBe(true);
+  p.press("t");
+  expect(p.q(".lens").textContent).toContain("on the data's own time axis");
+  expect(p.all(".timeline-row")).toEqual([]);
 });
 
 test("the Worklog takes in entries as they arrive and keeps the filter", async () => {
   await published();
   p.press("w");
+  p.click("[aria-label='Every entry']");
   p.click("[aria-label='Agent']");
   const before = p.all(".lens .worklog-row").length;
   p.s.app.hub.read("CASE-1").commit(() => [{ type: "run.paused", actor: { kind: "system", id: "t" }, payload: { reason: "x" } }]);
@@ -58,28 +112,7 @@ test("the Worklog takes in entries as they arrive and keeps the filter", async (
   expect((p.q("[aria-label='Agent']") as HTMLInputElement).checked).toBe(false);
 });
 
-test("the Timeline orders by time and mutes cards that are not kept", async () => {
-  await published();
-  const id = state().incoming[0]!;
-  expect((await p.s.command("CASE-1", "discard", { card: id })).status).toBe(200);
-  await p.settle();
-  p.press("t");
-  const rows = p.all(".lens .timeline-row");
-  expect(rows.length).toBeGreaterThan(0);
-  const times = rows.map((r) => Date.parse(r.querySelector("time")!.getAttribute("datetime")!));
-  expect(times).toEqual([...times].sort((a, b) => a - b));
-  const cardRows = rows.filter((r) => r.dataset.about !== undefined);
-  expect(cardRows.length).toBe(Object.keys(state().cards).length);
-  for (const r of cardRows) expect([r.dataset.about, r.classList.contains("muted")]).toEqual([r.dataset.about, state().cards[r.dataset.about!]!.place !== "lane"]);
-  expect(cardRows.some((r) => r.classList.contains("muted"))).toBe(true);
-  expect(cardRows.some((r) => !r.classList.contains("muted"))).toBe(true);
-  const text = rows.map((r) => r.textContent).join("\n");
-  for (const what of ["query issued", "card created", "stage started", "stage finished", "draft revised", "product published"]) expect(text).toContain(what);
-  expect(rows[0]!.querySelector("time")!.getAttribute("title")).toMatch(/Z$/);
-  expect(rows[0]!.querySelector(".actor-kind")).not.toBeNull();
-});
-
-test("a step finished on a reused query reads as reused on the Worklog and the Timeline", async () => {
+test("a step finished on a reused query reads as reused on the Worklog", async () => {
   await published();
   const card = Object.keys(state().cards)[0]!;
   p.s.app.hub.read("CASE-1").commit(() => [{
@@ -91,31 +124,6 @@ test("a step finished on a reused query reads as reused on the Worklog and the T
   const last = p.all(".lens .worklog-row").at(-1)!;
   expect(last.querySelector(".what")!.textContent).toBe("step reused, no query sent");
   expect(last.getAttribute("title")).toContain("reused q1 from 2026-11-20T10:00:00.000Z");
-  p.press("t");
-  const rows = p.all(".lens .timeline-row").filter((r) => r.textContent!.includes("step reused"));
-  expect(rows).toHaveLength(1);
-  expect(rows[0]!.textContent).toContain("no query sent");
-  expect(rows[0]!.textContent).toContain("reused q1");
-  // a step that ran is not a Timeline row: its query and card are
-  expect(p.all(".lens .timeline-row").filter((r) => r.textContent!.includes("step finished"))).toEqual([]);
-});
-
-test("the Timeline puts a card at its event time when it has one", async () => {
-  await published();
-  const card = Object.values(state()).length > 0 ? Object.values(state().cards).find((c) => c.event_time !== null) : undefined;
-  if (card === undefined) return;
-  p.press("t");
-  const row = p.q(`.lens .timeline-row[data-about=${card.id}]`);
-  expect(row.querySelector("time")!.getAttribute("datetime")).toBe(card.event_time!);
-});
-
-test("activating a card row on the Timeline moves to that card", async () => {
-  await published();
-  p.press("t");
-  const kept = state().lanes[0]!.cards[0]!;
-  p.click(`.lens .timeline-row[data-about=${kept}]`);
-  await p.settle();
-  expect((p.doc.activeElement as HTMLElement).dataset.card).toBe(kept);
 });
 
 test("Discarded lists discarded cards and Restore brings one back to Incoming", async () => {

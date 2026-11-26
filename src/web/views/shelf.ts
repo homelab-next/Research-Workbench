@@ -15,7 +15,7 @@ export function makeShelf(ui: Ui, on: { open(id: LensId): void; dock(): Dock; to
     el,
     update() {
       syncList(buttons, LENSES, (l) => l.id,
-        (l) => h("button", { type: "button", class: "lens-button", data: { lens: l.id }, on: { click: () => on.open(l.id) } }, `${l.title} ${l.key.toUpperCase()}`),
+        (l) => h("button", { type: "button", class: l.soon === true ? "lens-button soon" : "lens-button", data: { lens: l.id }, on: { click: () => on.open(l.id) } }, `${l.title} ${l.key.toUpperCase()}${l.soon === true ? " · soon" : ""}`),
         (b, l) => { b.classList.toggle("active", on.current() === l.id); });
       side.textContent = on.dock() === "bottom" ? "Dock right" : "Dock bottom";
     },
