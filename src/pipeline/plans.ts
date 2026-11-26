@@ -121,8 +121,11 @@ function playbookStep(
   if (problem !== null) return `${name}: ${problem}`;
   // the registry loads a playbook only when every pivot it names is loaded
   const pivots = p.steps.map((s) => deps.registry.pivot(s.pivot)!);
-  const last = deps.registry.pivot(p.steps.find((s) => s.id === p.end[0])!.pivot)!;
-  if (last.to !== sg.want) return `${name}: the playbook ${id} finds ${last.to}, not ${sg.want}`;
+  const ends = p.end.map((e) => deps.registry.pivot(p.steps.find((s) => s.id === e)!.pivot)!);
+  if (ends.some((x) => x.to !== sg.want)) {
+    const types = [...new Set(ends.map((x) => x.to))];
+    return `${name}: the playbook ${id} ends on steps that find ${types.join(" and ")}; a plan step needs every end step to find ${sg.want}`;
+  }
   const unconfirmed = [...new Set(pivots.map((x) => x.source))].filter((src) => deps.registry.source(src)?.confirmed === false);
   if (!frame.limits.allow_unconfirmed && unconfirmed.length > 0) return `${name}: the playbook ${id} uses the unconfirmed source ${unconfirmed[0]!}`;
   // as for a route step, the gate says which unconfirmed sources the playbook asks
@@ -130,7 +133,9 @@ function playbookStep(
   const first = have.find((h) => h.type === p.inputs[0]!.type)!;
   return {
     id: stepId, subgoal: goalId, pivot: "", source: "", from: { ...first }, to: sg.want, window: { ...frame.window },
-    needs_window: pivots.some((x) => x.needs_window), free: true, weight: 0, estimate: null, empty_means: last.empty_means, warnings,
+    needs_window: pivots.some((x) => x.needs_window), free: true, weight: 0, estimate: null,
+    // an empty answer is a proven negative only when every end step says so
+    empty_means: ends.every((x) => x.empty_means === "proven-negative") ? "proven-negative" : "not-seen", warnings,
     playbook: { id: p.id, hash: p.hash, inputs: have },
     // the playbook and every pivot it names are loaded (checked above), so the pins can be computed
     pins: stepPins(deps.registry, { pivot: "", playbook: { id: p.id, hash: p.hash, inputs: have } })!,

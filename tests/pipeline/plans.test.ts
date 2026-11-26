@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { appendFileSync, cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Plan } from "../../src/core/types";
@@ -408,7 +408,9 @@ test("each way a playbook sub-goal can be wrong is refused with its reason", () 
   expect(buildPlan("", pbOut({ have: [{ type: "domain", value: "cdn-update.example.org" }] }), deps(), pbFrame, null)).toEqual({
     errors: [`${name}: the playbook needs a address for address`],
   });
-  expect(buildPlan("", pbOut({ want: "account" }), deps(), pbFrame, null)).toEqual({ errors: [`${name}: the playbook address-triage finds asset, not account`] });
+  expect(buildPlan("", pbOut({ want: "account" }), deps(), pbFrame, null)).toEqual({
+    errors: [`${name}: the playbook address-triage ends on steps that find asset; a plan step needs every end step to find account`],
+  });
   expect(buildPlan("", pbOut(), deps(), frame, null)).toEqual({ errors: [`${name}: the playbook address-triage uses the unconfirmed source leases`] });
   const shape = "the plan output is not in the required shape: each sub-goal needs a route of pivot ids, or a playbook and an empty route";
   expect(buildPlan("", pbOut({ route: ["address_to_asset"] }), deps(), pbFrame, null)).toEqual({ errors: [shape] });
@@ -432,4 +434,17 @@ test("every step of a built plan carries pins, and a playbook step's pins change
   const pb = plan.steps.find((s) => s.playbook !== undefined)!;
   expect(changed.playbook("address-triage")!.hash).toBe(pb.playbook!.hash);
   expect(stepPins(changed, pb)).not.toBe(pb.pins);
+});
+
+test("a playbook plan step checks every end step: each must find the wanted type, and empty means proven negative only when each says so", () => {
+  const name = 'sub-goal "Triage"';
+  const triage = readFileSync(join(f.sample.root, "playbooks", "address-triage.yaml"), "utf8").replace(/^kind: playbook\nid: address-triage\ntitle: [^\n]*\n/, "");
+  const twoTypes = withPlaybook("triage-names", triage.replace("end: [asset]", "end: [asset, names]"));
+  expect(buildPlan("", pbOut({ playbook: "triage-names" }), twoTypes, pbFrame, null)).toEqual({
+    errors: [`${name}: the playbook triage-names ends on steps that find asset and domain; a plan step needs every end step to find asset`],
+  });
+  const twoAssets = withPlaybook("triage-lease", triage.replace("end: [asset]", "end: [asset, lease]"));
+  const plan = buildPlan("", pbOut({ playbook: "triage-lease" }), twoAssets, pbFrame, null) as Plan;
+  expect(plan.steps).toHaveLength(1);
+  expect(plan.steps[0]!.empty_means).toBe("not-seen");
 });
