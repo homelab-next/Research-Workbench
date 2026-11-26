@@ -2,7 +2,8 @@ import type { Json } from "../core/canonical";
 import { isPlainObject } from "../core/canonical";
 import type { Schema } from "../core/schema";
 import type { CardState, CaseState } from "../core/state/types";
-import type { Entry, Marking } from "../core/types";
+import { BASIS_TEXT, PERSON_SOURCE } from "../core/state/person";
+import type { Entry, Marking, PersonStatement } from "../core/types";
 import { isMarking, strictest } from "../core/types";
 import type { LoadedManifest, Registry } from "../modules/registry";
 import { scrub, scrubCoverage } from "./tools/kit";
@@ -130,6 +131,20 @@ function requestBehind(entries: readonly Entry[], e: Entry): Extract<Entry, { ty
   throw new ContextError(`what ${a.id} wrote at entry ${e.seq} has no model request before it, so its marking is not known`);
 }
 
+/** A statement by the person as a part: their word, how they know it, what it is about and the question it answers; no coverage, columns or rows. */
+function statementPart(card: CardState, p: PersonStatement, registry: Registry): PackPart {
+  const title = scrub(registry, card.title);
+  const how = p.detail === "" ? BASIS_TEXT[p.basis] : `${BASIS_TEXT[p.basis]}: ${scrub(registry, p.detail)}`;
+  const text = [
+    `Card ${card.id}: ${title}`,
+    scrub(registry, card.body),
+    `Source: ${PERSON_SOURCE} (${how}). A statement by the person running the investigation, not data from a source.`,
+    ...(p.about.length === 0 ? [] : [`About: ${p.about.map((o) => `${o.type} ${scrub(registry, o.value)}`).join(", ")}`]),
+    ...(p.answers === null ? [] : [`Answers: ${p.answers}`]),
+  ].join("\n");
+  return { kind: "card", id: card.id, title: `Card ${card.id}: ${title}`, text, marking: card.marking, fixed: false };
+}
+
 /**
  * The only way a card or text a model wrote becomes a pack part. A card's title, body and coverage detail are scrubbed as the tools scrub them
  * (a location, user or credential never reaches a model) and it carries the card's marking. Text a model wrote carries the marking of the model
@@ -138,6 +153,7 @@ function requestBehind(entries: readonly Entry[], e: Entry): Extract<Entry, { ty
 export function packPart(from: PartFrom): PackPart {
   if ("card" in from) {
     const { card, registry } = from;
+    if (card.person !== undefined) return statementPart(card, card.person, registry);
     const coverage = scrubCoverage(registry, card.coverage);
     const cov = coverage === null ? "unknown" : coverage.kind === "full" ? "full" : `partial (${coverage.reason}${coverage.detail ? `: ${coverage.detail}` : ""})`;
     const title = scrub(registry, card.title);

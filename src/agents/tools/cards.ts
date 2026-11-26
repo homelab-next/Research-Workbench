@@ -1,7 +1,8 @@
 import type { Json } from "../../core/canonical";
 import type { CardState } from "../../core/state/types";
 import { strictest } from "../../core/types";
-import type { Payloads } from "../../core/types";
+import type { Payloads, PersonStatement } from "../../core/types";
+import { BASIS_TEXT } from "../../core/state/person";
 import type { Registry } from "../../modules/registry";
 import { revalidateCard } from "../../modules/revalidate";
 import { previewCell } from "../../modules/runner";
@@ -15,6 +16,8 @@ export function cardBrief(registry: Registry, c: CardState): Json {
   return json({
     id: c.id, title: scrub(registry, c.title), body: scrub(registry, c.body), source: c.source, marking: c.marking, coverage: scrubCoverage(registry, c.coverage), empty: c.empty,
     row_count: c.row_count, place: c.place, subgoal: c.subgoal, validated: c.validated === null ? null : c.validated.outcome,
+    // only a statement says so, so every other card's brief is as it was
+    ...(c.person === undefined ? {} : { person: true }),
   });
 }
 
@@ -33,6 +36,12 @@ function withoutLocation(text: string, location: string | null): string {
   if (base !== "") out = out.split(base).join("");
   return out.replace(/^([A-Z]+ )[a-z][a-z0-9+.-]*:\/\/[^/\s?#]*/i, "$1");
 }
+
+/** How the person knows what a statement says, what it is about and the question it answers. */
+const personView = (registry: Registry, p: PersonStatement): Json => json({
+  basis: p.basis, how: p.detail === "" ? BASIS_TEXT[p.basis] : `${BASIS_TEXT[p.basis]}: ${scrub(registry, p.detail)}`,
+  about: p.about.map((o) => ({ type: o.type, value: scrub(registry, o.value) })), answers: p.answers,
+});
 
 async function readCard(ctx: ToolContext, args: Record<string, Json>): Promise<ToolResult> {
   const id = str(args.card);
@@ -57,6 +66,7 @@ async function readCard(ctx: ToolContext, args: Record<string, Json>): Promise<T
   const view = {
     id: c.id, title, body, columns: c.columns, rows: c.rows.slice(0, VIEW_ROWS).map((r) => r.map(previewCell)),
     row_count: c.row_count, coverage: scrubCoverage(ctx.deps.registry, c.coverage), empty: c.empty, marking: c.marking, quality_notes: notes, provenance,
+    ...(c.person === undefined ? {} : { person: personView(ctx.deps.registry, c.person) }),
     // the title again under `card`, so a script's {{card:<title>}} can name this card
     card: [{ id: c.id, title }],
   };

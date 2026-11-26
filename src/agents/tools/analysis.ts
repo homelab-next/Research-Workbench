@@ -1,5 +1,5 @@
 import type { Json } from "../../core/canonical";
-import { namesFinding, ruledFindings, rulingText } from "../../core/state";
+import { isPersonCard, namesFinding, ruledFindings, rulingText } from "../../core/state";
 import { ANSWER_ACTIONS, CONFIDENCES, SECTIONS, SEVERITIES } from "../../core/types";
 import type { Schema } from "../../core/schema";
 import { composeStatement, likelihoodMatches } from "../draft";
@@ -29,6 +29,8 @@ function cardsExist(ctx: ToolContext, ids: string[]): void {
 /** An empty result is evidence only when it is a proven negative over full coverage; anything else is a gap (check 8 reads the same rule). */
 function notSeen(ctx: ToolContext, id: string): boolean {
   const card = ctx.session.state.cards[id]!;
+  // a statement by the person has no rows by nature: it is their word, not an empty result
+  if (isPersonCard(card)) return false;
   return card.row_count === 0 && !(card.empty === "proven-negative" && card.coverage !== null && card.coverage.kind === "full");
 }
 /** True when the text names the card, as a whole word in any case (as check 8 reads a section). */
@@ -157,7 +159,7 @@ function assessmentParameters(likelihood: readonly string[] | null): Schema {
 export const ANALYSIS_TOOLS: ToolDef[] = [
   {
     name: "propose_assessment",
-    description: "Propose a finding in the draft, citing the cards that support it. Write the claim plainly, give how likely it is as one of the standard's likelihood terms, and say how confident you are and why; the statement is worded from them. A card with no rows may be cited only when it is a proven negative with full coverage; any other empty card is a gap. Name `replaces` to change one you already proposed.",
+    description: "Propose a finding in the draft, citing the cards that support it. Write the claim plainly, give how likely it is as one of the standard's likelihood terms, and say how confident you are and why; the statement is worded from them. A card with no rows may be cited only when it is a proven negative with full coverage; any other empty card is a gap. A statement by the person may be cited; say in confidence_basis that the finding rests on the person's word. Name `replaces` to change one you already proposed.",
     parameters: assessmentParameters(null),
     parametersFor: (ctx) => assessmentParameters(ctx.draft?.terms?.likelihood ?? null),
     call: proposeAssessment, refused: refusedProposal,

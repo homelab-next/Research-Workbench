@@ -265,3 +265,21 @@ test("the example has the required fields, the first enum value and empty arrays
     .toEqual({ a: [3], n: 0 });
   expect(exampleOf({ anyOf: [{ const: "x" }, { type: "string" }] })).toBe("x");
 });
+
+test("a statement card's part says it is the person's word, not data, and has no coverage, columns or rows lines", () => {
+  const card = {
+    id: "c1", title: "Statement: The device at 192.0.2.17 is the meeting-room TV.", body: "The device at 192.0.2.17 is the meeting-room TV.", kind: "note", made_by: "human",
+    query: null, columns: [], column_types: [], rows: [], row_count: 0, coverage: null, empty: null, marking: "TLP:GREEN", source: null, step: null, subgoal: null,
+    why: "did it myself: I installed it", event_time: null, quality_notes: [],
+    person: { basis: "did", detail: "I installed it", about: [{ type: "address", value: "192.0.2.17" }], answers: null },
+  } as unknown as CardState;
+  const part = packPart({ card, registry });
+  expect(part).toMatchObject({ kind: "card", id: "c1", marking: "TLP:GREEN", fixed: false, title: "Card c1: Statement: The device at 192.0.2.17 is the meeting-room TV." });
+  expect(part.text).toBe(["Card c1: Statement: The device at 192.0.2.17 is the meeting-room TV.", "The device at 192.0.2.17 is the meeting-room TV.",
+    "Source: the person (did it myself: I installed it). A statement by the person running the investigation, not data from a source.", "About: address 192.0.2.17"].join("\n"));
+  const answering = packPart({ card: { ...card, person: { ...card.person!, answers: "ask-1" } } as CardState, registry });
+  expect(answering.text.split("\n").at(-1)).toBe("Answers: ask-1");
+  const bare = packPart({ card: { ...card, person: { basis: "told", detail: "", about: [], answers: null } } as CardState, registry });
+  expect(bare.text).toBe(["Card c1: Statement: The device at 192.0.2.17 is the meeting-room TV.", "The device at 192.0.2.17 is the meeting-room TV.",
+    "Source: the person (was told). A statement by the person running the investigation, not data from a source."].join("\n"));
+});

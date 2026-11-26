@@ -1,4 +1,4 @@
-import { holds, latestDraft, namesFinding, ruledFindings, rulingText, runConflicts } from "../core/state";
+import { holds, isPersonCard, latestDraft, namesFinding, ruledFindings, rulingText, runConflicts } from "../core/state";
 import type { CaseState, ConflictState } from "../core/state";
 import { CONFIDENCES } from "../core/types";
 import type { ReviewConflict } from "../core/types";
@@ -140,7 +140,8 @@ const pauseReason = (reasons: string[]): string => `${reasons.join(". ")}. The p
 export function uncitableNote(state: Readonly<CaseState>, points: readonly string[]): string | null {
   const ids = Object.keys(state.cards).filter((id) => {
     const c = state.cards[id]!;
-    if (c.place === "discarded" || c.row_count !== 0) return false;
+    // a statement by the person has no rows by nature and may be cited
+    if (c.place === "discarded" || c.row_count !== 0 || isPersonCard(c)) return false;
     if (c.empty === "proven-negative" && c.coverage !== null && c.coverage.kind === "full") return false;
     return points.some((p) => new RegExp(`(?<![\\w])${escapeRe(id)}(?![\\w])`, "i").test(p));
   }).sort();

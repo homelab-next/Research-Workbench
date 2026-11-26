@@ -4,6 +4,7 @@ import { startStandin } from "../helpers/http-standin";
 import { runQuery } from "../../src/modules/runner";
 import { fixture, person, START, WINDOW } from "../helpers/tools-fixture";
 import type { Fixture } from "../helpers/tools-fixture";
+import { addStatement } from "../../src/pipeline/person";
 
 let f: Fixture;
 beforeEach(() => { f = fixture(true); });
@@ -114,4 +115,24 @@ test("verify_card scrubs a refusal's text", async () => {
   const r = await f.call("verify_card", { why: "w", card: "c1" });
   expect(JSON.stringify(r)).not.toContain(f.sample.root);
   expect(JSON.stringify(r)).toContain("[hidden]");
+});
+
+test("list_cards marks a statement and read_card says how the person knows; other cards' views are as before", async () => {
+  await f.call("run_step", { step: "s1", why: "w" });
+  const other = await f.call("read_card", { why: "w", card: "c1" });
+  const id = addStatement(f.s, f.sample.deps, {
+    actor: person, statement: "The device at 192.0.2.17 is the meeting-room TV.", basis: "did", detail: "I installed it", about: [{ type: "address", value: "192.0.2.17" }], marking: null,
+  });
+  const listed = view(await f.call("list_cards", { why: "w" })).cards as Record<string, Json>[];
+  const brief = listed.find((c) => c.id === id)!;
+  const otherBrief = listed.find((c) => c.id === "c1")!;
+  expect(brief.person).toBe(true);
+  expect("person" in otherBrief).toBe(false);
+  const r = await f.call("read_card", { why: "w", card: id });
+  expect(r.ok).toBe(true);
+  expect(view(r).person).toEqual({ basis: "did", how: "did it myself: I installed it", about: [{ type: "address", value: "192.0.2.17" }], answers: null });
+  expect(view(r).provenance).toBeNull();
+  // the result card reads as it did before the statement was added
+  expect(await f.call("read_card", { why: "w", card: "c1" })).toEqual(other);
+  expect("person" in view(other)).toBe(false);
 });

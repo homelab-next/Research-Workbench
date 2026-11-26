@@ -8,6 +8,7 @@ import { agent, person } from "../helpers/tools-fixture";
 import { fixture } from "../helpers/tools-fixture";
 import type { Fixture } from "../helpers/tools-fixture";
 import type { ToolName } from "../../src/agents/tools";
+import { addStatement } from "../../src/pipeline/person";
 
 let f: Fixture;
 beforeEach(async () => {
@@ -383,4 +384,26 @@ test("raise_challenge refuses to reopen a finding the person has ruled on", asyn
   expect(Object.keys(f.s.state.challenges)).toEqual([]);
   // another point may still be raised
   expect((await f.call("raise_challenge", { why: "w", severity: "consider", text: "the peer is unexplained", cites: ["c1"] })).ok).toBe(true);
+});
+
+const statement = (): string => addStatement(f.s, f.sample.deps, {
+  actor: person, statement: "The device at 192.0.2.17 is the meeting-room TV.", basis: "did", detail: "I installed it", about: [{ type: "address", value: "192.0.2.17" }], marking: null,
+});
+
+test("a finding may cite a statement by the person, though it has no rows", async () => {
+  f.ctx.draft = drafting();
+  const id = statement();
+  const r = await f.call("propose_assessment", assess({ cites: ["c1", id], confidence_basis: "rests on the person's word" }));
+  expect(r.ok).toBe(true);
+  expect(f.ctx.draft.findings[0]!.cites).toEqual(["c1", id]);
+  const spec = toolSpecs(["propose_assessment"]).find((t) => t.name === "propose_assessment")!;
+  expect(spec.description).toContain("A statement by the person may be cited; say in confidence_basis that the finding rests on the person's word.");
+});
+
+test("a narrative section may name a statement card", async () => {
+  f.ctx.draft = drafting();
+  const id = statement();
+  const r = await f.call("propose_narrative", { why: "w", section: "summary", text: `The device is the meeting-room TV, as the person says (${id}).`, cites: [id] });
+  expect(r.ok).toBe(true);
+  expect(f.ctx.draft.narrativeCites.summary).toEqual([id]);
 });

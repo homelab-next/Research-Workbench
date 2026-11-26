@@ -7,6 +7,7 @@ import type { CaseState } from "../../src/core/state";
 import type { Draft, Finding, Plan, Product, ReviewConflict, StageDef } from "../../src/core/types";
 import { firstUnpassedReview, nextStep, SEND_BACK_CAP } from "../../src/pipeline/next";
 import type { Pipeline, StageManifest } from "../../src/pipeline/manifests";
+import { uncitableNote } from "../../src/pipeline/conflict";
 import { card, EntryBuilder } from "../helpers/entries";
 
 const sm = (id: string, order: number, over: Partial<StageManifest> = {}): StageManifest => ({
@@ -437,4 +438,20 @@ test("a reviewer that names an empty card proving nothing sends back a note that
   expect(reason).not.toContain("c5 returned");
   const plain = nextStep(disagreement([{ check: "support", where: "f26", message: "f26 cites too little" }], cards), roled, { likelihood: LIKELIHOOD });
   expect((plain as { sent_back: { reason: string } }).sent_back.reason).toBe("f26 cites too little");
+});
+
+test("a send-back that names a statement card gets no cannot-be-cited note", () => {
+  const b = new EntryBuilder();
+  b.add("case.created", { id: "case-1", title: "t", asked: "a", why: "w", starting: [], window: { from: null, to: null }, objective: null, marking: "TLP:GREEN" });
+  const statement = card("c5", {
+    kind: "note", made_by: "human", columns: [], column_types: [], rows: [], row_count: 0, coverage: null, empty: null, source: null,
+    person: { basis: "did", detail: "", about: [], answers: null },
+  });
+  b.add("card.created", { card: statement }, person);
+  b.add("card.created", { card: card("c6", { rows: [], row_count: 0, empty: "not-seen" }) });
+  const s = fold(b.entries);
+  expect(s.skipped).toEqual([]);
+  expect(uncitableNote(s, ["f1 should cite c5"])).toBeNull();
+  // an empty card that is not the person's still gets the note
+  expect(uncitableNote(s, ["f1 should cite c5 and c6"])).toStartWith("Note: c6 returned no rows");
 });
