@@ -171,6 +171,66 @@ A source with no password (a user name only) needs none of this.
 
 Each source has a `marking`: `TLP:CLEAR`, `TLP:GREEN`, `TLP:AMBER`, `TLP:AMBER+STRICT` or `TLP:RED`. Each model has a `where`: `machine`, `network` or `hosted`. `marking_policy` in the configuration says where each marking may go. The default lets the two least restrictive go anywhere, keeps the next two off hosted models, and keeps the most restrictive on this machine. Cards keep their marking into drafts and into the published bundle, and a model is never given text its place may not see. Preflight fails if a source's marking may not go to the model of a stage that reads it.
 
+### Playbooks
+
+A playbook is a fixed list of lookups, run in code with no model and no budget. It is one file, `kind: playbook`, anywhere under a trusted root (the sample keeps it in `playbooks/address-triage.yaml`):
+
+```yaml
+kind: playbook
+id: address-triage
+title: Triage an address
+about: Is the address a known asset, what names resolved to it, and who looked those names up.
+inputs:
+  - { name: address, type: address }
+steps:
+  - { id: asset,   pivot: address_to_asset,          from: input.address }
+  - { id: lease,   pivot: address_to_asset_by_lease, from: input.address, when: asset.empty }
+  - { id: names,   pivot: address_to_domains,        from: input.address }
+  - { id: clients, pivot: domain_to_clients,         from: names, when: names.rows, max_values: 5 }
+end: [asset]
+```
+
+That is the whole grammar. There is no `else`, no `and` and no loop.
+
+- `inputs`: one or more, each a name and a type of value. No two inputs share a type.
+- `steps`: one to twelve, run in the order written, one at a time. `pivot` names a loaded pivot. `from` is `input.<name>` or the id of an earlier step; a step that starts from an earlier step runs once for each value that step found, in the order found, up to `max_values` (default 5, at most 20). `when` (optional) is `<earlier step>.rows` or `<earlier step>.empty`.
+- `end` (optional): step ids. The outcome of the playbook is the outcome of the first listed step that ran. Without it, the last step.
+
+What `rows` and `empty` mean: a step has `rows` if any of its lookups returned a row. A step is `empty` only if it ran and every lookup came back with no rows and full coverage. A lookup that was partial, failed, refused or waiting for a budget makes the step neither, so a step that depends on it is skipped and the record says it could not tell. A branch never treats "we could not look" as "there was nothing".
+
+Limits: at most 12 steps a playbook, 20 values a step, 50 lookups a run. A playbook never spends a budget: a lookup whose pivot is costly is not sent, the step says it needs a budget and the playbook goes on. Run that pivot by hand with a budget; running the playbook again reuses the answer. A playbook that does not load (an unknown pivot, a bad `from`, a duplicate id) is rejected with the reason and the server still starts.
+
+Start one from the Pivot panel (a button under the routes for each playbook the card's values can fill) or from the command bar: `run playbook address-triage on 198.51.100.77`. The planner may also offer a playbook as one plan step in place of a route, if every lookup in it is free; Research then runs it in code with no researcher. Each run is one job. Every lookup goes through the same runner as any other query, so it is recorded as a query with a card, and the run's steps are recorded as `playbook.*` entries. Before a lookup is sent, the runner looks for an answer in the case to the same pivot, value and window under the same manifests, with full coverage and a card that still exists; if there is one, no query is sent and the step says "reused, no query sent". A lookup a researcher answered is reused by a playbook, and the other way round.
+
+### Inventories
+
+An inventory says what a list of things (one type of value) holds and whether it is complete. It is one file, `kind: inventory`, under a trusted root:
+
+```yaml
+kind: inventory
+id: assets
+title: Asset list
+holds: asset
+scope: internal hosts
+complete: true
+basis: Every internal host is entered by hand before it is given an address.
+derived: false
+```
+
+A pivot asks an inventory with one more line, `inventory: assets`. Its `to` must be the inventory's `holds`, and its manifest must come from a trusted root. Its `empty_means` is decided by the inventory: `proven-negative` if the inventory is complete, `not-seen` if not. Leave `empty_means` out, or state the one the inventory implies; the other is rejected.
+
+`complete: true` needs a `basis`, one sentence on why the list can be relied on to hold everything in its scope. A list worked out from observed events (`derived: true`) only holds what was seen and cannot be complete; that pair is refused. When in doubt, say `complete: false`.
+
+A card from an inventory pivot says what the answer proves:
+
+- `2 rows · in Asset list`
+- `No rows · proven negative · not in Asset list, which is complete for internal hosts`
+- `No rows · not seen (not proof of absence) · Asset list is not declared complete`
+
+A partial result keeps its "partial" wording and is never either of the last two.
+
+"Does it belong?" is a button on the Pivot panel. It asks every inventory that takes the card's value, as one playbook made on the spot, and gives one verdict: a known asset; not a known asset (proven, because a complete inventory came back empty); not seen in any inventory (none is complete, so this proves nothing); or could not tell.
+
 ## Before a run
 
 ```bash
@@ -189,6 +249,8 @@ It reads your files and asks your model server what it has. It never contacts a 
 - `context fit`: every stage's reply cap (`max_output_tokens`) leaves the pack its half of the context each request has. If it does not, the line names the cap that fits.
 - `marking policy`: every source's marking may go to every stage's model.
 - `model answers`: one fixed test question, with no case data, answered with a well-formed tool call. It is the only thing preflight sends anywhere, and no ledger records it. `--no-question` leaves it out.
+
+The rule is `max_output_tokens + floor(slot × 0.5) ≤ slot`, where `slot` is the context divided by `parallel`. A stage that names a `fast_model` is checked for it too, as `<stage> (fast)`.
 
 Load the model in one slot. If the server splits the context between several slots, each request has only its share, so `parallel` in the model manifest says how many slots share the context, and `context` is the whole of it. Preflight checks the reply caps against the share, and a stage whose cap does not fit stops before it calls the model.
 
@@ -221,4 +283,7 @@ It prints the address and any `problem:` lines. Fix those first.
 - The lake guard is strict, and it is written for one query engine's rules. It has been tested against a stand-in, not against every way an engine can read a statement. Treat it as one safeguard among several (read-only access, `adhoc: false`, the row estimate and the budget), not the only one.
 - A card that a published product cites can be discarded afterwards. The published bundle is unchanged, but the case no longer shows the card as live.
 - A server error from a case ledger that cannot be read shows as a generic 500.
+- A playbook cannot be given a budget: a costly lookup in it waits, and a person runs that pivot by hand.
+- A step starts from the type its earlier step's pivot yields, not from a named column of its rows.
+- The fast model (`fast_model` in a stage manifest) has no dropdown; it is set in the manifest only.
 - Run one researcher at a time against a real lake (`research.parallel: 1`, which `new-root` sets).

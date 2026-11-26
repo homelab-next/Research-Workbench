@@ -14,6 +14,14 @@ example addresses (192.0.2.x, 198.51.100.x, 203.0.113.x), example.com/.net/.org 
 The story: account `j.doe` signs in to `ws-17.example.net` from an address it has never used, and minutes
 later that workstation starts calling `198.51.100.77` every ten minutes. Start from that address.
 
+## Playbook and inventories
+
+- `playbooks/address-triage.yaml`: Triage an address. It asks the asset list, falls back to the lease records only when the asset list came back empty (a branch taken or skipped), looks up the names that resolved to the address and, for each name found (up to 5), who looked it up (a fan-out). It ends on the asset step, so the outcome is the asset list's answer. Run it from the Pivot panel; the scripted run asks two of these lookups already, so the playbook reuses them.
+- `inventories/assets.yaml`: the asset list, declared complete for internal hosts, with a basis. An empty answer from it is a proven negative.
+- `inventories/leases.yaml`: lease records, derived from addresses handed out and not complete. An empty answer from it is only "not seen".
+
+Together they show "Does it belong?": a known address is a known asset; an address in neither list reads as proven not a known asset because the asset list is complete.
+
 ## A demo run
 
 The sample carries a scripted investigation (`scripts/sample-run.yaml`): the models are the scripted one, so no real model
