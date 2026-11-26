@@ -1,13 +1,17 @@
 import type { Json } from "../../core/canonical";
 import type { Actor, Entry } from "../../core/types";
-import type { PlanStep, StepOutcome } from "../../core/types";
+import type { Marking, PlanStep, StepOutcome } from "../../core/types";
+import { strictest } from "../../core/types";
 import { subgoalAnswered } from "../../core/state";
 import { ContextError, packPart } from "../../agents/context";
 import type { PackPart } from "../../agents/context";
+import { execTool, TOOLS } from "../../agents/tools";
+import type { ToolContext } from "../../agents/tools";
+import { stepLine } from "../../agents/tools/research";
 import { beginPlaybook, runPlaybook } from "../../modules/playbook-run";
 import { spendPlanBudget } from "../plans";
 import type { StageEnd, StageEnv } from "../engine";
-import { lastPass, noSchema, requestsOfPass, stageAgent, stageOfRole, titleOf } from "./agent";
+import { frameOf, lastPass, noSchema, requestsOfPass, resolveAgent, stageAgent, stageOfRole, titleOf } from "./agent";
 import type { AgentStageEnd } from "./agent";
 
 const ENGINE: Actor = { kind: "system", id: "engine" };
@@ -25,8 +29,7 @@ const noteOf = (end: AgentStageEnd | undefined): string => {
   return typeof note === "string" ? note : "";
 };
 
-const describeStep = (s: PlanStep): string =>
-  `- ${s.id}: ${s.pivot} on ${s.source}, from ${s.from.type} ${s.from.value === "" ? "(the value an earlier step found)" : s.from.value} to ${s.to}${s.free ? "" : " (costly)"}`;
+const describeStep = (s: PlanStep): string => `- ${s.id}: ${stepLine(s)}${s.free ? "" : " (costly)"}`;
 
 /**
  * Research: one researcher per sub-goal with an accepted step, at most `research.parallel` at once, each as its own job. When Assemble sent
@@ -102,7 +105,7 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
         const playbook = steps.length === 1 && steps[0]!.playbook !== undefined ? steps[0]! : null;
         units.push({
           playbook, actor_id: actorId(g.id), title: `Research: ${g.title}`, subgoal: g.id, question: null,
-          task: `Research sub-goal ${g.id}. ${TASK} Run the accepted steps it lists with run_step, in order, then report what each returned.`,
+          task: `Research sub-goal ${g.id}. ${TASK} The accepted steps it lists were run before you were asked, where they could be: what each returned is in the part titled "What the accepted steps returned", with their cards. Run with run_step, by its id, only a step that part says is not yet run, then report what the steps found.`,
           // the steps carry the planner's values, source and pivot: they are as strict as the question
           part: questionPart(`question-${g.id}`, [`Sub-goal ${g.id}: ${g.title}`, g.question, "Accepted steps:", ...steps.map(describeStep)].join("\n"), planRequests),
         });
@@ -114,6 +117,48 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
   }
 
   const results: (AgentStageEnd | undefined)[] = units.map(() => undefined);
+  /**
+   * A sub-goal's accepted steps, run in code in plan order at the start of its job, before its researcher is asked: each step whose value
+   * the plan gives and that has not run, through run_step as the researcher's actor (an answered query is reused; a costly step spends only
+   * the plan's budget). Returns the parts the researcher reads: what each step returned, then the cards. A step whose value an earlier step
+   * finds is left to the researcher. Nothing is run when the researcher's model cannot be resolved (the agent then stalls with the reason).
+   */
+  const runStepsInCode = async (u: Unit, job: string): Promise<PackPart[]> => {
+    if (u.subgoal === null) return [];
+    const g = current.subgoals.find((x) => x.id === u.subgoal)!;
+    const steps = current.steps.filter((s) => accepted(g).includes(s.id));
+    const who = await resolveAgent(env, u.actor_id);
+    if ("stalled" in who) return [];
+    const { window, limits } = frameOf(env);
+    const ctx: ToolContext = {
+      session, deps: deps.runner, seeker: deps.seeker, actor: who.actor, link: { run: session.state.run.id, stage: stage.id, job },
+      draft: null, draft_hash: null, subgoal: u.subgoal, window, limits, onNeedsBudget: (p, step) => spendPlanBudget(session, deps.runner, p, step),
+    };
+    const lines: string[] = [];
+    const markings: Marking[] = [];
+    for (const step of steps) {
+      if (statusOf(step.id) === "pending" && step.from.value !== "" && session.state.run.status !== "paused" && session.state.run.status !== "finished") {
+        const args = { step: step.id, why: `accepted plan step ${step.id}, run by the workbench before the researcher was asked` };
+        const r = await execTool(ctx, { tool: TOOLS.run_step, name: "run_step", args, why: args.why, error: null });
+        if (r.marking !== null) markings.push(r.marking);
+      }
+      const st = Object.hasOwn(session.state.plan.steps, step.id) ? session.state.plan.steps[step.id]! : null;
+      const status = st === null ? "pending" : st.status;
+      if (status === "pending") lines.push(`${step.id}: not yet run${step.from.value === "" ? " (it needs the value an earlier step found)" : ""}`);
+      else if (status === "running") lines.push(`${step.id}: running`);
+      else lines.push(`${step.id}: ${st!.note === "" ? status : st!.note}`);
+    }
+    const fresh = session.entries();
+    const cards = [...new Set(steps.flatMap((s) => (Object.hasOwn(session.state.plan.steps, s.id) ? session.state.plan.steps[s.id]!.cards : [])))]
+      .flatMap((c) => (Object.hasOwn(session.state.cards, c) ? [packPart({ card: session.state.cards[c]!, registry: deps.registry })] : []));
+    // the notes are the tools' words on what the source returned: as strict as the planner's values and the sources they came from
+    const said = packPart({
+      kind: "note", id: `steps-${g.id}`, title: "What the accepted steps returned", text: lines.join("\n"), fixed: false,
+      entries: fresh, written_by: planRequests, floor: markings.length === 0 ? null : strictest(...markings),
+    });
+    return [said, ...cards];
+  };
+
   const runUnit = async (u: Unit): Promise<AgentStageEnd> => {
     if (u.playbook !== null) return runPlaybookUnit(u.playbook, current.subgoals.find((g) => g.id === u.subgoal)!.question);
     let job = "";
@@ -126,8 +171,13 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
     };
     let end: AgentStageEnd;
     try {
+      const ran = u.sent_back === true ? [] : await runStepsInCode(u, job);
+      if (session.state.run.status === "paused" || session.state.run.status === "finished") {
+        close("failed");
+        return { kind: "stopped" };
+      }
       end = await stageAgent(env, {
-        actor_id: u.actor_id, task: u.task, extras: [u.part], subgoal: u.subgoal, job,
+        actor_id: u.actor_id, task: u.task, extras: [u.part, ...ran], subgoal: u.subgoal, job,
         // a researcher sent back for a question has no sub-goal: it may not run plan steps or spend a plan budget
         ...(u.sent_back === true ? { omit_tools: ["run_step"] as const } : { onNeedsBudget: (p: string, step: string | null) => spendPlanBudget(session, deps.runner, p, step) }),
       });

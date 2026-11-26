@@ -97,7 +97,7 @@ test("run_step on a later hop needs a value, and takes one", async () => {
 test("run_step refuses a step that was not accepted or belongs to another sub-goal", async () => {
   f.s.commit(() => [{ type: "plan.accepted", actor: agent, payload: { plan: "plan-1", steps: ["s1", "s2"], budgets: {} } }]);
   expect((await f.call("run_step", { step: "s4", value: "192.0.2.17", why: "w" })).summary).toBe("step s4 was not accepted");
-  expect((await f.call("run_step", { step: "nope", why: "w" })).summary).toBe("unknown step: nope");
+  expect((await f.call("run_step", { step: "nope", why: "w" })).summary).toStartWith("unknown step: nope; the plan's steps are ");
   f.ctx.subgoal = "g2";
   expect((await f.call("run_step", { step: "s1", why: "w" })).summary).toBe("step s1 belongs to sub-goal g1, not g2");
   expect(issued()).toEqual([]);
@@ -165,11 +165,11 @@ test("an engine that declines leaves the step blocked, and a finished step does 
   expect(f.s.state.plan.steps.s3!.status).toBe("blocked");
   const head = f.s.head().seq;
   const again = await f.call("run_step", { step: "s3", why: "again" });
-  expect(again).toMatchObject({ ok: false, summary: "this step has already run" });
+  expect(again).toMatchObject({ ok: true, summary: "this step has already run: waiting for a person's budget (proposal p1)", view: { status: "already_run", outcome: "blocked" } });
   expect(f.s.head().seq).toBe(head);
   for (const step of ["s1"]) {
     await f.call("run_step", { step, why: "w" });
-    expect((await f.call("run_step", { step, why: "w" })).summary).toBe("this step has already run");
+    expect((await f.call("run_step", { step, why: "w" })).summary).toBe("this step has already run: no rows · proven negative");
   }
   expect(issued().filter((q) => q.step === "s1")).toHaveLength(1);
 });
@@ -268,8 +268,8 @@ test("hostile arguments are refused as results", async () => {
     expect(r.ok).toBe(false);
     expect(r.summary).toStartWith("invalid arguments: ");
   }
-  expect((await f.call("run_step", { why: "w", step: "constructor" })).summary).toBe("unknown step: constructor");
-  expect((await f.call("run_step", { why: "w", step: "__proto__" })).summary).toBe("unknown step: __proto__");
+  expect((await f.call("run_step", { why: "w", step: "constructor" })).summary).toStartWith("unknown step: constructor; ");
+  expect((await f.call("run_step", { why: "w", step: "__proto__" })).summary).toStartWith("unknown step: __proto__; ");
   expect((await f.call("read_card", { why: "w", card: "constructor" })).summary).toBe("unknown card: constructor");
   expect((await f.call("verify_card", { why: "w", card: "__proto__" })).summary).toBe("unknown card: __proto__");
   expect((await f.call("describe_source", { why: "w", source: "constructor" })).summary).toBe("unknown source: constructor");
@@ -283,15 +283,30 @@ test("hostile arguments are refused as results", async () => {
   expect(({} as Record<string, unknown>).x).toBeUndefined();
 });
 
-test("run_step given a pivot id says it is a pivot and names the steps to use", async () => {
+test("run_step given a pivot id runs the step when the pivot is unique in the sub-goal, and names the steps when it is not", async () => {
   f.ctx.subgoal = "g2";
-  expect((await f.call("run_step", { step: "address_to_internal_peers", value: START, why: "w" })).summary)
-    .toBe("address_to_internal_peers is a pivot, not a step; this sub-goal's steps are s2 (address_to_internal_peers), s4 (address_to_asset)");
+  const r = await f.call("run_step", { step: "address_to_internal_peers", why: "w" });
+  expect(r.ok).toBe(true);
+  expect(f.s.state.plan.steps.s2!.status).not.toBe("pending");
   f.ctx.subgoal = null;
-  expect((await f.call("run_step", { step: "address_to_verdict", why: "w" })).summary)
-    .toBe("address_to_verdict is a pivot, not a step; the plan's steps are s1 (address_to_asset), s2 (address_to_internal_peers), s3 (address_to_verdict), s4 (address_to_asset)");
-  expect((await f.call("run_step", { step: "nope", why: "w" })).summary).toBe("unknown step: nope");
-  expect(issued()).toEqual([]);
+  expect((await f.call("run_step", { step: "address_to_asset", why: "w" })).summary)
+    .toBe("address_to_asset is a pivot of more than one step; the plan's steps are s1 (address_to_asset), s2 (address_to_internal_peers), s3 (address_to_verdict), s4 (address_to_asset)");
+  expect((await f.call("run_step", { step: "nope", why: "w" })).summary)
+    .toBe("unknown step: nope; the plan's steps are s1 (address_to_asset), s2 (address_to_internal_peers), s3 (address_to_verdict), s4 (address_to_asset)");
+  expect(issued().map((q) => q.step)).toEqual(["s2"]);
+});
+
+test("run_step takes a step's description line in place of its id", async () => {
+  f.ctx.subgoal = "g1";
+  const line = `address_to_asset on assets, from address ${START} to asset`;
+  const r = await f.call("run_step", { step: line, why: "w" });
+  expect(r.summary).toBe("no rows · proven negative");
+  expect(f.s.state.plan.steps.s1).toMatchObject({ status: "empty" });
+  // the line as the researcher's part lists it, with its id and dash, is the same step
+  f.ctx.subgoal = "g3";
+  const costly = await f.call("run_step", { step: `- s3: address_to_verdict on reputation, from address ${START} to verdict (costly)`, why: "w" });
+  expect(costly.summary).toBe("waiting for a person's budget (proposal p1)");
+  expect(issued().map((q) => q.step)).toEqual(["s1"]);
 });
 
 // ---------- reuse of an answered query (task 9 item 1) ----------

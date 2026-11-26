@@ -683,3 +683,43 @@ test("a playbook changed since the plan was accepted is not run", async () => {
   expect(ofType("query.issued")).toEqual([]);
   expect(ofType("job.started")).toEqual([]);
 });
+
+// ---------- accepted steps run in code ----------
+
+test("a sub-goal's accepted steps run in code at the start of its job; the researcher reads their cards and calls no tool", async () => {
+  const one = { goal: "is it ours", subgoals: [
+    { title: "Is it an asset", question: "Is it an asset?", have: [{ type: "address", value: "192.0.2.17" }], want: "asset", route: ["address_to_asset"] },
+    { title: "Reputation", question: "What is known?", have: [{ type: "address", value: "198.51.100.77" }], want: "verdict", route: ["address_to_verdict"] },
+  ] };
+  const r = rig({ orchestrator: [say(FRAME)], planner: [say(one)], "researcher-g1": [answered("it is ws-17")], "researcher-g2": [answered("known")] });
+  await toGate(r);
+  r.engine.acceptPlan({ actor: person, budgets: { s2: 1 } });
+  await r.engine.advance();
+  expect(f.s.state.plan.steps.s1).toMatchObject({ status: "answered" });
+  expect(f.s.state.plan.steps.s2).toMatchObject({ status: "answered" });
+  // the costly step spent the plan's budget, in the person's name
+  expect(ofType("proposal.accepted").map((e) => e.actor)).toEqual([person]);
+  const job1 = ofType("job.started").find((e) => e.payload.subgoal === "g1")!.payload.job;
+  const q1 = ofType("query.issued").find((e) => e.payload.step === "s1")!;
+  expect(q1).toMatchObject({ job: job1, payload: { purpose: "result" } });
+  // each researcher made one request, and the step's card was in its pack before it was asked
+  const asks = ofType("model.request").filter((e) => e.actor.id === "researcher-g1");
+  expect(asks).toHaveLength(1);
+  const card = f.s.state.plan.steps.s1!.cards[0]!;
+  expect(asks[0]!.seq).toBeGreaterThan(ofType("step.finished").find((e) => e.payload.step === "s1")!.seq);
+  expect(asks[0]!.payload.pack.some((i) => i.id === card)).toBe(true);
+  expect(f.s.blobs.text(asks[0]!.payload.messages.blob)).toContain("s1: 1 row · full coverage");
+  expect(finished("research")[0]!.payload.outcome).toBe("pass");
+});
+
+test("a step whose value an earlier step finds is left to the researcher's run_step", async () => {
+  const r = rig({ orchestrator: [say(FRAME)], planner: [say(planOut())], "researcher-g1": [calls(call("run_step", { step: "s2", value: ASSET })), answered("accounts found")] });
+  await toGate(r);
+  r.engine.acceptPlan({ actor: person, steps: ["s1", "s2"] });
+  await r.engine.advance();
+  expect(f.s.state.plan.steps.s1!.status).toBe("answered");
+  expect(f.s.state.plan.steps.s2!.status).toBe("answered");
+  const asks = ofType("model.request").filter((e) => e.actor.id === "researcher-g1");
+  expect(asks).toHaveLength(2);
+  expect(f.s.blobs.text(asks[0]!.payload.messages.blob)).toContain("s2: not yet run");
+});

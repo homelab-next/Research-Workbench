@@ -1,6 +1,7 @@
 import type { Json } from "../../core/canonical";
 import type { CaseSession } from "../../core/session";
-import type { StepOutcome, TimeWindow } from "../../core/types";
+import type { Plan, PlanStep, StepOutcome, TimeWindow } from "../../core/types";
+import { strictest } from "../../core/types";
 import { pivotWeight } from "../../modules/manifests";
 import { bindPivot, runPivot, yielded } from "../../modules/pivots";
 import { answeredBefore, reuseNote } from "../../modules/reuse";
@@ -95,23 +96,46 @@ async function runPivotTool(ctx: ToolContext, args: Record<string, Json>): Promi
   return resultOf(ctx, r, pivot, pivot.source);
 }
 
+/** A step as the researcher's part lists it, after its id: pivot, source, the value it starts from and the type it finds. */
+export function stepLine(s: PlanStep): string {
+  if (s.playbook !== undefined) return `playbook ${s.playbook.id}, from ${s.from.type} ${s.from.value} to ${s.to}`;
+  return `${s.pivot} on ${s.source}, from ${s.from.type} ${s.from.value === "" ? "(the value an earlier step found)" : s.from.value} to ${s.to}`;
+}
+
+/**
+ * The step a model named: by its id, by its line as the researcher's part lists it (with or without the leading "- <id>: " and the
+ * trailing " (costly)"), or by its pivot when one step of the sub-goal uses it. Anything else is refused with the steps it may name.
+ */
+function stepNamed(ctx: ToolContext, plan: Plan, name: string): PlanStep {
+  const exact = plan.steps.find((s) => s.id === name);
+  if (exact !== undefined) return exact;
+  const mine = plan.steps.filter((s) => ctx.subgoal === null || s.subgoal === ctx.subgoal);
+  const listed = `${ctx.subgoal === null ? "the plan's" : "this sub-goal's"} steps are ${mine.length === 0 ? "none" : mine.map((s) => `${s.id} (${s.playbook === undefined ? s.pivot : `playbook ${s.playbook.id}`})`).join(", ")}`;
+  const line = name.trim().replace(/^-\s*/, "").replace(/\s*\(costly\)$/, "");
+  const byLine = mine.find((s) => line === stepLine(s) || line === `${s.id}: ${stepLine(s)}`);
+  if (byLine !== undefined) return byLine;
+  if (ctx.deps.registry.pivot(name) !== null) {
+    const using = mine.filter((s) => s.pivot === name);
+    if (using.length === 1) return using[0]!;
+    throw new ToolError(using.length === 0 ? `${name} is a pivot, not a step; ${listed}` : `${name} is a pivot of more than one step; ${listed}`);
+  }
+  throw new ToolError(`unknown step: ${name}; ${listed}`);
+}
+
 async function runStepTool(ctx: ToolContext, args: Record<string, Json>): Promise<ToolResult> {
   const plan = acceptedPlan(ctx.session);
-  const id = str(args.step);
-  const step = plan.steps.find((s) => s.id === id);
-  if (step === undefined) {
-    // a model that names the pivot where it means the step is told which steps it may run
-    if (ctx.deps.registry.pivot(id) !== null) {
-      const mine = plan.steps.filter((s) => ctx.subgoal === null || s.subgoal === ctx.subgoal);
-      const listed = mine.length === 0 ? "none" : mine.map((s) => `${s.id} (${s.pivot})`).join(", ");
-      throw new ToolError(`${id} is a pivot, not a step; ${ctx.subgoal === null ? "the plan's" : "this sub-goal's"} steps are ${listed}`);
-    }
-    throw new ToolError(`unknown step: ${id}`);
-  }
+  const step = stepNamed(ctx, plan, str(args.step));
+  const id = step.id;
   if (step.playbook !== undefined) throw new ToolError(`step ${id} is a playbook; the engine runs it`);
   if (!ctx.session.state.plan.accepted_steps.includes(id)) throw new ToolError(`step ${id} was not accepted`);
   const had = Object.hasOwn(ctx.session.state.plan.steps, id) ? ctx.session.state.plan.steps[id]! : null;
-  if (had !== null && had.status !== "pending" && had.status !== "running") throw new ToolError("this step has already run");
+  if (had !== null && had.status !== "pending" && had.status !== "running") {
+    // a step finished before (by the workbench at the start of the job, or by an earlier call) is read back, not run again
+    const cards = had.cards.flatMap((c) => (Object.hasOwn(ctx.session.state.cards, c) ? [ctx.session.state.cards[c]!] : []));
+    const summary = `this step has already run${had.note === "" ? "" : `: ${scrub(ctx.deps.registry, had.note)}`}`;
+    const view = { status: "already_run", step: id, outcome: had.status, note: summary, card: cards.map((c) => cardBrief(ctx.deps.registry, c)) };
+    return { ok: true, summary, view: json(view), marking: cards.length === 0 ? null : strictest(...cards.map((c) => c.marking)) };
+  }
   if (ctx.subgoal !== null && step.subgoal !== ctx.subgoal) throw new ToolError(`step ${id} belongs to sub-goal ${step.subgoal}, not ${ctx.subgoal}`);
   const value = step.from.value !== "" ? step.from.value : str(args.value);
   if (value === "") throw new ToolError("this step needs a value from an earlier step");

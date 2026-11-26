@@ -246,7 +246,9 @@ test("nothing runs after a person's stop that lands while a researcher's model t
   const all = s.entries(id);
   const at = all.findIndex((e) => e.type === "run.finished" && e.payload.outcome === "stopped");
   expect(at).toBeGreaterThan(-1);
-  const after = all.slice(at + 1).map((e) => `${e.seq} ${e.type} ${e.actor.kind}:${e.actor.id}`);
-  // a query already issued may still record its result; nothing new starts
+  // a query already issued may still record its result (and the card that holds it); nothing new starts
+  const issuedBefore = new Set(all.slice(0, at).flatMap((e) => (e.type === "query.issued" ? [e.payload.query] : [])));
+  const after = all.slice(at + 1).filter((e) => !(e.type === "card.created" && e.payload.card.query !== null && issuedBefore.has(e.payload.card.query)))
+    .map((e) => `${e.seq} ${e.type} ${e.actor.kind}:${e.actor.id}`);
   expect(after.filter((x) => /tool\.called|query\.issued|proposal\.accepted|card\.created/.test(x))).toEqual([]);
 });
