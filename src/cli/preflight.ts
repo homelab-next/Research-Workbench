@@ -198,7 +198,7 @@ export async function preflight(
 
   // pivots, rendered offline
   const observables = new Observables(registry.types());
-  const pool = new ConnectorPool({ secrets, observables });
+  const pool = new ConnectorPool({ secrets, observables, client_name: "research-workbench" });
   try {
     let pivotBad = 0;
     for (const pv of registry.pivots()) {

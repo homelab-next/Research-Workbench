@@ -31,7 +31,7 @@ export function compose(config: Config, wb: Workbench, opts: { refuse_hosts?: ()
   if (makeSeeker === undefined) throw new ComposeError(`the seeker "${config.seeker}" is not one this build has`);
   const secrets = new Secrets(process.env, config.secrets_file);
   const observables = new Observables(registry.types());
-  const pool = new ConnectorPool({ secrets, observables, ...(opts.refuse_hosts ? { refuse_hosts: opts.refuse_hosts } : {}) });
+  const pool = new ConnectorPool({ secrets, observables, client_name: "research-workbench", ...(opts.refuse_hosts ? { refuse_hosts: opts.refuse_hosts } : {}) });
   try {
     const loaded = loadProviders(registry, secrets, opts.refuse_hosts ? { refuse_hosts: opts.refuse_hosts } : {});
     problems.push(...loaded.problems.map((p) => `${p.path}: ${p.error}`));
