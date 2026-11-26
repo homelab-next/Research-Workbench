@@ -5,7 +5,11 @@ export const GRAPH = { nodes: 60, children: 12, w: 180, h: 26, gapX: 70, gapY: 8
 
 export interface PlacedNode { key: string; x: number; y: number; layer: number; label: string; more: number }
 export interface PlacedEdge { key: string; from: string; to: string; points: [number, number][] }
-export interface GraphLayout { nodes: PlacedNode[]; edges: PlacedEdge[]; width: number; height: number; shown: number; of: number }
+export interface GraphLayout {
+  nodes: PlacedNode[]; edges: PlacedEdge[]; width: number; height: number; shown: number; of: number;
+  /** The visible values neither drawn nor linked to a drawn one, in model order: no drawn node's detail names them (empty when focused). */
+  unreached: string[];
+}
 
 const r2 = (n: number): number => Math.round(n * 100) / 100;
 const cut = (value: string): string => {
@@ -44,6 +48,7 @@ export function layoutGraph(model: GraphModel, opts: { dir: "wide" | "tall"; typ
   if (focused) root(opts.focus!);
   else for (const n of visible) if (n.starting) root(n.key);
 
+  let from = 0;
   for (;;) {
     while (queue.length > 0) {
       const at = queue.shift()!;
@@ -58,11 +63,13 @@ export function layoutGraph(model: GraphModel, opts: { dir: "wide" | "tall"; typ
         } else passed.add(nb);
       }
     }
-    if (focused) break;
-    const next = visible.find((n) => !placed.has(n.key) && !passed.has(n.key));
-    if (next === undefined) break;
-    root(next.key);
+    // past the cap nothing more is placed, so the walk stops (every value left is counted, not rooted)
+    if (focused || placed.size >= GRAPH.nodes) break;
+    while (from < visible.length && (placed.has(visible[from]!.key) || passed.has(visible[from]!.key))) from++;
+    if (from >= visible.length) break;
+    root(visible[from]!.key);
   }
+  const unreached = focused ? [] : visible.filter((n) => !placed.has(n.key) && ![...adj.get(n.key)!].some((k) => placed.has(k))).map((n) => n.key);
 
   // The order the keyboard walks: placement order, or the tree depth-first when tall.
   let walk: Walked[] = [...placed.values()];
@@ -109,5 +116,5 @@ export function layoutGraph(model: GraphModel, opts: { dir: "wide" | "tall"; typ
 
   const width = nodes.length === 0 ? pad * 2 : Math.max(...nodes.map((n) => n.x)) + w + pad;
   const height = nodes.length === 0 ? pad * 2 : Math.max(...nodes.map((n) => n.y)) + h + pad;
-  return { nodes, edges: placedEdges, width, height, shown: nodes.length, of: visible.length };
+  return { nodes, edges: placedEdges, width, height, shown: nodes.length, of: visible.length, unreached };
 }

@@ -316,3 +316,30 @@ test("an entry that changes nothing the Graph reads repaints nothing", () => {
   expect(q(r, "svg") === svg).toBe(true);
   expect(detail(r).querySelector("h3") === h3).toBe(true);
 });
+
+test("past 60 values, a value linked to nothing drawn is listed, and its button focuses the graph on it", () => {
+  const START = { type: "address", value: "198.51.100.77" };
+  const names = Array.from({ length: 12 }, (_, i) => sight("domain", `n${i}.example.com`));
+  const cards: [string, Partial<Card>][] = [["c1", { observed: obs("address_to_domains", START, names) }]];
+  for (let k = 0; k < 5; k++) cards.push([`c${k + 2}`, { observed: obs("domain_to_clients", { type: "domain", value: `n${k}.example.com` }, Array.from({ length: 12 }, (_, i) => sight("address", `192.0.2.${k * 12 + i}`))) }]);
+  // a pivot on a value read off a card's rows: it starts its own component, which the cap leaves undrawn
+  cards.push(["c7", { observed: obs("address_to_domains", { type: "address", value: "203.0.113.9" }, [sight("domain", "lone-a.example.com"), sight("domain", "lone-b.example.com")]) }]);
+  const r = rig(cards, [START]);
+  expect(q(r, ".graph-count").textContent).toBe("Showing 60 of 76 values");
+  const drawn = new Set(all(r, "g.node").map((n) => n.getAttribute("data-key")!));
+  expect(drawn.has("address|203.0.113.9")).toBe(false);
+  // every value is drawn, a link in a drawn node's detail, or in the list
+  const reach = new Set(drawn);
+  for (const k of drawn) { click(node(r, k)); for (const b of detail(r).querySelectorAll('[data-action="focus"]')) reach.add(b.getAttribute("data-key")!); }
+  const listed = all(r, ".graph-unreached button");
+  for (const b of listed) reach.add(b.getAttribute("data-key")!);
+  expect(listed.map((b) => b.textContent)).toEqual(["Address 203.0.113.9", "Domain lone-a.example.com", "Domain lone-b.example.com"]);
+  expect(q(r, ".graph-unreached summary").textContent).toBe("3 more values are linked to nothing drawn");
+  expect(reach.size).toBe(76);
+  click(listed[0]!);
+  expect(q(r, ".graph-count").textContent).toBe("Showing 3 of 76 values");
+  expect(detail(r).querySelector("h3")!.textContent).toBe("Address 203.0.113.9");
+  expect(q(r, ".graph-whole").hasAttribute("hidden")).toBe(false);
+  expect(q(r, ".graph-unreached").hasAttribute("hidden")).toBe(true);
+  expect(q(two(), ".graph-unreached").hasAttribute("hidden")).toBe(true);
+});

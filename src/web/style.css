@@ -302,6 +302,9 @@ kbd { font-family: var(--mono); font-size: 12px; background: var(--panel-2); bor
 .lens-graph .graph-head { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; justify-content: space-between; }
 .lens-graph .graph-count { color: var(--muted); font-variant-numeric: tabular-nums; }
 .lens-graph .graph-notes p { margin: 2px 0; color: var(--amber); }
+.lens-graph .graph-unreached { margin: 4px 0; }
+.lens-graph .graph-unreached summary { color: var(--muted); cursor: pointer; }
+.lens-graph .graph-unreached-list { margin: 4px 0; padding-left: 18px; max-height: 30vh; overflow: auto; overflow-wrap: anywhere; }
 .lens-graph .graph-body { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
 .lens-graph .graph-scroll { flex: 1 1 360px; min-width: 0; overflow: auto; max-height: 60vh; }
 .lens-graph .graph-detail { flex: 0 1 280px; min-width: 200px; overflow-wrap: anywhere; }

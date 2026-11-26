@@ -120,3 +120,18 @@ test("the same model and options give the same layout", () => {
   expect(layoutGraph(base, WIDE)).toEqual(layoutGraph(base, WIDE));
   expect(layoutGraph(base, TALL)).toEqual(layoutGraph(base, TALL));
 });
+
+test("past the cap, the values with no drawn neighbour are reported in model order; a value next to a drawn one is not", () => {
+  const start = nd("address", "s", true);
+  const leaves = Array.from({ length: 70 }, (_, i) => nd("domain", `l${String(i).padStart(2, "0")}`));
+  const chain = leaves.slice(0, 59);
+  const nodes = [start, ...leaves];
+  const edges = [ed(start, chain[0]!), ...chain.slice(1).map((n, i) => ed(chain[i]!, n)), ed(leaves[58]!, leaves[59]!)];
+  const lone = nd("address", "lone"), mate = nd("domain", "mate");
+  const l = layoutGraph(model([...nodes, lone, mate], [...edges, ed(mate, lone)]), WIDE);
+  expect(l.shown).toBe(60);
+  // l59 hangs off the last drawn node; l60..l69, lone and mate touch nothing drawn
+  expect(l.unreached).toEqual([...leaves.slice(60).map((n) => n.key), "address|lone", "domain|mate"]);
+  expect(layoutGraph(base, WIDE).unreached).toEqual([]);
+  expect(layoutGraph(model([...nodes, lone], edges), { dir: "wide", types: null, focus: "address|lone" }).unreached).toEqual([]);
+});

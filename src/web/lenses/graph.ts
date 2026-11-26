@@ -36,12 +36,16 @@ export function makeGraph(ui: Ui, open: Open): View {
   const count = h("span", { class: "graph-count" });
   const whole = h("button", { type: "button", class: "graph-whole", on: { click: () => { focus = null; refresh(); } } }, "Whole graph");
   const head = h("div", { class: "graph-head" }, filter, count, whole);
+  // values the cap leaves with no drawn neighbour: the only route to them, so each is a button that focuses the graph on it
+  const unreachedText = h("summary", null);
+  const unreachedList = h("ul", { class: "graph-unreached-list" });
+  const unreached = h("details", { class: "graph-unreached", hidden: true }, unreachedText, unreachedList);
   const notes = h("div", { class: "graph-notes" });
   const empty = h("p", { class: "empty" }, "No lookup has linked these yet.");
   const scroll = h("div", { class: "graph-scroll" });
   const side = h("aside", { class: "graph-detail" });
   const body = h("div", { class: "graph-body" }, scroll, side);
-  const el = h("div", { class: "lens lens-graph", name: "Graph" }, head, empty, notes, body);
+  const el = h("div", { class: "lens lens-graph", name: "Graph" }, head, unreached, empty, notes, body);
 
   const typeTitle = (id: string): string => ui.ref.types.find((t) => t.id === id)?.title ?? id;
   const pivotTitle = (id: string): string => ui.ref.pivots.find((p) => p.id === id)?.title ?? id;
@@ -150,6 +154,13 @@ export function makeGraph(ui: Ui, open: Open): View {
     count.textContent = `Showing ${layout.shown} of ${layout.of} values`;
     count.hidden = model.nodes.length === 0;
     whole.hidden = focus === null;
+    const far = layout.unreached.map((k) => nodes.get(k)!);
+    unreached.hidden = far.length === 0;
+    unreachedText.textContent = `${plural(far.length, "more value is", "more values are")} linked to nothing drawn`;
+    syncList(unreachedList, far, (n) => n.key, (n) => h("li", null, h("button", {
+      type: "button", class: "link", data: { action: "focus", key: n.key }, title: `Focus the graph on ${nameOf(n)}`,
+      on: { click: () => { focus = n.key; selected = n.key; cursor = n.key; refresh(); } },
+    }, nameOf(n))), () => {});
     empty.hidden = model.edges.length > 0;
     clear(notes);
     if (model.legacy) notes.append(h("p", { class: "graph-legacy" }, "Some cards were recorded before links were; their links are read from the first 50 rows."));
