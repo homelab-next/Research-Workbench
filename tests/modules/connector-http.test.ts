@@ -337,3 +337,16 @@ test("the http connector refuses a source that points at the server", async () =
   expect((err as Error).message).toBe("this source points at the workbench's own server");
   expect(s.requests.length).toBe(before);
 });
+
+test("the request turns off Bun's own idle timeout, so the source's timeout is the only one", async () => {
+  const real = globalThis.fetch;
+  const inits: Record<string, unknown>[] = [];
+  globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: RequestInit) => { inits.push({ ...(init ?? {}) }); return real(input, init); }) as typeof fetch;
+  try {
+    await make().run(req("reputation", { value: "198.51.100.77", days: 7 }));
+  } finally {
+    globalThis.fetch = real;
+  }
+  expect(inits.length).toBe(1);
+  for (const init of inits) expect(init.timeout).toBe(false);
+});

@@ -510,3 +510,16 @@ test("describe and show columns on a guarded table render end to end, with or wi
   }
   expect(() => c.render(req("describe iceberg.s.events; select 1"))).toThrow(GuardError);
 });
+
+test("every request turns off Bun's own idle timeout: the statement, a page fetch and the cancel", async () => {
+  t.on(/./, { columns: ["a"], pages: [[[1], [2], [3]], [[4], [5], [6]], [[7]]] });
+  const inits: { method: unknown; timeout: unknown }[] = [];
+  globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: RequestInit) => { inits.push({ method: init?.method, timeout: (init as { timeout?: unknown } | undefined)?.timeout }); return realFetch(input, init); }) as typeof fetch;
+  try {
+    await c.run(okReq);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  expect(inits.map((i) => i.method)).toEqual(expect.arrayContaining(["POST", "GET", "DELETE"]));
+  for (const i of inits) expect(i.timeout).toBe(false);
+});

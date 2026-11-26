@@ -84,7 +84,7 @@ export class HttpConnector implements Connector {
     let bytes: Uint8Array;
     let media: string;
     try {
-      const res = await fetch(url, { method: e.method, headers, body, redirect: "manual", signal: ctl.signal });
+      const res = await fetch(url, { method: e.method, headers, body, redirect: "manual", signal: ctl.signal, timeout: false });
       if (res.status >= 300) {
         await res.body?.cancel().catch(() => undefined);
         throw new ConnectorError(`HTTP ${res.status}${res.status < 400 ? " (redirects are not followed)" : ""} from endpoint ${e.name}`);

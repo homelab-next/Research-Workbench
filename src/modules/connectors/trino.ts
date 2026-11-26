@@ -126,7 +126,8 @@ export class TrinoConnector implements Connector {
   }
 
   private init(method: string, headers: Record<string, string>, signal: AbortSignal, body?: string): RequestInit {
-    const init: RequestInit & { tls?: { rejectUnauthorized: boolean } } = { method, headers, redirect: "manual", signal };
+    // timeout: false turns off Bun's own idle timer (5 minutes by default): the AbortController timers are the only deadline
+    const init: RequestInit & { tls?: { rejectUnauthorized: boolean }; timeout?: false } = { method, headers, redirect: "manual", signal, timeout: false };
     if (body !== undefined) init.body = body;
     if (!this.source.tls_verify) init.tls = { rejectUnauthorized: false };
     return init;
