@@ -16,6 +16,12 @@ export interface Reference {
   phases: { id: string; title: string }[]; profile: { id: string; title: string };
   /** The most times one stage is sent back to before the run pauses (a person may allow more). */
   send_back_cap: number;
+  playbooks: PlaybookView[];
+}
+export interface PlaybookView {
+  id: string; title: string; about: string; inputs: { name: string; type: string }[];
+  steps: { id: string; pivot: string; from: string; when: string | null; max_values: number }[];
+  end: string[]; free: boolean; max_lookups: number;
 }
 export interface ModelView { provider: string; model: string; where: Where; efforts: string[]; context: number | null; allowed: boolean; reason: string | null }
 /** What a command returns: where the ledger now ends, or why it was refused. Never state. */

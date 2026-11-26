@@ -1,9 +1,10 @@
 import { isPlainObject } from "../core/canonical";
 import type { Marking } from "../core/types";
-import type { ModelView, PivotView, Reference, SourceView } from "../core/wire";
+import type { ModelView, PivotView, PlaybookView, Reference, SourceView } from "../core/wire";
 import { scrub } from "../agents/tools/kit";
 import { mayGo } from "../agents/pack";
 import { pivotWeight } from "../modules/manifests";
+import { fromText, maxLookups, whenText } from "../modules/playbooks";
 import type { EngineDeps } from "../pipeline/engine";
 import { SEND_BACK_CAP } from "../pipeline/next";
 
@@ -36,9 +37,14 @@ export function referenceOf(deps: EngineDeps): Reference {
   for (const stage of deps.pipeline.stages) {
     if (stage.phase !== null && !phases.some((p) => p.id === stage.phase)) phases.push({ id: stage.phase, title: sentence(stage.phase) });
   }
+  const playbooks: PlaybookView[] = registry.playbooks().map((p) => ({
+    id: p.id, title: shown(deps, p.title), about: shown(deps, p.about), inputs: p.inputs.map((i) => ({ name: i.name, type: i.type })),
+    steps: p.steps.map((s) => ({ id: s.id, pivot: s.pivot, from: fromText(s), when: whenText(s), max_values: s.max_values })),
+    end: [...p.end], free: registry.costlyPivots(p).length === 0, max_lookups: maxLookups(p),
+  }));
   return {
     types: registry.types().map((t) => ({ id: t.id, title: shown(deps, t.title) })), sources, pivots, objectives, phases,
-    profile: { id: deps.profile.id, title: shown(deps, deps.profile.title) }, send_back_cap: SEND_BACK_CAP,
+    profile: { id: deps.profile.id, title: shown(deps, deps.profile.title) }, send_back_cap: SEND_BACK_CAP, playbooks,
   };
 }
 

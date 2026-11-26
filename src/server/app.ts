@@ -14,6 +14,7 @@ import "./plan-commands";
 import "./draft-commands";
 import "./converse";
 import "./seek";
+import "./playbook-commands";
 import type { CommandContext } from "./commands";
 import { blobResponse, bundleFile, custodyOf } from "./evidence";
 import { CaseHub } from "./hub";

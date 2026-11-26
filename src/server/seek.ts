@@ -22,7 +22,7 @@ const UTC_MS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const isUtcMs = (x: unknown): x is string => typeof x === "string" && UTC_MS.test(x) && Number.isFinite(Date.parse(x)) && new Date(x).toISOString() === x;
 
 /** The window as a TimeWindow, or what is wrong with it: each end null or a UTC time with milliseconds, the first not after the second. */
-function windowOf(w: Json): TimeWindow {
+export function windowOf(w: Json): TimeWindow {
   const { from, to } = w as { from: string | null; to: string | null };
   for (const [end, v] of [["from", from], ["to", to]] as const) {
     if (v !== null && !isUtcMs(v)) throw new Refused(`the window's ${end} must be empty or a UTC time like 2026-11-20T00:00:00.000Z`);
@@ -31,7 +31,7 @@ function windowOf(w: Json): TimeWindow {
   return { from, to };
 }
 
-const whyOf = (a: Record<string, Json>): string => {
+export const whyOf = (a: Record<string, Json>): string => {
   const why = text(a, "why").trim();
   if (why === "") throw new Refused("say why: a lookup is recorded with its reason");
   return why;
