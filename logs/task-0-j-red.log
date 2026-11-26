@@ -1,0 +1,138 @@
+bun test v1.3.14 (0d9b296a)
+
+tests/modules/playbook-run.test.ts:
+
+# Unhandled error between tests
+-------------------------------
+SyntaxError: Export named 'CAPPED' not found in module '/home/ansible/Research-Workbench/src/modules/playbook-run.ts'.
+-------------------------------
+
+
+ 0 pass
+ 1 fail
+ 1 error
+Ran 1 test across 1 file. [51.00ms]
+bun test v1.3.14 (0d9b296a)
+
+tests/modules/playbook-run.test.ts:
+223 |   expect(entries().filter((e) => e.type === "query.issued").length).toBe(1);
+224 |   expect(end.caveats).toContain("stopped before every lookup was sent");
+225 |   // the end step (asset) had run before the stop, so its answer stands
+226 |   expect(end).toMatchObject({ outcome: "answered", end_step: "asset", lookups: 1 });
+227 |   // the steps it never reached are recorded skipped, with the reason
+228 |   expect(Object.keys(s.state.playbooks[job]!.steps)).toEqual(["asset", "lease", "names", "clients"]);
+                                                           ^
+error: expect(received).toEqual(expected)
+
+@@ -3,4 +3,3 @@
+    "lease",
+-   "names",
+-   "clients",
+  ]
+
+- Expected  - 2
++ Received  + 0
+
+      at <anonymous> (/home/ansible/Research-Workbench/tests/modules/playbook-run.test.ts:228:54)
+(fail) stop is asked before each lookup, and a stopped run does not read as answered [40.82ms]
+242 |       && Object.values(s.state.queries).some((q) => q.id === e.payload.query && q.status === "done" && (q.rows ?? 0) > 0));
+243 |   };
+244 |   const { job, end } = await run([{ type: "address", value: START }], toClients, stop);
+245 |   expect(step(job, "clients").lookups.length).toBe(1);
+246 |   expect(step(job, "clients").lookups[0]!.rows).toBeGreaterThan(0);
+247 |   expect(end).toMatchObject({ outcome: "blocked", end_step: "clients" });
+                    ^
+error: expect(received).toMatchObject(expected)
+
+  {
++   "cards": [
++     "c1",
++     "c2",
++     "c3",
++     "c4",
++   ],
++   "caveats": [],
++   "end_cards": [
++     "c4",
++   ],
+    "end_step": "clients",
+-   "outcome": "blocked",
++   "lookups": 4,
++   "outcome": "answered",
++   "reused": 0,
+  }
+
+- Expected  - 1
++ Received  + 13
+
+      at <anonymous> (/home/ansible/Research-Workbench/tests/modules/playbook-run.test.ts:247:15)
+(fail) a run stopped in its end step ends blocked, not answered [124.82ms]
+250 | test("steps a stopped run never reached are recorded skipped with the reason", async () => {
+251 |   // stop() true before the second step's first lookup: the asset list does not hold START, so lease would run next
+252 |   let asked = 0;
+253 |   const { job, end } = await run([{ type: "address", value: START }], triage(), () => asked++ >= 1);
+254 |   const steps = s.state.playbooks[job]!.order.map((id) => step(job, id));
+255 |   expect(steps.map((x) => [x.step, x.status, x.reason])).toEqual([["asset", "ran", ""], ["lease", "skipped", STOPPED], ["names", "skipped", STOPPED], ["clients", "skipped", STOPPED]]);
+                                                               ^
+error: expect(received).toEqual(expected)
+
+@@ -6,17 +6,3 @@
+    ],
+-   [
+-     "lease",
+-     "skipped",
+-     "stopped before every lookup was sent",
+-   ],
+-   [
+-     "names",
+-     "skipped",
+-     "stopped before every lookup was sent",
+-   ],
+-   [
+-     "clients",
+-     "skipped",
+-     "stopped before every lookup was sent",
+-   ],
+  ]
+
+- Expected  - 15
++ Received  + 0
+
+      at <anonymous> (/home/ansible/Research-Workbench/tests/modules/playbook-run.test.ts:255:58)
+(fail) steps a stopped run never reached are recorded skipped with the reason [39.82ms]
+271 |   });
+272 |   const { job, end } = await run([{ type: "address", value: "203.0.113.10" }], wide);
+273 |   expect(end.lookups).toBe(50);
+274 |   expect(end).toMatchObject({ outcome: "empty", end_step: "asset" });
+275 |   const order = s.state.playbooks[job]!.order;
+276 |   expect(order).toEqual(wide.steps.map((x) => x.id));
+                      ^
+error: expect(received).toEqual(expected)
+
+@@ -7,8 +7,3 @@
+    "s6",
+-   "s7",
+-   "s8",
+-   "s9",
+-   "s10",
+-   "s11",
+-   "s12",
+  ]
+
+- Expected  - 6
++ Received  + 0
+
+      at <anonymous> (/home/ansible/Research-Workbench/tests/modules/playbook-run.test.ts:276:17)
+(fail) a run that hits the lookup ceiling after its end step finished keeps that step's outcome [1291.07ms]
+
+ 15 pass
+ 4 fail
+ 147 expect() calls
+Ran 19 tests across 1 file. [4.44s]
+=== RED again with the revised end-step test, implementation reverted to HEAD (constants exported only) ===
+(fail) stop is asked before each lookup, and a stopped run does not read as answered [39.28ms]
+(fail) a run stopped in its end step ends blocked, not answered [130.65ms]
+(fail) steps a stopped run never reached are recorded skipped with the reason [40.69ms]
+(fail) a run that hits the lookup ceiling after its end step finished keeps that step's outcome [1296.73ms]
+ 15 pass
+ 4 fail

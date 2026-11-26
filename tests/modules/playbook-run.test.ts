@@ -11,7 +11,7 @@ import { recoverSession } from "../../src/pipeline/recover";
 import { ConnectorPool } from "../../src/modules/connectors";
 import { Observables } from "../../src/modules/observables";
 import { runPivot } from "../../src/modules/pivots";
-import { beginPlaybook, playbookProblem, runPlaybook } from "../../src/modules/playbook-run";
+import { beginPlaybook, CAPPED, playbookProblem, runPlaybook, STOPPED } from "../../src/modules/playbook-run";
 import type { PlaybookEnd, PlaybookStart } from "../../src/modules/playbook-run";
 import { toPlaybook } from "../../src/modules/playbooks";
 import type { PlaybookManifest } from "../../src/modules/playbooks";
@@ -224,12 +224,64 @@ test("stop is asked before each lookup, and a stopped run does not read as answe
   expect(end.caveats).toContain("stopped before every lookup was sent");
   // the end step (asset) had run before the stop, so its answer stands
   expect(end).toMatchObject({ outcome: "answered", end_step: "asset", lookups: 1 });
-  expect(Object.keys(s.state.playbooks[job]!.steps)).toEqual(["asset", "lease"]);
+  // the steps it never reached are recorded skipped, with the reason
+  expect(Object.keys(s.state.playbooks[job]!.steps)).toEqual(["asset", "lease", "names", "clients"]);
+  expect([step(job, "names").status, step(job, "clients").status]).toEqual(["skipped", "skipped"]);
   // a stop before the end step ran leaves it blocked
   const late: PlaybookManifest = { ...triage(), id: "late", hash: "hash-late", end: ["names"] };
   const b = await run([{ type: "address", value: START }], late, () => true);
   expect(b.end).toMatchObject({ outcome: "blocked", end_step: null, lookups: 0 });
 });
+
+test("a run stopped in its end step ends blocked, not answered", async () => {
+  const toClients: PlaybookManifest = { ...triage(), id: "to-clients", hash: "hash-to-clients", end: ["clients"] };
+  // stop() turns true once the first clients lookup has returned rows
+  const stop = (): boolean => {
+    const run = Object.values(s.state.playbooks).at(-1)!;
+    return s.entries().some((e) => e.type === "query.issued" && e.payload.pivot === "domain_to_clients" && e.job === run.job
+      && Object.values(s.state.queries).some((q) => q.id === e.payload.query && q.status === "done" && (q.rows ?? 0) > 0));
+  };
+  // names finds two domains for this address, so clients has a second lookup to stop before
+  const { job, end } = await run([{ type: "address", value: "203.0.113.30" }], toClients, stop);
+  expect(step(job, "names").found.length).toBe(2);
+  expect(step(job, "clients").lookups.length).toBe(1);
+  expect(step(job, "clients").lookups[0]!.rows).toBeGreaterThan(0);
+  expect(end).toMatchObject({ outcome: "blocked", end_step: "clients" });
+});
+
+test("steps a stopped run never reached are recorded skipped with the reason", async () => {
+  // stop() true before the second step's first lookup: the asset list does not hold START, so lease would run next
+  let asked = 0;
+  const { job, end } = await run([{ type: "address", value: START }], triage(), () => asked++ >= 1);
+  const steps = s.state.playbooks[job]!.order.map((id) => step(job, id));
+  expect(steps.map((x) => [x.step, x.status, x.reason])).toEqual([["asset", "ran", ""], ["lease", "skipped", STOPPED], ["names", "skipped", STOPPED], ["clients", "skipped", STOPPED]]);
+  for (const x of steps.slice(1)) expect(x).toMatchObject({ lookups: [], found: [], left: 0 });
+  expect(end).toMatchObject({ outcome: "empty", end_step: "asset" });
+});
+
+test("a run that hits the lookup ceiling after its end step finished keeps that step's outcome", async () => {
+  const pivots = ["address_to_asset_by_lease", "address_to_internal_peers", "address_to_asset"];
+  const wide = written("wide-end", {
+    inputs: [{ name: "address", type: "address" }],
+    steps: [
+      { id: "asset", pivot: "address_to_asset", from: "input.address" },
+      { id: "names", pivot: "address_to_domains", from: "input.address" },
+      { id: "clients", pivot: "domain_to_clients", from: "names", max_values: 20 },
+      ...Array.from({ length: 9 }, (_, i) => ({ id: `s${i + 4}`, pivot: pivots[i % 3]!, from: "clients", max_values: 20 })),
+    ],
+    end: ["asset"],
+  });
+  const { job, end } = await run([{ type: "address", value: "203.0.113.10" }], wide);
+  expect(end.lookups).toBe(50);
+  expect(end).toMatchObject({ outcome: "empty", end_step: "asset" });
+  const order = s.state.playbooks[job]!.order;
+  expect(order).toEqual(wide.steps.map((x) => x.id));
+  const halted = order.findIndex((id) => step(job, id).reason === CAPPED);
+  expect(halted).toBeGreaterThan(0);
+  // the step it halted in keeps its lookups if it sent any; every step after it is skipped with the reason
+  for (const id of order.slice(halted + 1)) expect(step(job, id)).toMatchObject({ status: "skipped", reason: CAPPED, lookups: [] });
+  expect(order.slice(halted + 1).length).toBeGreaterThan(0);
+}, 30_000); // fifty lookups against the sample's files take a few seconds on a loaded machine
 
 test("an interrupted playbook reads interrupted, and its re-run sends only what had no full answer", async () => {
   const start = startOf([{ type: "address", value: START }]);

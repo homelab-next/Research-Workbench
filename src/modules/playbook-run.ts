@@ -1,6 +1,6 @@
 import { Refused } from "../core/refused";
 import type { CaseSession } from "../core/session";
-import type { Actor, EntryInput, Observable, Payloads, PlaybookLookup, StepOutcome, TimeWindow } from "../core/types";
+import type { Actor, EntryInput, Observable, PlaybookLookup, StepOutcome, TimeWindow } from "../core/types";
 import { bindPivot, runPivot, yielded } from "./pivots";
 import { MAX_PLAYBOOK_LOOKUPS } from "./playbooks";
 import type { PlaybookManifest, PlaybookStep } from "./playbooks";
@@ -13,8 +13,8 @@ export interface PlaybookStart {
 }
 export interface PlaybookEnd { outcome: StepOutcome; end_step: string | null; cards: string[]; end_cards: string[]; caveats: string[]; lookups: number; reused: number }
 
-const STOPPED = "stopped before every lookup was sent";
-const CAPPED = `stopped after ${MAX_PLAYBOOK_LOOKUPS} lookups`;
+export const STOPPED = "stopped before every lookup was sent";
+export const CAPPED = `stopped after ${MAX_PLAYBOOK_LOOKUPS} lookups`;
 
 /** Why this playbook cannot be started on these inputs and this window; null when it can. Reads the registry only. */
 export function playbookProblem(deps: RunnerDeps, playbook: PlaybookManifest, inputs: Observable[], window: TimeWindow): string | null {
@@ -154,15 +154,18 @@ async function walk(
   const caveat = (c: string): void => { if (!caveats.includes(c)) caveats.push(c); };
   let lookups = 0, reusedCount = 0;
   let halted = false;
+  /** The step the run halted in (stopped, or at the lookup ceiling): it and every step after it may not have done all it would have. */
+  let haltedIn: string | null = null;
+  const recordFor = (step: PlaybookStep, w: Walked, why: string, left: number): boolean =>
+    session.commit((): EntryInput[] => (!isRunning() ? [] : [{
+      type: "playbook.step", actor: start.actor, ...l, payload: { job, step: step.id, pivot: step.pivot, status: w.status, reason: why, lookups: w.lookups, found: w.found, left },
+    }])).length > 0;
 
   for (const step of p.steps) {
     const pivot = deps.registry.pivot(step.pivot);
     const type = pivot?.from ?? step.pivot;
     const reason = skipReason(step, done, type);
-    const payload = (w: Walked, why: string, left: number): Payloads["playbook.step"] =>
-      ({ job, step: step.id, pivot: step.pivot, status: w.status, reason: why, lookups: w.lookups, found: w.found, left });
-    const record = (w: Walked, why: string, left: number): boolean =>
-      session.commit((): EntryInput[] => (!isRunning() ? [] : [{ type: "playbook.step", actor: start.actor, ...l, payload: payload(w, why, left) }])).length > 0;
+    const record = (w: Walked, why: string, left: number): boolean => recordFor(step, w, why, left);
 
     if (reason !== null) {
       const w: Walked = { status: "skipped", lookups: [], found: [], whole: true };
@@ -217,12 +220,25 @@ async function walk(
     if (pivot !== null) {
       for (const r of results) for (const o of yielded(pivot, r, deps.observables)) if (!w.found.includes(o.value)) w.found.push(o.value);
     }
-    // a step stopped before its first lookup did not run: it leaves no entry
+    // a step stopped before its first lookup did not run: it is recorded skipped below, with the steps after it
     if (w.lookups.length > 0 || !halted) {
       if (!record(w, halted ? (caveats.includes(CAPPED) ? CAPPED : STOPPED) : "", left)) return null;
       done.set(step.id, w);
     }
-    if (halted) break;
+    if (halted) {
+      haltedIn = step.id;
+      break;
+    }
+  }
+  if (haltedIn !== null) {
+    // the steps the run never reached say why: the halted step when it sent nothing, and every step after it
+    const why = caveats.includes(CAPPED) ? CAPPED : STOPPED;
+    for (const step of p.steps.slice(p.steps.findIndex((x) => x.id === haltedIn))) {
+      if (done.has(step.id)) continue;
+      const w: Walked = { status: "skipped", lookups: [], found: [], whole: false };
+      if (!recordFor(step, w, why, 0)) return null;
+      done.set(step.id, w);
+    }
   }
 
   const endStep = p.end.find((id) => done.get(id)?.status === "ran") ?? null;
@@ -231,6 +247,7 @@ async function walk(
   const endWalk = endStep === null ? null : done.get(endStep)!;
   const endCards = endWalk === null ? [] : [...new Set(endWalk.lookups.flatMap((x) => (x.card === null ? [] : [x.card])))];
   return {
-    outcome: endWalk === null ? "blocked" : outcomeOf(endWalk), end_step: endStep, cards, end_cards: endCards, caveats, lookups, reused: reusedCount,
+    // an end step the run halted in may have more to find: it answers nothing
+    outcome: endWalk === null || endStep === haltedIn ? "blocked" : outcomeOf(endWalk), end_step: endStep, cards, end_cards: endCards, caveats, lookups, reused: reusedCount,
   };
 }
