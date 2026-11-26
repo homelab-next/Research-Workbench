@@ -67,6 +67,9 @@ export async function stageAgent(env: StageEnv, opts: {
   narrow?: (s: Schema) => Schema;
   /** Sentences the re-ask adds for an answer that failed its schema. */
   explain?: (answer: Json) => string[];
+  /** What the work still lacks (names): see AgentSpec.lacking. */
+  lacking?: () => string[];
+  lackingAsk?: (missing: string[]) => string;
 }): Promise<AgentStageEnd> {
   const { session, deps, stage } = env;
   const title = titleOf(env);
@@ -104,6 +107,8 @@ export async function stageAgent(env: StageEnv, opts: {
     actor: who.actor, provider: who.provider, model: who.model, effort: who.effort, pack, task: opts.task, tools: stage.tools.filter((t) => !(opts.omit_tools ?? []).includes(t)), schema,
     ...(stage.schema === null ? {} : { schema_id: stage.schema }),
     ...(opts.explain === undefined ? {} : { explain: opts.explain }),
+    ...(opts.lacking === undefined ? {} : { lacking: opts.lacking }),
+    ...(opts.lackingAsk === undefined ? {} : { lackingAsk: opts.lackingAsk }),
     ...(stage.sampling === null || stage.sampling === undefined ? {} : { sampling: stage.sampling }),
     ...(stage.max_output_tokens === null || stage.max_output_tokens === undefined ? {} : { max_output_tokens: stage.max_output_tokens }),
     ...(stage.max_turns === null || stage.max_turns === undefined ? {} : { max_turns: stage.max_turns }),

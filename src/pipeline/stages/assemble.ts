@@ -6,7 +6,7 @@ import type { Schema } from "../../core/schema";
 import type { CaseSession } from "../../core/session";
 import { ContextError, packPart } from "../../agents/context";
 import type { PackPart } from "../../agents/context";
-import { buildProduct, carriedCites, composeChange, DraftWork, draftOf, termsOf } from "../../agents/draft";
+import { buildProduct, lackingOf, carriedCites, composeChange, DraftWork, draftOf, termsOf } from "../../agents/draft";
 import { ToolError } from "../../agents/tools/kit";
 import type { StageEnd, StageEnv } from "../engine";
 import { reviewPointsPart } from "../review-points";
@@ -133,7 +133,14 @@ export async function assembleRunner(env: StageEnv): Promise<StageEnd> {
     narrow: (s: Schema): Schema => (nothing ? firstJudgmentOnly(changeKinds(s, terms.change_terms), terms.first_change) : changeKinds(s, terms.change_terms)),
     ...(nothing ? { explain: (a: Json): string[] => (isPlainObject(a) && typeof a.change_kind === "string" && a.change_kind !== terms.first_change ? [nothingPublished(terms.first_change)] : []) } : {}),
   };
-  const end = await stageAgent(env, { actor_id: actorId, task, extras, draft: work, draft_hash: latest?.hash ?? null, ...narrowing });
+  // an answer over an empty required section or no finding is not accepted; a request for research is not a draft, so it is not held to it
+  const lacking = (): string[] => (work.research.length > 0 ? [] : lackingOf(work));
+  const lackingAsk = (missing: string[]): string => {
+    const sections = missing.filter((x) => x !== "findings");
+    const tools = sections.length === 0 ? "propose_assessment" : sections.length === missing.length ? "propose_narrative" : "propose_narrative and propose_assessment";
+    return `The draft still has no ${missing.join(", ")}; propose ${sections.length === 0 && missing.length === 1 ? "one" : "them"} with ${tools}, then answer`;
+  };
+  const end = await stageAgent(env, { actor_id: actorId, task, extras, draft: work, draft_hash: latest?.hash ?? null, lacking, lackingAsk, ...narrowing });
   if (end.kind !== "output") return end;
   const output = end.output as { change_kind?: string; change_detail?: string; assumptions?: string[] };
 

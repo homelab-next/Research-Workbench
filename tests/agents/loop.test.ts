@@ -4,7 +4,7 @@ import type { Entry, EntryType, Marking, Where } from "../../src/core/types";
 import { MARKINGS } from "../../src/core/types";
 import type { Schema } from "../../src/core/schema";
 import { IdAllocator } from "../../src/core/ids";
-import { EMPTY_REASK, extractJson, MAX_TURNS, runAgent } from "../../src/agents/loop";
+import { EMPTY_REASK, extractJson, MAX_TURNS, runAgent, turnLine } from "../../src/agents/loop";
 import type { AgentEnd, AgentSpec } from "../../src/agents/loop";
 import type { Pack } from "../../src/agents/pack";
 import { assemblePack } from "../../src/agents/pack";
@@ -834,4 +834,11 @@ test("an error or a decline on a routing turn ends the agent as on any turn, rec
     expect(requests().map((e) => e.payload.provider)).toEqual(["fast"]);
     expect(main.turns).toBe(0);
   }
+});
+
+test("the turn line names what the draft still lacks on the last two turns only", () => {
+  expect(turnLine(3, 16, ["alternatives"])).toBe("Turn 3 of 16.");
+  expect(turnLine(15, 16, ["alternatives", "findings"])).toBe("Turn 15 of 16. Two turns left: finish your proposals and give your final answer next turn. The draft still has no alternatives, findings.");
+  expect(turnLine(16, 16, ["alternatives"])).toContain("The draft still has no alternatives.");
+  expect(turnLine(16, 16, [])).not.toContain("still has no");
 });

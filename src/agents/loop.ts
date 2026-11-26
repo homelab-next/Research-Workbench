@@ -19,10 +19,11 @@ export const EMPTY_REASK = "Your reply was empty; your answer went into your rea
 const DECLINE_CHARS = 2000;
 
 /** The line each request's task text ends with: which turn this is, and near the end what is left to do. */
-export function turnLine(turn: number, of: number): string {
+export function turnLine(turn: number, of: number, missing: readonly string[] = []): string {
   const said = `Turn ${turn} of ${of}.`;
-  if (turn >= of) return `${said} This is the last turn: give your final answer now; no tool will be run.`;
-  if (turn === of - 1) return `${said} Two turns left: finish your proposals and give your final answer next turn.`;
+  const lacks = missing.length === 0 ? "" : ` The draft still has no ${missing.join(", ")}.`;
+  if (turn >= of) return `${said} This is the last turn: give your final answer now; no tool will be run.${lacks}`;
+  if (turn === of - 1) return `${said} Two turns left: finish your proposals and give your final answer next turn.${lacks}`;
   return said;
 }
 
@@ -40,6 +41,10 @@ export interface AgentSpec {
   outside_run?: boolean;
   /** What the stage knows of an answer that failed its schema: sentences added to the re-ask (and to the errors) for that answer. */
   explain?: (answer: Json) => string[];
+  /** What the work still lacks, by name (read at each request): an answer that fits its schema is re-asked, with the one re-ask, while this is not empty; the last two turns' notes name it. */
+  lacking?: () => string[];
+  /** The re-ask for an answer given while `lacking` names something. */
+  lackingAsk?: (missing: string[]) => string;
   /** The seq of the entry this work answers (a question): put on the agent's own request and block entries, so a reader links them to it by cause rather than by position. */
   cause?: number;
   /** An optional fast model that takes the tool-choosing turns only; the stage's model writes the answer. Absent: the stage's model takes every turn. */
@@ -184,7 +189,7 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     const ordinal = session.entries().filter((e) => e.type === "model.request" && e.actor.kind === "agent" && e.actor.id === actor.id
       && e.payload.provider === via.id && e.payload.model === viaModel).length;
     // the task text says which turn this is; on the last the reply can only be the answer: no tool is offered to run, and output is structured
-    const sent = messages.map((m, i) => (i === 1 ? { ...m, content: `${spec.task}\n\n${turnLine(turn + 1, maxTurns)}` } : m));
+    const sent = messages.map((m, i) => (i === 1 ? { ...m, content: `${spec.task}\n\n${turnLine(turn + 1, maxTurns, spec.lacking?.() ?? [])}` } : m));
     const req: TurnRequest = { model: viaModel, effort: viaEffort, messages: sent, tools: toolSpecs(spec.tools, ctx), key: actor.id, ordinal };
     if (spec.sampling !== undefined) req.sampling = spec.sampling;
     if (spec.max_output_tokens !== undefined) req.max_output_tokens = spec.max_output_tokens;
@@ -359,7 +364,15 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     else if (found === null) errors = ["the reply holds no JSON object"];
     else {
       errors = validate(spec.schema, found.value).map((e) => `${e.path.replace(/^\$\.?/, "") || "output"} ${e.message}`);
-      if (errors.length === 0) return { kind: "done", content: result.content, output: found.value, calls };
+      if (errors.length === 0) {
+        const missing = spec.lacking?.() ?? [];
+        if (missing.length === 0) return { kind: "done", content: result.content, output: found.value, calls };
+        // a complete-looking answer over an unfinished draft: it uses the one re-ask, and the work goes on with its tools
+        if (++failures >= 2) return { kind: "invalid", errors: [`the draft still has no ${missing.join(", ")}`], returned: "an answer over an unfinished draft", calls };
+        reasked = true;
+        messages.push({ role: "assistant", content: result.content }, { role: "user", content: spec.lackingAsk?.(missing) ?? `The draft still has no ${missing.join(", ")}; finish it, then answer` });
+        continue;
+      }
       if (spec.explain !== undefined) errors.push(...spec.explain(found.value));
     }
     if (++failures >= 2) return { kind: "invalid", errors, returned: returnedWord(empty, found, spec.schema), calls };

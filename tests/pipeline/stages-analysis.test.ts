@@ -45,8 +45,10 @@ const finding = (claim: string, cites: string[], extra: Record<string, Json> = {
   call("propose_assessment", { claim, likelihood: "likely", confidence: "high", confidence_basis: "the record", cites, assumptions: [], reasoning: "matches", ...extra });
 const section = (s: string, text: string, cites: string[] = []) => call("propose_narrative", { section: s, text, cites });
 const out = (detail: string) => say({ done: true, change_kind: "first judgment", change_detail: detail, assumptions: ["the records are current"], note: "n" });
+/** The four sections the checks require, each written. */
+const FILL = ["summary", "gaps_and_limits", "alternatives", "assessment"].map((x) => section(x, "stated"));
 /** Draft 1: two findings and a summary. */
-const FIRST: ScriptReply[] = [calls(finding("it is internal", ["c1"]), finding("it talks to the proxy", ["c2"]), section("summary", "all clear", ["c1"])), out("first")];
+const FIRST: ScriptReply[] = [calls(finding("it is internal", ["c1"]), finding("it talks to the proxy", ["c2"]), section("summary", "all clear", ["c1"]), ...["gaps_and_limits", "alternatives", "assessment"].map((x) => section(x, "stated"))), out("first")];
 /** Draft 2: only f1 is proposed again. */
 const SECOND: ScriptReply[] = [calls(finding("it is internal and managed", ["c1"], { replaces: "f1" })), out("second")];
 /** Draft 2 that also answers challenge x1 (revised). */
@@ -154,6 +156,26 @@ test("the analyst's proposals become draft 1 with its hash, and each finding is 
   expect(publishable(f.s.state, d.hash)).toBe(true);
 });
 
+test("an answer with an empty required section is re-asked naming it, and the stage finishes once it is written", async () => {
+  const partial: ScriptReply[] = [calls(finding("it is internal", ["c1"]), section("summary", "all clear"), section("gaps_and_limits", "none"), section("assessment", "internal")), out("first"), calls(section("alternatives", "a misconfigured proxy")), out("first")];
+  const r = rig({ analyst: partial, evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
+  await go(r);
+  const reask = (JSON.parse(requestText("analyst", 2)) as { messages: { role: string; content: string }[] }).messages.at(-1)!;
+  expect(reask).toEqual({ role: "user", content: "The draft still has no alternatives; propose them with propose_narrative, then answer" });
+  expect(finished("assemble")[0]!.payload).toMatchObject({ outcome: "pass" });
+  expect(f.s.state.drafts[0]!.product.alternatives).toBe("a misconfigured proxy");
+});
+
+test("an answer with no finding is re-asked for findings, and one still incomplete after the re-ask stalls the stage", async () => {
+  const bare: ScriptReply[] = [calls(...["summary", "gaps_and_limits", "assessment"].map((x) => section(x, "stated"))), out("first"), out("first")];
+  const r = rig({ analyst: bare, evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
+  const sum = await go(r);
+  const reask = (JSON.parse(requestText("analyst", 2)) as { messages: { role: string; content: string }[] }).messages.at(-1)!;
+  expect(reask.content).toStartWith("The draft still has no alternatives, findings;");
+  expect(sum.status).not.toBe("waiting");
+  expect(f.s.state.drafts).toHaveLength(0);
+});
+
 test("objective, question, marking and source quality are filled in by code, not by the model", async () => {
   const r = rig({ analyst: FIRST, evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
   await go(r);
@@ -204,7 +226,7 @@ function sixteen(analyst: ScriptReply[]): Rig {
       likelihood: "likely", confidence: "low" as const, confidence_basis: "b", cites: ["c1"], assumptions: [], reasoning: "r",
     }));
     engine!.revise({ product: {
-      objective: "o", question: "q", marking: "TLP:GREEN", summary: "all clear", key_findings: findings, gaps_and_limits: "", alternatives: "", assessment: "",
+      objective: "o", question: "q", marking: "TLP:GREEN", summary: "all clear", key_findings: findings, gaps_and_limits: "g", alternatives: "a", assessment: "s",
       sources: [], assumptions: [], change: "First judgment.",
     }, reason: "an earlier analysis", actor: person });
     return PASS;
@@ -241,7 +263,7 @@ test("a finding of the previous draft is kept only when it is proposed again in 
 });
 
 test("a revision keeps the cards a carried-over section cited by tool only", async () => {
-  const first: ScriptReply[] = [calls(finding("it is internal", ["c1"]), section("summary", "all clear", ["c2"])), out("first")];
+  const first: ScriptReply[] = [calls(finding("it is internal", ["c1"]), section("summary", "all clear", ["c2"]), ...["gaps_and_limits", "alternatives", "assessment"].map((x) => section(x, "stated"))), out("first")];
   const r = rig({ analyst: [...first, ...SECOND], evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
   r.checks.fail = 1;
   await go(r);
@@ -255,7 +277,7 @@ test("a revision keeps the cards a carried-over section cited by tool only", asy
 });
 
 test("a revision that rewrites every section does not carry their old cards", async () => {
-  const first: ScriptReply[] = [calls(finding("it is internal", ["c1"]), section("summary", "all clear", ["c2"])), out("first")];
+  const first: ScriptReply[] = [calls(finding("it is internal", ["c1"]), section("summary", "all clear", ["c2"]), ...["gaps_and_limits", "alternatives", "assessment"].map((x) => section(x, "stated"))), out("first")];
   const second: ScriptReply[] = [calls(finding("it is internal", ["c1"], { replaces: "f1" }), ...["summary", "gaps_and_limits", "alternatives", "assessment"].map((s) => section(s, "rewritten"))), out("second")];
   const r = rig({ analyst: [...first, ...second], evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
   r.checks.fail = 1;
@@ -683,7 +705,7 @@ test("Evaluate's pack carries Challenge's points with the analyst's answers, and
 });
 
 // draft 1 says almost certain; Challenge says that overclaims; draft 2 lowers it to likely; Evaluate says likely understates it
-const SURE: ScriptReply[] = [calls(finding("ws-17 held the address", ["c1"], { likelihood: "almost certain" })), out("first")];
+const SURE: ScriptReply[] = [calls(finding("ws-17 held the address", ["c1"], { likelihood: "almost certain" }), ...FILL), out("first")];
 const OVERCLAIMS = calls(call("raise_challenge", { severity: "must_address", text: "almost certain on f1 overclaims: one event", cites: ["c1"] }));
 const LOWERED: ScriptReply[] = [calls(
   finding("ws-17 held the address", ["c1"], { likelihood: "likely", replaces: "f1" }),

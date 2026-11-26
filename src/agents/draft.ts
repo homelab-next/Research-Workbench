@@ -11,6 +11,19 @@ import { ToolError } from "./tools/kit";
 
 export type TextSection = Exclude<Section, "key_findings">;
 
+/**
+ * The product's text sections the sample checks require non-empty (07 alternatives, 08 gaps_and_limits; the summary and assessment are
+ * what a reader takes the draft for): Assemble does not finish while one is empty. The one place the list is kept.
+ */
+export const REQUIRED_SECTIONS: readonly TextSection[] = ["summary", "assessment", "alternatives", "gaps_and_limits"];
+
+/** What a draft still lacks of what the checks require: the empty required sections by name, and "findings" when it has none. */
+export function lackingOf(work: DraftWork): string[] {
+  const out: string[] = REQUIRED_SECTIONS.filter((k) => work.sections[k].trim() === "");
+  if (work.findings.length === 0) out.push("findings");
+  return out;
+}
+
 /** What the draft builder takes from the profile's standard (context/standards): the one place the terms are listed. */
 export interface StandardTerms {
   /** The likelihood terms, in the standard's order. */
