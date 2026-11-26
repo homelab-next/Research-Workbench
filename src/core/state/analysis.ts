@@ -68,10 +68,15 @@ function applyDrafts(s: CaseState, entry: Entry): CaseState {
       const { stage, outcome, draft_hash } = entry.payload as Payloads["stage.finished"];
       if (draft_hash === null || !has(s.reviews, draft_hash)) return s;
       const passed = s.reviews[draft_hash]!.passed_stages;
+      const failed = s.reviews[draft_hash]!.failed_stages ?? [];
+      // the stages that failed this draft, so the page can tell a fail on this draft from one on an earlier draft
+      const marked = outcome === "fail"
+        ? (failed.includes(stage) ? s : withReview(s, draft_hash, (r) => ({ ...r, failed_stages: [...failed, stage] })))
+        : (failed.includes(stage) ? withReview(s, draft_hash, (r) => ({ ...r, failed_stages: failed.filter((x) => x !== stage) })) : s);
       if (outcome === "pass") {
-        return passed.includes(stage) ? s : withReview(s, draft_hash, (r) => ({ ...r, passed_stages: [...passed, stage] }));
+        return passed.includes(stage) ? marked : withReview(marked, draft_hash, (r) => ({ ...r, passed_stages: [...passed, stage] }));
       }
-      return passed.includes(stage) ? withReview(s, draft_hash, (r) => ({ ...r, passed_stages: passed.filter((x) => x !== stage) })) : s;
+      return passed.includes(stage) ? withReview(marked, draft_hash, (r) => ({ ...r, passed_stages: passed.filter((x) => x !== stage) })) : marked;
     }
     case "run.started": {
       // a new run reviews afresh; applyRun has already installed it (or recorded it malformed). Checks, evaluations and challenges stay.

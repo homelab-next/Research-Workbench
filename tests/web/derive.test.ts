@@ -203,6 +203,39 @@ test("it reads running again as soon as it starts again, and passed when no revi
   expect(sentBack(ok, stageOf(ok, "assemble"))).toBeNull();
 });
 
+test("a new draft that no reviewer has failed does not read sent back by the reviewer that failed the draft before it", () => {
+  // final review I4: Evaluate failed draft 3 and sent it back; Assemble wrote draft 4, and Checks is reviewing it
+  const three: StageDef[] = [...reviewed.slice(0, 2), { id: "evaluate", title: "Evaluate", phase: "analysis", runs: "agent", gate: null, reviews: true, model: null }, reviewed[2]!];
+  const b = base();
+  b.add("run.started", { run: "run-1", pipeline: "p", pipeline_hash: "h", stages: three });
+  b.add("stage.started", { stage: "assemble", attempt: 1 });
+  b.add("draft.revised", { draft: authored(3, "h3", analyst) });
+  b.add("stage.finished", { stage: "assemble", attempt: 1, outcome: "pass", draft_hash: "h3", output: null, reason: null });
+  b.add("stage.started", { stage: "checks", attempt: 1 });
+  b.add("stage.finished", { stage: "checks", attempt: 1, outcome: "pass", draft_hash: "h3", output: null, reason: null });
+  b.add("stage.started", { stage: "evaluate", attempt: 1 });
+  b.add("stage.finished", { stage: "evaluate", attempt: 1, outcome: "fail", draft_hash: "h3", output: null, reason: "weak" });
+  // before the send-back is written, draft 3 reads sent back by Evaluate
+  const failed = fold(b.entries);
+  expect(sentBack(failed, stageOf(failed, "assemble"))).toEqual({ draft: 3, by: "Evaluate" });
+  b.add("stage.sent_back", { from: "evaluate", to: "assemble", reason: "weak", count: 1 });
+  b.add("stage.started", { stage: "assemble", attempt: 2 });
+  b.add("draft.revised", { draft: authored(4, "h4", analyst) });
+  b.add("stage.finished", { stage: "assemble", attempt: 2, outcome: "pass", draft_hash: "h4", output: null, reason: null });
+  b.add("stage.started", { stage: "checks", attempt: 2 });
+  const s = fold(b.entries);
+  expect(s.skipped).toEqual([]);
+  expect(stageOf(s, "evaluate").status).toBe("failed");
+  expect(sentBack(s, stageOf(s, "assemble"))).toBeNull();
+  expect(stageMark(s, stageOf(s, "assemble"))).toBe("passed");
+  // once Evaluate fails draft 4 as well, it reads sent back again
+  b.add("stage.finished", { stage: "checks", attempt: 2, outcome: "pass", draft_hash: "h4", output: null, reason: null });
+  b.add("stage.started", { stage: "evaluate", attempt: 2 });
+  b.add("stage.finished", { stage: "evaluate", attempt: 2, outcome: "fail", draft_hash: "h4", output: null, reason: "still weak" });
+  const again = fold(b.entries);
+  expect(sentBack(again, stageOf(again, "assemble"))).toEqual({ draft: 4, by: "Evaluate" });
+});
+
 test("a draft a person wrote marks no stage as sent back", () => {
   const s = fold(afterReview("fail", { kind: "human", id: "pat" }).entries);
   for (const st of s.run.stages) expect(sentBack(s, st)).toBeNull();

@@ -97,6 +97,8 @@ export interface ReviewState {
   challenges: string[];
   /** Ids of stages that finished with outcome "pass" for this draft hash. */
   passed_stages: string[];
+  /** Ids of stages whose latest finish on this draft hash was a fail; present only once one has failed it. */
+  failed_stages?: string[];
   /** The latest publish.rejected for this hash: the person's verdict, shown in the Narrative lens. It clears passed_stages. */
   rejected: { reason: string; stop: boolean; seq: number; ts: string } | null;
 }

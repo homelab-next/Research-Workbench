@@ -97,7 +97,8 @@ export type StageMark = "passed" | "passed earlier draft" | "running" | "failed"
 
 /**
  * The latest draft this stage wrote when a review stage has failed it: the draft's number and the title of the stage that sent it back.
- * Null when the latest draft is not this stage's (an agent's, by stage id), when the stage is running or has ended otherwise, or when no review stage has failed.
+ * Null when the latest draft is not this stage's (an agent's, by stage id), when the stage is running or has ended otherwise, or when no review stage has failed
+ * that draft (a review stage that failed an earlier draft and has not yet run on this one has not sent it back).
  */
 export function sentBack(state: CaseState, stage: StageState): { draft: number; by: string } | null {
   const latest = latestDraft(state);
@@ -105,7 +106,9 @@ export function sentBack(state: CaseState, stage: StageState): { draft: number; 
   if (stage.status !== "passed" && stage.status !== "idle") return null;
   const { run } = state;
   const named = Object.hasOwn(run.sent_back_to, stage.id) ? run.stages.find((x) => x.id === run.sent_back_to[stage.id]) : undefined;
-  const from = named ?? run.stages.find((x) => x.reviews && x.status === "failed");
+  // a review stage's "failed" is from its last finish: it sent this draft back only if that finish was on this draft
+  const failedThis = Object.hasOwn(state.reviews, latest.hash) ? state.reviews[latest.hash]!.failed_stages ?? [] : [];
+  const from = named ?? run.stages.find((x) => x.reviews && x.status === "failed" && failedThis.includes(x.id));
   return from === undefined ? null : { draft: latest.n, by: from.title };
 }
 
