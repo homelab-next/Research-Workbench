@@ -7,7 +7,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isPlainObject } from "../core/canonical";
 import { loadProfile } from "../agents/context";
-import { mayGo, packBudget } from "../agents/pack";
+import { fitProblem, mayGo, packBudget, slotContext } from "../agents/pack";
 import { loadProviders } from "../agents/providers";
 import type { ModelInfo, Provider } from "../agents/providers";
 import { describeSampling } from "../agents/providers/sampling";
@@ -24,7 +24,7 @@ export interface Check { name: string; level: "ok" | "fail" | "note"; detail: st
 
 const USAGE = "usage: bun run preflight [--config <file>] [--min-context <tokens>] [--no-question]\nexit 0 ready, 1 not ready, 2 bad command line or configuration, 3 unexpected error";
 const DEFAULT_MIN_CONTEXT = 32768;
-const NAMES = ["configuration", "outside the repository", "secrets", "manifests", "pipeline", "checks", "lake sources", "pivots", "model listed", "model loaded", "context", "marking policy", "model answers"] as const;
+const NAMES = ["configuration", "outside the repository", "secrets", "manifests", "pipeline", "checks", "lake sources", "pivots", "model listed", "model loaded", "context", "context fit", "marking policy", "model answers"] as const;
 type Name = (typeof NAMES)[number];
 
 /** The command line is wrong. The process exits 2. */
@@ -76,6 +76,8 @@ export function oneLine(s: string): string {
   return t.length > MAX_DETAIL ? `${t.slice(0, MAX_DETAIL - 1)}\u2026` : t;
 }
 const MODEL_CALL_MS = 30000;
+/** Tokens the fixed question leaves free for the model's own reply, of the context a request has. */
+const QUESTION_ROOM = 2048;
 /** Rejects if `work` takes longer than `ms`. */
 async function within<T>(ms: number, work: Promise<T>, what: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -228,7 +230,7 @@ export async function preflight(
   }
   const many = pairs.size > 1;
   const listings = new Map<string, Promise<ModelInfo[]>>();
-  const asked: { pair: { provider: string; model: string }; provider: Provider }[] = [];
+  const asked: { pair: { provider: string; model: string }; provider: Provider; slot: number | null }[] = [];
   for (const pair of pairs.values()) {
     const who = many ? `${pair.model}: ` : "";
     const provider = loaded.providers.get(pair.provider);
@@ -246,16 +248,32 @@ export async function preflight(
     }
     if (info.loaded === null) add("model loaded", "note", `${pair.provider} does not say what is loaded; ${pair.model} may need loading`);
     else add("model loaded", "ok", `${pair.model} is loaded at ${pair.provider}`);
+    let slotOf: number | null = null;
     if (provider.kind === "scripted") {
       add("context", "note", `${who}a script has no context window`);
     } else {
       const manifest = registry.get("model", pair.provider)?.body.context;
       const context = info.loaded === true ? info.context : typeof manifest === "number" ? manifest : null;
+      const slots = info.parallel;
       if (context === null) add("context", "fail", `${who}the context is not known: ${pair.provider} does not report it and its manifest gives none`);
-      else if (context < p.min_context) add("context", "fail", `${who}${context} tokens is below the ${p.min_context} a run needs; load it with a larger context`);
-      else add("context", "ok", `${who}${context} tokens; a turn's pack may use ${packBudget(context)} characters`);
+      else {
+        const slot = slotContext(context, slots);
+        const share = slots !== null && slots > 1 ? ` a request (${context} loaded, shared by ${slots} slots)` : "";
+        if (slot < p.min_context) add("context", "fail", `${who}${slot} tokens${share} is below the ${p.min_context} a run needs; load it with a larger context`);
+        else add("context", "ok", `${who}${slot} tokens${share}; a turn's pack may use ${packBudget(slot)} characters`);
+        slotOf = slot;
+        const mine = stages.filter((s) => s.model!.provider === pair.provider && s.model!.model === pair.model);
+        const cap = (s: StageManifest): number | undefined => s.max_output_tokens ?? provider.max_output_tokens;
+        let fitBad = 0;
+        for (const s of mine) {
+          const c = cap(s);
+          const problem = c === undefined ? null : fitProblem(slot, c);
+          if (problem !== null) { fitBad++; add("context fit", "fail", `${s.id}: ${problem}`); }
+        }
+        if (fitBad === 0) add("context fit", "ok", `${who}every stage's reply cap fits ${slot} tokens a request (${slots ?? 1} slot${(slots ?? 1) === 1 ? "" : "s"})`);
+      }
     }
-    asked.push({ pair, provider });
+    asked.push({ pair, provider, slot: slotOf });
   }
 
   // the marking policy
@@ -274,7 +292,7 @@ export async function preflight(
 
   // the one question
   if (p.question) {
-    for (const { pair, provider } of asked) {
+    for (const { pair, provider, slot } of asked) {
       if (provider.kind === "scripted") { add("model answers", "note", `${pair.model} is scripted; nothing was asked`); continue; }
       const cap = Math.min(typeof registry.get("model", pair.provider)?.body.timeout_ms === "number" ? (registry.get("model", pair.provider)!.body.timeout_ms as number) : 120000, MODEL_CALL_MS);
       const r = await within(cap, provider.turn({
@@ -284,6 +302,7 @@ export async function preflight(
           { role: "user", content: "Call the tool record once, with why set to a short reason. Then stop." },
         ],
         tools: [QUESTION_TOOL as never],
+        ...(slot === null ? {} : { max_output_tokens: Math.max(1, slot - QUESTION_ROOM) }),
       }), pair.model).catch((err): { kind: "error"; message: string; raw: null } => ({ kind: "error", message: reason(err), raw: null }));
       if (r.kind === "error") { add("model answers", "fail", r.message); continue; }
       if (r.kind === "declined") { add("model answers", "fail", `declined: ${r.reason}`); continue; }

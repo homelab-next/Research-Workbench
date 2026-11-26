@@ -7,6 +7,9 @@ import { loadProfile } from "../../src/agents/context";
 import type { PackPart } from "../../src/agents/context";
 import { Providers } from "../../src/agents/providers";
 import type { Provider } from "../../src/agents/providers";
+import { LocalProvider } from "../../src/agents/providers/local";
+import { Secrets } from "../../src/modules/secrets";
+import { startModelStandin } from "../helpers/model-standin";
 import { ScriptedProvider } from "../../src/agents/providers/scripted";
 import type { Script, ScriptReply } from "../../src/agents/providers/scripted";
 import { loadConfig } from "../../src/modules/config";
@@ -246,4 +249,28 @@ test("a stage's max_turns overrides the loop's 16: the task counts to it and the
   expect(seen).toHaveLength(3);
   expect(seen[0]!.messages[1]!.content).toBe("t\n\nTurn 1 of 3.");
   expect(seen[2]!.tool_choice).toBe("none");
+});
+
+/** A local provider over a model stand-in, chosen for the Frame stage. */
+function localRig(opts: { context: number; parallel: number; max_output_tokens: number }, replies: Parameters<typeof startModelStandin>[0]["replies"] = []) {
+  const m = startModelStandin({ models: [{ id: "example/model-a" }], details: false, replies });
+  const r = rig(script(say(FRAME)));
+  r.deps.providers = new Providers([new LocalProvider({
+    id: "loc", base_url: m.url, where: "machine", credential: null, secrets: new Secrets({}, null), context: opts.context, parallel: opts.parallel,
+    efforts: [], timeout_ms: 5000, max_output_tokens: opts.max_output_tokens,
+  })]);
+  r.engine.setModel("frame", { provider: "loc", model: "example/model-a", effort: null }, person);
+  r.engine.start(person);
+  return { r, m };
+}
+
+test("a stage whose reply cap does not fit the per-request context stalls before any model call", async () => {
+  const { r, m } = localRig({ context: 65536, parallel: 2, max_output_tokens: 32768 });
+  try {
+    const end = await stageAgent(r.env(), { actor_id: "orchestrator", task: "t", extras: [] });
+    expect(end).toMatchObject({ kind: "stalled" });
+    expect((end as { reason: string }).reason).toContain("in the 32768 tokens each request has");
+    expect(m.requests.filter((q) => q.path.endsWith("/chat/completions"))).toEqual([]);
+    expect(ofType("model.request")).toEqual([]);
+  } finally { m.stop(); }
 });

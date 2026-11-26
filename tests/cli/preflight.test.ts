@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configFor, newRoot } from "../../scripts/new-root";
@@ -50,6 +50,9 @@ function env(url: string, extra: string[] = [], over: { roots?: string } = {}): 
   const tmp = tmpDir();
   const root = join(tmp, "root");
   newRoot(root, { base_url: url, model: "example/model-a" });
+  // a reply cap that fits the 65536 tokens these stand-ins load
+  const mf = join(root, "models", "local.yaml");
+  writeFileSync(mf, readFileSync(mf, "utf8").replace("max_output_tokens: 65536", "max_output_tokens: 16384"));
   const config = join(tmp, "config.yaml");
   const base = configFor(root).split("\n").filter((l) => l !== "");
   const lines = over.roots === undefined ? base : base.filter((l) => !/^roots:|^  - \{ path/.test(l)).concat([`roots: ${over.roots}`]);
@@ -100,7 +103,7 @@ test("a root from new-root on a loaded model is ready", async () => {
   expect(by(r, "model answers")[0]!.detail).toBe("one well-formed call (40 tokens in, 8 out); this question carries no case data and is not in a ledger");
   expect(m.requests.filter((q) => q.path.endsWith("/chat/completions"))).toHaveLength(1);
   expect(r.checks.map((c) => c.name)).toEqual(
-    ["configuration", "outside the repository", "secrets", "manifests", "pipeline", "checks", "lake sources", "pivots", "model listed", "model loaded", "context", "marking policy", "model answers"]
+    ["configuration", "outside the repository", "secrets", "manifests", "pipeline", "checks", "lake sources", "pivots", "model listed", "model loaded", "context", "context fit", "marking policy", "model answers"]
       .flatMap((n) => r.checks.filter((c) => c.name === n).map((c) => c.name)),
   );
 });
@@ -362,5 +365,36 @@ test("the model line prints the sampling and output limit the model manifest giv
   const m = standin([GOOD()]);
   const e = env(m.url);
   const r = await run(e);
-  expect(by(r, "model listed")[0]!.detail).toBe("example/model-a at local; sampling temperature 0.6, top_p 0.95, top_k 20, min_p 0, presence_penalty 1.5; up to 65536 output tokens");
+  expect(by(r, "model listed")[0]!.detail).toBe("example/model-a at local; sampling temperature 0.6, top_p 0.95, top_k 20, min_p 0, presence_penalty 1.5; up to 16384 output tokens");
+});
+
+/** Rewrites the model manifest of a new root: its context, slots and reply cap. */
+function sizeModel(e: Env, context: number, parallel: number, cap: number): void {
+  const file = join(e.root, "models", "local.yaml");
+  const kept = readFileSync(file, "utf8").split("\n").filter((l) => !/^(max_output_tokens|context|parallel):/.test(l));
+  writeFileSync(file, [...kept.filter((l) => l !== ""), `context: ${context}`, `parallel: ${parallel}`, `max_output_tokens: ${cap}`, ""].join("\n"));
+}
+
+test("preflight fails a stage whose reply cap does not fit, and names the cap that does", async () => {
+  const m = startModelStandin({ models: [{ id: "example/model-a" }], details: false, replies: [GOOD()] });
+  stops.push(m.stop);
+  const e = env(m.url);
+  sizeModel(e, 65536, 2, 32768);
+  const r = await run(e);
+  const fit = by(r, "context fit").filter((c) => c.level === "fail");
+  expect(fit.length).toBeGreaterThan(0);
+  expect(fit[0]!.detail).toMatch(/^[a-z]+: /);
+  expect(fit[0]!.detail).toContain("16384 or less");
+  expect(r.ok).toBe(false);
+});
+
+test("preflight's question is sized to the per-request context the manifest claims", async () => {
+  const m = startModelStandin({ models: [{ id: "example/model-a" }], details: false, replies: [GOOD()] });
+  stops.push(m.stop);
+  const e = env(m.url);
+  sizeModel(e, 65536, 1, 8192);
+  const r = await run(e);
+  expect(by(r, "context fit")).toEqual([expect.objectContaining({ level: "ok", detail: "every stage's reply cap fits 65536 tokens a request (1 slot)" })]);
+  const body = JSON.parse(m.requests.find((q) => q.path.endsWith("/chat/completions"))!.body) as { max_tokens: number };
+  expect(body.max_tokens).toBe(65536 - 2048);
 });

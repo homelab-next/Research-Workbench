@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { assemblePack, mayGo, packBudget, renderPack, tooStrict } from "../../src/agents/pack";
+import { assemblePack, fitProblem, maxReply, mayGo, packBudget, renderPack, slotContext, tooStrict } from "../../src/agents/pack";
 import type { Pack } from "../../src/agents/pack";
 import type { PackPart } from "../../src/agents/context";
 import { sha256Hex } from "../../src/core/hash";
@@ -117,4 +117,15 @@ test("the rendered pack names what was left out", () => {
   expect(out.endsWith("Left out of this turn: k big, k huge")).toBe(true);
   const all = renderPack(assemblePack([fixed("a", 3), part("b", 3)], open) as Pack);
   expect(all).toBe("## T-a\nxxx\n\n## T-b\nxxx");
+});
+
+test("the per-request context is the loaded context shared between the slots", () => {
+  expect(slotContext(131072, null)).toBe(131072);
+  expect(slotContext(131072, 2)).toBe(65536);
+  expect(maxReply(65536)).toBe(32768);
+});
+
+test("a reply cap fits only while it leaves the pack its half", () => {
+  expect(fitProblem(131072, 65536)).toBeNull();
+  expect(fitProblem(65536, 65536)).toBe("a reply of up to 65536 tokens does not fit beside this stage's context in the 65536 tokens each request has; set max_output_tokens to 32768 or less, or load the model with a larger context in one slot");
 });

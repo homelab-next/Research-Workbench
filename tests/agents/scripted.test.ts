@@ -119,5 +119,5 @@ test("a placeholder left unresolved (a title with a newline) is an error", async
 });
 
 test("every model a script provider lists counts as loaded", async () => {
-  expect(await make([{ actor: "planner", reply: { content: "x" } }]).models()).toEqual([{ id: "s", context: null, efforts: [], loaded: true }]);
+  expect(await make([{ actor: "planner", reply: { content: "x" } }]).models()).toEqual([{ id: "s", context: null, efforts: [], loaded: true, parallel: null }]);
 });

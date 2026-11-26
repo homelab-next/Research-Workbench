@@ -8,7 +8,7 @@ import { ContextError, casePart, packPart, schemaOf, stageParts } from "../../ag
 import type { PackPart } from "../../agents/context";
 import type { CallRecord } from "../../agents/loop";
 import { runAgent } from "../../agents/loop";
-import { assemblePack, packBudget } from "../../agents/pack";
+import { assemblePack, fitProblem, packBudget, slotContext } from "../../agents/pack";
 import { DEFAULT_CONTEXT } from "../../agents/providers/local";
 import type { ModelInfo, Provider } from "../../agents/providers/types";
 import type { DraftWork } from "../../agents/draft";
@@ -32,7 +32,7 @@ export const titleOf = (env: StageEnv): string => env.session.state.run.stages.f
 const listedBefore = new WeakMap<Provider, Map<string, ModelInfo>>();
 
 /** The agent's actor and its provider and model, from the stage's chosen model; or why there is none. */
-export async function resolveAgent(env: StageEnv, actorId: string): Promise<{ actor: AgentActor; provider: Provider; model: string; effort: string | null; context: number } | { stalled: string }> {
+export async function resolveAgent(env: StageEnv, actorId: string): Promise<{ actor: AgentActor; provider: Provider; model: string; effort: string | null; /** tokens each request has */ context: number } | { stalled: string }> {
   const { state } = env.session;
   const title = titleOf(env);
   const choice = state.run.stages.find((s) => s.id === env.stage.id)?.model ?? null;
@@ -56,7 +56,7 @@ export async function resolveAgent(env: StageEnv, actorId: string): Promise<{ ac
     }
   }
   const actor: AgentActor = { kind: "agent", id: actorId, stage: env.stage.id, profile: env.deps.profile.id, model: choice.model, effort: choice.effort, where: provider.where };
-  return { actor, provider, model: choice.model, effort: choice.effort, context: info.context ?? DEFAULT_CONTEXT };
+  return { actor, provider, model: choice.model, effort: choice.effort, context: slotContext(info.context ?? DEFAULT_CONTEXT, info.parallel) };
 }
 
 /** What every agent stage shares: the model, the pack, the actor, the tool context, the loop and what the loop ended with. */
@@ -72,6 +72,11 @@ export async function stageAgent(env: StageEnv, opts: {
   const title = titleOf(env);
   const who = await resolveAgent(env, opts.actor_id);
   if ("stalled" in who) return { kind: "stalled", reason: who.stalled };
+  if (who.provider.kind === "local") {
+    const cap = stage.max_output_tokens ?? who.provider.max_output_tokens;
+    const problem = cap === undefined ? null : fitProblem(who.context, cap);
+    if (problem !== null) return { kind: "stalled", reason: `${title}: ${problem}` };
+  }
   // read after the await: a person may have changed the case, the run or a stage limit while the model was being resolved
   const state = session.state;
 

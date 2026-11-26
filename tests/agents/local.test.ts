@@ -35,7 +35,7 @@ const asError = (r: TurnResult): string => { if (r.kind !== "error") throw new E
 
 test("lists models with the context the endpoint has loaded", async () => {
   const m = standin([], { models: [{ id: "qwen/qwen3.6-35b-a3b", loaded_context_length: 131072 }] });
-  expect(await provider(m.url).models()).toEqual([{ id: "qwen/qwen3.6-35b-a3b", context: 131072, efforts: [], loaded: true }]);
+  expect(await provider(m.url).models()).toEqual([{ id: "qwen/qwen3.6-35b-a3b", context: 131072, efforts: [], loaded: true, parallel: null }]);
 });
 
 test("a model the details endpoint lists with no loaded context is not loaded; one it does not list at all is not loaded either", async () => {
@@ -56,7 +56,7 @@ test("without the details endpoint loaded is null", async () => {
 
 test("without the details endpoint the manifest's context is used, else the default", async () => {
   const a = standin([], { details: false, models: [{ id: "m" }] });
-  expect(await provider(a.url, { context: 4096, efforts: ["low"] }).models()).toEqual([{ id: "m", context: 4096, efforts: ["low"], loaded: null }]);
+  expect(await provider(a.url, { context: 4096, efforts: ["low"] }).models()).toEqual([{ id: "m", context: 4096, efforts: ["low"], loaded: null, parallel: null }]);
   expect((await provider(a.url).models())[0]!.context).toBe(DEFAULT_CONTEXT);
   expect(DEFAULT_CONTEXT).toBe(8192);
 });

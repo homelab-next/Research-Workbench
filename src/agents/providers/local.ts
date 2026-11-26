@@ -23,6 +23,8 @@ export interface LocalOptions {
   credential: string | null;
   secrets: Secrets;
   context: number | null;
+  /** How many slots share the context (the manifest's `parallel`); absent when it says nothing. */
+  parallel?: number;
   efforts: string[];
   timeout_ms: number;
   max_bytes?: number;
@@ -62,6 +64,7 @@ export class LocalProvider implements Provider {
   readonly #origin: string;
   readonly #secret: string | null;
   readonly #context: number | null;
+  readonly #parallel: number | null;
   readonly #efforts: string[];
   readonly #timeout: number;
   readonly #max: number;
@@ -83,6 +86,7 @@ export class LocalProvider implements Provider {
     this.#origin = u.origin;
     this.#secret = opts.credential === null ? null : loadCredential(opts.secrets, opts.credential);
     this.#context = opts.context;
+    this.#parallel = opts.parallel ?? null;
     this.#efforts = [...opts.efforts];
     this.#timeout = opts.timeout_ms;
     this.#max = opts.max_bytes ?? MODEL_MAX_BYTES;
@@ -168,7 +172,7 @@ export class LocalProvider implements Provider {
         }
       }
     } catch { /* not LM Studio, or it did not answer: the manifest's context applies */ }
-    return listed.map((id) => ({ id, context: loaded.get(id) ?? this.#context ?? DEFAULT_CONTEXT, efforts: [...this.#efforts], loaded: loaded.has(id) ? true : details ? false : null }));
+    return listed.map((id) => ({ id, context: loaded.get(id) ?? this.#context ?? DEFAULT_CONTEXT, efforts: [...this.#efforts], loaded: loaded.has(id) ? true : details ? false : null, parallel: this.#parallel }));
   }
 
   body(req: TurnRequest): Uint8Array {

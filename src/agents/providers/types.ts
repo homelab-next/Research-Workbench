@@ -10,7 +10,9 @@ export interface ToolSpec { name: string; description: string; parameters: Schem
 export interface ToolCall { id: string; name: string; arguments: string }
 export interface ChatMessage { role: "system" | "user" | "assistant" | "tool"; content: string; tool_calls?: ToolCall[]; tool_call_id?: string }
 /** `loaded`: true when the endpoint says the model is in memory with a context; false when it answered a listing that does not say so; null when it has no such listing. */
-export interface ModelInfo { id: string; context: number | null; efforts: string[]; loaded: boolean | null }
+export interface ModelInfo { id: string; context: number | null; efforts: string[]; loaded: boolean | null;
+  /** How many requests the model serves at once, sharing its context, when the manifest says; null when it does not. */
+  parallel: number | null }
 /** `key` is the calling agent's actor id; `ordinal` is how many model requests that actor id has already made in the case. */
 /** `response_format`: the reply is to be one JSON object matching `schema`; sent only to a provider whose `structured_output` is true. */
 export interface TurnRequest { model: string; effort: string | null; messages: ChatMessage[]; tools: ToolSpec[]; key: string; ordinal: number; response_format?: { name: string; schema: Schema };

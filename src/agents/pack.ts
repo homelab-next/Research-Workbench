@@ -13,6 +13,22 @@ export function packBudget(contextTokens: number): number {
   return Math.floor(contextTokens * PACK_SHARE) * CHARS_PER_TOKEN;
 }
 
+/** Tokens each request has: the loaded context shared between the slots the model serves at once (one when the manifest says nothing). */
+export function slotContext(context: number, parallel: number | null): number {
+  return Math.floor(context / Math.max(1, parallel ?? 1));
+}
+
+/** The most tokens a reply may hold beside a pack that takes its half of the slot. */
+export function maxReply(slot: number): number {
+  return slot - Math.floor(slot * PACK_SHARE);
+}
+
+/** Why a reply cap does not fit a slot, in words that name the cap that would; null when it fits. */
+export function fitProblem(slot: number, cap: number): string | null {
+  if (cap <= maxReply(slot)) return null;
+  return `a reply of up to ${cap} tokens does not fit beside this stage's context in the ${slot} tokens each request has; set max_output_tokens to ${maxReply(slot)} or less, or load the model with a larger context in one slot`;
+}
+
 const itemOf = (p: PackPart): PackItem => ({ kind: p.kind, id: p.id, title: p.title, hash: sha256Hex(p.text), chars: p.text.length, fixed: p.fixed });
 
 /** True when a limit is set and the marking is stricter than it. A marking that is not one of MARKINGS is the strictest. */
