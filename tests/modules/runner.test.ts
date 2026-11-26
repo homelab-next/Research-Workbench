@@ -6,7 +6,9 @@ import { join } from "node:path";
 import { Workbench } from "../../src/core/workbench";
 import type { CaseSession } from "../../src/core/session";
 import { verifyCase } from "../../src/core/verify";
-import type { Actor, Cost, TimeWindow } from "../../src/core/types";
+import type { Actor, Card, Cost, Entry, SubGoal, TimeWindow } from "../../src/core/types";
+import type { CaseState } from "../../src/core/state";
+import { subgoalAnswered } from "../../src/core/state/run";
 import { Registry } from "../../src/modules/registry";
 import { Observables } from "../../src/modules/observables";
 import { Secrets } from "../../src/modules/secrets";
@@ -14,6 +16,8 @@ import { ConnectorPool } from "../../src/modules/connectors";
 import type { Connector, QueryOutcome, QueryRequest } from "../../src/modules/connectors";
 import { CARD_CELL_CHARS, CARD_PREVIEW_ROWS, rowsHash, runQuery } from "../../src/modules/runner";
 import { runProposal } from "../../src/modules/proposals";
+import { runPivot } from "../../src/modules/pivots";
+import { sampleRoot } from "../helpers/sample-root";
 import type { RunnerDeps, RunQueryInput } from "../../src/modules/runner";
 import { startStandin } from "../helpers/http-standin";
 import type { Standin } from "../helpers/http-standin";
@@ -798,4 +802,51 @@ test("a card the fold would refuse fails the query whole: no result is recorded 
   expect(r).toMatchObject({ status: "failed", error: "the card built from the result is malformed" });
   expect(types()).toEqual(["case.created", "query.issued", "query.failed"]);
   expect(s.state.queries.q1!.status).toBe("failed");
+});
+
+// ---------- inventories: what an empty answer from an inventory pivot proves ----------
+async function onSample<T>(body: (sample: ReturnType<typeof sampleRoot>, card: (pivot: string, value: string) => Promise<Card>) => Promise<T>): Promise<T> {
+  const sample = sampleRoot(join(dir, "inv"));
+  try {
+    const card = async (pivot: string, value: string): Promise<Card> => {
+      const r = await runPivot(s, sample.deps, { pivot, value, window: win, why: "does it belong", actor: human });
+      expect(r.status).toBe("done");
+      return s.state.cards[(r as { card: string }).card]!;
+    };
+    return await body(sample, card);
+  } finally {
+    sample.close();
+  }
+}
+const lastIssued = () => s.entries().filter((e) => e.type === "query.issued").at(-1)! as Extract<Entry, { type: "query.issued" }>;
+
+test("an inventory pivot's card says what the answer proves, and the query names the inventory", async () => {
+  await onSample(async (sample, card) => {
+    expect((await card("address_to_asset", "192.0.2.17")).body).toBe("1 rows · in Asset list");
+    expect((await card("address_to_asset", "198.51.100.77")).body).toBe("No rows · proven negative · not in Asset list, which is complete for internal hosts");
+    expect(lastIssued().payload.inventory).toEqual({ id: "assets", hash: sample.registry.inventory("assets")!.hash, complete: true });
+  });
+});
+
+test("an incomplete inventory's empty answer is not seen, on the card and for the sub-goal rule", async () => {
+  await onSample(async (sample, card) => {
+    const c = await card("address_to_asset_by_lease", "198.51.100.77");
+    expect(c.empty).toBe("not-seen");
+    expect(c.body).toBe("No rows · not seen (not proof of absence) · Lease records is not declared complete");
+    expect(lastIssued().payload.inventory).toEqual({ id: "leases", hash: sample.registry.inventory("leases")!.hash, complete: false });
+    // a plan step finished "empty" on this card: subgoalAnswered(state, g) is false
+    const g: SubGoal = { id: "g1", title: "Is it ours", question: "Is it ours?", steps: ["s1"] };
+    const at = (id: string): CaseState => ({ ...s.state, plan: { ...s.state.plan, accepted_steps: ["s1"], steps: { s1: { status: "empty", cards: [id], note: "" } } } });
+    expect(subgoalAnswered(at(c.id), g)).toBe(false);
+    // the same rule on the complete inventory's empty card is an answer
+    const proven = await card("address_to_asset", "198.51.100.77");
+    expect(subgoalAnswered(at(proven.id), g)).toBe(true);
+  });
+});
+
+test("a pivot with no inventory keeps its card body and its query has no inventory key", async () => {
+  await onSample(async (_sample, card) => {
+    expect((await card("address_to_domains", "203.0.113.250")).body).toBe("No rows · not seen (not proof of absence)");
+    expect(Object.hasOwn(lastIssued().payload, "inventory")).toBe(false);
+  });
 });

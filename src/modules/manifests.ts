@@ -5,6 +5,7 @@ import type { Schema } from "../core/schema";
 import { EMPTY_MEANS, MARKINGS, WHERES } from "../core/types";
 import type { Marking, Where } from "../core/types";
 import type { ObservableType } from "./observables";
+import { INVENTORY_SCHEMA } from "./inventories";
 import { PLAYBOOK_SCHEMA } from "./playbooks";
 
 export class ManifestError extends Error {
@@ -33,6 +34,8 @@ export interface SourceManifest {
 export interface PivotManifest {
   id: string; title: string; hash: string; from: string; to: string; source: string; query: string; needs_window: boolean;
   weight: number | null; empty_means: "proven-negative" | "not-seen"; yields: Record<string, string>;
+  /** The inventory the pivot looks the value up in, if any; its completeness decides what an empty answer means. */
+  inventory: string | null;
 }
 
 const str: Schema = { type: "string" };
@@ -130,6 +133,7 @@ export const PIVOTS_SCHEMA: Schema = {
           weight: { type: ["number", "null"], minimum: 0 },
           empty_means: { type: "string", enum: [...EMPTY_MEANS] },
           yields: { type: "object", additionalProperties: str },
+          inventory: name,
         },
       },
     },
@@ -180,7 +184,8 @@ export function describeErrors(errors: { path: string; message: string }[]): str
 
 /** Checks a whole file's body against the schema for its kind. Returns null for kinds that are not validated here. */
 export function schemaFor(kind: string): Schema | null {
-  return kind === "source" ? SOURCE_SCHEMA : kind === "types" ? TYPES_SCHEMA : kind === "pivots" ? PIVOTS_SCHEMA : kind === "playbook" ? PLAYBOOK_SCHEMA : null;
+  return kind === "source" ? SOURCE_SCHEMA : kind === "types" ? TYPES_SCHEMA : kind === "pivots" ? PIVOTS_SCHEMA : kind === "playbook" ? PLAYBOOK_SCHEMA
+    : kind === "inventory" ? INVENTORY_SCHEMA : null;
 }
 
 /** Drops object keys that were written with nothing after them, at any depth, so they take their defaults. */
@@ -232,10 +237,15 @@ export function toType(item: Record<string, Json>): ObservableType {
   return { id: item.id as string, title: (item.title as string | undefined) ?? (item.id as string), pattern: item.pattern as string };
 }
 
+/**
+ * Builds a pivot from a validated item. An unstated empty_means reads not-seen here; for a pivot that names an inventory the registry
+ * then decides it from the inventory (the item, which the registry keeps, still shows whether it was stated).
+ */
 export function toPivot(item: Record<string, Json>, hash: string): PivotManifest {
   const i = item as Record<string, any>;
   return {
     id: i.id, title: i.title ?? i.id, hash, from: i.from, to: i.to, source: i.source, query: i.query,
     needs_window: i.needs_window ?? false, weight: i.weight ?? null, empty_means: i.empty_means ?? "not-seen", yields: i.yields ?? {},
+    inventory: i.inventory ?? null,
   };
 }

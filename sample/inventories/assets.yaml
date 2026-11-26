@@ -1,0 +1,8 @@
+kind: inventory
+id: assets
+title: Asset list
+holds: asset
+scope: internal hosts
+complete: true
+basis: Every internal host is entered by hand before it is given an address.
+derived: false

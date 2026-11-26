@@ -1,6 +1,6 @@
 import { isPlainObject } from "../core/canonical";
 import type { Marking } from "../core/types";
-import type { ModelView, PivotView, PlaybookView, Reference, SourceView } from "../core/wire";
+import type { InventoryView, ModelView, PivotView, PlaybookView, Reference, SourceView } from "../core/wire";
 import { scrub } from "../agents/tools/kit";
 import { mayGo } from "../agents/pack";
 import { pivotWeight } from "../modules/manifests";
@@ -25,7 +25,7 @@ export function referenceOf(deps: EngineDeps): Reference {
   const pivots: PivotView[] = registry.pivots().map((p) => {
     const source = registry.source(p.source);
     const weight = source === null ? (p.weight ?? 0) : pivotWeight(p, source);
-    return { id: p.id, title: shown(deps, p.title), from: p.from, to: p.to, source: p.source, free: weight === 0, weight, needs_window: p.needs_window, empty_means: p.empty_means };
+    return { id: p.id, title: shown(deps, p.title), from: p.from, to: p.to, source: p.source, free: weight === 0, weight, needs_window: p.needs_window, empty_means: p.empty_means, inventory: p.inventory };
   });
   const objectives = registry.all("objective").map((m) => {
     const list = Array.isArray(m.body.measures) ? (m.body.measures as unknown[]) : [];
@@ -42,9 +42,12 @@ export function referenceOf(deps: EngineDeps): Reference {
     steps: p.steps.map((s) => ({ id: s.id, pivot: s.pivot, from: fromText(s), when: whenText(s), max_values: s.max_values })),
     end: [...p.end], free: registry.costlyPivots(p).length === 0, max_lookups: maxLookups(p),
   }));
+  const inventories: InventoryView[] = registry.inventories().map((i) => ({
+    id: i.id, title: shown(deps, i.title), holds: i.holds, scope: shown(deps, i.scope), complete: i.complete,
+  }));
   return {
     types: registry.types().map((t) => ({ id: t.id, title: shown(deps, t.title) })), sources, pivots, objectives, phases,
-    profile: { id: deps.profile.id, title: shown(deps, deps.profile.title) }, send_back_cap: SEND_BACK_CAP, playbooks,
+    profile: { id: deps.profile.id, title: shown(deps, deps.profile.title) }, send_back_cap: SEND_BACK_CAP, playbooks, inventories,
   };
 }
 

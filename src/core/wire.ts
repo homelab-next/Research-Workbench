@@ -9,7 +9,9 @@ export interface Me { user: string; role: "analyst" | "requester" | "leader"; or
 export interface CaseSummaryView { id: string; title: string; marking: Marking; created_ts: string; run_status: RunState["status"]; phase: string | null; incoming: number; kept: number }
 export interface NewCaseInput { title: string; asked: string; why: string; starting: Observable[]; window: TimeWindow; objective: string | null; marking: Marking }
 export interface SourceView { id: string; title: string; connector: string; marking: Marking; where: Where; confirmed: boolean; adhoc: boolean; cost: { weight: number; unit: string }; quality: string }
-export interface PivotView { id: string; title: string; from: string; to: string; source: string; free: boolean; weight: number; needs_window: boolean; empty_means: EmptyMeans }
+export interface PivotView { id: string; title: string; from: string; to: string; source: string; free: boolean; weight: number; needs_window: boolean; empty_means: EmptyMeans; inventory: string | null }
+/** A list a source keeps, and whether it is declared complete for its scope (only then is an empty answer from it a proven negative). */
+export interface InventoryView { id: string; title: string; holds: string; scope: string; complete: boolean }
 export interface Reference {
   types: { id: string; title: string }[]; sources: SourceView[]; pivots: PivotView[];
   objectives: { id: string; title: string; measures: { id: string; kind: "mop" | "moe"; title: string }[] }[];
@@ -17,6 +19,7 @@ export interface Reference {
   /** The most times one stage is sent back to before the run pauses (a person may allow more). */
   send_back_cap: number;
   playbooks: PlaybookView[];
+  inventories: InventoryView[];
 }
 export interface PlaybookView {
   id: string; title: string; about: string; inputs: { name: string; type: string }[];

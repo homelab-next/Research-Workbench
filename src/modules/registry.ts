@@ -10,19 +10,22 @@ import { ManifestError, parseManifestFile, pivotWeight, toPivot, toSource, toTyp
 import type { LoadedManifest, PivotManifest, SourceManifest } from "./manifests";
 import { compileType, MAX_VALUE_LENGTH, PATTERN_PROBE_LIMIT_MS, probePattern } from "./observables";
 import type { ObservableType } from "./observables";
+import { toInventory } from "./inventories";
+import type { InventoryManifest } from "./inventories";
 import { fromText, toPlaybook } from "./playbooks";
 import type { PlaybookManifest } from "./playbooks";
 
 export type { LoadedManifest, PivotManifest, QualityNote, SourceManifest, TableManifest, EndpointManifest } from "./manifests";
 export type { ObservableType } from "./observables";
 export type { PlaybookManifest } from "./playbooks";
+export type { InventoryManifest } from "./inventories";
 
 export interface Problem { root: string; path: string; error: string }
 
 const DEFAULT_ACTOR: Actor = { kind: "system", id: "registry" };
 /** Kinds whose text or schema is put in front of a model or decides what a run does; an untrusted root may not supply them. */
 export const TRUSTED_ONLY_KINDS: readonly string[] = [
-  "model", "script", "check", "stage", "profile", "rules", "persona", "procedure", "skill", "gate", "playbook", "reference", "objective", "framework", "standard", "schema",
+  "model", "script", "check", "stage", "profile", "rules", "persona", "procedure", "skill", "gate", "playbook", "inventory", "reference", "objective", "framework", "standard", "schema",
 ];
 const MANIFEST_FILE = /\.(?:ya?ml|md)$/i;
 const key = (kind: string, id: string): string => `${kind}\0${id}`;
@@ -96,6 +99,7 @@ export class Registry {
   private readonly typeById = new Map<string, ObservableType>();
   private readonly pivotById = new Map<string, PivotManifest>();
   private readonly playbookById = new Map<string, PlaybookManifest>();
+  private readonly inventoryById = new Map<string, InventoryManifest>();
   private roots: RootConfig[] = [];
   private readonly conflicted = new Set<string>();
 
@@ -136,6 +140,12 @@ export class Registry {
   }
   playbook(id: string): PlaybookManifest | null {
     return this.playbookById.get(id) ?? null;
+  }
+  inventories(): InventoryManifest[] {
+    return [...this.inventoryById.values()];
+  }
+  inventory(id: string): InventoryManifest | null {
+    return this.inventoryById.get(id) ?? null;
   }
   /** The ids of the playbook's pivots whose weight is above zero. */
   costlyPivots(p: PlaybookManifest): string[] {
@@ -218,7 +228,7 @@ export class Registry {
     }
     // refused before the id table, so an untrusted root cannot take a trusted manifest's id and make it vanish
     if (TRUSTED_ONLY_KINDS.includes(parsed.kind) && !root.trusted) {
-      throw new ManifestError(`a ${parsed.kind} manifest is accepted only from a trusted root`);
+      throw new ManifestError(`${/^[aeiou]/.test(parsed.kind) ? "an" : "a"} ${parsed.kind} manifest is accepted only from a trusted root`);
     }
     if (parsed.kind === "types" || parsed.kind === "pivots") {
       const single = parsed.kind === "types" ? "type" : "pivot";
@@ -269,8 +279,10 @@ export class Registry {
       }
     }
     const playbook = parsed.kind === "playbook" ? toPlaybook(body, hash) : null;
+    const inventory = parsed.kind === "inventory" ? toInventory(body, hash) : null;
     if (!this.add({ ...base, kind: parsed.kind, id, title, body })) return;
     if (playbook !== null) this.playbookById.set(id, playbook);
+    if (inventory !== null) this.inventoryById.set(id, inventory);
     if (parsed.kind === "source") this.sourceById.set(id, toSource(body, hash, dir, resolve(root.path)));
   }
 
@@ -284,6 +296,7 @@ export class Registry {
     else if (kind === "pivot") this.pivotById.delete(id);
     else if (kind === "type") this.typeById.delete(id);
     else if (kind === "playbook") this.playbookById.delete(id);
+    else if (kind === "inventory") this.inventoryById.delete(id);
   }
 
   /** Checks what refers to what, once every file is read: columns to types, then pivots to sources and types. */
@@ -293,6 +306,9 @@ export class Registry {
       this.reject(m.root, m.path, error);
       this.drop(kind, id);
     };
+    for (const inv of this.inventories()) {
+      if (!this.typeById.has(inv.holds)) reject("inventory", inv.id, `inventory "${inv.id}": it holds "${inv.holds}", which is not a known observable type`);
+    }
     for (const s of this.sources()) {
       const missing = s.tables.flatMap(t => t.columns).map(c => c.type).find(t => t !== null && !this.typeById.has(t));
       if (missing !== undefined) reject("source", s.id, `source "${s.id}": a column is typed "${missing}", which is not a known observable type`);
@@ -308,8 +324,25 @@ export class Registry {
       }
       else if (missingType !== undefined) reject("pivot", p.id, `pivot "${p.id}": type "${missingType}" is not a known observable type`);
       else if (!Object.values(p.yields).includes(p.to)) reject("pivot", p.id, `pivot "${p.id}": yields maps no column to its target type "${p.to}"`);
+      else if (p.inventory !== null) this.crossCheckInventory(p, home, reject);
     }
     this.crossCheckPlaybooks();
+  }
+
+  /**
+   * A pivot that names an inventory: the inventory is loaded, the pivot is trusted, it finds what the inventory holds, and an
+   * empty_means it states agrees with the inventory. One that states none takes it from the inventory: proven-negative only when complete.
+   */
+  private crossCheckInventory(p: PivotManifest, home: LoadedManifest, reject: (kind: string, id: string, error: string) => void): void {
+    const inv = this.inventoryById.get(p.inventory!);
+    const decided = inv?.complete === true ? "proven-negative" : "not-seen";
+    const stated = typeof home.body.empty_means === "string" ? home.body.empty_means : null;
+    if (inv === undefined) reject("pivot", p.id, `pivot "${p.id}": inventory "${p.inventory}" is not loaded`);
+    else if (!this.isTrusted(home.root)) reject("pivot", p.id, `pivot "${p.id}": only a pivot from a trusted root may name an inventory`);
+    else if (p.to !== inv.holds) reject("pivot", p.id, `pivot "${p.id}": it finds ${p.to}, but inventory "${inv.id}" holds ${inv.holds}`);
+    else if (stated !== null && stated !== decided) {
+      reject("pivot", p.id, `pivot "${p.id}": empty_means ${stated} contradicts inventory "${inv.id}", which is ${inv.complete ? "complete" : "not declared complete"}`);
+    } else if (stated === null) this.pivotById.set(p.id, { ...p, empty_means: decided });
   }
 
   /** A playbook is checked against the pivots it names, once pivots are settled. */

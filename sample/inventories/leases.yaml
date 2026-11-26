@@ -1,0 +1,7 @@
+kind: inventory
+id: leases
+title: Lease records
+holds: asset
+scope: addresses handed out by lease
+complete: false
+derived: true

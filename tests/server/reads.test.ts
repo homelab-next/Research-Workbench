@@ -24,7 +24,7 @@ test("the reference holds types, sources, pivots, objectives, phases and the pro
   expect(ref.types.map((t) => t.id)).toContain("address");
   expect(ref.sources.map((x) => x.id)).toContain("flows");
   const pivot = ref.pivots.find((p) => p.id === "address_to_verdict")!;
-  expect(pivot).toEqual({ id: "address_to_verdict", title: "Reputation verdict for the address", from: "address", to: "verdict", source: "reputation", free: false, weight: 5, needs_window: false, empty_means: "not-seen" });
+  expect(pivot).toEqual({ id: "address_to_verdict", title: "Reputation verdict for the address", from: "address", to: "verdict", source: "reputation", free: false, weight: 5, needs_window: false, empty_means: "not-seen", inventory: null });
   expect(ref.pivots.find((p) => p.id === "address_to_peers" || p.id === "address_to_internal_peers")!.free).toBe(true);
   const objective = ref.objectives.find((o) => o.id === "sample-objective")!;
   expect(objective.measures).toContainEqual({ id: "queries_run", kind: "mop", title: "Queries run" });

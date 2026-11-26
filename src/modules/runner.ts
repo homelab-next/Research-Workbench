@@ -8,6 +8,7 @@ import type { Actor, Card, Coverage, Cost, EmptyMeans, EntryInput, QueryPurpose,
 import { isUtcTimestamp } from "./connectors";
 import type { Bound, Connector, ConnectorPool, QueryOutcome, QueryRequest } from "./connectors";
 import type { Observables } from "./observables";
+import type { InventoryManifest } from "./inventories";
 import { pivotWeight } from "./manifests";
 import type { PivotManifest, Registry, SourceManifest } from "./registry";
 import { GuardError } from "./sqlguard";
@@ -105,8 +106,18 @@ function checkWindow(w: unknown): TimeWindow | string {
   return { from: from as string | null, to: to as string | null };
 }
 
-function bodyOf(rows: number, coverage: Coverage, empty: EmptyMeans | null): string {
+/**
+ * The card's one-line reading. For a pivot that asks an inventory it says what the answer proves: in the list, absent from a complete
+ * list, or not seen in one that is not declared complete. An empty answer from a complete list that is not a proven negative (partial
+ * coverage) says not seen, and the partial suffix says why.
+ */
+function bodyOf(rows: number, coverage: Coverage, empty: EmptyMeans | null, inv: InventoryManifest | null): string {
   let body = rows === 0 ? (empty === "proven-negative" ? "No rows · proven negative" : "No rows · not seen (not proof of absence)") : `${rows} rows`;
+  if (inv !== null) {
+    if (rows > 0) body += ` · in ${inv.title}`;
+    else if (empty === "proven-negative") body += ` · not in ${inv.title}, which is complete for ${inv.scope}`;
+    else if (!inv.complete) body += ` · ${inv.title} is not declared complete`;
+  }
   if (coverage.kind === "partial") body += ` · partial: ${coverage.reason}${coverage.detail ? ` (${coverage.detail})` : ""}`;
   return body;
 }
@@ -289,6 +300,8 @@ interface Issue {
  */
 async function issueAndRun(session: CaseSession, deps: RunnerDeps, q: Issue): Promise<{ result: RunQueryResult; out: QueryOutcome | null; resultSeq: number | null }> {
   const { source, connector, req, pivot, link } = q;
+  // the inventory the pivot asks, as the registry has it now: its completeness is what an empty answer from it proves
+  const inv = pivot?.inventory == null ? null : deps.registry.inventory(pivot.inventory);
   const issuedAt = session.commit((_state, ids) => {
     const query = ids.next("query");
     return [{
@@ -297,6 +310,7 @@ async function issueAndRun(session: CaseSession, deps: RunnerDeps, q: Issue): Pr
         query, source: source.id, source_hash: source.hash, pivot: pivot?.id ?? null, pivot_hash: pivot?.hash ?? null,
         connector: source.connector, text: q.rendered, bound: { ...req.bound }, window: req.window, why: q.why,
         estimate: q.estimate, step: q.step, verifies: q.verifies, purpose: q.purpose,
+        ...(inv === null ? {} : { inventory: { id: inv.id, hash: inv.hash, complete: inv.complete } }),
       },
     }];
   })[0]!;
@@ -323,7 +337,8 @@ async function issueAndRun(session: CaseSession, deps: RunnerDeps, q: Issue): Pr
     const blob = session.blobs.put(out.raw, out.media);
     const hash = rowsHash(out.columns, out.rows);
     const rows = out.rows.length;
-    const empty: EmptyMeans | null = rows > 0 ? null : pivot?.empty_means === "proven-negative" && out.coverage.kind === "full" ? "proven-negative" : "not-seen";
+    const proves = pivot?.empty_means === "proven-negative" && (inv === null || inv.complete);
+    const empty: EmptyMeans | null = rows > 0 ? null : proves && out.coverage.kind === "full" ? "proven-negative" : "not-seen";
     const outcome = out.coverage.kind === "partial" ? "partial" : rows === 0 ? "empty" : "answered";
     let cardId: string | null = null;
     const committed = session.commit((_state, ids) => {
@@ -337,7 +352,7 @@ async function issueAndRun(session: CaseSession, deps: RunnerDeps, q: Issue): Pr
         Object.assign(hints, pivot?.yields ?? {});
         cardId = ids.next("card");
         const card: Card = {
-          id: cardId, title: q.title, body: bodyOf(rows, out.coverage, empty), kind: "result",
+          id: cardId, title: q.title, body: bodyOf(rows, out.coverage, empty, inv), kind: "result",
           made_by: q.actor.kind, query, columns: out.columns, column_types: deps.observables.columnTypes(out.columns, hints, out.rows),
           rows: out.rows.slice(0, CARD_PREVIEW_ROWS).map((row) => row.map(previewCell)), row_count: rows, coverage: out.coverage, empty, marking: source.marking,
           source: source.id, step: q.step, subgoal: q.subgoal, why: q.why, event_time: null,

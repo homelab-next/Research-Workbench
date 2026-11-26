@@ -33,6 +33,7 @@ pivots:
     to: asset
     source: leases
     query: "select asset from leases where address = {value}"
+    inventory: leases
     empty_means: not-seen
     yields: { asset: asset }
   - id: address_to_asset
@@ -41,6 +42,7 @@ pivots:
     to: asset
     source: assets
     query: "select asset from assets where address = {value}"
+    inventory: assets
     empty_means: proven-negative
     yields: { asset: asset }
   - id: asset_to_accounts

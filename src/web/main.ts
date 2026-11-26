@@ -6,7 +6,7 @@ import { makePrefs } from "./prefs";
 import type { Ui } from "./ui";
 
 /** A requester or a leader may not read the reference; they have nothing to choose from. */
-const NO_REFERENCE: Reference = { types: [], sources: [], pivots: [], objectives: [], phases: [], profile: { id: "none", title: "none" }, send_back_cap: 0, playbooks: [] };
+const NO_REFERENCE: Reference = { types: [], sources: [], pivots: [], objectives: [], phases: [], profile: { id: "none", title: "none" }, send_back_cap: 0, playbooks: [], inventories: [] };
 
 async function main(): Promise<void> {
   let storage: Storage | null = null;
