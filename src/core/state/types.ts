@@ -1,5 +1,5 @@
 import type {
-  Actor, BlobRef, Card, Cost, Marking, Challenge, CheckFinding, Coverage, Draft, ModelChoice, Payloads,
+  Actor, BlobRef, Card, Cost, Marking, Challenge, CheckFinding, Coverage, Draft, ModelChoice, Observable, Payloads,
   Place, Plan, Proposal, QueryPurpose, ReviewConflict, RunHold, StageDef, StepOutcome, TimeWindow,
 } from "../types";
 
@@ -65,7 +65,7 @@ export interface PlanState {
   steps: Record<string, { status: "pending" | "running" | StepOutcome; cards: string[]; note: string }>;
 }
 export interface JobState {
-  id: string; title: string; kind: "research" | "query" | "model" | "check"; source: string | null;
+  id: string; title: string; kind: Payloads["job.started"]["kind"]; source: string | null;
   status: "running" | "done" | "failed"; started_ts: string; ended_ts: string | null;
 }
 export interface QueryState {
@@ -75,6 +75,15 @@ export interface QueryState {
   status: "running" | "done" | "failed";
   rows: number | null; rows_hash: string | null; coverage: Coverage | null; result: BlobRef | null;
   error: string | null; card: string | null;
+}
+/**
+ * A playbook run, keyed by its job. `status` is running until playbook.finished gives the outcome; a job that failed first (a stopped server,
+ * a run that threw) leaves it interrupted. `steps` holds each step's entry as written, `order` the order the steps were written in.
+ */
+export interface PlaybookRunState {
+  job: string; playbook: string; title: string; inputs: Observable[]; window: TimeWindow; plan_step: string | null; started_seq: number;
+  status: "running" | "interrupted" | StepOutcome; end_step: string | null;
+  steps: Record<string, Payloads["playbook.step"]>; order: string[]; cards: string[]; end_cards: string[]; caveats: string[];
 }
 export type ProposalState = Proposal & { status: "open" | "accepted" | "rejected"; seq: number; budget: number | null; reason: string | null; refused_budget: number | null };
 export interface ReviewState {
@@ -123,6 +132,8 @@ export interface CaseState {
   /** For each draft hash made after a reviewer sent work back, that reviewer's stage id (the latest revision with the hash wins). */
   made_for: Record<string, string>;
   conflicts: Record<string, ConflictState>;
+  /** Playbook runs, keyed by job. */
+  playbooks: Record<string, PlaybookRunState>;
   published: { n: number; draft_hash: string; head_hash: string; dir: string; seq: number; ts: string }[];
   feedback: Payloads["feedback.recorded"][];
   /** `asked_seq` is the seq of the turn's agent.asked entry; `ended` is why it will not be answered (agent.ended), else null. */

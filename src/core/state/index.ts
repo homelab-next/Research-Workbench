@@ -7,6 +7,7 @@ export type { Reducer } from "./apply";
 export { applyRun, runUsage, stageFinishedCounts, subgoalAnswered } from "./run";
 export { applyAnalysis, blockers, latestDraft, notedExceptions, openMustAddress, proposalMarking, publishable } from "./analysis";
 export { applyCards, cardLocation } from "./cards";
+export { applyPlaybooks } from "./playbooks";
 export { applyConflicts, keepText, namesFinding, ruledFindings, rulingText, runConflicts } from "./conflicts";
 export { CARD_REF, cardRefs } from "./cites";
 export { cardFields, caseFields, isCard, isCaseCreated, isCoverage, isObservable, isTimeWindow } from "./shapes";
@@ -44,6 +45,7 @@ export function initial(): CaseState {
     challenges: {},
     made_for: {},
     conflicts: {},
+    playbooks: {},
     published: [],
     feedback: [],
     conversation: [],

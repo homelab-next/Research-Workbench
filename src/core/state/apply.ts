@@ -2,6 +2,7 @@ import type { Entry } from "../types";
 import { applyAnalysis } from "./analysis";
 import { applyCards } from "./cards";
 import { isObj, isStr, malformed, recordSkip } from "./guards";
+import { applyPlaybooks } from "./playbooks";
 import { applyRun } from "./run";
 import { caseFields, isCaseCreated } from "./shapes";
 import type { CaseState, IdKind } from "./types";
@@ -37,7 +38,7 @@ export function applyCase(s: CaseState, entry: Entry): CaseState {
 }
 
 /** One reducer per area; each takes the state and the entry and returns a state. Add new areas here. */
-export const REDUCERS: readonly Reducer[] = [applyCase, applyCards, applyRun, applyAnalysis];
+export const REDUCERS: readonly Reducer[] = [applyCase, applyCards, applyRun, applyAnalysis, applyPlaybooks];
 
 /** Leaves everything as it was except seq, head_ts and the record of what was skipped. */
 function skip(state: CaseState, entry: Entry, reason: string): CaseState {

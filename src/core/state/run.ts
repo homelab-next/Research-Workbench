@@ -14,7 +14,9 @@ const isStep = (x: unknown): x is PlanStep =>
   isObj(x) && isStr(x.id) && isStr(x.subgoal) && isStr(x.pivot) && isStr(x.source)
   && isObservable(x.from) && isStr(x.to) && isTimeWindow(x.window)
   && isBool(x.needs_window) && isBool(x.free) && isNum(x.weight) && (x.estimate === null || isCost(x.estimate))
-  && isOneOf(x.empty_means, EMPTY_MEANS) && isStrList(x.warnings);
+  && isOneOf(x.empty_means, EMPTY_MEANS) && isStrList(x.warnings)
+  && (x.playbook === undefined || (isObj(x.playbook) && isStr(x.playbook.id) && isStr(x.playbook.hash) && Array.isArray(x.playbook.inputs) && x.playbook.inputs.every(isObservable)));
+const isInventoryRef = (x: unknown): boolean => x === undefined || (isObj(x) && isStr(x.id) && isStr(x.hash) && isBool(x.complete));
 const isSubGoal = (x: unknown): boolean => isObj(x) && isStr(x.id) && isStr(x.title) && isStr(x.question) && isStrList(x.steps);
 const isPlan = (x: unknown): x is Plan =>
   isObj(x) && isStr(x.id) && isStr(x.goal) && isTimeWindow(x.window)
@@ -106,9 +108,9 @@ function applyPlan(s: CaseState, entry: Entry): CaseState {
 function applyQuery(s: CaseState, entry: Entry): CaseState {
   switch (entry.type) {
     case "query.issued": {
-      const { query, source, text, why, window, step, verifies, purpose } = entry.payload;
+      const { query, source, text, why, window, step, verifies, purpose, inventory } = entry.payload;
       if (!isStr(query) || !isStr(source) || !isStr(text) || !isStr(why) || !isTimeWindow(window) || !isStrOrNull(step) || !isStrOrNull(verifies)
-        || !isOneOf(purpose, QUERY_PURPOSES)) {
+        || !isOneOf(purpose, QUERY_PURPOSES) || !isInventoryRef(inventory)) {
         return malformed(s, entry);
       }
       if (Object.hasOwn(s.queries, query)) return s;

@@ -52,6 +52,8 @@ export interface PlanStep {
   id: string; subgoal: string; pivot: string; source: string;
   from: Observable; to: string; window: TimeWindow; needs_window: boolean;
   free: boolean; weight: number; estimate: Cost | null; empty_means: EmptyMeans; warnings: string[];
+  /** A step that is a playbook: its id, its manifest hash when the plan was made, and the values it starts from. A step without it is a pivot. */
+  playbook?: { id: string; hash: string; inputs: Observable[] };
 }
 export interface SubGoal { id: string; title: string; question: string; steps: string[] }
 export interface Plan { id: string; goal: string; window: TimeWindow; subgoals: SubGoal[]; steps: PlanStep[] }
@@ -100,8 +102,18 @@ export interface ReviewConflict {
  * again; a stage at its run cap on the draft, or an edge at its send-back cap, gets a fresh allowance of that cap.
  */
 export type RunHold = { kind: "ruled"; stage: string } | { kind: "stage_runs"; stage: string } | { kind: "send_back"; edge: string };
-/** Why a query was issued: for its result, to price another query (an estimate), or to re-run an earlier one (a verify). */
-export type QueryPurpose = "result" | "estimate" | "verify";
+/**
+ * Why a query was issued: for its result, to price another query (an estimate), to re-run an earlier one (a verify), or as one lookup of a
+ * playbook (no model chose it).
+ */
+export type QueryPurpose = "result" | "estimate" | "verify" | "playbook";
+/** True for a query made for its answer: a result or a playbook lookup. */
+export const isAnswerPurpose = (p: QueryPurpose): boolean => p === "result" || p === "playbook";
+/** One lookup of a playbook step: the value it was on, how it ended, and the query and card that answered it (sent now, or reused). */
+export interface PlaybookLookup {
+  value: string; outcome: "answered" | "empty" | "partial" | "failed" | "needs_budget" | "refused"; rows: number | null;
+  query: string | null; card: string | null; reused: boolean; detail: string;
+}
 export type Proposal =
   /**
    * A query an agent may not run until a person sets a budget. `text` is the query as given to the runner (a template
@@ -133,7 +145,7 @@ export interface Payloads {
   "gate.waiting": { gate: "plan" | "publish" };
   "gate.passed": { gate: "plan" | "publish" };
   "budget.set": { tokens: number | null };
-  "job.started": { job: string; title: string; kind: "research" | "query" | "model" | "check"; source: string | null };
+  "job.started": { job: string; title: string; kind: "research" | "query" | "model" | "check" | "playbook"; source: string | null };
   "job.finished": { job: string; outcome: "done" | "failed" };
   // plans
   "plan.proposed": { plan: Plan };
@@ -146,11 +158,19 @@ export interface Payloads {
   /** A person asked for the price of a costly step before accepting the plan. `query` is the estimate query the source answered, when there was one. */
   "step.estimated": { step: string; estimate: Cost | null; query: string | null };
   // queries
-  "query.issued": { query: string; source: string; source_hash: string; pivot: string | null; pivot_hash: string | null; connector: string; text: string; bound: Record<string, Json>; window: TimeWindow; why: string; estimate: Cost | null; step: string | null; verifies: string | null; purpose: QueryPurpose };
+  "query.issued": { query: string; source: string; source_hash: string; pivot: string | null; pivot_hash: string | null; connector: string; text: string; bound: Record<string, Json>; window: TimeWindow; why: string; estimate: Cost | null; step: string | null; verifies: string | null; purpose: QueryPurpose;
+    /** The inventory the pivot asks, when it asks one, and whether that inventory is complete (what an empty answer then means). */
+    inventory?: { id: string; hash: string; complete: boolean } };
   "query.result": { query: string; result: BlobRef; rows: number; rows_hash: string; coverage: Coverage; duration_ms: number; cost: Cost | null };
   "query.failed": { query: string; error: string };
   /** The end of a route the person asked for: what it reached, which pivots ran dry, what the answer rests on, and the cards its lookups made. The lookups themselves are the query entries that carry `job`. */
   "route.finished": { job: string; want: string; outcome: "answered" | "blocked"; reached: Observable[]; blocked: string[]; caveats: string[]; cards: string[] };
+  /** A playbook run: which playbook (and its manifest hash), on what, why, the plan step it carries out, and every step's pivot and pivot hash. */
+  "playbook.started": { job: string; playbook: string; playbook_hash: string; title: string; inputs: Observable[]; window: TimeWindow; why: string; plan_step: string | null; steps: { id: string; pivot: string; pivot_hash: string }[] };
+  /** One step of a playbook run: ran or skipped and why, each lookup, the values found, and how many values were left unfollowed. */
+  "playbook.step": { job: string; step: string; pivot: string; status: "ran" | "skipped"; reason: string; lookups: PlaybookLookup[]; found: string[]; left: number };
+  /** The end of a playbook run: its outcome and the end step it came from, the cards, the caveats, and how many lookups were sent and reused. */
+  "playbook.finished": { job: string; outcome: StepOutcome; end_step: string | null; cards: string[]; end_cards: string[]; caveats: string[]; lookups: number; reused: number };
   "verify.run": { original: string; rerun: string | null; card: string; outcome: "matches" | "differs" | "could_not_run"; detail: string };
   // models
   "model.request": { request: string; provider: string; model: string; effort: string | null; where: Where; marking: Marking; pack: PackItem[]; left_out: PackItem[]; messages: BlobRef; tools: string[] };
@@ -283,9 +303,11 @@ export const STAGE_RUNS = listOf<StageDef["runs"]>({ agent: true, script: true, 
 export const STAGE_OUTCOMES = listOf<Payloads["stage.finished"]["outcome"]>({ pass: true, fail: true, declined: true });
 export const RUN_OUTCOMES = listOf<Payloads["run.finished"]["outcome"]>({ published: true, stopped: true });
 export const STEP_OUTCOMES = listOf<StepOutcome>({ answered: true, empty: true, partial: true, blocked: true, failed: true });
-export const JOB_KINDS = listOf<Payloads["job.started"]["kind"]>({ research: true, query: true, model: true, check: true });
+export const JOB_KINDS = listOf<Payloads["job.started"]["kind"]>({ research: true, query: true, model: true, check: true, playbook: true });
 export const JOB_OUTCOMES = listOf<Payloads["job.finished"]["outcome"]>({ done: true, failed: true });
-export const QUERY_PURPOSES = listOf<QueryPurpose>({ result: true, estimate: true, verify: true });
+export const QUERY_PURPOSES = listOf<QueryPurpose>({ result: true, estimate: true, verify: true, playbook: true });
+export const PLAYBOOK_LOOKUP_OUTCOMES = listOf<PlaybookLookup["outcome"]>({ answered: true, empty: true, partial: true, failed: true, needs_budget: true, refused: true });
+export const PLAYBOOK_STEP_STATUSES = listOf<Payloads["playbook.step"]["status"]>({ ran: true, skipped: true });
 export const ROUTE_OUTCOMES = listOf<Payloads["route.finished"]["outcome"]>({ answered: true, blocked: true });
 export const VERIFY_OUTCOMES = listOf<Payloads["verify.run"]["outcome"]>({ matches: true, differs: true, could_not_run: true });
 export const PLACES = listOf<Place>({ incoming: true, lane: true, discarded: true });
@@ -306,7 +328,8 @@ export const ENTRY_TYPES = listOf<EntryType>({
   "stage.finished": true, "stage.sent_back": true, "gate.waiting": true, "gate.passed": true, "budget.set": true,
   "job.started": true, "job.finished": true, "plan.proposed": true, "plan.accepted": true, "plan.denied": true,
   "plan.replan_requested": true, "step.started": true, "step.finished": true, "step.estimated": true, "query.issued": true,
-  "query.result": true, "query.failed": true, "verify.run": true, "route.finished": true, "model.request": true, "model.response": true,
+  "query.result": true, "query.failed": true, "verify.run": true, "route.finished": true,
+  "playbook.started": true, "playbook.step": true, "playbook.finished": true, "model.request": true, "model.response": true,
   "model.declined": true, "model.blocked": true, "tool.called": true, "tool.returned": true, "tool.skipped": true, "card.created": true,
   "card.kept": true, "card.moved": true, "card.discarded": true, "card.restored": true, "card.sent_back": true,
   "card.pinned": true, "lane.created": true, "lane.renamed": true, "lane.removed": true, "lane.target_set": true,
