@@ -19,6 +19,7 @@ test.each<[string, Intent]>([
   ["home", { kind: "go", to: "home" }],
   ["open pipeline", { kind: "lens", id: "pipeline" }],
   ["go to jobs", { kind: "lens", id: "jobs" }],
+  ["open graph", { kind: "lens", id: "graph" }],
   ["run", { kind: "run" }], ["Pause", { kind: "pause" }], ["accept plan", { kind: "accept_plan" }], ["approve", { kind: "approve" }],
   ["verify c12", { kind: "verify", card: "c12" }],
   ["verify c99", { kind: "say", text: "There is no card c99" }],

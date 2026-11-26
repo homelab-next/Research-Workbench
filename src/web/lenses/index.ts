@@ -1,5 +1,6 @@
 import { makeAgent } from "./agent";
 import { makeDiscarded } from "./discarded";
+import { makeGraph } from "./graph";
 import { makeJobs } from "./jobs";
 import { makeNarrative } from "./narrative";
 import { makePipeline } from "./pipeline";
@@ -17,6 +18,7 @@ export const LENSES: LensDef[] = [
   { id: "steps", key: "s", title: "Steps", make: (ui, open, arg) => makeSteps(ui, open, arg) },
   { id: "narrative", key: "r", title: "Narrative", make: (ui, open, arg) => makeNarrative(ui, open, arg) },
   { id: "timeline", key: "t", title: "Timeline", make: (ui, open) => makeTimeline(ui, open) },
+  { id: "graph", key: "g", title: "Graph", make: (ui, open) => makeGraph(ui, open) },
   { id: "worklog", key: "w", title: "Worklog", make: (ui, open) => makeWorklog(ui, open) },
   { id: "discarded", key: "d", title: "Discarded", make: (ui, open) => makeDiscarded(ui, open) },
   { id: "jobs", key: "b", title: "Jobs", make: (ui, open) => makeJobs(ui, open) },

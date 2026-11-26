@@ -14,7 +14,7 @@ import { makeHelp } from "./views/help";
 import { dispatchKey } from "./keys";
 import { nextThing } from "./derive";
 
-export type LensId = "agent" | "steps" | "timeline" | "narrative" | "worklog" | "discarded" | "jobs" | "pipeline" | "replay";
+export type LensId = "agent" | "steps" | "timeline" | "graph" | "narrative" | "worklog" | "discarded" | "jobs" | "pipeline" | "replay";
 export type Route = { screen: "home" } | { screen: "pick" } | { screen: "new" } | { screen: "soon"; mode: string } | { screen: "case"; id: string };
 
 /** "#/" · "#/investigate" · "#/investigate/new" · "#/soon/<mode>" · "#/case/CASE-1". Anything else is home. */

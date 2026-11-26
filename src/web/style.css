@@ -297,3 +297,44 @@ kbd { font-family: var(--mono); font-size: 12px; background: var(--panel-2); bor
 .lens-timeline .tl-mark:hover .tl-span, .lens-timeline .tl-mark:hover .tl-point { fill: var(--accent); }
 .lens-timeline .tl-detail { grid-column: 2; margin: 0; padding-left: 16px; overflow-wrap: anywhere; }
 .lens-timeline .tl-more { color: var(--muted); }
+
+/* ---------- Graph lens ---------- */
+.lens-graph .graph-head { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; justify-content: space-between; }
+.lens-graph .graph-count { color: var(--muted); font-variant-numeric: tabular-nums; }
+.lens-graph .graph-notes p { margin: 2px 0; color: var(--amber); }
+.lens-graph .graph-body { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+.lens-graph .graph-scroll { flex: 1 1 360px; min-width: 0; overflow: auto; max-height: 60vh; }
+.lens-graph .graph-detail { flex: 0 1 280px; min-width: 200px; overflow-wrap: anywhere; }
+.lens-graph .graph-svg { display: block; }
+.lens-graph .edge path { fill: none; stroke: var(--muted); stroke-width: 1.2; }
+.lens-graph .edge.selected path { stroke: var(--accent); stroke-width: 2; }
+.lens-graph .edge-end { fill: var(--muted); }
+.lens-graph .edge.selected .edge-end { fill: var(--accent); }
+.lens-graph .edge-label { fill: var(--text); font-size: 10px; paint-order: stroke; stroke: var(--bg); stroke-width: 3px; }
+.lens-graph .node { cursor: pointer; }
+.lens-graph .node rect { fill: var(--panel-2); stroke: var(--line); stroke-width: 1.5; }
+.lens-graph .node:focus-visible { outline: none; }
+.lens-graph .node:focus-visible rect { stroke: var(--accent); stroke-width: 3; }
+.lens-graph .node.selected rect { stroke: var(--accent); stroke-width: 2.5; }
+.lens-graph .node.starting rect { stroke-dasharray: 4 2; }
+.lens-graph .node-type { fill: var(--muted); font-size: 9px; }
+.lens-graph .node-value { fill: var(--text); font-size: 11px; font-family: var(--mono); }
+.lens-graph .node .more { fill: var(--amber); font-size: 10px; }
+.lens-graph .node .belongs { font-size: 13px; font-weight: 700; }
+.lens-graph .t0 rect { fill: color-mix(in srgb, var(--blue) 18%, var(--panel-2)); }
+.lens-graph .t1 rect { fill: color-mix(in srgb, var(--violet) 18%, var(--panel-2)); }
+.lens-graph .t2 rect { fill: color-mix(in srgb, var(--green) 18%, var(--panel-2)); }
+.lens-graph .t3 rect { fill: color-mix(in srgb, var(--amber) 18%, var(--panel-2)); }
+.lens-graph .t4 rect { fill: color-mix(in srgb, var(--accent) 18%, var(--panel-2)); }
+.lens-graph .t5 rect { fill: color-mix(in srgb, var(--tlp-red) 18%, var(--panel-2)); }
+.lens-graph .t6 rect { fill: color-mix(in srgb, var(--tlp-clear) 14%, var(--panel-2)); }
+.lens-graph .t7 rect { fill: color-mix(in srgb, var(--tlp-green) 18%, var(--panel-2)); }
+.lens-graph .belongs-known .belongs, .lens-graph .belongs-verdict.belongs-known { fill: var(--green); color: var(--green); }
+.lens-graph .belongs-proven .belongs, .lens-graph .belongs-verdict.belongs-proven { fill: var(--tlp-red); color: var(--tlp-red); }
+.lens-graph .belongs-not-seen .belongs, .lens-graph .belongs-verdict.belongs-not-seen { fill: var(--amber); color: var(--amber); }
+.lens-graph .belongs-unknown .belongs, .lens-graph .belongs-verdict.belongs-unknown { fill: var(--muted); color: var(--muted); }
+.lens-graph .belongs-verdict { font-weight: 600; }
+.lens-graph .node-links { margin: 6px 0; padding-left: 16px; }
+.lens-graph .node-links .link { border: 0; background: transparent; color: var(--accent); padding: 0; text-align: left; text-decoration: underline; }
+.lens-graph .node-more { color: var(--muted); }
+.lens-graph .node-actions { display: flex; flex-wrap: wrap; gap: 6px; }

@@ -1,5 +1,7 @@
-import type { PlaybookRunState } from "../core/state/types";
+import type { CaseState, PlaybookRunState } from "../core/state/types";
+import { valueKey } from "../core/state/observed";
 import type { EmptyMeans } from "../core/types";
+import { BELONGS_ID } from "../core/wire";
 import type { Reference } from "../core/wire";
 
 export type Verdict = "known" | "not known: proven" | "not seen" | "could not tell";
@@ -64,4 +66,18 @@ export function belongsVerdict(run: PlaybookRunState, ref: Refs, cards: Cards): 
   const unnamed = (s: Step): boolean => s.scope === null && s.read.kind === "empty";
   if (run.status === "interrupted" || steps.some((s) => s.read.kind === "unknown" || unnamed(s))) return { verdict: "could not tell", text: "Could not tell" };
   return { verdict: "not seen", text: "Not seen in any inventory; none is complete, so this proves nothing" };
+}
+
+/** For each value "does it belong?" has finished on: the verdict of its newest run (by started_seq), keyed by valueKey. A running run gives none. */
+export function belongsByValue(state: Pick<CaseState, "playbooks" | "cards">, ref: Refs): Map<string, { verdict: Verdict; text: string }> {
+  const newest = new Map<string, PlaybookRunState>();
+  for (const run of Object.values(state.playbooks)) {
+    if (run.playbook !== BELONGS_ID || run.status === "running") continue;
+    for (const input of run.inputs) {
+      const k = valueKey(input.type, input.value);
+      const known = newest.get(k);
+      if (known === undefined || run.started_seq > known.started_seq) newest.set(k, run);
+    }
+  }
+  return new Map([...newest].map(([k, run]) => [k, belongsVerdict(run, ref, state.cards)]));
 }

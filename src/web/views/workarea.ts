@@ -299,7 +299,7 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
   };
   const withCard = (fn: (card: string, c: NonNullable<ReturnType<typeof currentState>>) => void) => (): void => { const c = currentState(); if (c !== null) fn(c.id, c); };
   const lensKeys: Record<string, () => void> = {};
-  for (const id of ["agent", "steps", "timeline", "narrative", "worklog", "discarded", "jobs", "pipeline", "replay"] as const) lensKeys[`lens_${id}`] = () => area.openLens(id);
+  for (const id of ["agent", "steps", "timeline", "graph", "narrative", "worklog", "discarded", "jobs", "pipeline", "replay"] as const) lensKeys[`lens_${id}`] = () => area.openLens(id);
   const targetKeys: Record<string, () => void> = {};
   for (let n = 1; n <= 9; n++) {
     targetKeys[`target_${n}`] = () => {

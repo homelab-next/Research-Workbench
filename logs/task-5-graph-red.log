@@ -1,0 +1,202 @@
+bun test v1.3.14 (0d9b296a)
+
+tests/web/graph.test.ts:
+66 | const unseen = (id: string): [string, Partial<Card>] => [id, { empty: "not-seen", rows: [], row_count: 0 }];
+67 | 
+68 | test("a node per value with its type's title and its value, placed where the layout says", () => {
+69 |   const r = two();
+70 |   const n = node(r, "domain|a.example.com");
+71 |   expect(n.getAttribute("role")).toBe("button"); expect(n.getAttribute("transform")).toBe("translate(262 12)");
+              ^
+TypeError: null is not an object (evaluating 'n.getAttribute')
+      at <anonymous> (/home/ansible/Research-Workbench/tests/web/graph.test.ts:71:10)
+(fail) a node per value with its type's title and its value, placed where the layout says [5.06ms]
+82 | });
+83 | 
+84 | test("an edge is a path between its two nodes with a tooltip naming the pivot and the cards", () => {
+85 |   const r = two();
+86 |   const edges = all(r, "g.edge");
+87 |   expect(edges.length).toBe(2);
+                            ^
+error: expect(received).toBe(expected)
+
+Expected: 2
+Received: 0
+
+      at <anonymous> (/home/ansible/Research-Workbench/tests/web/graph.test.ts:87:24)
+(fail) an edge is a path between its two nodes with a tooltip naming the pivot and the cards [0.78ms]
+91 |   expect(edge.querySelector("title")!.textContent).toBe("Names that resolved to the address · c1");
+92 | });
+93 | 
+94 | test("selecting a node fills the detail: its cards, its links both ways, Pivot… and Focus", () => {
+95 |   const r = two();
+96 |   expect(detail(r).querySelector("h3")).toBeNull();
+                      ^
+TypeError: null is not an object (evaluating 'detail(r).querySelector')
+      at <anonymous> (/home/ansible/Research-Workbench/tests/web/graph.test.ts:96:18)
+(fail) selecting a node fills the detail: its cards, its links both ways, Pivot… and Focus [0.63ms]
+49 |   return { store, v, calls, b, push, ui };
+50 | }
+51 | const q = (r: Rig, sel: string): HTMLElement => r.v.el.querySelector(sel) as HTMLElement;
+52 | const all = (r: Rig, sel: string): HTMLElement[] => [...r.v.el.querySelectorAll(sel)] as HTMLElement[];
+53 | const node = (r: Rig, key: string): HTMLElement => q(r, `g.node[data-key="${key}"]`);
+54 | const click = (el: Element): void => { el.dispatchEvent(new win.Event("click", { bubbles: true }) as never); };
+                                            ^
+TypeError: null is not an object (evaluating 'el.dispatchEvent')
+      at click (/home/ansible/Research-Workbench/tests/web/graph.test.ts:54:40)
+      at <anonymous> (/home/ansible/Research-Workbench/tests/web/graph.test.ts:112:3)
+(fail) the selected node's edges carry the pivot's title as a label; no other edge does [0.32ms]
+115 |   expect(all(r, "text.edge-label").map((t) => t.textContent)).toEqual(["Names that resolved to the address", "Clients that looked the name up"]);
+116 | });
+117 | 
+118 | test("a card chip opens the card; a linked value's button focuses the graph on it", () => {
+119 |   const r = rig([["c1", { observed: C1 }], ["c2", { observed: C2 }]], [ADDR, { type: "domain", value: "lone.example.com" }]);
+120 |   expect(q(r, ".graph-count").textContent).toBe("Showing 4 of 4 values");
+                                  ^
+TypeError: null is not an object (evaluating 'q(r, ".graph-count").textContent')
+      at <anonymous> (/home/ansible/Research-Workbench/tests/web/graph.test.ts:120:29)
+(fail) a card chip opens the card; a linked value's button focuses the graph on it [0.57ms]
+133 | 
+134 | test("the drawing is one tab stop; arrows move between nodes in layout order; Enter selects", () => {
+135 |   const r = two();
+136 |   const doc = win.document;
+137 |   const stops = (): number => all(r, "g.node").filter((n) => n.getAttribute("tabindex") === "0").length;
+138 |   expect(stops()).toBe(1);
+                        ^
+error: expect(received).toBe(expected)
+
+Expected: 1
+Received: 0
+
+      at <anonymous> (/home/ansible/Research-Workbench/tests/web/graph.test.ts:138:19)
+(fail) the drawing is one tab stop; arrows move between nodes in layout order; Enter selects [0.34ms]
+150 | });
+151 | 
+152 | test("a value 'does it belong?' has finished on carries its verdict, in a glyph and in words", () => {
+153 |   const r = rig([proven("cp")], [ADDR], belongs([{ outcome: "empty", card: "cp" }]));
+154 |   const n = node(r, "address|198.51.100.77");
+155 |   expect(n.querySelector("text.belongs")!.textContent).toBe("✗"); expect(n.classList.contains("belongs-proven")).toBe(true);
+               ^
+TypeError: null is not an object (evaluating 'n.querySelector')
+      at <anonymous> (/home/ansible/Research-Workbench/tests/web/graph.test.ts:155:10)
+(fail) a value 'does it belong?' has finished on carries its verdict, in a glyph and in words [0.37ms]
+159 | });
+160 | 
+161 | test("the four verdicts have four glyph-and-class pairs", () => {
+162 |   const verdict = (cards: [string, Partial<Card>][], lookups: Parameters<typeof belongs>[0]): [string, string] => {
+163 |     const n = node(rig(cards, [ADDR], belongs(lookups)), "address|198.51.100.77");
+164 |     return [n.querySelector("text.belongs")!.textContent!, [...n.classList].filter((c) => c.startsWith("belongs-")).join(" ")];
+                  ^
+TypeError: null is not an object (evaluating 'n.querySelector')
+      at verdict (/home/ansible/Research-Workbench/tests/web/graph.test.ts:164:13)
+      at <anonymous> (/home/ansible/Research-Workbench/tests/web/graph.test.ts:166:10)
+(fail) the four verdicts have four glyph-and-class pairs [0.55ms]
+169 |   expect(verdict([], [{ outcome: "failed", card: null }])).toEqual(["?", "belongs-unknown"]);
+170 | });
+171 | 
+172 | test("a type's checkbox hides its nodes and their edges", () => {
+173 |   const r = two();
+174 |   (r.v.el.querySelector("[aria-label='Domain']") as HTMLElement).click();
+                                                     ^
+TypeError: null is not an object (evaluating 'r.v.el.querySelector("[aria-label='Domain']").click')
+      at <anonymous> (/home/ansible/Research-Workbench/tests/web/graph.test.ts:174:48)
+(fail) a type's checkbox hides its nodes and their edges [0.42ms]
+181 | 
+182 | const hub = (extra = 0): Rig => rig([["c1", { observed: obs("address_to_domains", { type: "address", value: "hub" }, Array.from({ length: 30 }, (_, i) => sight("domain", `h${String(i).padStart(2, "0")}.example.com`)), extra) }]], [{ type: "address", value: "hub" }]);
+183 | 
+184 | test("a hub shows 12 of its neighbours and a +N badge; its detail lists every link", () => {
+185 |   const r = hub();
+186 |   expect(node(r, "address|hub").querySelector("text.more")!.textContent).toBe("+18");
+                                    ^
+TypeError: null is not an object (evaluating 'node(r, "address|hub").querySelector')
+      at <anonymous> (/home/ansible/Research-Workbench/tests/web/graph.test.ts:186:31)
+(fail) a hub shows 12 of its neighbours and a +N badge; its detail lists every link [0.64ms]
+49 |   return { store, v, calls, b, push, ui };
+50 | }
+51 | const q = (r: Rig, sel: string): HTMLElement => r.v.el.querySelector(sel) as HTMLElement;
+52 | const all = (r: Rig, sel: string): HTMLElement[] => [...r.v.el.querySelectorAll(sel)] as HTMLElement[];
+53 | const node = (r: Rig, key: string): HTMLElement => q(r, `g.node[data-key="${key}"]`);
+54 | const click = (el: Element): void => { el.dispatchEvent(new win.Event("click", { bubbles: true }) as never); };
+                                            ^
+TypeError: null is not an object (evaluating 'el.dispatchEvent')
+      at click (/home/ansible/Research-Workbench/tests/web/graph.test.ts:54:40)
+      at <anonymous> (/home/ansible/Research-Workbench/tests/web/graph.test.ts:194:3)
+(fail) a node whose cards hold more values than they list says so [0.52ms]
+197 |   expect(detail(none).querySelector(".node-more")).toBeNull();
+198 | });
+199 | 
+200 | test("docked right the layout is tall; docked at the bottom it is wide; a change of dock lays it out again", () => {
+201 |   const r = two();
+202 |   expect(node(r, "domain|a.example.com").getAttribute("transform")).toBe("translate(262 12)");
+                                             ^
+TypeError: null is not an object (evaluating 'node(r, "domain|a.example.com").getAttribute')
+      at <anonymous> (/home/ansible/Research-Workbench/tests/web/graph.test.ts:202:40)
+(fail) docked right the layout is tall; docked at the bottom it is wide; a change of dock lays it out again [0.48ms]
+49 |   return { store, v, calls, b, push, ui };
+50 | }
+51 | const q = (r: Rig, sel: string): HTMLElement => r.v.el.querySelector(sel) as HTMLElement;
+52 | const all = (r: Rig, sel: string): HTMLElement[] => [...r.v.el.querySelectorAll(sel)] as HTMLElement[];
+53 | const node = (r: Rig, key: string): HTMLElement => q(r, `g.node[data-key="${key}"]`);
+54 | const click = (el: Element): void => { el.dispatchEvent(new win.Event("click", { bubbles: true }) as never); };
+                                            ^
+TypeError: null is not an object (evaluating 'el.dispatchEvent')
+      at click (/home/ansible/Research-Workbench/tests/web/graph.test.ts:54:40)
+      at <anonymous> (/home/ansible/Research-Workbench/tests/web/graph.test.ts:211:3)
+(fail) in replay Pivot… is disabled and says why; so it is for a starting value no card holds [0.21ms]
+218 |   click(pivot()); expect(r.calls).toEqual([]);
+219 | });
+220 | 
+221 | test("with no card the starting values are drawn and a line says nothing links them; at entry 0 there is only the line", () => {
+222 |   const r = rig([]);
+223 |   expect(q(r, ".empty").textContent).toBe("No lookup has linked these yet.");
+                            ^
+TypeError: null is not an object (evaluating 'q(r, ".empty").textContent')
+      at <anonymous> (/home/ansible/Research-Workbench/tests/web/graph.test.ts:223:23)
+(fail) with no card the starting values are drawn and a line says nothing links them; at entry 0 there is only the line [0.22ms]
+237 |   b.add("query.result", { query: "q1", result: { blob: "0".repeat(64), bytes: 1 }, rows: 1, rows_hash: "r", coverage: { kind: "full" }, duration_ms: 1, cost: null });
+238 |   b.add("card.created", { card: card("c1", { query: "q1", columns: ["n"], column_types: ["domain"], rows: [["z.example.com"]], row_count: 1 }) });
+239 |   const r = rig([]);
+240 |   for (const e of b.entries.slice(1)) r.store.push({ ...e, seq: r.store.entries.length + 1 } as never);
+241 |   r.v.update();
+242 |   expect(q(r, ".graph-legacy").textContent).toBe("Some cards were recorded before links were; their links are read from the first 50 rows.");
+                                   ^
+TypeError: null is not an object (evaluating 'q(r, ".graph-legacy").textContent')
+      at <anonymous> (/home/ansible/Research-Workbench/tests/web/graph.test.ts:242:30)
+(fail) a case read the legacy way says so [0.33ms]
+246 | test("a value that looks like markup is text; a long one is cut in the node and whole in its name", () => {
+247 |   const long = "x".repeat(300);
+248 |   const r = rig([["c1", { observed: obs("address_to_domains", ADDR, [sight("domain", "<img src=x onerror=1>"), sight("domain", long)]) }]]);
+249 |   expect(r.v.el.querySelector("img")).toBeNull();
+250 |   const n = node(r, `domain|${long}`);
+251 |   expect(n.querySelector("text.node-value")!.textContent!.length).toBeLessThan(30);
+               ^
+TypeError: null is not an object (evaluating 'n.querySelector')
+      at <anonymous> (/home/ansible/Research-Workbench/tests/web/graph.test.ts:251:10)
+(fail) a value that looks like markup is text; a long one is cut in the node and whole in its name [0.24ms]
+49 |   return { store, v, calls, b, push, ui };
+50 | }
+51 | const q = (r: Rig, sel: string): HTMLElement => r.v.el.querySelector(sel) as HTMLElement;
+52 | const all = (r: Rig, sel: string): HTMLElement[] => [...r.v.el.querySelectorAll(sel)] as HTMLElement[];
+53 | const node = (r: Rig, key: string): HTMLElement => q(r, `g.node[data-key="${key}"]`);
+54 | const click = (el: Element): void => { el.dispatchEvent(new win.Event("click", { bubbles: true }) as never); };
+                                            ^
+TypeError: null is not an object (evaluating 'el.dispatchEvent')
+      at click (/home/ansible/Research-Workbench/tests/web/graph.test.ts:54:40)
+      at <anonymous> (/home/ansible/Research-Workbench/tests/web/graph.test.ts:259:3)
+(fail) the selection survives a new entry and is dropped when its node is gone [0.49ms]
+79 |   };
+80 |   const app = startApp(ui, root, { caseScreen });
+81 |   const el = (t: string | Element): HTMLElement => (typeof t === "string" ? q(t) : (t as HTMLElement));
+82 |   const q = (selector: string): HTMLElement => {
+83 |     const found = root.querySelector(selector);
+84 |     if (found === null) throw new Error(`nothing matches ${selector}`);
+                                       ^
+error: nothing matches .shelf [data-lens="graph"]
+      at q (/home/ansible/Research-Workbench/tests/helpers/dom.ts:84:35)
+      at <anonymous> (/home/ansible/Research-Workbench/tests/web/graph.test.ts:276:14)
+(fail) on a real page, G opens the Graph and the shelf reads Graph G [566.80ms]
+
+ 0 pass
+ 18 fail
+ 4 expect() calls
+Ran 18 tests across 1 file. [808.00ms]

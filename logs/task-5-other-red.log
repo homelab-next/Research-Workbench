@@ -1,0 +1,65 @@
+bun test v1.3.14 (0d9b296a)
+
+tests/web/playbook.test.ts:
+
+# Unhandled error between tests
+-------------------------------
+SyntaxError: Export named 'belongsByValue' not found in module '/home/ansible/Research-Workbench/src/web/belongs.ts'.
+-------------------------------
+
+
+tests/web/commands.test.ts:
+error: expect(received).toEqual(expected)
+
+  {
+-   "id": "graph",
+-   "kind": "lens",
++   "kind": "ask",
++   "text": "open graph",
+  }
+
+- Expected  - 2
++ Received  + 2
+
+(fail) open graph [0.10ms]
+
+tests/web/keys.test.ts:
+66 |   for (const [k, v] of Object.entries(props)) el.setAttribute(k, v);
+67 |   return el as unknown as Element;
+68 | };
+69 | 
+70 | test("the map is the one in the plan", () => {
+71 |   expect(KEYMAP.map((b) => `${b.area}:${b.keys.join(",")}:${b.action}`)).toEqual(EXPECTED);
+                                                                              ^
+error: expect(received).toEqual(expected)
+
+@@ -38,3 +38,3 @@
+    "lenses:t:lens_timeline",
+-   "lenses:g:lens_graph",
+    "lenses:r:lens_narrative",
+
+- Expected  - 1
++ Received  + 0
+
+      at <anonymous> (/home/ansible/Research-Workbench/tests/web/keys.test.ts:71:74)
+(fail) the map is the one in the plan [0.25ms]
+288 |   const q = await open();
+289 |   const seen: string[] = [];
+290 |   const ids = [["a", "agent"], ["s", "steps"], ["t", "timeline"], ["g", "graph"], ["r", "narrative"], ["w", "worklog"], ["d", "discarded"], ["b", "jobs"], ["q", "pipeline"], ["e", "replay"]] as const;
+291 |   for (const [k, id] of ids) lens(id, k, seen);
+292 |   first(q).focus();
+293 |   for (const [k, id] of ids) { q.press(k); expect(q.store()).not.toBeNull(); expect(seen.at(-1)).toBe(id); }
+                                                                                                       ^
+error: expect(received).toBe(expected)
+
+Expected: "graph"
+Received: "timeline"
+
+      at <anonymous> (/home/ansible/Research-Workbench/tests/web/keys.test.ts:293:98)
+(fail) each lens letter opens its lens and V flips the dock side [512.88ms]
+
+ 62 pass
+ 4 fail
+ 1 error
+ 202 expect() calls
+Ran 66 tests across 3 files. [14.84s]

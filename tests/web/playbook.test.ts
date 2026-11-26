@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { page } from "../helpers/dom";
 import type { Page } from "../helpers/dom";
 import { SAMPLE_START, SAMPLE_WINDOW } from "../../scripts/make-sample-data";
-import { belongsLines, belongsVerdict } from "../../src/web/belongs";
+import { belongsByValue, belongsLines, belongsVerdict } from "../../src/web/belongs";
 import type { PlaybookRunState } from "../../src/core/state/types";
 
 let p: Page | null = null;
@@ -179,4 +179,20 @@ test("belongsVerdict: a hit whose pivot has left the reference is still known; a
   expect(belongsVerdict(run([["i1", "gone", [lk("v", "answered")]]]), none, cards).verdict).toBe("known");
   expect(belongsLines(run([["i1", "gone", [lk("v", "answered")]]]), none, cards)[0]!.line).toBe("In gone");
   expect(belongsVerdict(run([["i1", "gone", [lk("v", "empty", "proven")]]]), none, cards).verdict).toBe("could not tell");
+});
+
+test("belongsByValue: the newest finished run on a value gives the verdict; a running run and another playbook's run give nothing", () => {
+  const ADDR = { type: "address", value: "198.51.100.77" };
+  const mk = (job: string, playbook: string, status: PlaybookRunState["status"], seq: number, lookups: Parameters<typeof run>[0]): PlaybookRunState =>
+    ({ ...run(lookups), job, playbook, status, started_seq: seq, inputs: [ADDR] });
+  const proven = [["i1", "pa", [lk("v", "empty", "proven")]]] as Parameters<typeof run>[0];
+  const listed = [["i1", "pa", [lk("v", "answered")]]] as Parameters<typeof run>[0];
+  const state = (runs: PlaybookRunState[]) => ({ playbooks: Object.fromEntries(runs.map((r) => [r.job, r])), cards: cards as never });
+  const key = "address|198.51.100.77";
+  const two = belongsByValue(state([mk("a", "does-it-belong", "empty", 3, proven), mk("b", "does-it-belong", "answered", 9, listed)]), ref);
+  expect(two.get(key)).toEqual({ verdict: "known", text: "Known asset" });
+  const flipped = belongsByValue(state([mk("a", "does-it-belong", "empty", 9, proven), mk("b", "does-it-belong", "answered", 3, listed)]), ref);
+  expect(flipped.get(key)!.verdict).toBe("not known: proven");
+  expect([...belongsByValue(state([mk("a", "does-it-belong", "running", 3, proven)]), ref)]).toEqual([]);
+  expect([...belongsByValue(state([mk("a", "address-triage", "answered", 3, listed)]), ref)]).toEqual([]);
 });
