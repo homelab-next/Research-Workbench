@@ -1,6 +1,8 @@
 import type { JobState } from "../../core/state";
+import type { PlaybookRunState } from "../../core/state/types";
 import type { Open } from "../app";
 import { syncList } from "../dom";
+import { playbookTrail } from "../panels/playbook";
 import type { Ui, View } from "../ui";
 
 /** "3.2 s" under ten seconds, "12 s" under a minute, then "1 min 5 s". */
@@ -20,7 +22,7 @@ export function orderJobs(jobs: Record<string, JobState>): JobState[] {
     Number(b.status === "running") - Number(a.status === "running") || stamp(b.started_ts) - stamp(a.started_ts) || number(b) - number(a));
 }
 
-/** The Jobs lens: every job the case has started, with its status, source and how long it took. */
+/** The Jobs lens: every job the case has started, with its status, source and how long it took. A playbook job opens to its run's trail. */
 export function makeJobs(ui: Ui, open: Open): View {
   const { h } = ui;
   const { store } = open;
@@ -35,14 +37,23 @@ export function makeJobs(ui: Ui, open: Open): View {
     const now = store.at === null ? Date.now() : stamp(store.shown.head_ts);
     return `running for ${Math.floor(Math.max(0, now - stamp(j.started_ts)) / 1000)} s`;
   };
+  const runOf = (j: JobState): PlaybookRunState | null => (j.kind === "playbook" && Object.hasOwn(store.shown.playbooks, j.id) ? store.shown.playbooks[j.id]! : null);
+  /** The run each playbook row's trail was drawn from: the trail is drawn again only when the fold gives a new run object. */
+  const drawn = new WeakMap<HTMLElement, PlaybookRunState>();
   const paint = (n: HTMLElement, j: JobState): void => {
     n.querySelector(".status")!.textContent = j.status;
     n.querySelector(".duration")!.textContent = duration(j);
+    const run = runOf(j);
+    if (run === null || drawn.get(n) === run) return;
+    drawn.set(n, run);
+    n.querySelector(".playbook-trail")?.remove();
+    n.append(playbookTrail(ui, run, store.shown.cards, (card) => open.nav.focusCard(card)));
   };
   const make = (j: JobState): HTMLElement => {
-    const n = h("div", { class: "job-row", data: { job: j.id } },
-      h("span", { class: "title" }, j.title), " ", h("span", { class: "kind tag tag-human" }, j.kind), " ", h("span", { class: "status" }), " ",
-      h("span", { class: "source" }, source(j)), " ", h("span", { class: "duration" }));
+    const row = [h("span", { class: "title" }, j.title), " ", h("span", { class: "kind tag tag-human" }, j.kind), " ", h("span", { class: "status" }), " ",
+      h("span", { class: "source" }, source(j)), " ", h("span", { class: "duration" })];
+    // a playbook job whose run the case holds opens to that run; any other job is one line
+    const n = runOf(j) === null ? h("div", { class: "job-row", data: { job: j.id } }, row) : h("details", { class: "job-row", data: { job: j.id } }, h("summary", null, row));
     paint(n, j);
     return n;
   };
@@ -54,7 +65,8 @@ export function makeJobs(ui: Ui, open: Open): View {
     const state = store.shown;
     const jobs = orderJobs(state.jobs);
     empty.hidden = jobs.length > 0;
-    syncList(list, jobs, (j) => j.id, make, paint);
+    // a row is made again when its job gains its run (a plain line becomes one that opens)
+    syncList(list, jobs, (j) => (runOf(j) === null ? j.id : `${j.id} run`), make, paint);
     const ticking = store.at === null && jobs.some((j) => j.status === "running");
     if (ticking && timer === null) timer = ui.win.setInterval(update, 1000);
     else if (!ticking) stopTimer();

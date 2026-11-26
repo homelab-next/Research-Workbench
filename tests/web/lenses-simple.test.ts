@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { ACTIVITY } from "../../src/web/lenses/worklog";
 import { describe as describeEntry } from "../../src/web/describe";
+import { parseCommand, perform } from "../../src/web/commands";
 import { page } from "../helpers/dom";
 import type { Page } from "../helpers/dom";
 
@@ -180,6 +181,28 @@ test("Jobs shows a running job first, as running", async () => {
   expect(first.textContent).toContain("A slow one");
   expect(first.querySelector(".status")!.textContent).toBe("running");
   expect(first.querySelector(".duration")!.textContent).toMatch(/^running for \d+ s$/);
+});
+
+test("a playbook job opens to its run in the Jobs lens, and a card chip in it focuses the card", async () => {
+  p = await page();
+  const id = await p.s.newCase();
+  p.win.location.hash = `#/case/${id}`;
+  await p.settle();
+  const intent = parseCommand("run playbook address-triage on 198.51.100.77", { cases: [], in_case: true, cards: [] });
+  expect((await perform(intent, { ui: p.ui, nav: { openLens: () => {} } as never, store: p.store() })).cleared).toBe(true);
+  await p.s.app.hub.idle();
+  await p.settle();
+  p.press("b");
+  await p.settle();
+  const run = Object.values(state().playbooks)[0]!;
+  expect(run.status).not.toBe("running");
+  const row = p.q(`.lens details.job-row[data-job=${run.job}]`);
+  expect(row.querySelector("summary .status")!.textContent).toBe(state().jobs[run.job]!.status);
+  const trail = p.q("details[data-job] .playbook-trail");
+  expect(trail.querySelectorAll(".step").length).toBe(run.order.length);
+  const chip = trail.querySelector(".card-chip") as HTMLElement;
+  p.click(chip);
+  expect(p.navCalls).toContainEqual(["focusCard", chip.textContent]);
 });
 
 test("with nothing yet, Jobs and Discarded say so", async () => {

@@ -1,5 +1,5 @@
 import type { Observable, TimeWindow } from "../../core/types";
-import type { PlaybookRunState } from "../../core/state/types";
+import type { CaseState, PlaybookRunState } from "../../core/state/types";
 import { BELONGS_ID } from "../../core/wire";
 import type { Nav } from "../app";
 import { belongsLines, belongsVerdict } from "../belongs";
@@ -12,6 +12,35 @@ import type { Ui, View } from "../ui";
 export interface PlaybookBlock extends View { setValues(values: Observable[]): void }
 
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+
+/** The trail of one run, from the fold: the verdict for a does-it-belong run, the status line, each step and lookup with its card chip, the caveats. */
+export function playbookTrail(ui: Ui, run: PlaybookRunState, cards: CaseState["cards"], onCard: (card: string) => void): HTMLElement {
+  const { h } = ui;
+  const pivotTitle = (id: string): string => ui.ref.pivots.find((x) => x.id === id)?.title ?? id;
+  const box = h("div", { class: "playbook-trail", role: "status" });
+  const status = run.status === "interrupted" ? "Interrupted: the server stopped. Run it again; answered lookups are reused." : run.status === "running" ? "Running" : `Finished: ${run.status}`;
+  if (run.playbook === BELONGS_ID && run.status !== "running") {
+    const v = belongsVerdict(run, ui.ref, cards);
+    box.append(h("p", { class: `belongs-verdict ${v.verdict.replace(/[^a-z]+/g, "-")}` }, v.text),
+      h("div", { class: "belongs-lines" }, belongsLines(run, ui.ref, cards).map((l) => h("p", { class: "belongs-line", data: { inventory: l.inventory } }, l.line))));
+  }
+  box.append(h("p", { class: `status ${run.status}` }, status));
+  for (const id of run.order) {
+    const s = Object.hasOwn(run.steps, id) ? run.steps[id]! : null;
+    if (s === null) continue;
+    box.append(h("div", { class: `step ${s.status}`, data: { step: id } },
+      h("span", { class: "what" }, `${id} · ${pivotTitle(s.pivot)}`),
+      s.status === "skipped" ? h("span", { class: "skipped" }, ` skipped: ${s.reason}`) : null,
+      s.lookups.map((l) => h("div", { class: `lookup ${l.outcome}` },
+        h("span", null, `${l.value}: ${l.outcome}`), l.reused ? h("span", { class: "reused" }, " · reused, no query sent") : null,
+        // what the lookup's answer means, as the record says: proven negative, not seen, the reuse, the failure
+        l.detail === "" ? null : h("span", { class: "detail" }, ` · ${l.detail}`),
+        l.card === null ? null : " ", l.card === null ? null : cardChip(ui, l.card, onCard))),
+      s.left > 0 ? h("div", { class: "left" }, `${s.left} values not followed`) : null));
+  }
+  for (const c of run.caveats) box.append(h("p", { class: "caveat" }, c));
+  return box;
+}
 
 /**
  * The playbook block of the Pivot panel (design §5.3, §7.3): the playbooks the card's values can fill, "does it belong?" for each value, and the
@@ -26,7 +55,6 @@ export function makePlaybookBlock(ui: Ui, store: CaseStore, nav: Pick<Nav, "focu
   const el = h("div", { class: "playbook-block" });
 
   const ro = (): boolean => store.at !== null;
-  const pivotTitle = (id: string): string => ui.ref.pivots.find((x) => x.id === id)?.title ?? id;
   const disabledWhy = (): string | null => {
     if (ro()) return "Return to live to run a playbook";
     if (ask.why().trim() === "") return "Say why first";
@@ -57,32 +85,6 @@ export function makePlaybookBlock(ui: Ui, store: CaseStore, nav: Pick<Nav, "focu
     return found;
   };
 
-  function trail(run: PlaybookRunState): HTMLElement {
-    const box = h("div", { class: "playbook-trail", role: "status" });
-    const status = run.status === "interrupted" ? "Interrupted: the server stopped. Run it again; answered lookups are reused." : run.status === "running" ? "Running" : `Finished: ${run.status}`;
-    if (run.playbook === BELONGS_ID && run.status !== "running") {
-      const v = belongsVerdict(run, ui.ref, store.shown.cards);
-      box.append(h("p", { class: `belongs-verdict ${v.verdict.replace(/[^a-z]+/g, "-")}` }, v.text),
-        h("div", { class: "belongs-lines" }, belongsLines(run, ui.ref, store.shown.cards).map((l) => h("p", { class: "belongs-line", data: { inventory: l.inventory } }, l.line))));
-    }
-    box.append(h("p", { class: `status ${run.status}` }, status));
-    for (const id of run.order) {
-      const s = Object.hasOwn(run.steps, id) ? run.steps[id]! : null;
-      if (s === null) continue;
-      box.append(h("div", { class: `step ${s.status}`, data: { step: id } },
-        h("span", { class: "what" }, `${id} · ${pivotTitle(s.pivot)}`),
-        s.status === "skipped" ? h("span", { class: "skipped" }, ` skipped: ${s.reason}`) : null,
-        s.lookups.map((l) => h("div", { class: `lookup ${l.outcome}` },
-          h("span", null, `${l.value}: ${l.outcome}`), l.reused ? h("span", { class: "reused" }, " · reused, no query sent") : null,
-          // what the lookup's answer means, as the record says: proven negative, not seen, the reuse, the failure
-          l.detail === "" ? null : h("span", { class: "detail" }, ` · ${l.detail}`),
-          l.card === null ? null : " ", l.card === null ? null : cardChip(ui, l.card, (c) => nav.focusCard(c)))),
-        s.left > 0 ? h("div", { class: "left" }, `${s.left} values not followed`) : null));
-    }
-    for (const c of run.caveats) box.append(h("p", { class: "caveat" }, c));
-    return box;
-  }
-
   function paint(): void {
     const run = newest();
     const next = JSON.stringify([values, ask.window(), ask.why(), ro(), run, ui.ref.playbooks.length]);
@@ -110,7 +112,7 @@ export function makePlaybookBlock(ui: Ui, store: CaseStore, nav: Pick<Nav, "focu
     }
     el.hidden = buttons.length === 0 && run === null;
     if (buttons.length > 0) el.append(h("div", { class: "row playbooks" }, buttons.flatMap((b) => [b, " "])));
-    if (run !== null) el.append(trail(run));
+    if (run !== null) el.append(playbookTrail(ui, run, store.shown.cards, (c) => nav.focusCard(c)));
   }
 
   return {

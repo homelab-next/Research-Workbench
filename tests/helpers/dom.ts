@@ -73,7 +73,8 @@ export async function page(opts: { role?: Role; reducedMotion?: boolean; hash?: 
   const screen = caseScreenFor(ui);
   const caseScreen: CaseScreen = (o, register) => {
     opened = o;
-    const nav = { ...o.nav, openLens: (...a: Parameters<Open["nav"]["openLens"]>) => { navCalls.push(["openLens", ...a]); o.nav.openLens(...a); }, pivot: (...a: Parameters<Open["nav"]["pivot"]>) => { navCalls.push(["pivot", ...a]); o.nav.pivot(...a); } };
+    const nav = { ...o.nav, openLens: (...a: Parameters<Open["nav"]["openLens"]>) => { navCalls.push(["openLens", ...a]); o.nav.openLens(...a); }, pivot: (...a: Parameters<Open["nav"]["pivot"]>) => { navCalls.push(["pivot", ...a]); o.nav.pivot(...a); },
+      focusCard: (card: string) => { navCalls.push(["focusCard", card]); o.nav.focusCard(card); } };
     return screen({ store: o.store, nav }, register);
   };
   const app = startApp(ui, root, { caseScreen });
