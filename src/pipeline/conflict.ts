@@ -139,7 +139,8 @@ export function holds(product: Product, c: ConflictState): boolean | null {
 
 const ABOUT: Record<ReviewConflict["change"], RegExp> = {
   likelihood: /likel|probab|chance|certain|overclaim|overstat|understat/i,
-  confidence: /confiden/i,
+  // whole words only: "confidence_basis" is a field, not a confidence to change
+  confidence: /\b(?:over|under|un)?confiden(?:ce|t)\b/i,
   dropped: /restor|reinstat|drop|remov|delet|omit|missing/i,
   added: /restor|reinstat|drop|remov|delet|omit|missing|should not|add/i,
 };
