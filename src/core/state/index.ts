@@ -8,15 +8,19 @@ export { applyRun, runUsage, stageFinishedCounts, subgoalAnswered } from "./run"
 export { applyAnalysis, blockers, latestDraft, notedExceptions, openMustAddress, proposalMarking, publishable } from "./analysis";
 export { applyCards, cardLocation } from "./cards";
 export { applyPlaybooks } from "./playbooks";
-export { applyConflicts, keepText, namesFinding, ruledFindings, rulingText, runConflicts } from "./conflicts";
+export { applyConflicts, holds, keepText, namesFinding, revisedRulingReason, ruledFindings, rulingText, runConflicts } from "./conflicts";
 export { CARD_REF, cardRefs } from "./cites";
-export { cardFields, caseFields, isCard, isCaseCreated, isCoverage, isObservable, isObserved, isTimeWindow } from "./shapes";
+export {
+  activeOverrules, applyPerson, BASIS_TEXT, holdsOverrule, isPersonCard, openQuestions, overruleReason, overruleSays, overruleText, PERSON_SOURCE,
+  reopensOverrule, runQuestions, unheld, waitingOn,
+} from "./person";
+export { cardFields, caseFields, isCard, isCaseCreated, isCoverage, isObservable, isObserved, isPersonStatement, isTimeWindow } from "./shapes";
 export * from "./observed";
 export * from "./types";
 
 export function initial(): CaseState {
   const counters = {} as Record<IdKind, number>;
-  for (const k of ["card", "lane", "query", "job", "proposal", "challenge", "request", "call", "turn", "run", "plan", "conflict"] as const) counters[k] = 0;
+  for (const k of ["card", "lane", "query", "job", "proposal", "challenge", "request", "call", "turn", "run", "plan", "conflict", "question"] as const) counters[k] = 0;
   return {
     seq: 0,
     head_ts: null,
@@ -46,6 +50,8 @@ export function initial(): CaseState {
     challenges: {},
     made_for: {},
     conflicts: {},
+    questions: {},
+    overrules: {},
     playbooks: {},
     published: [],
     feedback: [],

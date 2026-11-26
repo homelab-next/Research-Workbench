@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { apply, blockers, fold, initial, latestDraft, notedExceptions, publishable, runUsage } from "../../src/core/state";
+import { apply, blockers, fold, initial, latestDraft, notedExceptions, publishable, revisedRulingReason, ruledFindings, runUsage } from "../../src/core/state";
 import type { CaseState } from "../../src/core/state";
 import type { Challenge, Draft, Entry, Product, StageDef } from "../../src/core/types";
 import { EntryBuilder } from "../helpers/entries";
@@ -550,19 +550,94 @@ test("a revision made after a reviewer's send-back records which reviewer it ans
   expect(s.skipped).toEqual([]);
 });
 
-test("review.conflict records the conflict in the run; review.ruled records the person's ruling once", () => {
+test("review.conflict records the conflict in the run; a later review.ruled replaces the ruling and keeps the earlier one", () => {
   const b = run();
   revise(b, 1, "h1"); revise(b, 2, "h2");
   b.add("review.conflict", { conflict: conflict() as never });
   let s = fold(b.entries);
   expect(s.counters.conflict).toBe(1);
   expect(s.conflicts.k1).toMatchObject({ finding: "f25", run: "run-1", ruling: null });
-  b.add("review.ruled", { conflict: "k1", follow: "challenge", note: "one event" }, { actor: person });
-  const ruledAt = b.entries.at(-1)!;
-  b.add("review.ruled", { conflict: "k1", follow: "evaluate", note: "" }, { actor: person });
+  const first = b.add("review.ruled", { conflict: "k1", follow: "challenge", note: "one event" }, { actor: person });
+  const second = b.add("review.ruled", { conflict: "k1", follow: "evaluate", note: "" }, { actor: person });
   s = fold(b.entries);
-  expect(s.conflicts.k1!.ruling).toEqual({ follow: "challenge", note: "one event", by: "analyst", seq: ruledAt.seq, ts: ruledAt.ts });
+  expect(s.conflicts.k1!.ruling).toEqual({ follow: "evaluate", note: "", by: "analyst", seq: second.seq, ts: second.ts });
+  expect(s.conflicts.k1!.earlier_rulings).toEqual([{ follow: "challenge", note: "one event", by: "analyst", seq: first.seq, ts: first.ts }]);
+  const third = b.add("review.ruled", { conflict: "k1", follow: null, note: "neither: it is the TV" }, { actor: person });
+  s = fold(b.entries);
+  expect(s.conflicts.k1!.ruling).toMatchObject({ follow: null, seq: third.seq });
+  expect(s.conflicts.k1!.earlier_rulings!.map((r) => r.seq)).toEqual([first.seq, second.seq]);
   expect(s.skipped).toEqual([]);
+});
+
+test("a conflict ruled once has no earlier_rulings", () => {
+  const b = run();
+  revise(b, 1, "h1"); revise(b, 2, "h2");
+  b.add("review.conflict", { conflict: conflict() as never });
+  b.add("review.ruled", { conflict: "k1", follow: "challenge", note: "one event" }, { actor: person });
+  // a refused second ruling replaces nothing
+  b.add("review.ruled", { conflict: "k1", follow: "checks", note: "" }, { actor: person });
+  const s = fold(b.entries);
+  expect("earlier_rulings" in s.conflicts.k1!).toBe(false);
+  expect(s.conflicts.k1!.ruling).toMatchObject({ follow: "challenge" });
+});
+
+const withFinding = (likelihood: string, confidence: "low" | "moderate" | "high" = "moderate"): Product => ({
+  ...product, key_findings: [{ id: "f1", statement: "s", likelihood, confidence, confidence_basis: "b", cites: [], assumptions: [], reasoning: "r" }],
+});
+const draftOf = (n: number, hash: string, p: Product): Draft => ({ n, hash, author: { kind: "system", id: "test" }, product: p, reason: "r" });
+/** A run whose draft h2 moved f1 from almost certain to likely for Challenge, with Evaluate's conflict k1 on it. */
+function ruledRun(): EntryBuilder {
+  const b = run();
+  b.add("draft.revised", { draft: draftOf(1, "h1", withFinding("almost certain")) });
+  b.add("draft.revised", { draft: draftOf(2, "h2", withFinding("likely")) });
+  b.add("review.conflict", { conflict: conflict({ finding: "f1", points: ["f1: understates it"], reason: "Evaluate and Challenge disagree on f1" }) as never });
+  return b;
+}
+
+test("an overrule of a ruled finding, made after the ruling, takes its place: ruledFindings leaves the ruling out", () => {
+  const b = ruledRun();
+  b.add("finding.overruled", { finding: "f1", draft_hash: "h2", likelihood: "almost certain", confidence: null, stays: null, note: "It is the TV I installed." }, { actor: person });
+  b.add("review.ruled", { conflict: "k1", follow: "challenge", note: "" }, { actor: person });
+  // the ruling came after the overrule: it stands
+  expect([...ruledFindings(fold(b.entries)).keys()]).toEqual(["f1"]);
+  b.add("finding.overruled", { finding: "f1", draft_hash: "h2", likelihood: "almost certain", confidence: null, stays: null, note: "It is the TV I installed, really." }, { actor: person });
+  let s = fold(b.entries);
+  expect([...ruledFindings(s).keys()]).toEqual([]);
+  // a withdrawn overrule replaces nothing: the ruling is back
+  b.add("finding.overruled", { finding: "f1", draft_hash: "h2", likelihood: null, confidence: null, stays: null, note: "I was wrong." }, { actor: person });
+  s = fold(b.entries);
+  expect([...ruledFindings(s).keys()]).toEqual(["f1"]);
+  expect(s.skipped).toEqual([]);
+});
+
+test("a draft that does not hold a ruling of this run, or an overrule, cannot be published, and says which", () => {
+  const b = ruledRun();
+  b.add("review.ruled", { conflict: "k1", follow: "challenge", note: "" }, { actor: person });
+  b.add("draft.revised", { draft: draftOf(3, "h3", withFinding("almost certain")) });
+  passAll(b, "h3");
+  const s = fold(b.entries);
+  expect(blockers(s, "h3")).toEqual(["The draft does not hold your ruling on f1 (follow Challenge: keep likely)"]);
+
+  const c = run();
+  c.add("draft.revised", { draft: draftOf(1, "h1", withFinding("likely")) });
+  c.add("finding.overruled", { finding: "f1", draft_hash: "h1", likelihood: "almost certain", confidence: null, stays: null, note: "It is the TV I installed." }, { actor: person });
+  passAll(c, "h1");
+  const s2 = fold(c.entries);
+  expect(blockers(s2, "h1")).toContain("The draft does not hold your overrule of f1 (likelihood almost certain)");
+  expect(publishable(s2, "h1")).toBe(false);
+
+  // a draft that holds them: neither line
+  b.add("draft.revised", { draft: draftOf(4, "h4", withFinding("likely")) });
+  passAll(b, "h4");
+  expect(blockers(fold(b.entries), "h4")).toEqual([]);
+  c.add("draft.revised", { draft: draftOf(2, "h2", withFinding("almost certain")) });
+  passAll(c, "h2");
+  expect(blockers(fold(c.entries), "h2")).toEqual([]);
+  // a withdrawn overrule: no line
+  c.add("finding.overruled", { finding: "f1", draft_hash: "h2", likelihood: null, confidence: null, stays: null, note: "I was wrong." }, { actor: person });
+  c.add("draft.revised", { draft: draftOf(3, "h3", withFinding("likely")) });
+  passAll(c, "h3");
+  expect(blockers(fold(c.entries), "h3")).toEqual([]);
 });
 
 test("a malformed conflict or ruling is recorded as skipped; a ruling not by a person, or for a stage not party to it, or with neither side nor note, is too", () => {
@@ -580,4 +655,13 @@ test("a malformed conflict or ruling is recorded as skipped; a ruling not by a p
     [bad1.seq, "malformed review.conflict"], [bad2.seq, "malformed review.ruled"], [bad3.seq, "a ruling is a person's"],
     [bad4.seq, "a ruling follows one of the two reviewers in the conflict"], [bad5.seq, "a ruling follows one of the two reviewers, or gives a note"],
   ]);
+});
+
+test("revisedRulingReason says the person revised the ruling, and the ruling that holds now; null for a conflict ruled once", () => {
+  const b = ruledRun();
+  b.add("review.ruled", { conflict: "k1", follow: "challenge", note: "" }, { actor: person });
+  expect(revisedRulingReason(fold(b.entries), fold(b.entries).conflicts.k1!)).toBeNull();
+  b.add("review.ruled", { conflict: "k1", follow: "evaluate", note: "It is the TV." }, { actor: person });
+  const s = fold(b.entries);
+  expect(revisedRulingReason(s, s.conflicts.k1!)).toBe("the person revised the ruling on f1 (Evaluate and Challenge disagree on f1): follow Evaluate: almost certain. Note: It is the TV.");
 });

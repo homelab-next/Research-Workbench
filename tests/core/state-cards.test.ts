@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { apply, cardLocation, fold, initial } from "../../src/core/state";
 import { applyWith } from "../../src/core/state/apply";
 import type { CaseState } from "../../src/core/state";
-import type { Entry, Observed, Payloads } from "../../src/core/types";
+import type { Card, Entry, Observed, Payloads } from "../../src/core/types";
 import { isObserved } from "../../src/core/state/shapes";
 import { EntryBuilder, card } from "../helpers/entries";
 
@@ -505,4 +505,51 @@ test("the fold does not share or change the card's observed", () => {
   const s = fold(b.entries);
   expect(given.observed).toEqual(OBSERVED);
   expect(s.cards.c1!.observed).toEqual(OBSERVED);
+});
+
+// ---------- slice 8: a person's statement ----------
+const PERSON = { kind: "human", id: "analyst" } as const;
+const statement = (id: string, over: Partial<Card> = {}): Card => card(id, {
+  kind: "note", made_by: "human", columns: [], column_types: [], rows: [], row_count: 0, coverage: null, title: "The TV", body: "It is the gym TV.",
+  person: { basis: "saw", detail: "in the gym on Tuesday", about: [{ type: "address", value: "192.0.2.17" }], answers: null }, ...over,
+});
+
+test("a card with person is kept as written when a person made it as a note with no query, source or rows", () => {
+  const payload = { card: statement("c1") };
+  const b = new EntryBuilder();
+  b.add("card.created", payload, { actor: PERSON });
+  const s = fold(b.entries);
+  expect(s.cards.c1!.person).toEqual({ basis: "saw", detail: "in the gym on Tuesday", about: [{ type: "address", value: "192.0.2.17" }], answers: null });
+  expect(s.cards.c1!.person).not.toBe(payload.card.person);           // the state shares nothing with the payload
+  expect(s.cards.c1!.person!.about).not.toBe(payload.card.person!.about);
+  expect(s.cards.c1!.person!.about[0]).not.toBe(payload.card.person!.about[0]);
+  expect(s.skipped).toEqual([]);
+});
+
+test("a card with person that an agent made, or that has rows, a query or a source, is skipped: a person's statement is a person's", () => {
+  const agent = { kind: "agent", id: "a1", stage: "research", profile: "p", model: "m", effort: null, where: "machine" } as const;
+  const b = new EntryBuilder();
+  const tries = [
+    b.add("card.created", { card: statement("c1") }, { actor: agent }),
+    b.add("card.created", { card: statement("c2", { rows: [["x"]], row_count: 1 }) }, { actor: PERSON }),
+    b.add("card.created", { card: statement("c3", { query: "q1" }) }, { actor: PERSON }),
+    b.add("card.created", { card: statement("c4", { source: "netflow" }) }, { actor: PERSON }),
+    b.add("card.created", { card: statement("c5", { made_by: "agent" }) }, { actor: PERSON }),
+    b.add("card.created", { card: statement("c6", { kind: "result" }) }, { actor: PERSON }),
+  ];
+  const s = fold(b.entries);
+  expect(s.cards).toEqual({});
+  expect(s.skipped).toEqual(tries.map((e) => ({ seq: e.seq, type: "card.created", reason: "a person's statement is a person's" })));
+});
+
+test("a malformed person field is a malformed card; a card without person folds as before", () => {
+  const b = new EntryBuilder();
+  const bad1 = b.add("card.created", { card: statement("c1", { person: { basis: "guess", detail: "", about: [], answers: null } as never }) }, { actor: PERSON });
+  const bad2 = b.add("card.created", { card: statement("c2", { person: { basis: "saw", detail: "", about: [{ type: 1 }], answers: null } as never }) }, { actor: PERSON });
+  const bad3 = b.add("card.created", { card: statement("c3", { person: { basis: "saw", detail: "", about: [], answers: 3 } as never }) }, { actor: PERSON });
+  b.add("card.created", { card: card("c4") });
+  const s = fold(b.entries);
+  expect(Object.keys(s.cards)).toEqual(["c4"]);
+  expect("person" in s.cards.c4!).toBe(false);
+  expect(s.skipped.map((x) => [x.seq, x.reason])).toEqual([[bad1.seq, "malformed card.created"], [bad2.seq, "malformed card.created"], [bad3.seq, "malformed card.created"]]);
 });

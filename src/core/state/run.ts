@@ -33,7 +33,7 @@ const isProposal = (x: unknown): x is Proposal => {
 };
 
 const isHold = (x: unknown): x is RunHold =>
-  isObj(x) && (((x.kind === "ruled" || x.kind === "stage_runs") && isStr(x.stage)) || (x.kind === "send_back" && isStr(x.edge)));
+  isObj(x) && (((x.kind === "ruled" || x.kind === "stage_runs" || x.kind === "question") && isStr(x.stage)) || (x.kind === "send_back" && isStr(x.edge)));
 
 /** The stage's count on the latest draft, begun again when the draft is another. */
 function repeatsOn(s: CaseState, stage: string): CaseState["run"]["repeats"][string] {

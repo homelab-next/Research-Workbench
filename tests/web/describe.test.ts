@@ -75,3 +75,16 @@ test("a step finished on a reused query says reused, and that no query was sent"
   expect(describe(sampleOf("step.finished", { ...ran, note: "1 row" }), ref)).toEqual({ what: "step finished", detail: "s4 · empty · 1 row" });
   expect(describe(sampleOf("step.finished", { ...ran, reused: 7 }), ref).what).toBe("step finished");
 });
+
+test("a ruling, a question to the person, its answer and an overrule give their particulars", () => {
+  expect(describe(sampleOf("review.ruled", { conflict: "k1", follow: "challenge", note: "one event" }), ref)).toEqual({ what: "conflict ruled on", detail: "k1 · follow challenge · one event" });
+  const q: Payloads["question.asked"] = { question: { id: "ask-1", text: "Where is the access point AP-7?", why: "w", cards: [], about: [], blocking: true } };
+  expect(describe(sampleOf("question.asked", q), ref)).toEqual({ what: "question put to the person", detail: "ask-1 · Where is the access point AP-7?" });
+  expect(describe(sampleOf("question.answered", { question: "ask-1", card: "c3" }), ref)).toEqual({ what: "question answered", detail: "ask-1 · c3" });
+  const o: Payloads["finding.overruled"] = { finding: "f1", draft_hash: "h", likelihood: "almost certain", confidence: "high", stays: null, note: "It is the TV I installed." };
+  expect(describe(sampleOf("finding.overruled", o), ref)).toEqual({ what: "finding overruled", detail: "f1 · likelihood almost certain, confidence high · It is the TV I installed." });
+  expect(describe(sampleOf("finding.overruled", { ...o, likelihood: null, confidence: null, stays: false }), ref).detail).toBe("f1 · dropped · It is the TV I installed.");
+  expect(describe(sampleOf("finding.overruled", { ...o, likelihood: null, confidence: null, stays: true }), ref).detail).toBe("f1 · must stay · It is the TV I installed.");
+  expect(describe(sampleOf("finding.overruled", { ...o, likelihood: null, confidence: null, stays: null }), ref).detail).toBe("f1 · overrule withdrawn · It is the TV I installed.");
+  expect(describe(sampleOf("finding.overruled", { finding: "f1", likelihood: 5 }), ref).detail).toBe("f1 · overrule withdrawn");
+});

@@ -8,6 +8,12 @@ const str = (x: unknown): string => (typeof x === "string" ? x : typeof x === "n
 const cost = (x: unknown): string => { const c = loose(x); return typeof c.amount === "number" ? `${c.amount} ${str(c.unit)}` : ""; };
 const join = (...parts: string[]): string => parts.filter((p) => p !== "").join(" · ");
 const plural = (n: unknown, word: string): string => (typeof n === "number" ? `${n} ${word}` : "");
+/** What an overrule set, read loosely: as the fold's overruleSays says it. */
+const overruled = (p: Loose): string => {
+  const set = [typeof p.likelihood === "string" ? `likelihood ${p.likelihood}` : "", typeof p.confidence === "string" ? `confidence ${p.confidence}` : ""].filter((x) => x !== "");
+  if (set.length > 0) return set.join(", ");
+  return p.stays === true ? "must stay" : p.stays === false ? "dropped" : "overrule withdrawn";
+};
 
 type Say = (p: Loose, ref: Reference) => string;
 const none: Say = () => "";
@@ -89,6 +95,9 @@ const TABLE: Record<EntryType, [string | ((p: Loose) => string), Say]> = {
   "challenge.answered": ["challenge answered", (p) => join(str(p.challenge), str(p.action), str(p.answer))],
   "review.conflict": ["reviewers disagree", (p) => { const c = loose(p.conflict); return join(str(c.id), str(c.reason)); }],
   "review.ruled": ["conflict ruled on", (p) => join(str(p.conflict), p.follow === null || p.follow === undefined ? "" : `follow ${str(p.follow)}`, str(p.note))],
+  "question.asked": ["question put to the person", (p) => { const q = loose(p.question); return join(str(q.id), str(q.text)); }],
+  "question.answered": ["question answered", (p) => join(str(p.question), str(p.card))],
+  "finding.overruled": ["finding overruled", (p) => join(str(p.finding), overruled(p), str(p.note))],
   "publish.rejected": ["publishing rejected", (p) => str(p.reason)],
   "product.published": ["product published", (p) => join(typeof p.n === "number" ? `product ${p.n}` : "", str(p.dir))],
   "feedback.recorded": ["feedback recorded", (p) => join(str(p.measure), str(p.value), str(p.note))],

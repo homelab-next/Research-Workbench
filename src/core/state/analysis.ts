@@ -4,6 +4,7 @@ import { canonical } from "../canonical";
 import type { Json } from "../canonical";
 import { has, isBool, isNum, isObj, isOneOf, isStr, isStrList, malformed, recordSkip } from "./guards";
 import { applyConflicts } from "./conflicts";
+import { unheld } from "./person";
 import { stageFinishedCounts } from "./run";
 import { isBlobRefShape } from "./shapes";
 import type { CaseState, ChallengeState, ReviewState } from "./types";
@@ -193,6 +194,8 @@ export function blockers(state: CaseState, draftHash: string): string[] {
   }
   if (review?.evaluation?.pass === false) out.push("Evaluation failed on this revision");
   for (const c of openMustAddress(state, draftHash)) out.push(`Challenge ${c.id} must be addressed`);
+  // the person's rulings of this run and their overrules: a draft that does not hold them is not published
+  out.push(...unheld(state, latestDraft(state)!.product));
   return out;
 }
 

@@ -40,7 +40,15 @@ export interface Card {
   quality_notes: string[];
   /** What the pivot's result observed; only on a card made by a pivot's own query (from 6b). */
   observed?: Observed;
+  /** Only on a statement by the person (slice 8): such a card is a note a person made, with no query, no source and no rows. */
+  person?: PersonStatement;
 }
+/** How the person knows what they state: they saw it, did it, were told it, or did not say. */
+export type PersonBasis = "saw" | "did" | "told" | "unstated";
+/** What makes a card a person's statement: how they know it, what it is about, and the question it answers (null when they volunteered it). */
+export interface PersonStatement { basis: PersonBasis; detail: string; about: Observable[]; answers: string | null }
+/** A question a stage puts to the person: `why` is why the answer matters; `cards` and `about` are what it is about. */
+export interface Question { id: string; text: string; why: string; cards: string[]; about: Observable[]; blocking: boolean }
 
 // ---------- plans ----------
 export type StepOutcome = "answered" | "empty" | "partial" | "blocked" | "failed";
@@ -97,9 +105,11 @@ export interface ReviewConflict {
 }
 /**
  * Why the engine paused, when a person's resume of that pause changes what comes next: a reviewer whose only points were on ruled findings runs
- * again; a stage at its run cap on the draft, or an edge at its send-back cap, gets a fresh allowance of that cap.
+ * again; a stage at its run cap on the draft, or an edge at its send-back cap, gets a fresh allowance of that cap; a stage that passed with a
+ * blocking question to the person unanswered (`question`, written after that stage's pass, before the next stage starts) has those questions
+ * waived, and the run goes on without the answer.
  */
-export type RunHold = { kind: "ruled"; stage: string } | { kind: "stage_runs"; stage: string } | { kind: "send_back"; edge: string };
+export type RunHold = { kind: "ruled"; stage: string } | { kind: "stage_runs"; stage: string } | { kind: "send_back"; edge: string } | { kind: "question"; stage: string };
 /**
  * Why a query was issued: for its result, to price another query (an estimate), to re-run an earlier one (a verify), or as one lookup of a
  * playbook (no model chose it).
@@ -216,8 +226,15 @@ export interface Payloads {
   "challenge.answered": { challenge: string; answer: string; action: "revised" | "rebutted" };
   /** The engine found the reviewers disagree and paused instead of sending the work back. */
   "review.conflict": { conflict: ReviewConflict };
-  /** A person's ruling on a conflict: follow one of its two reviewers (a stage id), or none, with a note. Fixed for the rest of the run. */
+  /** A person's ruling on a conflict: follow one of its two reviewers (a stage id), or none, with a note. The latest ruling on a conflict is the one that holds. */
   "review.ruled": { conflict: string; follow: string | null; note: string };
+  // the person (slice 8)
+  /** An agent puts a question to the person. Asking does not stop the run. */
+  "question.asked": { question: Question };
+  /** The person answers a question with a statement card of theirs (its `person.answers` names the question). */
+  "question.answered": { question: string; card: string };
+  /** A person sets a finding's likelihood, its confidence, or whether it stays. Null leaves that alone; all three null withdraws the overrule. */
+  "finding.overruled": { finding: string; draft_hash: string; likelihood: string | null; confidence: Finding["confidence"] | null; stays: boolean | null; note: string };
   // product and feedback
   "publish.rejected": { draft_hash: string; reason: string; stop: boolean };
   "product.published": { n: number; draft_hash: string; head_hash: string; dir: string; bundle: BlobRef };
@@ -322,6 +339,7 @@ export const SEVERITIES = listOf<Challenge["severity"]>({ must_address: true, co
 export const CONFLICT_CHANGES = listOf<ReviewConflict["change"]>({ likelihood: true, confidence: true, dropped: true, added: true });
 export const ANSWER_ACTIONS = listOf<Payloads["challenge.answered"]["action"]>({ revised: true, rebutted: true });
 export const FEEDBACK_KINDS = listOf<Payloads["feedback.recorded"]["kind"]>({ mop: true, moe: true });
+export const PERSON_BASES = listOf<PersonBasis>({ saw: true, did: true, told: true, unstated: true });
 
 /** Every entry type, as a runtime list. Built from an object keyed by EntryType, so a name missing from Payloads or extra to it is a type error. */
 export const ENTRY_TYPES = listOf<EntryType>({
@@ -337,7 +355,8 @@ export const ENTRY_TYPES = listOf<EntryType>({
   "card.pinned": true, "lane.created": true, "lane.renamed": true, "lane.removed": true, "lane.target_set": true,
   "undo": true, "proposal.created": true, "proposal.accepted": true, "proposal.rejected": true, "proposal.repriced": true,
   "assessment.made": true, "research.requested": true, "draft.revised": true, "check.run": true,
-  "evaluation.made": true, "challenge.raised": true, "challenge.answered": true, "review.conflict": true, "review.ruled": true, "publish.rejected": true,
+  "evaluation.made": true, "challenge.raised": true, "challenge.answered": true, "review.conflict": true, "review.ruled": true,
+  "question.asked": true, "question.answered": true, "finding.overruled": true, "publish.rejected": true,
   "product.published": true, "feedback.recorded": true, "agent.asked": true, "agent.answered": true, "agent.ended": true,
   "module.loaded": true, "module.rejected": true, "setting.changed": true, "case.anchored": true,
 });

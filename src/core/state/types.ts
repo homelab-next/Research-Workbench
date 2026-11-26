@@ -1,12 +1,12 @@
 import type {
-  Actor, BlobRef, Card, Cost, Marking, Challenge, CheckFinding, Coverage, Draft, ModelChoice, Observable, Payloads,
-  Place, Plan, Proposal, QueryPurpose, ReviewConflict, RunHold, StageDef, StepOutcome, TimeWindow,
+  Actor, BlobRef, Card, Cost, Marking, Challenge, CheckFinding, Coverage, Draft, Finding, ModelChoice, Observable, Payloads,
+  Place, Plan, Proposal, Question, QueryPurpose, ReviewConflict, RunHold, StageDef, StepOutcome, TimeWindow,
 } from "../types";
 
-export type IdKind = "card" | "lane" | "query" | "job" | "proposal" | "challenge" | "request" | "call" | "turn" | "run" | "plan" | "conflict";
+export type IdKind = "card" | "lane" | "query" | "job" | "proposal" | "challenge" | "request" | "call" | "turn" | "run" | "plan" | "conflict" | "question";
 export const ID_PREFIX: Record<IdKind, string> = {
   card: "c", lane: "l", query: "q", job: "j", proposal: "p", challenge: "x",
-  request: "r", call: "t", turn: "u", run: "run-", plan: "plan-", conflict: "k",
+  request: "r", call: "t", turn: "u", run: "run-", plan: "plan-", conflict: "k", question: "ask-",
 };
 
 export interface CardState extends Card {
@@ -105,8 +105,27 @@ export interface ReviewState {
   /** The latest publish.rejected for this hash: the person's verdict, shown in the Narrative lens. It clears passed_stages. */
   rejected: { reason: string; stop: boolean; seq: number; ts: string } | null;
 }
-/** `run` is the run in progress when the conflict was found; `ruling` is the person's, once made. */
-export type ConflictState = ReviewConflict & { run: string | null; seq: number; ruling: { follow: string | null; note: string; by: string; seq: number; ts: string } | null };
+/** A person's ruling on a conflict. */
+export interface Ruling { follow: string | null; note: string; by: string; seq: number; ts: string }
+/**
+ * `run` is the run in progress when the conflict was found; `ruling` is the person's latest, once made. `earlier_rulings` is present only once a
+ * ruling was replaced: those it replaced, oldest first.
+ */
+export type ConflictState = ReviewConflict & { run: string | null; seq: number; ruling: Ruling | null; earlier_rulings?: Ruling[] };
+/** A question put to the person: the run and stage that asked it (null outside one), who asked, the answer once given, and the waiver once the person went on without it. */
+export type QuestionState = Question & {
+  run: string | null; stage: string | null; by: string; seq: number; ts: string;
+  answer: { card: string; by: string; seq: number; ts: string } | null;
+  /** The person resumed the run without answering: the stage went on. */
+  waived: { by: string; seq: number; ts: string } | null;
+};
+/** A person's overrule of a finding, as written, with who made it and when. */
+export interface Overrule {
+  finding: string; draft_hash: string; likelihood: string | null; confidence: Finding["confidence"] | null; stays: boolean | null; note: string;
+  by: string; seq: number; ts: string;
+}
+/** The latest overrule of a finding, and those it replaced, oldest first. */
+export type OverruleState = Overrule & { earlier: Overrule[] };
 /** `run` is the run in progress when the challenge was raised (null when none). */
 export type ChallengeState = Challenge & { run: string | null; status: "open" | "answered"; answer: string | null; action: "revised" | "rebutted" | null };
 
@@ -141,6 +160,11 @@ export interface CaseState {
   /** For each draft hash made after a reviewer sent work back, that reviewer's stage id (the latest revision with the hash wins). */
   made_for: Record<string, string>;
   conflicts: Record<string, ConflictState>;
+  // the person (slice 8)
+  /** Questions put to the person, keyed by id. */
+  questions: Record<string, QuestionState>;
+  /** The person's overrules, keyed by finding id: case-wide, not per run. */
+  overrules: Record<string, OverruleState>;
   /** Playbook runs, keyed by job. */
   playbooks: Record<string, PlaybookRunState>;
   published: { n: number; draft_hash: string; head_hash: string; dir: string; seq: number; ts: string }[];

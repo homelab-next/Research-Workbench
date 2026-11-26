@@ -881,3 +881,22 @@ test("a job names its sub-goal and request when it says so; an entry without the
   expect(bad.skipped).toHaveLength(2);
   expect(Object.keys(bad.jobs)).toEqual(["j1", "j2", "j3"]);
 });
+
+// ---------- slice 8: a pass held for the person's answer ----------
+test("a pause held for a question is recorded; a person's resume clears it and leaves the stages as they were", () => {
+  const b = started();
+  const first = stages[0]!.id;
+  b.add("stage.started", { stage: first, attempt: 1 });
+  b.add("stage.finished", { stage: first, attempt: 1, outcome: "pass", draft_hash: null, output: null, reason: null });
+  b.add("run.paused", { reason: "waiting for the person's answer to ask-1", hold: { kind: "question", stage: first } });
+  let s = fold(b.entries);
+  expect(s.run).toMatchObject({ status: "paused", pause_reason: "waiting for the person's answer to ask-1", hold: { kind: "question", stage: first } });
+  const before = s.run.stages;
+  b.add("run.resumed", {}, { actor: { kind: "human", id: "analyst" } });
+  s = fold(b.entries);
+  expect(s.run).toMatchObject({ status: "running", pause_reason: null, hold: null });
+  expect(s.run.stages).toEqual(before);
+  expect(s.skipped).toEqual([]);
+  b.add("run.paused", { reason: "r", hold: { kind: "question", stage: 5 } as never });
+  expect(fold(b.entries).skipped.map((x) => x.reason)).toEqual(["malformed run.paused"]);
+});

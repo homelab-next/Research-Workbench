@@ -1,6 +1,6 @@
 import { PLACES } from "../types";
 import type { Entry, Place } from "../types";
-import { isBool, isNum, isOneOf, isStr, isStrOrNull, malformed } from "./guards";
+import { isBool, isNum, isOneOf, isStr, isStrOrNull, malformed, recordSkip } from "./guards";
 import { cardFields, isCard } from "./shapes";
 import type { CardState, CaseState, LaneState, UndoItem } from "./types";
 
@@ -69,6 +69,9 @@ export function applyCards(s: CaseState, entry: Entry): CaseState {
     case "card.created": {
       const c = entry.payload.card;
       if (!isCard(c)) return malformed(s, entry);
+      // a person's statement is a note the person made, with nothing from a source: no query, no source, no rows
+      if (c.person !== undefined && !(entry.actor.kind === "human" && c.made_by === "human" && c.kind === "note" && c.query === null && c.source === null
+        && c.row_count === 0 && c.rows.length === 0)) return recordSkip(s, entry, "a person's statement is a person's");
       if (Object.hasOwn(s.cards, c.id)) return s;
       const state: CardState = {
         ...cardFields(c), place: "incoming", lane: null, pinned: false,

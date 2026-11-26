@@ -56,7 +56,8 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("a whole run, live, equals its replay at every entry", () => {
+/** The whole run of the first test, through the session, with the live state captured after every commit. */
+function wholeRun(): { s: CaseSession; live: CaseState[]; run: string; q1: string; d1: Draft; d2: Draft } {
   const s: CaseSession = wb.createCase({
     title: "Beaconing from 192.0.2.10", asked: "Is it beaconing?", why: "IDS alert", starting: [{ type: "ip", value: "192.0.2.10" }],
     window: { from: "2026-11-22T00:00:00.000Z", to: "2026-11-23T00:00:00.000Z" }, objective: "Decide", marking: "TLP:AMBER",
@@ -184,6 +185,11 @@ test("a whole run, live, equals its replay at every entry", () => {
   one({ type: "feedback.recorded", payload: { measure: "useful", kind: "moe", value: 4, note: "" }, actor: human });
   commit((_st, ids) => [{ type: "agent.asked", payload: { turn: ids.next("turn"), text: "Why moderate?", left_out: [], added: ["c1"] }, actor: human }]);
   one({ type: "agent.answered", payload: { turn: "u1", request: "r9", text: "One source.", cites: ["c1"] }, actor: planner });
+  return { s, live, run, q1, d1, d2 };
+}
+
+test("a whole run, live, equals its replay at every entry", () => {
+  const { s, live, run, q1, d1, d2 } = wholeRun();
 
   // ---- what the run left behind
   const final = s.state;
@@ -220,5 +226,84 @@ test("a whole run, live, equals its replay at every entry", () => {
   expect(report.published.bundles.map((b) => b.state)).toEqual(["bad_blob"]);
   // pre-run response, plan prompt, plan text, its reasoning, the result rows, the check input, the bundle
   expect(report.blobs.referenced).toBe(8);
+  expect(errors).toEqual([]);
+});
+
+// ---------- slice 8: the person ----------
+
+test("a ledger with none of slice 8's entries folds with no question, no overrule and no replaced ruling", () => {
+  const { s } = wholeRun();
+  const state = fold(s.entries());
+  expect(state.questions).toEqual({});
+  expect(state.overrules).toEqual({});
+  expect(state.counters.question).toBe(0);
+  expect(Object.values(state.conflicts).some((c) => "earlier_rulings" in c)).toBe(false);
+  expect(state.skipped).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test("a ledger holding a statement, a question, its answer, an overrule and a revised ruling folds the same at every entry as the live session saw it", () => {
+  const { s, live, d2 } = wholeRun();
+  const one = (input: EntryInput) => s.commit(() => [input]);
+  const researcher: Actor = { ...planner, id: "researcher-g1", stage: "collect" };
+  const assembler: Actor = { ...planner, id: "assembler-g1", stage: "assemble" };
+  const stage = (id: string, outcome: "pass" | "fail", draft_hash: string | null) =>
+    one({ type: "stage.finished", payload: { stage: id, attempt: 1, outcome, draft_hash, output: null, reason: null }, actor: system, stage: id });
+  const statement = (id: string, answers: string | null) => card(id, {
+    kind: "note", made_by: "human", columns: [], column_types: [], rows: [], row_count: 0, coverage: null, title: "The TV",
+    body: "It is the TV I installed in the gym.", person: { basis: "did", detail: "installed it in March", about: [{ type: "ip", value: "192.0.2.10" }], answers },
+  });
+
+  s.commit((_st, ids) => [{ type: "run.started", payload: { run: ids.next("run"), pipeline: "investigate", pipeline_hash: "a".repeat(64), stages }, actor: system }]);
+  // a statement the person volunteers
+  s.commit((_st, ids) => [{ type: "card.created", payload: { card: statement(ids.next("card"), null) }, actor: human }]);
+  // Collect asks, blocking; passes; the engine holds the run before the next stage; the person goes on without the answer
+  one({ type: "stage.started", payload: { stage: "collect", attempt: 1 }, actor: system, stage: "collect" });
+  s.commit((_st, ids) => [{ type: "question.asked", payload: { question: { id: ids.next("question"), text: "Is a TV expected on that access point?", why: "it would explain the name", cards: ["c1"], about: [{ type: "ip", value: "192.0.2.10" }], blocking: true } }, actor: researcher, stage: "collect" }]);
+  stage("collect", "pass", null);
+  one({ type: "run.paused", payload: { reason: "waiting for the person's answer to ask-1. Answer it in the Narrative lens, or resume to go on without it.", hold: { kind: "question", stage: "collect" } }, actor: system });
+  one({ type: "run.resumed", payload: {}, actor: human });
+  expect(s.state.questions["ask-1"]!.waived).toMatchObject({ by: "analyst" });
+  // Assemble asks a second, not blocking; the person answers it with a statement
+  one({ type: "stage.started", payload: { stage: "assemble", attempt: 1 }, actor: system, stage: "assemble" });
+  s.commit((_st, ids) => [{ type: "question.asked", payload: { question: { id: ids.next("question"), text: "Who installed it?", why: "w", cards: [], about: [], blocking: false } }, actor: assembler, stage: "assemble" }]);
+  s.commit((_st, ids) => {
+    const c = ids.next("card");
+    return [
+      { type: "card.created", payload: { card: statement(c, "ask-2") }, actor: human },
+      { type: "question.answered", payload: { question: "ask-2", card: c }, actor: human },
+    ];
+  });
+  // a draft that moved f1, a conflict on it, a ruling, a revised ruling, and an overrule that takes its place
+  const d3 = draftOf(3, { ...baseProduct, key_findings: [{ ...baseProduct.key_findings[0]!, likelihood: "almost certain" }] }, "for challenge");
+  one({ type: "draft.revised", payload: { draft: d3 }, actor: assembler, stage: "assemble" });
+  s.commit((_st, ids) => [{ type: "review.conflict", payload: { conflict: {
+    id: ids.next("conflict"), draft_hash: d3.hash, finding: "f1", change: "likelihood", earlier: "likely", now: "almost certain", raised_by: "evaluate", changed_for: "challenge",
+    asks: "likely", asked: "higher", points: ["f1: overstates it"], reason: "Evaluate and Challenge disagree on f1",
+  } }, actor: system }]);
+  one({ type: "review.ruled", payload: { conflict: "k1", follow: "evaluate", note: "" }, actor: human });
+  one({ type: "review.ruled", payload: { conflict: "k1", follow: "challenge", note: "the TV is mine" }, actor: human });
+  one({ type: "finding.overruled", payload: { finding: "f1", draft_hash: d3.hash, likelihood: "almost certain", confidence: "high", stays: null, note: "It is the TV I installed." }, actor: human });
+  one({ type: "finding.overruled", payload: { finding: "f1", draft_hash: d3.hash, likelihood: "almost certain", confidence: null, stays: null, note: "It is the TV I installed." }, actor: human });
+
+  const final = s.state;
+  expect(final.skipped).toEqual([]);
+  expect(final.counters.question).toBe(2);
+  expect(final.questions["ask-2"]!.answer).toMatchObject({ card: "c4" });
+  expect(final.cards.c3!.person).toMatchObject({ basis: "did", answers: null });
+  expect(final.conflicts.k1!.earlier_rulings).toHaveLength(1);
+  expect(final.overrules.f1).toMatchObject({ confidence: null, earlier: [{ confidence: "high" }] });
+  expect(blockers(final, d3.hash)).not.toContain("The draft does not hold your overrule of f1 (likelihood almost certain)");
+  expect(d2.hash).not.toBe(d3.hash);
+
+  const all = s.entries();
+  for (let n = 1; n <= all.length; n++) {
+    expect(live[n], `live state at ${n}`).toBeDefined();
+    expect(fold(all, n), `entry ${n} (${all[n - 1]!.type})`).toEqual(live[n]!);
+  }
+  wb.close();
+  wb = Workbench.open(dir, { onError });
+  expect(wb.session(s.id).state).toEqual(final);
+  expect(verifyCase(s.dir)).toMatchObject({ entries: all.length, firstBad: null });
   expect(errors).toEqual([]);
 });

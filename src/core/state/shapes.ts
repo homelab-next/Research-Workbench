@@ -1,12 +1,15 @@
 // Shape checks for the records the fold and the workbench share. Browser-safe: no runtime imports.
-import { CARD_KINDS, CARD_MAKERS, EMPTY_MEANS, isMarking, STAGE_OUTCOMES } from "../types";
-import type { BlobRef, Card, Observable, Observed, Payloads, Span, TimeWindow } from "../types";
+import { CARD_KINDS, CARD_MAKERS, EMPTY_MEANS, isMarking, PERSON_BASES, STAGE_OUTCOMES } from "../types";
+import type { BlobRef, Card, Observable, Observed, Payloads, PersonStatement, Span, TimeWindow } from "../types";
 import { isNum, isObj, isOneOf, isStr, isStrList, isStrOrNull } from "./guards";
 import { isCoverage, isObserved } from "pivot/types";
 
 export const isCount = (x: unknown): x is number => Number.isSafeInteger(x) && (x as number) >= 0;
 export const isTimeWindow = (x: unknown): x is TimeWindow => isObj(x) && isStrOrNull(x.from) && isStrOrNull(x.to);
 export const isObservable = (x: unknown): x is Observable => isObj(x) && isStr(x.type) && isStr(x.value);
+/** The shape of a person's statement on a card: how they know, the detail, what it is about, and the question it answers (or null). */
+export const isPersonStatement = (x: unknown): x is PersonStatement =>
+  isObj(x) && isOneOf(x.basis, PERSON_BASES) && isStr(x.detail) && Array.isArray(x.about) && x.about.every(isObservable) && isStrOrNull(x.answers);
 
 // isCoverage and isObserved are pivot's (the vocabulary it shares with the workbench), the same checks re-exported.
 export { isCoverage, isObserved } from "pivot/types";
@@ -17,13 +20,17 @@ export const isCard = (x: unknown): x is Card =>
   && Array.isArray(x.rows) && x.rows.every(Array.isArray) && isCount(x.row_count)
   && (x.coverage === null || isCoverage(x.coverage)) && (x.empty === null || isOneOf(x.empty, EMPTY_MEANS))
   && isMarking(x.marking) && isStrOrNull(x.source) && isStrOrNull(x.step) && isStrOrNull(x.subgoal)
-  && isStr(x.why) && isStrOrNull(x.event_time) && isStrList(x.quality_notes) && (x.observed === undefined || isObserved(x.observed));
+  && isStr(x.why) && isStrOrNull(x.event_time) && isStrList(x.quality_notes) && (x.observed === undefined || isObserved(x.observed))
+  && (x.person === undefined || isPersonStatement(x.person));
 
 /** The fields of a card and nothing else. */
 export function cardFields(c: Card): Card {
   const { id, title, body, kind, made_by, query, columns, column_types, rows, row_count, coverage, empty, marking, source, step, subgoal, why, event_time, quality_notes } = c;
   const fields: Card = { id, title, body, kind, made_by, query, columns, column_types, rows, row_count, coverage, empty, marking, source, step, subgoal, why, event_time, quality_notes };
-  return c.observed === undefined ? fields : { ...fields, observed: observedFields(c.observed) };
+  const observed = c.observed === undefined ? fields : { ...fields, observed: observedFields(c.observed) };
+  if (c.person === undefined) return observed;
+  const { basis, detail, about, answers } = c.person;
+  return { ...observed, person: { basis, detail, about: about.map((o) => ({ type: o.type, value: o.value })), answers } };
 }
 
 /** The fields of an observed and nothing else, copied so the state shares nothing with the payload. */

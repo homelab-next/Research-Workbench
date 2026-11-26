@@ -2,6 +2,7 @@ import type { Entry } from "../types";
 import { applyAnalysis } from "./analysis";
 import { applyCards } from "./cards";
 import { isObj, isStr, malformed, recordSkip } from "./guards";
+import { applyPerson } from "./person";
 import { applyPlaybooks } from "./playbooks";
 import { applyRun } from "./run";
 import { caseFields, isCaseCreated } from "./shapes";
@@ -23,6 +24,7 @@ const COUNTED: Partial<Record<Entry["type"], IdKind>> = {
   "agent.asked": "turn",
   "run.started": "run",
   "plan.proposed": "plan",
+  "question.asked": "question",
 };
 
 /** The id kind an entry of this type creates, if any. */
@@ -37,8 +39,11 @@ export function applyCase(s: CaseState, entry: Entry): CaseState {
   return s;
 }
 
-/** One reducer per area; each takes the state and the entry and returns a state. Add new areas here. */
-export const REDUCERS: readonly Reducer[] = [applyCase, applyCards, applyRun, applyAnalysis, applyPlaybooks];
+/**
+ * One reducer per area; each takes the state and the entry and returns a state. Add new areas here. applyPerson comes before applyRun: it reads
+ * the hold on run.resumed before applyRun clears it.
+ */
+export const REDUCERS: readonly Reducer[] = [applyCase, applyCards, applyPerson, applyRun, applyAnalysis, applyPlaybooks];
 
 /** Leaves everything as it was except seq, head_ts and the record of what was skipped. */
 function skip(state: CaseState, entry: Entry, reason: string): CaseState {

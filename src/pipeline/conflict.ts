@@ -1,7 +1,7 @@
-import { latestDraft, namesFinding, ruledFindings, rulingText, runConflicts } from "../core/state";
+import { holds, latestDraft, namesFinding, ruledFindings, rulingText, runConflicts } from "../core/state";
 import type { CaseState, ConflictState } from "../core/state";
 import { CONFIDENCES } from "../core/types";
-import type { Product, ReviewConflict } from "../core/types";
+import type { ReviewConflict } from "../core/types";
 import type { Pipeline, Role } from "./manifests";
 import { escapeRe } from "../modules/sqlguard";
 import { findingChanges } from "./review-points";
@@ -114,29 +114,8 @@ export function reviewConflict(state: Readonly<CaseState>, pipeline: Pipeline, s
   return null;
 }
 
-/** The value the person's ruling keeps: the reviewer they followed asked for it. Null for a ruling that follows neither (a note only). */
-function ruledValue(c: ConflictState): { present: boolean; value: string | null } | null {
-  if (c.ruling === null) return null;
-  const keep = c.ruling.follow === c.changed_for ? true : c.ruling.follow === c.raised_by ? false : null;
-  if (keep === null) return null;
-  switch (c.change) {
-    case "dropped": return { present: !keep, value: null };
-    case "added": return { present: keep, value: null };
-    case "likelihood":
-    case "confidence": return { present: true, value: keep ? c.now : c.earlier };
-  }
-}
-
-/** Whether the draft holds the ruling on its finding; null when the ruling keeps no value to check. */
-export function holds(product: Product, c: ConflictState): boolean | null {
-  const want = ruledValue(c);
-  if (want === null) return null;
-  const f = product.key_findings.find((x) => x.id === c.finding);
-  if (!want.present || f === undefined) return want.present === (f !== undefined);
-  if (c.change === "likelihood") return f.likelihood === want.value;
-  if (c.change === "confidence") return f.confidence === want.value;
-  return true;
-}
+// holds moved to src/core/state/conflicts.ts (slice 8), so the fold's blockers can read it; re-exported here for the pipeline's callers
+export { holds } from "../core/state";
 
 const ABOUT: Record<ReviewConflict["change"], RegExp> = {
   likelihood: /likel|probab|chance|certain|overclaim|overstat|understat/i,
