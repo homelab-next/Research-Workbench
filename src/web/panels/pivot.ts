@@ -4,6 +4,7 @@ import { cardChip, tag } from "../chips";
 import { clear } from "../dom";
 import type { CaseStore } from "../store";
 import { routeTrail } from "../trail";
+import { makePlaybookBlock } from "./playbook";
 import type { Nav } from "../app";
 import type { Ui, View } from "../ui";
 
@@ -81,13 +82,14 @@ export function makePivotPanel(ui: Ui, store: CaseStore, nav: Pick<Nav, "focusCa
   const whyInput = h("input", { type: "text", name: "Why", on: { input: (e) => { why = (e.target as HTMLInputElement).value; whyEdited = true; paintRoutes(); } } }) as HTMLInputElement;
   const routeBox = h("div", { class: "routes" });
   const trailBox = h("div", { class: "trail route-trail", role: "status" });
+  const block = makePlaybookBlock(ui, store, nav, { window: () => windowValue(), why: () => (whyEdited || want !== "" ? why : `Pivot from ${card}`) });
   const el = h("section", { class: "pivot-panel", name: "Pivot" },
     h("div", { class: "row starting" }, h("span", { class: "label" }, "Starting from:"), " ", chips),
     h("div", { class: "row" }, h("label", { class: "wanted-label" }, "What do you want?"), " ", wantSelect),
     h("div", { class: "row" }, h("label", { class: "label" }, "Window:"), " ", windowSelect, " ", customBox),
     h("div", { class: "row" }, h("span", { class: "label" }, "Limits:"), " ", h("label", null, "Max cost "), costInput, " ", h("label", null, allow, " Allow unconfirmed sources")),
     h("div", { class: "row" }, h("label", { class: "label" }, "Why "), whyInput),
-    routeBox, trailBox);
+    block.el, routeBox, trailBox);
 
   function syncWhy(): void { why = suggested(); whyInput.value = why; }
   function paintWindow(): void { customBox.hidden = windowKind !== "custom"; }
@@ -135,6 +137,7 @@ export function makePivotPanel(ui: Ui, store: CaseStore, nav: Pick<Nav, "focusCa
     hop.confirmed ? null : " ", hop.confirmed ? null : unconfirmedTag());
 
   function paintRoutes(): void {
+    block.update();
     clear(routeBox);
     if (want === "") return;
     if (routes === "loading") { routeBox.append(h("p", { class: "muted" }, "Looking for routes…")); return; }
@@ -243,10 +246,12 @@ export function makePivotPanel(ui: Ui, store: CaseStore, nav: Pick<Nav, "focusCa
     setValues(next) {
       values = next.map((o) => ({ type: o.type, value: o.value }));
       paintStarting();
+      block.setValues(values);
       if (!whyEdited && want !== "") syncWhy();
       reload();
     },
     update() {
+      block.update();
       if (ro() !== wasReadonly) { wasReadonly = ro(); paintRoutes(); }
       paintTrail();
     },

@@ -422,3 +422,14 @@ test("Accept and Run the free steps carry the id of the plan on screen", async (
   await settled();
   expect(log.filter((c) => c.command === "accept_plan").map((c) => c.args.plan)).toEqual([state().plan.current!.id]);
 });
+
+test("a playbook step reads as the playbook, its lookup cap and 'no model'; one no longer loaded says so", async () => {
+  await atGate();
+  const plan = state().plan.current!;
+  const step = (playbook: string) => ({ ...plan.steps[0]!, id: "s9", pivot: "", source: "", free: true, weight: 0, playbook: { id: playbook, hash: "h", inputs: [{ type: "address", value: "198.51.100.77" }] } });
+  p.s.app.hub.read("CASE-1").commit((_s, ids) => [{ type: "plan.proposed", actor: agent, payload: { plan: { ...plan, id: ids.next("plan"), steps: [...plan.steps, step("address-triage"), { ...step("gone"), id: "s10" }], subgoals: plan.subgoals.map((g, i) => (i === 0 ? { ...g, steps: [...g.steps, "s9", "s10"] } : g)) } as Plan } }]);
+  await p.settle();
+  expect(p.q("[data-step=s9]").textContent).toContain("Playbook: Triage an address · up to 8 lookups · no model");
+  expect(p.q("[data-step=s10]").textContent).toContain("Playbook: gone (no longer loaded)");
+  expect(p.q("[data-step=s9] .pivot").textContent).toBe("Playbook: Triage an address · up to 8 lookups · no model");
+});

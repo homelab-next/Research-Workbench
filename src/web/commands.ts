@@ -11,7 +11,8 @@ export type Intent =
   | { kind: "verify"; card: string }
   | { kind: "replay"; seq: number | null }
   | { kind: "ask"; text: string }
-  | { kind: "say"; text: string };
+  | { kind: "say"; text: string }
+  | { kind: "playbook"; id: string; value: string };
 
 const LENSES: readonly LensId[] = ["agent", "steps", "timeline", "narrative", "worklog", "discarded", "jobs", "pipeline", "replay"];
 const NEEDS_CASE = "Open a case first: investigate CASE-1";
@@ -61,6 +62,8 @@ export function parseCommand(text: string, ctx: CommandContext): Intent {
     if (!ctx.in_case) return say(NEEDS_CASE);
     return ctx.cards.includes(verify[1]!) ? { kind: "verify", card: verify[1]! } : say(`There is no card ${verify[1]}`);
   }
+  const playbook = /^run playbook (\S+) on (\S+)$/i.exec(typed.replace(/\s+/g, " "));
+  if (playbook) return inCase({ kind: "playbook", id: playbook[1]!, value: playbook[2]! });
   const replay = /^replay(?: ([0-9]+))?$/.exec(l);
   if (replay) return inCase({ kind: "replay", seq: replay[1] === undefined ? null : Number(replay[1]) });
   if (l === "summarize") return inCase({ kind: "ask", text: "Give a synopsis of this case." });
@@ -82,6 +85,15 @@ export async function perform(intent: Intent, env: PerformEnv): Promise<{ cleare
     case "verify": nav.focusCard(intent.card); return { cleared: await ui.act("verify_card", { card: intent.card }) };
     case "replay": nav.openLens("replay", intent.seq === null ? undefined : String(intent.seq)); return done;
     case "ask": nav.ask(intent.text); return done;
+    case "playbook": {
+      const pb = ui.ref.playbooks.find((x) => x.id === intent.id);
+      if (pb === undefined) return { cleared: false, say: `There is no playbook ${intent.id}` };
+      if (pb.inputs.length !== 1) return { cleared: false, say: `${pb.title} takes ${pb.inputs.length} values; start it from a card's Pivot panel` };
+      const window = store?.live.meta?.window ?? { from: null, to: null };
+      const ok = await ui.act("run_playbook", { playbook: pb.id, inputs: [{ type: pb.inputs[0]!.type, value: intent.value }], window, why: `run playbook ${pb.id} on ${intent.value}` });
+      if (ok) nav.openLens("jobs");
+      return { cleared: ok };
+    }
     case "pause": return { cleared: await ui.act("pause") };
     // A gate is passed only by its own button: the bar takes the person to the gate and says so.
     case "approve": nav.openLens("narrative", store?.live.run.waiting === "publish" ? AT_GATE : undefined); return { cleared: false, say: "Approve the draft from the Narrative lens" };

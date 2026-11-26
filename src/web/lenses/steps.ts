@@ -51,6 +51,12 @@ export function makeSteps(ui: Ui, open: Open, arg: string | null = null): View {
   const ro = (): boolean => store.at !== null;
   const atGate = (s: CaseState): boolean => s.plan.status === "proposed" && s.plan.current !== null && s.run.waiting === "plan";
   const pivotTitle = (id: string): string => ui.ref.pivots.find((p) => p.id === id)?.title ?? id;
+  /** What a step does, in words: its pivot, or the playbook it runs (code runs it; no model chooses its lookups). */
+  const stepTitle = (step: PlanStep): string => {
+    if (step.playbook === undefined) return pivotTitle(step.pivot);
+    const pb = ui.ref.playbooks.find((x) => x.id === step.playbook!.id);
+    return pb === undefined ? `Playbook: ${step.playbook.id} (no longer loaded)` : `Playbook: ${pb.title} · up to ${pb.max_lookups} lookups · no model`;
+  };
   const sourceView = (id: string) => ui.ref.sources.find((x) => x.id === id);
   const sourceTitle = (id: string): string => sourceView(id)?.title ?? id;
   /** The figure on record for a step: the person's asked-for estimate, else the plan's own. */
@@ -116,11 +122,11 @@ export function makeSteps(ui: Ui, open: Open, arg: string | null = null): View {
     const kids: Child[] = [];
     if (gate) {
       kids.push(h("input", {
-        type: "checkbox", checked: !unchecked.has(step.id), disabled: ro(), name: `Run ${step.id}: ${pivotTitle(step.pivot)}`,
+        type: "checkbox", checked: !unchecked.has(step.id), disabled: ro(), name: `Run ${step.id}: ${stepTitle(step)}`,
         on: { change: (e) => { if ((e.target as HTMLInputElement).checked) unchecked.delete(step.id); else unchecked.add(step.id); syncButtons(); } },
       }));
     }
-    kids.push(h("span", { class: "step-id" }, step.id), h("span", { class: "pivot" }, pivotTitle(step.pivot)), h("span", { class: "source" }, sourceTitle(step.source)));
+    kids.push(h("span", { class: "step-id" }, step.id), h("span", { class: "pivot" }, stepTitle(step)), step.playbook === undefined ? h("span", { class: "source" }, sourceTitle(step.source)) : null);
     kids.push(h("span", { class: "from" }, step.from.value === "" ? "from an earlier step" : `from ${step.from.type} ${step.from.value}`));
     if (step.free) kids.push(tag(ui, "done", "free"));
     else {
