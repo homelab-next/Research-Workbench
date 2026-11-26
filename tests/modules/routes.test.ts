@@ -6,6 +6,7 @@ import { Workbench } from "../../src/core/workbench";
 import type { CaseSession } from "../../src/core/session";
 import type { Actor, Observable, TimeWindow } from "../../src/core/types";
 import { Registry } from "../../src/modules/registry";
+import { loadRegistry } from "../../src/modules/registry-record";
 import { Observables } from "../../src/modules/observables";
 import { Secrets } from "../../src/modules/secrets";
 import { ConnectorPool } from "../../src/modules/connectors";
@@ -79,7 +80,7 @@ tables:
     pv("at", "address", "tag", "small", "tag", "address"),
     pv("au", "address", "label", "unconf", "label", "address"),
   ].join("\n")}\n`);
-  const registry = Registry.load([{ path: root, trusted: true, credentials: [] }]);
+  const registry = loadRegistry([{ path: root, trusted: true, credentials: [] }]);
   expect(registry.problems).toEqual([]);
   pool = new ConnectorPool({ secrets: new Secrets({}, null), observables });
   deps = { registry, pool, observables };
@@ -157,6 +158,12 @@ test("a refused hop is a roadblock", async () => {
   expect(r.outcome).toBe("blocked");
   expect(r.trail.map((t) => t.status)).toEqual(["refused"]);
   expect(r.blocked).toEqual(["ad"]);
+});
+
+test("a refused hop adds no caveat: the walk is pivot's, the caveats are the workbench's as before", async () => {
+  const r = await go([{ type: "address", value: "not an address" }], "owner");
+  expect(r.trail.map((t) => [t.hop.pivot, t.status])).toEqual([["ad", "refused"]]);
+  expect(r.caveats).toEqual([]);
 });
 
 test("values given in have never count as reached: holding the goal type asks for other values of it", async () => {

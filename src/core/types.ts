@@ -2,10 +2,11 @@ import { isPlainObject } from "./canonical";
 import type { Json } from "./canonical";
 
 // ---------- primitives ----------
-export type Marking = "TLP:CLEAR" | "TLP:GREEN" | "TLP:AMBER" | "TLP:AMBER+STRICT" | "TLP:RED";
-/** Least to most restrictive. */
-export const MARKINGS: readonly Marking[] = ["TLP:CLEAR", "TLP:GREEN", "TLP:AMBER", "TLP:AMBER+STRICT", "TLP:RED"];
-export type Where = "machine" | "network" | "hosted";
+// The vocabulary shared with pivot is pivot's (pivot docs/design.md §4): the same shapes, re-exported so every import here stays.
+import { EMPTY_MEANS, MARKINGS, WHERES, isMarking } from "pivot/types";
+import type { Coverage, Cost, EmptyMeans, Marking, Observable, Observed, TimeWindow, Where } from "pivot/types";
+export { EMPTY_MEANS, MARKINGS, MAX_POINTS, MAX_SIGHTINGS, PARTIAL_REASONS, WHERES, isMarking } from "pivot/types";
+export type { Coverage, Cost, EmptyMeans, Marking, Observable, Observed, Sighting, Span, TimeWindow, Where } from "pivot/types";
 
 export type Actor =
   | { kind: "human"; id: string }
@@ -13,22 +14,6 @@ export type Actor =
   | { kind: "agent"; id: string; stage: string; profile: string; model: string; effort: string | null; where: Where };
 
 export interface BlobRef { blob: string; bytes: number; media?: string }
-export interface TimeWindow { from: string | null; to: string | null }
-export interface Observable { type: string; value: string }
-/** What a result says about when a value was seen: the earliest and latest time (UTC, `YYYY-MM-DDTHH:MM:SS.mmmZ`) and how many times; null when unknown. */
-export interface Span { first: string | null; last: string | null; count: number | null }
-/** A value a pivot found, with when it was seen; `points` (time, count) only for a pivot that declares the points shape. */
-export interface Sighting extends Span { type: string; value: string; points: [string, number][] }
-/** What a pivot's result observed, from every row: the value it ran on, the span over every row, and what it found (at most 100; `more` past that). */
-export interface Observed { pivot: string; from: Observable; span: Span; found: Sighting[]; more: number; unread: number }
-/** At most this many sightings on a card, and this many points on a sighting (design 6b §5.4). */
-export const MAX_SIGHTINGS = 100;
-export const MAX_POINTS = 24;
-export type Coverage =
-  | { kind: "full" }
-  | { kind: "partial"; reason: "row_limit" | "timeout" | "window_clipped" | "source_error" | "budget"; detail?: string };
-export interface Cost { amount: number; unit: string }
-export type EmptyMeans = "proven-negative" | "not-seen";
 export type Place = "incoming" | "lane" | "discarded";
 export interface ModelChoice { provider: string; model: string; effort: string | null }
 
@@ -316,7 +301,6 @@ function listOf<T extends string>(members: { readonly [K in T]: true }): readonl
   return Object.freeze(Object.keys(members) as T[]);
 }
 
-export const WHERES = listOf<Where>({ machine: true, network: true, hosted: true });
 export const SECTIONS = listOf<Section>({ summary: true, key_findings: true, gaps_and_limits: true, alternatives: true, assessment: true });
 export const GATES = listOf<NonNullable<StageDef["gate"]>>({ plan: true, publish: true });
 export const STAGE_RUNS = listOf<StageDef["runs"]>({ agent: true, script: true, human: true });
@@ -331,8 +315,6 @@ export const PLAYBOOK_STEP_STATUSES = listOf<Payloads["playbook.step"]["status"]
 export const ROUTE_OUTCOMES = listOf<Payloads["route.finished"]["outcome"]>({ answered: true, blocked: true });
 export const VERIFY_OUTCOMES = listOf<Payloads["verify.run"]["outcome"]>({ matches: true, differs: true, could_not_run: true });
 export const PLACES = listOf<Place>({ incoming: true, lane: true, discarded: true });
-export const EMPTY_MEANS = listOf<EmptyMeans>({ "proven-negative": true, "not-seen": true });
-export const PARTIAL_REASONS = listOf<Extract<Coverage, { kind: "partial" }>["reason"]>({ row_limit: true, timeout: true, window_clipped: true, source_error: true, budget: true });
 export const CARD_KINDS = listOf<Card["kind"]>({ result: true, assessment: true, note: true });
 export const CARD_MAKERS = listOf<Card["made_by"]>({ agent: true, human: true, system: true });
 export const CONFIDENCES = listOf<Finding["confidence"]>({ low: true, moderate: true, high: true });
@@ -372,10 +354,6 @@ export function isActor(x: unknown): x is Actor {
   if (x.kind !== "agent" || keys !== AGENT_KEYS) return false;
   return typeof x.id === "string" && typeof x.stage === "string" && typeof x.profile === "string" && typeof x.model === "string"
     && (x.effort === null || typeof x.effort === "string") && (WHERES as readonly unknown[]).includes(x.where);
-}
-
-export function isMarking(x: unknown): x is Marking {
-  return typeof x === "string" && (MARKINGS as readonly string[]).includes(x);
 }
 
 /**

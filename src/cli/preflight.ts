@@ -16,6 +16,7 @@ import { ConnectorPool } from "../modules/connectors";
 import { GuardError } from "../modules/sqlguard";
 import { Observables } from "../modules/observables";
 import { Registry } from "../modules/registry";
+import { loadRegistry } from "../modules/registry-record";
 import { Secrets, SecretError } from "../modules/secrets";
 import { loadChecks, loadPipeline } from "../pipeline/manifests";
 import type { StageManifest } from "../pipeline/manifests";
@@ -149,7 +150,7 @@ export async function preflight(
     secrets = new Secrets(env, null);
   }
 
-  const registry = Registry.load(config.roots);
+  const registry = loadRegistry(config.roots);
   const named = new Set<string>();
   for (const s of registry.sources()) if (s.credential !== null) named.add(s.credential);
   for (const m of registry.all("model")) if (typeof m.body.credential === "string") named.add(m.body.credential);

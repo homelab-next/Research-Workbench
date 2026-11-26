@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadProviders } from "../../src/agents/providers";
 import { Registry } from "../../src/modules/registry";
+import { loadRegistry } from "../../src/modules/registry-record";
 import { Secrets } from "../../src/modules/secrets";
 
 const SAMPLE = join(import.meta.dir, "..", "..", "sample");
@@ -17,10 +18,10 @@ const put = (root: string, name: string, text: string): void => {
   writeFileSync(join(dir, root, name), text);
 };
 const model = (id: string, provider = "scripted"): string => `kind: model\nid: ${id}\ntitle: T\nprovider: ${provider}\nwhere: machine\n`;
-const load = (...roots: [string, boolean][]) => Registry.load(roots.map(([r, trusted]) => ({ path: join(dir, r), trusted, credentials: [] })));
+const load = (...roots: [string, boolean][]) => loadRegistry(roots.map(([r, trusted]) => ({ path: join(dir, r), trusted, credentials: [] })));
 
 test("the sample root yields the scripted provider on this machine", () => {
-  const registry = Registry.load([{ path: SAMPLE, trusted: true, credentials: [] }]);
+  const registry = loadRegistry([{ path: SAMPLE, trusted: true, credentials: [] }]);
   const { providers, problems } = loadProviders(registry, secrets);
   expect(problems).toEqual([]);
   expect(providers.get("scripted")!.where).toBe("machine");
@@ -73,7 +74,7 @@ const local = (over: Record<string, string>): string => {
 };
 const loadLocal = (text: string, credentials: string[] = [], env: Record<string, string> = {}) => {
   put("t", "lm.yaml", text);
-  const registry = Registry.load([{ path: join(dir, "t"), trusted: true, credentials }]);
+  const registry = loadRegistry([{ path: join(dir, "t"), trusted: true, credentials }]);
   const out = loadProviders(registry, new Secrets(env, null));
   return { ...out, problems: [...registry.problems, ...out.problems] };
 };

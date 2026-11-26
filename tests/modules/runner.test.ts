@@ -10,6 +10,7 @@ import type { Actor, Card, Cost, Entry, SubGoal, TimeWindow } from "../../src/co
 import type { CaseState } from "../../src/core/state";
 import { subgoalAnswered } from "../../src/core/state/run";
 import { Registry } from "../../src/modules/registry";
+import { loadRegistry } from "../../src/modules/registry-record";
 import { Observables } from "../../src/modules/observables";
 import { Secrets } from "../../src/modules/secrets";
 import { ConnectorPool } from "../../src/modules/connectors";
@@ -121,7 +122,7 @@ beforeEach(() => {
   db.run("create table flows (ts TEXT, src TEXT, dst TEXT, bytes INTEGER)");
   for (let i = 0; i < 3; i++) db.run("insert into flows values (?, ?, ?, ?)", [`2026-01-0${i + 1}T00:00:00.000Z`, "192.0.2.17", `198.51.100.${i}`, 100 - i]);
   db.close();
-  registry = Registry.load([{ path: root, trusted: true, credentials: ["REP_KEY"] }]);
+  registry = loadRegistry([{ path: root, trusted: true, credentials: ["REP_KEY"] }]);
   pool = new ConnectorPool({ secrets: new Secrets({ REP_KEY: "rep-key-value" }, null), observables });
   deps = { registry, pool, observables };
   wb = Workbench.open(join(dir, "data"), { onError: () => {} });
@@ -492,7 +493,7 @@ test("a pivot passed with other text lends neither its weight nor its proven neg
 });
 
 test("an agent on an adhoc source with other text gets the source's weight, not the free pivot's", async () => {
-  const adhoc = Registry.load([{ path: join(dir, "modules"), trusted: true, credentials: ["REP_KEY"] }]);
+  const adhoc = loadRegistry([{ path: join(dir, "modules"), trusted: true, credentials: ["REP_KEY"] }]);
   const src = adhoc.source("rep")!;
   const d: RunnerDeps = { ...deps, registry: { ...adhoc, source: (id: string) => (id === "rep" ? { ...src, adhoc: true } : adhoc.source(id)), pivot: (id: string) => adhoc.pivot(id), rootOf: adhoc.rootOf.bind(adhoc) } as unknown as Registry };
   const r = await runQuery(s, d, { ...repInput, actor: agent, pivot: adhoc.pivot("free_rep")!, text: "reputation" });
@@ -728,7 +729,7 @@ test("a proposal whose source has changed is refused and stays open", async () =
   await runQuery(s, deps, paidRep());
   const file = join(dir, "modules", "sources", "rep.yaml");
   writeFileSync(file, readFileSync(file, "utf8").replace("title: Reputation", "title: Reputation, edited"));
-  const reloaded = Registry.load([{ path: join(dir, "modules"), trusted: true, credentials: ["REP_KEY"] }]);
+  const reloaded = loadRegistry([{ path: join(dir, "modules"), trusted: true, credentials: ["REP_KEY"] }]);
   expect(reloaded.source("rep")!.hash).not.toBe(registry.source("rep")!.hash);
   const r = await runProposal(s, { ...deps, registry: reloaded }, { proposal: "p1", budget: 2, actor: human });
   expect(r).toEqual({ status: "refused", reasons: ["the source rep has changed since the proposal"] });

@@ -6,6 +6,7 @@ import type { Json } from "../../src/core/canonical";
 import { MARKINGS } from "../../src/core/types";
 import type { Product } from "../../src/core/types";
 import { Registry } from "../../src/modules/registry";
+import { loadRegistry } from "../../src/modules/registry-record";
 import type { CheckInput } from "../../src/pipeline/checks";
 import { runCheck } from "../../src/pipeline/checks";
 import { loadChecks } from "../../src/pipeline/manifests";
@@ -16,7 +17,7 @@ const SAMPLE = join(import.meta.dir, "..", "..", "sample");
 let checks: CheckManifest[];
 let registry: Registry;
 beforeAll(() => {
-  registry = Registry.load([{ path: SAMPLE, trusted: true, credentials: [] }]);
+  registry = loadRegistry([{ path: SAMPLE, trusted: true, credentials: [] }]);
   checks = loadChecks(registry).checks;
 });
 

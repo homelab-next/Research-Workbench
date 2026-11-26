@@ -1,6 +1,7 @@
 import { pivotWeight } from "../../modules/manifests";
 import { maxLookups } from "../../modules/playbooks";
 import type { Json } from "../../core/canonical";
+import type { Hop, Route } from "../../modules/seeker";
 import type { ToolContext, ToolDef, ToolResult } from "./index";
 import { idArg, json, MAX_HAVE, MAX_ID, params, str, ToolError } from "./kit";
 
@@ -49,7 +50,9 @@ async function describeSource(ctx: ToolContext, args: Record<string, Json>): Pro
 async function findRoutes(ctx: ToolContext, args: Record<string, Json>): Promise<ToolResult> {
   const have = (args.have as { type: string }[]).map((h) => h.type);
   const routes = ctx.seeker.routes(have, str(args.want), ctx.limits);
-  return ok(`${routes.length} routes`, json({ routes: routes.map((r) => ({ weight: r.weight, hops: r.hops })) }));
+  // a hop as the agent has always been shown it: pivot's hop also names the inventory its pivot asks, which this view leaves out
+  const hops = (r: Route): Omit<Hop, "inventory">[] => r.hops.map(({ inventory: _inventory, ...hop }) => hop);
+  return ok(`${routes.length} routes`, json({ routes: routes.map((r) => ({ weight: r.weight, hops: hops(r) })) }));
 }
 
 /**

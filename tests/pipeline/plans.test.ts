@@ -6,6 +6,7 @@ import type { Plan } from "../../src/core/types";
 import { loadConfig } from "../../src/modules/config";
 import { stepPins } from "../../src/modules/pins";
 import { Registry } from "../../src/modules/registry";
+import { loadRegistry } from "../../src/modules/registry-record";
 import { DEFAULT_LIMITS } from "../../src/modules/seeker";
 import { acceptPlan, buildPlan, denyPlan, estimateStep, PlanRefused, requestReplan, spendPlanBudget } from "../../src/pipeline/plans";
 import type { PlanOutput } from "../../src/pipeline/plans";
@@ -380,7 +381,7 @@ const pbOut = (over: Partial<PlanOutput["subgoals"][number]> = {}): PlanOutput =
 /** The sample root with one more playbook file, loaded as a fresh registry. */
 const withPlaybook = (id: string, body: string) => {
   writeFileSync(join(f.sample.root, "playbooks", `${id}.yaml`), `kind: playbook\nid: ${id}\ntitle: ${id}\n${body}`);
-  const registry = Registry.load([{ path: f.sample.root, trusted: true, credentials: [] }]);
+  const registry = loadRegistry([{ path: f.sample.root, trusted: true, credentials: [] }]);
   expect(registry.playbook(id)).not.toBeNull();
   return { ...deps(), registry, runner: { ...f.sample.deps, registry } };
 };
@@ -430,7 +431,7 @@ test("every step of a built plan carries pins, and a playbook step's pins change
   const root = join(dir, "changed");
   cpSync(f.sample.root, root, { recursive: true });
   appendFileSync(join(root, "pivots.yaml"), "# changed\n");
-  const changed = Registry.load([{ path: root, trusted: true, credentials: [] }]);
+  const changed = loadRegistry([{ path: root, trusted: true, credentials: [] }]);
   const pb = plan.steps.find((s) => s.playbook !== undefined)!;
   expect(changed.playbook("address-triage")!.hash).toBe(pb.playbook!.hash);
   expect(stepPins(changed, pb)).not.toBe(pb.pins);

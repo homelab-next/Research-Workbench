@@ -7,6 +7,7 @@ import { Workbench } from "../../src/core/workbench";
 import type { CaseSession } from "../../src/core/session";
 import type { Actor, Card, TimeWindow } from "../../src/core/types";
 import { Registry } from "../../src/modules/registry";
+import { loadRegistry } from "../../src/modules/registry-record";
 import { Observables } from "../../src/modules/observables";
 import { Secrets } from "../../src/modules/secrets";
 import { ConnectorPool } from "../../src/modules/connectors";
@@ -107,7 +108,7 @@ beforeEach(() => {
   db.run("create table flows (ts TEXT, src TEXT, dst TEXT, bytes INTEGER)");
   for (let i = 0; i < 3; i++) db.run("insert into flows values (?, ?, ?, ?)", [`2026-01-0${i + 1}T00:00:00.000Z`, "192.0.2.17", `198.51.100.${i}`, 100 - i]);
   db.close();
-  registry = Registry.load([{ path: root, trusted: true, credentials: ["REP_KEY"] }]);
+  registry = loadRegistry([{ path: root, trusted: true, credentials: ["REP_KEY"] }]);
   pool = new ConnectorPool({ secrets: new Secrets({ REP_KEY: "rep-key-value" }, null), observables });
   deps = { registry, pool, observables };
   wb = Workbench.open(join(dir, "data"), { onError: () => {} });

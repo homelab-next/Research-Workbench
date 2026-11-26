@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { newRoot } from "../../scripts/new-root";
 import { preflight } from "../../src/cli/preflight";
 import { Registry } from "../../src/modules/registry";
+import { loadRegistry } from "../../src/modules/registry-record";
 import { cleanEnv } from "../helpers/clean-env";
 import { startModelStandin } from "../helpers/model-standin";
 
@@ -99,7 +100,7 @@ async function preflightReadme(edit: (pivots: string) => string = (p) => p): Pro
   writeFileSync(config, [`data_dir: ${join(base, "data")}`, "roots:", `  - { path: ${JSON.stringify(root)}, trusted: true, credentials: [] }`, ""].join("\n"));
   mkdirSync(join(base, "data"), { recursive: true });
 
-  const registry = Registry.load([{ path: root, trusted: true, credentials: [] }]);
+  const registry = loadRegistry([{ path: root, trusted: true, credentials: [] }]);
   const problems = registry.problems.map((p) => `${p.path}: ${p.error}`);
   const r = await preflight(["--config", config, "--no-question"], { home: base, env: {}, repoRoot: REPO });
   return { checks: r.checks, problems };

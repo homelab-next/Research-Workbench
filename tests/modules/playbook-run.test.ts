@@ -16,6 +16,7 @@ import type { PlaybookEnd, PlaybookStart } from "../../src/modules/playbook-run"
 import { toPlaybook } from "../../src/modules/playbooks";
 import type { PlaybookManifest } from "../../src/modules/playbooks";
 import { Registry } from "../../src/modules/registry";
+import { loadRegistry } from "../../src/modules/registry-record";
 import type { RunnerDeps } from "../../src/modules/runner";
 import { Secrets } from "../../src/modules/secrets";
 import { sampleRoot } from "../helpers/sample-root";
@@ -70,7 +71,7 @@ function written(id: string, body: Record<string, Json>): PlaybookManifest {
 /** The sample again, after `change` edits its files: a fresh registry over the same root. */
 function reloaded(change: () => void): RunnerDeps {
   change();
-  const registry = Registry.load([{ path: sample.root, trusted: true, credentials: [] }]);
+  const registry = loadRegistry([{ path: sample.root, trusted: true, credentials: [] }]);
   const observables = new Observables(registry.types());
   const pool = new ConnectorPool({ secrets: new Secrets({}, null), observables });
   extraPools.push(pool);

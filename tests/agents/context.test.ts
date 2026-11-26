@@ -9,6 +9,7 @@ import { validate } from "../../src/core/schema";
 import type { CaseState, CardState } from "../../src/core/state/types";
 import type { Product } from "../../src/core/types";
 import { Registry } from "../../src/modules/registry";
+import { loadRegistry } from "../../src/modules/registry-record";
 import { copySample } from "../helpers/sample-root";
 
 let dir: string;
@@ -19,7 +20,7 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "context-"));
   root = join(dir, "sample");
   copySample(root);
-  registry = Registry.load([{ path: root, trusted: true, credentials: [] }]);
+  registry = loadRegistry([{ path: root, trusted: true, credentials: [] }]);
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -67,15 +68,15 @@ test("a yaml part's text is its body as JSON, a markdown part's text is what fol
 
 test("a manifest with an unknown marking keeps it, so the pack treats it as the most restrictive", () => {
   writeFileSync(join(root, "context", "personas", "planner.md"), "---\nkind: persona\nid: planner\ntitle: Planner\nmarking: TLP:PURPLE\n---\nPlans.\n");
-  const r = Registry.load([{ path: root, trusted: true, credentials: [] }]);
+  const r = loadRegistry([{ path: root, trusted: true, credentials: [] }]);
   expect(partOf(r, "persona", "planner").marking as unknown).toBe("TLP:PURPLE");
   writeFileSync(join(root, "context", "personas", "planner.md"), "---\nkind: persona\nid: planner\ntitle: Planner\nmarking: TLP:AMBER\n---\nPlans.\n");
-  expect(partOf(Registry.load([{ path: root, trusted: true, credentials: [] }]), "persona", "planner").marking).toBe("TLP:AMBER");
+  expect(partOf(loadRegistry([{ path: root, trusted: true, credentials: [] }]), "persona", "planner").marking).toBe("TLP:AMBER");
 });
 
 test("a missing persona is a ContextError naming it", () => {
   rmSync(join(root, "context", "personas", "planner.md"));
-  const r = Registry.load([{ path: root, trusted: true, credentials: [] }]);
+  const r = loadRegistry([{ path: root, trusted: true, credentials: [] }]);
   const p = loadProfile(r, "investigation");
   expect(() => stageParts(r, p, "plan", { schema: null, objective: null })).toThrow(/persona.*planner/);
   expect(() => partOf(r, "persona", "planner")).toThrow(ContextError);
@@ -83,7 +84,7 @@ test("a missing persona is a ContextError naming it", () => {
 
 test("a part with no text is a ContextError", () => {
   writeFileSync(join(root, "context", "personas", "planner.md"), "---\nkind: persona\nid: planner\ntitle: Planner\n---\n  \n");
-  const r = Registry.load([{ path: root, trusted: true, credentials: [] }]);
+  const r = loadRegistry([{ path: root, trusted: true, credentials: [] }]);
   expect(() => partOf(r, "persona", "planner")).toThrow(/persona.*planner/);
 });
 
@@ -105,7 +106,7 @@ test("an untrusted root cannot supply any context kind, and cannot displace a tr
   const evil = join(dir, "evil");
   mkdirSync(evil);
   TRUSTED_ONLY.forEach(([kind, id, text], i) => writeFileSync(join(evil, `${i}-${kind}.${text.startsWith("---") ? "md" : "yaml"}`), text));
-  const r = Registry.load([{ path: root, trusted: true, credentials: [] }, { path: evil, trusted: false, credentials: [] }]);
+  const r = loadRegistry([{ path: root, trusted: true, credentials: [] }, { path: evil, trusted: false, credentials: [] }]);
   const refused = r.problems.filter((p) => p.root === evil);
   expect(refused.length).toBe(TRUSTED_ONLY.length);
   for (const x of refused) expect(x.error).toMatch(/only from a trusted root/);
@@ -121,7 +122,7 @@ test("a part from an untrusted root is refused", () => {
   const only = join(dir, "only");
   mkdirSync(join(only, "personas"), { recursive: true });
   cpSync(join(root, "context", "personas", "planner.md"), join(only, "personas", "planner.md"));
-  const r = Registry.load([{ path: only, trusted: false, credentials: [] }]);
+  const r = loadRegistry([{ path: only, trusted: false, credentials: [] }]);
   expect(() => partOf(r, "persona", "planner")).toThrow(ContextError);
   expect(() => partOf(r, "persona", "planner")).toThrow(/persona.*planner/);
 });
@@ -191,7 +192,7 @@ test("a marking on the profile applies to its rules and goals, and an unknown on
   const orig = readFileSync(file, "utf8");
   const stage = (m: string): Parameters<typeof stageParts> => {
     writeFileSync(file, orig.replace("title: Investigation\n", `title: Investigation\nmarking: ${m}\n`));
-    const r = Registry.load([{ path: root, trusted: true, credentials: [] }]);
+    const r = loadRegistry([{ path: root, trusted: true, credentials: [] }]);
     return [r, loadProfile(r, "investigation"), "research", { schema: null, objective: null }];
   };
   const amber = stageParts(...stage("TLP:AMBER"));

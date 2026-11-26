@@ -4,6 +4,7 @@ import { makeSampleData } from "../../scripts/make-sample-data";
 import { ConnectorPool } from "../../src/modules/connectors";
 import { Observables } from "../../src/modules/observables";
 import { Registry } from "../../src/modules/registry";
+import { loadRegistry } from "../../src/modules/registry-record";
 import type { RunnerDeps } from "../../src/modules/runner";
 import { Secrets } from "../../src/modules/secrets";
 import { cheapestSeeker } from "../../src/modules/seeker";
@@ -27,7 +28,7 @@ export function sampleRoot(dir: string): {
   const fixture = startReputationFixture(join(root, "data"), 0);
   const rep = join(root, "sources", "reputation.yaml");
   writeFileSync(rep, readFileSync(rep, "utf8").replace("http://127.0.0.1:4801", fixture.url));
-  const registry = Registry.load([{ path: root, trusted: true, credentials: [] }]);
+  const registry = loadRegistry([{ path: root, trusted: true, credentials: [] }]);
   const observables = new Observables(registry.types());
   const pool = new ConnectorPool({ secrets: new Secrets({}, null), observables });
   return {

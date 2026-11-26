@@ -5,6 +5,7 @@ import type { Config } from "../modules/config";
 import { ConnectorPool } from "../modules/connectors";
 import { Observables } from "../modules/observables";
 import { Registry } from "../modules/registry";
+import { loadRegistry } from "../modules/registry-record";
 import { Secrets } from "../modules/secrets";
 import { SEEKERS } from "../modules/seeker";
 import type { EngineDeps } from "../pipeline/engine";
@@ -24,7 +25,7 @@ export class ComposeError extends Error {
  * usable pipeline, profile or seeker; every manifest problem short of that is returned in `problems`.
  */
 export function compose(config: Config, wb: Workbench, opts: { refuse_hosts?: () => readonly string[] } = {}): { deps: EngineDeps; problems: string[]; close(): void } {
-  const registry = Registry.load(config.roots, { chain: wb.chain });
+  const registry = loadRegistry(config.roots, { chain: wb.chain });
   const problems = registry.problems.map((p) => `${p.path}: ${p.error}`);
   const makeSeeker = Object.hasOwn(SEEKERS, config.seeker) ? SEEKERS[config.seeker] : undefined;
   if (makeSeeker === undefined) throw new ComposeError(`the seeker "${config.seeker}" is not one this build has`);

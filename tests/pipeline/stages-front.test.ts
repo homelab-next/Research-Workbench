@@ -10,6 +10,7 @@ import { ScriptedProvider } from "../../src/agents/providers/scripted";
 import type { ScriptReply } from "../../src/agents/providers/scripted";
 import { loadConfig } from "../../src/modules/config";
 import { Registry } from "../../src/modules/registry";
+import { loadRegistry } from "../../src/modules/registry-record";
 import { cheapestSeeker, DEFAULT_LIMITS } from "../../src/modules/seeker";
 import { Engine } from "../../src/pipeline/engine";
 import type { EngineDeps, StageEnd, StageRunner } from "../../src/pipeline/engine";
@@ -575,7 +576,7 @@ const pbGoal = (value = KNOWN, playbook = "address-triage", title = "Triage") =>
 const pbPlan = (...subgoals: object[]) => ({ goal: "what is the address", subgoals });
 /** The sample root as it is on disk now, loaded again, in place of the fixture's registry. */
 function reload(r?: Rig): void {
-  const registry = Registry.load([{ path: f.sample.root, trusted: true, credentials: [] }]);
+  const registry = loadRegistry([{ path: f.sample.root, trusted: true, credentials: [] }]);
   f.sample.registry = registry;
   f.sample.deps.registry = registry;
   f.sample.seeker = cheapestSeeker(registry);
@@ -848,7 +849,7 @@ test("the planner's answer schema names only the registry's types, the playbooks
 
 test("a playbook with a costly lookup is not one the planner may name, and with none left the answer schema has no playbook", () => {
   writeFileSync(join(f.sample.root, "playbooks", "rep-check.yaml"), "kind: playbook\nid: rep-check\ntitle: rep\nabout: a\ninputs:\n  - { name: address, type: address }\nsteps:\n  - { id: rep, pivot: address_to_verdict, from: input.address }\nend: [rep]\n");
-  const registry = Registry.load([{ path: f.sample.root, trusted: true, credentials: [] }]);
+  const registry = loadRegistry([{ path: f.sample.root, trusted: true, credentials: [] }]);
   expect(registry.playbook("rep-check")).not.toBeNull();
   expect(planChoices(registry).playbooks).toEqual(["address-triage"]);
   // final review M6: a frame that rules out unconfirmed sources rules out the sample's playbook (it reads leases)

@@ -8,6 +8,7 @@ import { latestDraft } from "../../src/core/state";
 import type { Marking, Product } from "../../src/core/types";
 import { loadProfile } from "../../src/agents/context";
 import { Registry, TRUSTED_ONLY_KINDS } from "../../src/modules/registry";
+import { loadRegistry } from "../../src/modules/registry-record";
 import type { StageEnv } from "../../src/pipeline/engine";
 import type { CheckInput } from "../../src/pipeline/checks";
 import { CHECK_MAX_OUTPUT, checkInput, runCheck } from "../../src/pipeline/checks";
@@ -36,7 +37,7 @@ function write(root: string, id: string, script: string, extra: Record<string, s
   writeFileSync(join(root, `${id}.yaml`), Object.entries(fields).map(([k, v]) => `${k}: ${v}`).join("\n") + "\n");
   if (!file.includes("/")) writeFileSync(join(root, file), script);
 }
-const load = (root: string): ReturnType<typeof loadChecks> => loadChecks(Registry.load([{ path: root, trusted: true, credentials: [] }]));
+const load = (root: string): ReturnType<typeof loadChecks> => loadChecks(loadRegistry([{ path: root, trusted: true, credentials: [] }]));
 const one = (id: string, script: string, extra: Record<string, string | number> = {}): CheckManifest => {
   const root = join(dir, `root-${id}`);
   write(root, id, script, extra);
@@ -52,7 +53,7 @@ test("check is a kind only a trusted root may supply", () => {
   write(evil, "ghost", PRINT("{ pass: true, findings: [] }"));
   const good = join(dir, "good");
   write(good, "ghost", PRINT("{ pass: true, findings: [] }"));
-  const r = Registry.load([{ path: good, trusted: true, credentials: [] }, { path: evil, trusted: false, credentials: [] }]);
+  const r = loadRegistry([{ path: good, trusted: true, credentials: [] }, { path: evil, trusted: false, credentials: [] }]);
   expect(r.problems.filter((p) => p.root === evil).map((p) => p.error)).toEqual(["a check manifest is accepted only from a trusted root"]);
   expect(r.get("check", "ghost")!.root).toBe(good);
 });
@@ -140,11 +141,11 @@ test("a check from an untrusted root is not loaded and never runs", () => {
   const marker = join(dir, "ran.txt");
   const root = join(dir, "root-evil");
   write(root, "evil", `await Bun.write(${JSON.stringify(marker)}, "x");`);
-  const registry = Registry.load([{ path: root, trusted: false, credentials: [] }]);
+  const registry = loadRegistry([{ path: root, trusted: false, credentials: [] }]);
   expect(registry.problems.map((p) => p.error)).toEqual(["a check manifest is accepted only from a trusted root"]);
   expect(loadChecks(registry).checks).toEqual([]);
   // the second lock: a registry that did hand one over is still refused by loadChecks
-  const trusted = Registry.load([{ path: root, trusted: true, credentials: [] }]);
+  const trusted = loadRegistry([{ path: root, trusted: true, credentials: [] }]);
   const stub = Object.create(trusted) as Registry;
   stub.rootOf = () => ({ path: root, trusted: false, credentials: [] });
   const r = loadChecks(stub);
@@ -241,7 +242,7 @@ function stageRig(checks: Record<string, [string, Record<string, string | number
   copySample(root);
   rmSync(join(root, "checks"), { recursive: true, force: true });
   for (const [id, [script, extra]] of Object.entries(checks)) write(join(root, "checks"), id, script, extra ?? {});
-  const registry = Registry.load([{ path: root, trusted: true, credentials: [] }]);
+  const registry = loadRegistry([{ path: root, trusted: true, credentials: [] }]);
   f.s.commit((_s, ids) => [{ type: "card.created", actor: person, payload: { card: {
     id: ids.next("card"), title: "t", body: "b", kind: "result", made_by: "human", query: null, columns: [], column_types: [], rows: [], row_count: 0, coverage: null, empty: null,
     marking: "TLP:GREEN", source: "assets", step: null, subgoal: null, why: "w", event_time: null, quality_notes: [],
@@ -373,7 +374,7 @@ test("a refused check manifest is recognised by its parsed kind", () => {
   // flow YAML on one line: a text match for `kind: check` on a line of its own does not see it; the id is taken by both roots, so both are refused
   writeFileSync(join(root, "first.yaml"), '{ kind: check, id: dup, title: first, order: 1, script: dup.ts, runner: bun, timeout_ms: 1000 }\n');
   writeFileSync(join(other, "again.yaml"), '{ kind: check, id: dup, title: again, order: 2, script: dup.ts, runner: bun, timeout_ms: 1000 }\n');
-  const r = loadChecks(Registry.load([{ path: root, trusted: true, credentials: [] }, { path: other, trusted: true, credentials: [] }]));
+  const r = loadChecks(loadRegistry([{ path: root, trusted: true, credentials: [] }, { path: other, trusted: true, credentials: [] }]));
   expect(r.broken.map((b) => b.id)).toContain("dup");
 });
 
@@ -384,7 +385,7 @@ test("an unparseable file beside a check manifest counts as a broken check", () 
   const lone = join(dir, "lone-root");
   mkdirSync(lone, { recursive: true });
   writeFileSync(join(lone, "mangled.yaml"), "{ kind: check, id: [");
-  const r = loadChecks(Registry.load([{ path: root, trusted: true, credentials: [] }, { path: lone, trusted: true, credentials: [] }]));
+  const r = loadChecks(loadRegistry([{ path: root, trusted: true, credentials: [] }, { path: lone, trusted: true, credentials: [] }]));
   expect(r.checks.map((c) => c.id)).toEqual(["fine"]);
   expect(r.broken).toHaveLength(1);
   expect(r.broken[0]!.problem).toContain("mangled.yaml");
@@ -397,7 +398,7 @@ test("a check manifest the registry refused, or one that is not valid, is broken
   writeFileSync(join(root, "garbled.yaml"), "kind: check\nid: garbled\norder: [1\n");
   const evil = join(dir, "evil-root");
   write(evil, "ghost", PRINT("{ pass: true, findings: [] }"));
-  const r = loadChecks(Registry.load([{ path: root, trusted: true, credentials: [] }, { path: evil, trusted: false, credentials: [] }]));
+  const r = loadChecks(loadRegistry([{ path: root, trusted: true, credentials: [] }, { path: evil, trusted: false, credentials: [] }]));
   expect(r.checks.map((c) => c.id)).toEqual(["fine"]);
   expect(r.broken.map((b) => b.id).sort()).toEqual(["garbled", "nort"]);
   for (const b of r.broken) expect(b.problem).not.toContain(dir);
@@ -407,7 +408,7 @@ test("the sample with one check's script gone loads ten checks and names the ele
   const root = join(dir, "sample-copy");
   copySample(root);
   rmSync(join(root, "checks", "08-gaps-and-negatives.ts"));
-  const r = loadChecks(Registry.load([{ path: root, trusted: true, credentials: [] }]));
+  const r = loadChecks(loadRegistry([{ path: root, trusted: true, credentials: [] }]));
   expect(r.checks).toHaveLength(10);
   expect(r.broken).toEqual([{ id: "gaps-and-negatives", problem: `script "08-gaps-and-negatives.ts" is missing` }]);
 });

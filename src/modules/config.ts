@@ -7,6 +7,7 @@ import type { Schema } from "../core/schema";
 import { validate } from "../core/schema";
 import { MARKINGS, WHERES } from "../core/types";
 import type { Marking, Where } from "../core/types";
+import type { RootConfig } from "pivot/catalogue/roots";
 
 export class ConfigError extends Error {
   constructor(message: string) {
@@ -20,7 +21,7 @@ export class ConfigError extends Error {
  * (http, trino) and sources that name a credential, and a trusted root's source may name only the credentials
  * listed here. An untrusted root may supply sql and files sources, pivots, and kinds this plan does not validate.
  */
-export interface RootConfig { path: string; trusted: boolean; credentials: string[] }
+export type { RootConfig } from "pivot/catalogue/roots";
 
 export interface Config {
   /** The file the settings came from, or null when the defaults were used. */

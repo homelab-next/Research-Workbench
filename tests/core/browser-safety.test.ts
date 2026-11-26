@@ -18,6 +18,14 @@ function code(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
 }
 
+/** pivot's sources, which a browser-shared module may import by their package path (`pivot/types`, `pivot/web/dom`). */
+const PIVOT_SRC = resolve(import.meta.dir, "../../node_modules/pivot/src");
+const pivotFile = (spec: string): string | null => {
+  if (!/^pivot\/[\w/-]+$/.test(spec)) return null;
+  const f = join(PIVOT_SRC, `${spec.slice("pivot/".length)}.ts`);
+  return existsSync(f) ? f : null;
+};
+
 const IMPORT = /\b(?:import|export)\b[^;]*?\bfrom\s*["']([^"']+)["']|\bimport\s*\(?\s*["']([^"']+)["']/g;
 
 /** Every file reachable from `entries` through relative imports. */
@@ -28,6 +36,8 @@ function closure(entries: string[]): string[] {
     seen.add(file);
     for (const m of code(readFileSync(file, "utf8")).matchAll(IMPORT)) {
       const spec = m[1] ?? m[2]!;
+      const fromPivot = pivotFile(spec);
+      if (fromPivot !== null) { visit(fromPivot); continue; }
       if (!spec.startsWith(".")) continue;
       const base = resolve(dirname(file), spec);
       const target = [base, `${base}.ts`, join(base, "index.ts")].find((p) => existsSync(p) && p.endsWith(".ts"));
@@ -45,7 +55,8 @@ function violations(files: string[]): string[] {
     const text = code(readFileSync(file, "utf8"));
     for (const m of text.matchAll(IMPORT)) {
       const spec = m[1] ?? m[2]!;
-      if (!spec.startsWith(".")) out.push(`${file}: imports ${spec}`);
+      // a pivot module is followed by the closure and checked like any other file
+      if (!spec.startsWith(".") && pivotFile(spec) === null) out.push(`${file}: imports ${spec}`);
     }
     for (const g of ["Bun", "process", "Buffer"]) {
       if (new RegExp(`(?<![.\\w$])${g}\\b`).test(text)) out.push(`${file}: uses ${g}`);
@@ -63,6 +74,9 @@ test("the browser-shared modules bundle for the browser", async () => {
 test("the browser-shared modules import no runtime module and use no Bun, process or Buffer global", () => {
   const files = closure(ENTRY_POINTS);
   expect(files.length).toBeGreaterThanOrEqual(ENTRY_POINTS.length);
+  // pivot's shared vocabulary and browser builders are in the closure, checked like the workbench's own files
+  expect(files).toContain(join(PIVOT_SRC, "types.ts"));
+  expect(files).toContain(join(PIVOT_SRC, "web", "dom.ts"));
   expect(violations(files)).toEqual([]);
 });
 

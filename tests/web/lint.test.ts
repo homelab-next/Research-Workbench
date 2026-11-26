@@ -8,6 +8,16 @@ import { dirname, join, relative, resolve } from "node:path";
  */
 const WEB = resolve(import.meta.dir, "../../src/web");
 const REPO = resolve(import.meta.dir, "../..");
+/** pivot's browser code, which src/web's dom, svg and graphlayout re-export (pivot docs/design.md §10). */
+const PIVOT_WEB = join(REPO, "node_modules", "pivot", "src", "web");
+const SHIM = /^export \* from "pivot\/web\/([\w-]+)";$/m;
+
+/** A file's text; for a one-line re-export of pivot's browser code, the text of the file it re-exports, which is what runs. */
+function source(file: string): string {
+  const text = readFileSync(file, "utf8");
+  const m = text.match(SHIM);
+  return m === null ? text : readFileSync(join(PIVOT_WEB, `${m[1]}.ts`), "utf8");
+}
 
 const BANNED: [string, RegExp][] = [
   ["innerHTML", /\binnerHTML\b/], ["outerHTML", /\bouterHTML\b/], ["insertAdjacentHTML", /\binsertAdjacentHTML\b/], ["document.write", /\bdocument\s*\.\s*write(ln)?\b/],
@@ -61,7 +71,7 @@ test("nothing under src/web uses an HTML sink", () => {
   const scanned = files(WEB).filter((f) => f !== join(WEB, "build.ts"));
   expect(scanned.length).toBeGreaterThan(5);
   for (const file of scanned) {
-    const text = code(readFileSync(file, "utf8"));
+    const text = code(source(file));
         for (const [name, re] of BANNED) {
       if (file === join(WEB, "dom.ts") && DOM_ONLY.has(name)) continue;
       if (file === join(WEB, "svg.ts") && SVG_ONLY.has(name)) continue;
@@ -102,14 +112,14 @@ test("the stylesheet loads nothing", () => {
 });
 
 test("the dom helper's attribute names are a fixed list, none starting with on", () => {
-  const text = code(readFileSync(join(WEB, "dom.ts"), "utf8"));
+  const text = code(source(join(WEB, "dom.ts")));
   const names = [...text.matchAll(/setAttribute\(\s*"([^"]+)"/g)].map((m) => m[1]!);
   expect(names.length).toBeGreaterThan(0);
   expect(names.filter((n) => /^on/i.test(n))).toEqual([]);
 });
 
 test("the svg helper writes attribute names from a fixed list, none starting with on", () => {
-  const text = code(readFileSync(join(WEB, "svg.ts"), "utf8"));
+  const text = code(source(join(WEB, "svg.ts")));
   const names = [...text.matchAll(/setAttribute\(\s*"([^"]+)"/g)].map((m) => m[1]!);
   expect(names.length).toBeGreaterThan(0);
   expect(names.filter((n) => /^on/i.test(n))).toEqual([]);
@@ -124,11 +134,17 @@ test("src/web imports only src/web, src/core/state and src/core/wire (and the sh
     if (file === join(WEB, "build.ts")) continue;
     for (const m of code(readFileSync(file, "utf8")).matchAll(IMPORT)) {
       const spec = m[1] ?? m[2]!;
+      // pivot's browser code, re-exported whole by a one-line file; it imports nothing (checked here too)
+      if (/^pivot\/web\/[\w-]+$/.test(spec)) {
+        const target = join(PIVOT_WEB, `${spec.slice("pivot/web/".length)}.ts`);
+        if ([...code(readFileSync(target, "utf8")).matchAll(IMPORT)].length > 0) bad.push(`${relative(REPO, file)}: ${spec} imports`);
+        continue;
+      }
       if (!spec.startsWith(".")) { bad.push(`${relative(REPO, file)}: ${spec}`); continue; }
       const target = resolve(dirname(file), spec);
       if (!allowed.some((a) => target === a || target.startsWith(`${a}/`) || target === a.replace(/\.ts$/, ""))) bad.push(`${relative(REPO, file)}: ${spec}`);
     }
-    const text = code(readFileSync(file, "utf8"));
+    const text = code(source(file));
     for (const g of ["Bun", "process", "Buffer"]) if (new RegExp(`(?<![.\\w$])${g}\\b`).test(text)) bad.push(`${relative(REPO, file)}: uses ${g}`);
   }
   expect(bad).toEqual([]);

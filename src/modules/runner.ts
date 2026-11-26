@@ -5,14 +5,18 @@ import { isCard, isCoverage } from "../core/state/shapes";
 import type { CaseSession } from "../core/session";
 import type { ProposalState } from "../core/state";
 import type { Actor, Card, Coverage, Cost, EmptyMeans, EntryInput, QueryPurpose, TimeWindow } from "../core/types";
-import { isUtcTimestamp } from "./connectors";
 import type { Bound, Connector, ConnectorPool, QueryOutcome, QueryRequest } from "./connectors";
-import type { Observables } from "./observables";
-import type { InventoryManifest } from "./inventories";
 import { pivotWeight } from "./manifests";
 import { observe } from "./observe";
 import type { PivotManifest, Registry, SourceManifest } from "./registry";
 import { GuardError } from "./sqlguard";
+// What a pivot's answer proves, and the checks on a request, are pivot's pure planning code; sending the query stays here.
+import type { PlanDeps } from "pivot/connectors/deps";
+import { checkBound, rowsHash } from "pivot/plan/render";
+import { checkWindow, overlaps } from "pivot/plan/window";
+import { emptyMeans, readingOf } from "pivot/plan/proof";
+
+export { rowsHash } from "pivot/plan/render";
 
 export const CARD_PREVIEW_ROWS = 50;
 /** The longest a previewed card cell may be, in characters. The blob keeps every value whole. */
@@ -26,7 +30,7 @@ export function previewCell(v: Json): Json {
   return text.length > CARD_CELL_CHARS ? `${text.slice(0, CARD_CELL_CHARS - 1)}…` : v;
 }
 
-export interface RunnerDeps { registry: Registry; pool: ConnectorPool; observables: Observables }
+export type RunnerDeps = PlanDeps;
 
 export interface RunQueryInput {
   source: string; text: string; bound: Bound; window: TimeWindow; why: string; actor: Actor;
@@ -54,21 +58,7 @@ export type RunQueryResult =
 
 const RUNNER: Actor = { kind: "system", id: "runner" };
 
-export function rowsHash(columns: string[], rows: Json[][]): string {
-  return sha256Hex(canonical({ columns, rows }));
-}
-
 const firstLine = (err: unknown): string => (err instanceof Error ? err.message : String(err)).split("\n")[0]!;
-
-/** True when a quality note's range overlaps the window. An open end overlaps everything; an unreadable date is treated as overlapping. */
-function overlaps(note: { from: string | null; to: string | null }, w: TimeWindow): boolean {
-  const before = (a: string | null, b: string | null): boolean => {
-    if (a === null || b === null) return true;
-    const x = Date.parse(a), y = Date.parse(b);
-    return Number.isNaN(x) || Number.isNaN(y) || x < y;
-  };
-  return before(w.from, note.to) && before(note.from, w.to);
-}
 
 function titleOf(input: RunQueryInput, source: SourceManifest, pivot: PivotManifest | null, bound: Bound, trusted: boolean): string {
   if (input.title !== undefined) return input.title;
@@ -82,45 +72,6 @@ function titleOf(input: RunQueryInput, source: SourceManifest, pivot: PivotManif
 function refusedBy(err: unknown): RunQueryResult {
   if (err instanceof GuardError) return { status: "refused", reasons: [...err.violations] };
   return { status: "refused", reasons: [firstLine(err)] };
-}
-
-/** A copy of the bound values taken once, so the caller cannot change them while the query runs; or why they are refused. */
-function checkBound(bound: unknown): Bound | string {
-  if (!isPlainObject(bound)) return "the bound values must be a mapping of name to value";
-  const out: Bound = {};
-  for (const [name, v] of Object.entries(bound)) {
-    if (v === null || typeof v === "string") out[name] = v;
-    else if (typeof v === "number" && Number.isFinite(v)) out[name] = v;
-    else return `the value for {${name}} is ${typeof v === "number" ? "not a finite number" : `a ${Array.isArray(v) ? "list" : typeof v}`}; only strings, finite numbers and null can be bound`;
-  }
-  return out;
-}
-
-/** A copy of the window, or why it is refused: each end null or a UTC timestamp with milliseconds, and from no later than to. */
-function checkWindow(w: unknown): TimeWindow | string {
-  if (!isPlainObject(w) || !Object.hasOwn(w, "from") || !Object.hasOwn(w, "to")) return "the window must have a from and a to (each a timestamp or null)";
-  const { from, to } = w as { from: unknown; to: unknown };
-  for (const [end, v] of [["from", from], ["to", to]] as const) {
-    if (v !== null && !isUtcTimestamp(v)) return `the window's ${end} must be null or a UTC timestamp like 2026-11-20T00:00:00.000Z`;
-  }
-  if (typeof from === "string" && typeof to === "string" && Date.parse(from) > Date.parse(to)) return "the window's from is later than its to";
-  return { from: from as string | null, to: to as string | null };
-}
-
-/**
- * The card's one-line reading. For a pivot that asks an inventory it says what the answer proves: in the list, absent from a complete
- * list, or not seen in one that is not declared complete. An empty answer from a complete list that is not a proven negative (partial
- * coverage) says not seen, and the partial suffix says why.
- */
-function bodyOf(rows: number, coverage: Coverage, empty: EmptyMeans | null, inv: InventoryManifest | null): string {
-  let body = rows === 0 ? (empty === "proven-negative" ? "No rows · proven negative" : "No rows · not seen (not proof of absence)") : `${rows} rows`;
-  if (inv !== null) {
-    if (rows > 0) body += ` · in ${inv.title}`;
-    else if (empty === "proven-negative") body += ` · not in ${inv.title}, which is complete for ${inv.scope}`;
-    else if (!inv.complete) body += ` · ${inv.title} is not declared complete`;
-  }
-  if (coverage.kind === "partial") body += ` · partial: ${coverage.reason}${coverage.detail ? ` (${coverage.detail})` : ""}`;
-  return body;
 }
 
 /**
@@ -338,8 +289,7 @@ async function issueAndRun(session: CaseSession, deps: RunnerDeps, q: Issue): Pr
     const blob = session.blobs.put(out.raw, out.media);
     const hash = rowsHash(out.columns, out.rows);
     const rows = out.rows.length;
-    const proves = pivot?.empty_means === "proven-negative" && (inv === null || inv.complete);
-    const empty: EmptyMeans | null = rows > 0 ? null : proves && out.coverage.kind === "full" ? "proven-negative" : "not-seen";
+    const empty: EmptyMeans | null = emptyMeans(pivot, inv, out.coverage, rows);
     const outcome = out.coverage.kind === "partial" ? "partial" : rows === 0 ? "empty" : "answered";
     let cardId: string | null = null;
     const committed = session.commit((_state, ids) => {
@@ -355,7 +305,7 @@ async function issueAndRun(session: CaseSession, deps: RunnerDeps, q: Issue): Pr
         // what the pivot's result observed, read once from every row (not the preview)
         const observed = pivot === null ? null : observe(pivot, String(req.bound.value), out.columns, out.rows, deps.observables);
         const card: Card = {
-          id: cardId, title: q.title, body: bodyOf(rows, out.coverage, empty, inv), kind: "result",
+          id: cardId, title: q.title, body: readingOf(rows, out.coverage, empty, inv), kind: "result",
           made_by: q.actor.kind, query, columns: out.columns, column_types: deps.observables.columnTypes(out.columns, hints, out.rows),
           rows: out.rows.slice(0, CARD_PREVIEW_ROWS).map((row) => row.map(previewCell)), row_count: rows, coverage: out.coverage, empty, marking: source.marking,
           source: source.id, step: q.step, subgoal: q.subgoal, why: q.why, event_time: observed?.span.first ?? null,

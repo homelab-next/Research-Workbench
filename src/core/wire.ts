@@ -5,8 +5,8 @@ import type { Json } from "./canonical";
 import type { RunState } from "./state";
 import type { EmptyMeans, Marking, ModelChoice, Observable, TimeWindow, Where } from "./types";
 
-/** The id of the playbook the server makes on the spot for "does it belong?"; no manifest may take it. */
-export const BELONGS_ID = "does-it-belong";
+/** The id of the playbook the server makes on the spot for "does it belong?"; no manifest may take it. pivot owns the name. */
+export { BELONGS_ID } from "pivot/types";
 
 export interface Me { user: string; role: "analyst" | "requester" | "leader"; origin: string; markings: Marking[]; policy: Record<Marking, Where[]>; problems: string[] }
 export interface CaseSummaryView { id: string; title: string; marking: Marking; created_ts: string; run_status: RunState["status"]; phase: string | null; incoming: number; kept: number }

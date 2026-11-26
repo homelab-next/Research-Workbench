@@ -6,6 +6,7 @@ import { Workbench } from "../../src/core/workbench";
 import type { CaseSession } from "../../src/core/session";
 import type { Actor, TimeWindow } from "../../src/core/types";
 import { Registry } from "../../src/modules/registry";
+import { loadRegistry } from "../../src/modules/registry-record";
 import type { PivotManifest } from "../../src/modules/registry";
 import { Observables } from "../../src/modules/observables";
 import { Secrets } from "../../src/modules/secrets";
@@ -51,7 +52,7 @@ types:
 pivots:
   - { id: ad, title: Domains of an address, from: address, to: domain, source: dns, query: "select domain from dns where address = {value}", weight: 0, yields: { domain: domain } }
 `);
-  const registry = Registry.load([{ path: root, trusted: true, credentials: [] }]);
+  const registry = loadRegistry([{ path: root, trusted: true, credentials: [] }]);
   p = registry.pivot("ad")!;
   pool = new ConnectorPool({ secrets: new Secrets({}, null), observables });
   deps = { registry, pool, observables };
@@ -63,15 +64,6 @@ afterEach(() => {
   pool.closeAll();
   try { wb.close(); } catch { /* already closed */ }
   rmSync(dir, { recursive: true, force: true });
-});
-
-test("bindPivot returns the template and the value", () => {
-  expect(bindPivot(p, "192.0.2.17", observables)).toEqual({ text: p.query, bound: { value: "192.0.2.17" } });
-});
-
-test("a value that is not of the pivot's type is refused", () => {
-  expect(() => bindPivot(p, "192.0.2.17' OR '1'='1", observables)).toThrow(PivotError);
-  expect(() => bindPivot(p, "example.org", observables)).toThrow(PivotError);
 });
 
 test("runPivot runs through the runner with the pivot attached", async () => {
@@ -89,17 +81,4 @@ test("an unknown pivot is refused", async () => {
   const bad = await runPivot(s, deps, { pivot: "ad", value: "example.org", window: win, why: "w", actor: human });
   expect(bad.status).toBe("refused");
   expect(s.entries().some((e) => e.type === "query.issued")).toBe(false);
-});
-
-test("yielded returns distinct values of the target type only", () => {
-  const result: RunQueryResult = {
-    status: "done", query: "q1", card: null, outcome: "answered", rows: 5, rows_hash: "h", coverage: { kind: "full" },
-    columns: ["domain", "other"],
-    data: [["example.org", "x"], ["example.org", "y"], [null, "z"], ["not a domain", "w"], ["a.example.net", "v"]],
-  };
-  expect(yielded(p, result, observables)).toEqual([{ type: "domain", value: "example.org" }, { type: "domain", value: "a.example.net" }]);
-  // an unrelated column whose values match the type is not read
-  const other: RunQueryResult = { ...result, columns: ["name", "domain"], data: [["example.net", null], ["x.example.org", "example.org"]] };
-  expect(yielded(p, other, observables)).toEqual([{ type: "domain", value: "example.org" }]);
-  expect(yielded(p, { status: "refused", reasons: [] }, observables)).toEqual([]);
 });

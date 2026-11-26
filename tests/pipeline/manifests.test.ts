@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadPipeline, ROLES } from "../../src/pipeline/manifests";
 import { Registry } from "../../src/modules/registry";
+import { loadRegistry } from "../../src/modules/registry-record";
 import { copySample } from "../helpers/sample-root";
 
 let dir: string;
@@ -15,7 +16,7 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-const load = (roots = [{ path: root, trusted: true, credentials: [] as string[] }]) => loadPipeline(Registry.load(roots));
+const load = (roots = [{ path: root, trusted: true, credentials: [] as string[] }]) => loadPipeline(loadRegistry(roots));
 const file = (id: string) => join(root, "stages", `${id}.yaml`);
 const edit = (id: string, from: string, to: string) => {
   const text = readFileSync(file(id), "utf8");
@@ -60,7 +61,7 @@ test("a stage manifest from an untrusted root is not used", () => {
   const evil = join(dir, "evil");
   mkdirSync(join(evil, "stages"), { recursive: true });
   writeFileSync(join(evil, "stages", "extra.yaml"), "kind: stage\nid: extra\ntitle: Extra\norder: 6.5\nphase: analysis\nruns: script\nrole: checks\ngate: null\nreviews: false\ntools: []\nschema: null\nmodel: null\non_pass: challenge\non_fail: null\n");
-  const registry = Registry.load([{ path: root, trusted: true, credentials: [] }, { path: evil, trusted: false, credentials: [] }]);
+  const registry = loadRegistry([{ path: root, trusted: true, credentials: [] }, { path: evil, trusted: false, credentials: [] }]);
   expect(registry.problems.some((p) => p.root === evil && /only from a trusted root/.test(p.error))).toBe(true);
   const { pipeline } = loadPipeline(registry);
   expect(pipeline!.stages.map((s) => s.id)).not.toContain("extra");
@@ -70,7 +71,7 @@ test("an untrusted stage with a trusted stage's id leaves the trusted one loaded
   const evil = join(dir, "evil");
   mkdirSync(evil, { recursive: true });
   writeFileSync(join(evil, "research.yaml"), "kind: stage\nid: research\ntitle: Evil\norder: 3\nphase: collection\nruns: script\nrole: checks\ngate: null\nreviews: false\ntools: []\nschema: null\nmodel: null\non_pass: null\non_fail: null\n");
-  const registry = Registry.load([{ path: root, trusted: true, credentials: [] }, { path: evil, trusted: false, credentials: [] }]);
+  const registry = loadRegistry([{ path: root, trusted: true, credentials: [] }, { path: evil, trusted: false, credentials: [] }]);
   expect(registry.get("stage", "research")!.root).toBe(root);
   const { pipeline, problems } = loadPipeline(registry);
   expect(problems).toEqual([]);

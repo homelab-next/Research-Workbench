@@ -4,20 +4,11 @@ import type { Bound } from "./connectors";
 import type { Observables } from "./observables";
 import type { PivotManifest } from "./registry";
 import { runQuery } from "./runner";
+import { bindPivot, PivotError, yielded as yieldedOf } from "pivot/plan/pivots";
 import type { RunnerDeps, RunQueryResult } from "./runner";
 
-export class PivotError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "PivotError";
-  }
-}
-
-/** The pivot's query template with the value to bind. Throws PivotError unless the value is of the pivot's `from` type. */
-export function bindPivot(pivot: PivotManifest, value: string, observables: Observables): { text: string; bound: Bound } {
-  if (!observables.matches(pivot.from, value)) throw new PivotError(`pivot ${pivot.id} takes a ${pivot.from}; the value given is not one`);
-  return { text: pivot.query, bound: { value } };
-}
+// bindPivot and PivotError are pivot's; runPivot stays here, where it calls the runner.
+export { bindPivot, PivotError } from "pivot/plan/pivots";
 
 export interface PivotInput {
   pivot: string; value: string; window: TimeWindow; why: string; actor: Actor;
@@ -49,18 +40,5 @@ export async function runPivot(session: CaseSession, deps: RunnerDeps, input: Pi
  * (the registry refuses a pivot with none). Nulls, non-strings and values that fail the type's pattern are dropped.
  */
 export function yielded(pivot: PivotManifest, result: RunQueryResult, observables: Observables): Observable[] {
-  if (result.status !== "done") return [];
-  const named = result.columns.map((c, i) => ({ c, i })).filter(({ c }) => Object.hasOwn(pivot.yields, c) && pivot.yields[c] === pivot.to);
-  const cols = named.map((x) => x.i);
-  const seen = new Set<string>();
-  const out: Observable[] = [];
-  for (const row of result.data) {
-    for (const i of cols) {
-      const v = row[i];
-      if (typeof v !== "string" || seen.has(v) || !observables.matches(pivot.to, v)) continue;
-      seen.add(v);
-      out.push({ type: pivot.to, value: v });
-    }
-  }
-  return out;
+  return result.status !== "done" ? [] : yieldedOf(pivot, result.columns, result.data, observables);
 }

@@ -7,6 +7,7 @@ import { fitProblem } from "../../src/agents/pack";
 import { loadProviders } from "../../src/agents/providers";
 import { loadConfig } from "../../src/modules/config";
 import { Registry } from "../../src/modules/registry";
+import { loadRegistry } from "../../src/modules/registry-record";
 import { Secrets } from "../../src/modules/secrets";
 import { loadChecks, loadPipeline } from "../../src/pipeline/manifests";
 import { configFor, newRoot } from "../../scripts/new-root";
@@ -26,7 +27,7 @@ test("the new root loads whole, with every agent stage on the local model and no
   const root = fresh();
   const files = newRoot(root, { base_url: "http://127.0.0.1:1234/v1", model: "example/model-a" });
   expect(files).toEqual([...files].sort());
-  const registry = Registry.load([{ path: root, trusted: true, credentials: [] }]);
+  const registry = loadRegistry([{ path: root, trusted: true, credentials: [] }]);
   expect(registry.problems).toEqual([]);
   const { pipeline, problems } = loadPipeline(registry);
   expect(problems).toEqual([]);
@@ -152,7 +153,7 @@ test("the model manifest carries the Qwen-recommended sampling and a 16384-token
   const body = Bun.YAML.parse(readFileSync(join(root, "models", "local.yaml"), "utf8")) as Record<string, unknown>;
   expect(body.max_output_tokens).toBe(16384);
   expect(body.sampling).toEqual({ temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0, presence_penalty: 1.5 });
-  const registry = Registry.load([{ path: root, trusted: true, credentials: [] }]);
+  const registry = loadRegistry([{ path: root, trusted: true, credentials: [] }]);
   const { providers, problems } = loadProviders(registry, new Secrets({}, null));
   expect([...registry.problems, ...problems]).toEqual([]);
   expect(providers.get("local")!.max_output_tokens).toBe(16384);
@@ -161,7 +162,7 @@ test("the model manifest carries the Qwen-recommended sampling and a 16384-token
 test("the new root's stages and model carry the settings the first real run arrived at, and they fit 65536 tokens in one slot", () => {
   const root = fresh();
   newRoot(root, { base_url: "http://127.0.0.1:1234/v1", model: "example/model-a" });
-  const { pipeline } = loadPipeline(Registry.load([{ path: root, trusted: true, credentials: [] }]));
+  const { pipeline } = loadPipeline(loadRegistry([{ path: root, trusted: true, credentials: [] }]));
   const by = Object.fromEntries(pipeline!.stages.filter((s) => s.runs === "agent").map((s) => [s.role, [s.max_output_tokens, s.max_turns]]));
   expect(by).toEqual({ frame: [8192, 8], plan: [32768, 16], research: [16384, 24], assemble: [32768, 30], evaluate: [16384, 16], challenge: [16384, 16], publish: [16384, 8] });
   const model = Bun.YAML.parse(readFileSync(join(root, "models", "local.yaml"), "utf8")) as Record<string, unknown>;
