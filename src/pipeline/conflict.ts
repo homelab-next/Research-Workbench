@@ -151,3 +151,20 @@ export function reopens(point: string, c: ConflictState): boolean {
 }
 
 const pauseReason = (reasons: string[]): string => `${reasons.join(". ")}. The person rules on it in the Narrative lens: follow one reviewer, or write a note.`;
+
+/**
+ * What a reviewer's send-back must also say when its points name a card that cannot be cited: an empty card that is not a proven negative over full
+ * coverage proves nothing (the tools refuse to cite it). Without this, a reviewer that asks for such a card to be cited sends the draft back for good
+ * (dev CASE-3: Evaluate asked f10 to cite the empty flow and DNS cards). Null when no point names one.
+ */
+export function uncitableNote(state: Readonly<CaseState>, points: readonly string[]): string | null {
+  const ids = Object.keys(state.cards).filter((id) => {
+    const c = state.cards[id]!;
+    if (c.place === "discarded" || c.row_count !== 0) return false;
+    if (c.empty === "proven-negative" && c.coverage !== null && c.coverage.kind === "full") return false;
+    return points.some((p) => new RegExp(`(?<![\\w])${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w])`, "i").test(p));
+  }).sort();
+  if (ids.length === 0) return null;
+  const list = ids.join(", ");
+  return `Note: ${list} returned no rows and prove nothing (not a proven negative over full coverage), so ${ids.length === 1 ? "it cannot" : "they cannot"} be cited. A claim that rests on ${ids.length === 1 ? "its" : "their"} absence is not supported: weaken or drop it, and name ${list} under gaps_and_limits.`;
+}

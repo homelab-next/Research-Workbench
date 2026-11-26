@@ -1,7 +1,7 @@
 import type { CaseState, StageState } from "../core/state";
 import { blockers, latestDraft, publishable } from "../core/state";
 import type { RunHold } from "../core/types";
-import { reviewConflict } from "./conflict";
+import { pointsOf, reviewConflict, uncitableNote } from "./conflict";
 import type { ConflictFound } from "./conflict";
 import type { Pipeline, StageManifest } from "./manifests";
 
@@ -80,6 +80,11 @@ export function nextStep(state: Readonly<CaseState>, pipeline: Pipeline, opts: {
       if (conflict !== null && conflict.kind === "conflict") return { kind: "pause", reason: conflict.reason, conflicts: conflict.fresh };
       if (conflict !== null && conflict.kind === "only_ruled") return { kind: "pause", reason: conflict.reason, hold: { kind: "ruled", stage: st.id } };
       if (conflict !== null) reason = conflict.reason;
+      if (m.role === "evaluate" || m.role === "challenge") {
+        const d = latestDraft(state as CaseState);
+        const note = d === null ? null : uncitableNote(state, pointsOf(state, m.role, d.hash));
+        if (note !== null) reason = `${reason} ${note}`;
+      }
       const edge = `${st.id}>${m.on_fail}`;
       const n = Object.hasOwn(run.sendbacks, edge) ? run.sendbacks[edge]! : 0;
       // the cap counts since a person's resume past it last set the count aside

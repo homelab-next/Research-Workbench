@@ -7,7 +7,7 @@ import type { CaseState } from "../../src/core/state";
 import type { Draft, Finding, Plan, Product, ReviewConflict, StageDef } from "../../src/core/types";
 import { firstUnpassedReview, nextStep, SEND_BACK_CAP } from "../../src/pipeline/next";
 import type { Pipeline, StageManifest } from "../../src/pipeline/manifests";
-import { EntryBuilder } from "../helpers/entries";
+import { card, EntryBuilder } from "../helpers/entries";
 
 const sm = (id: string, order: number, over: Partial<StageManifest> = {}): StageManifest => ({
   id, title: id[0]!.toUpperCase() + id.slice(1), phase: null, runs: "script", gate: null, reviews: false, model: null,
@@ -418,4 +418,23 @@ test("the send-back cap per edge stays three; a person's resume past it grants t
   expect(nextStep(resumed(0), pipeline)).toMatchObject({ kind: "start", stage: "assemble", sent_back: { count: 4 } });
   expect(nextStep(resumed(2), pipeline)).toMatchObject({ kind: "start", stage: "assemble", sent_back: { count: 6 } });
   expect(nextStep(resumed(3), pipeline)).toEqual({ kind: "pause", reason: "Checks has sent work back to Assemble 3 times. Last reason: no good", hold: { kind: "send_back", edge: "checks>assemble" } });
+});
+
+test("a reviewer that names an empty card proving nothing sends back a note that it cannot be cited and its absence is a gap", () => {
+  // dev CASE-3: Evaluate asked f10 to cite c2 (flows) and c4 (DNS), both empty and not proven negatives; the tools refuse to cite them
+  const cards = (b: EntryBuilder) => {
+    b.add("card.created", { card: card("c2", { rows: [], row_count: 0, empty: "not-seen" }) });
+    b.add("card.created", { card: card("c4", { rows: [], row_count: 0, coverage: { kind: "partial", reason: "timeout" }, empty: "proven-negative" }) });
+    b.add("card.created", { card: card("c5", { rows: [], row_count: 0, empty: "proven-negative" }) });
+  };
+  const cites = { check: "citation support", where: "f26", message: "f26 rests on c2 and c4 and c5 but cites only c1" };
+  const step = nextStep(disagreement([cites], cards), roled, { likelihood: LIKELIHOOD });
+  expect(step).toMatchObject({ kind: "start", stage: "assemble", sent_back: { from: "evaluate" } });
+  const reason = (step as { sent_back: { reason: string } }).sent_back.reason;
+  expect(reason).toStartWith(cites.message);
+  expect(reason).toContain("Note: c2, c4 returned no rows and prove nothing (not a proven negative over full coverage), so they cannot be cited. A claim that rests on their absence is not supported: weaken or drop it, and name c2, c4 under gaps_and_limits.");
+  // a proven negative over full coverage is citable: c5 is not in the note; and no note when no point names such a card
+  expect(reason).not.toContain("c5 returned");
+  const plain = nextStep(disagreement([{ check: "support", where: "f26", message: "f26 cites too little" }], cards), roled, { likelihood: LIKELIHOOD });
+  expect((plain as { sent_back: { reason: string } }).sent_back.reason).toBe("f26 cites too little");
 });
