@@ -507,3 +507,59 @@ test("a source id defined in two roots loads from neither, and a pivot naming it
   expect(r.source("s")).toBeNull();
   expect(r.pivot("p")).toBeNull();
 });
+
+// ---------- 6b: a pivot's time columns ----------
+const TIMED = (times: string): string => `kind: pivots
+pivots:
+  - id: p
+    from: address
+    to: domain
+    source: dns-logs
+    query: "select name, min(ts) as first_seen, max(ts) as last_seen, count(*) as events, ts from dns where client = {value} group by name"
+    yields: { name: domain }
+${times === "" ? "" : `    ${times}\n`}`;
+const load = (times: string): Registry => Registry.load([root({ ...GOOD, "pivots.yaml": TIMED(times) })]);
+
+test("a pivot may declare a span or points, with an optional count", () => {
+  expect(load('times: { first: first_seen, last: last_seen, count: events }').pivot("p")!.times).toEqual({ kind: "span", first: "first_seen", last: "last_seen", count: "events" });
+  expect(load("times: { at: ts }").pivot("p")!.times).toEqual({ kind: "points", at: "ts", count: null });
+  expect(load("").pivot("p")!.times).toBeNull();
+  expect(load("times: { at: ts }").problems).toEqual([]);
+});
+
+test("each wrong times declaration is rejected with its reason", () => {
+  for (const [times, reason] of [
+    ["{ first: a }", 'pivot "p": times needs first and last together, or at alone'],
+    ["{ first: a, last: b, at: c }", 'pivot "p": times needs first and last together, or at alone'],
+    ["{ first: a, last: a }", 'pivot "p": times names the column "a" twice'],
+    ["{ at: name }", 'pivot "p": times column "name" is a yielded value'],
+    ["{ at: when }", 'pivot "p": times column "when" is not in its query'],
+  ] as const) {
+    const r = load(`times: ${times}`);
+    expect(r.pivot("p")).toBeNull();
+    expect(r.problems.map(p => p.error)).toEqual([reason]);
+  }
+});
+
+test("a column named only as part of a longer word is not in the query", () => {
+  const r = load("times: { at: first }");
+  expect(r.problems.map(p => p.error)).toEqual(['pivot "p": times column "first" is not in its query']);
+});
+
+test("a wrong times declaration rejects only that pivot; the others in the file load", () => {
+  const text = `${TIMED("times: { first: a }")}${PIVOTS.replace("kind: pivots\npivots:\n", "")}`;
+  const r = Registry.load([root({ ...GOOD, "pivots.yaml": text })]);
+  expect(r.pivot("address_to_domains")).not.toBeNull();
+  expect(r.pivot("p")).toBeNull();
+});
+
+test("on an http source a times column must be one of the endpoint's columns", () => {
+  const rep = `kind: source\nid: rep\ntitle: T\nconnector: http\nlocation: https://rep.example.com\nmarking: "TLP:GREEN"\nwhere: network\nendpoints:\n  - { name: lookup, method: GET, path: /x, columns: [name, seen] }\n`;
+  const pivots = (at: string): string => `kind: pivots\npivots:\n  - { id: p, from: address, to: domain, source: rep, query: lookup, yields: { name: domain }, times: { at: ${at} } }\n`;
+  const good = Registry.load([root({ ...GOOD, "sources/rep.yaml": rep, "pivots.yaml": pivots("seen") })]);
+  expect(good.problems).toEqual([]);
+  expect(good.pivot("p")!.times).toEqual({ kind: "points", at: "seen", count: null });
+  const bad = Registry.load([root({ ...GOOD, "sources/rep.yaml": rep, "pivots.yaml": pivots("when") })]);
+  expect(bad.pivot("p")).toBeNull();
+  expect(bad.problems.map(p => p.error)).toEqual(['pivot "p": times column "when" is not a column of the endpoint lookup']);
+});

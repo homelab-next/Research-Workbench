@@ -45,12 +45,12 @@ test("read_card gives the exact query, its source hash and the result's hash", a
   const v = view(r);
   const q = f.s.state.queries.q1!;
   const issued = f.s.entries().find((e) => e.type === "query.issued")!;
-  expect(v).toMatchObject({ id: "c1", columns: ["name"], coverage: { kind: "full" }, empty: null, marking: "TLP:GREEN", quality_notes: ["resolver logging was duplicated"] });
+  expect(v).toMatchObject({ id: "c1", columns: ["name", "first_seen", "last_seen", "events"], coverage: { kind: "full" }, empty: null, marking: "TLP:GREEN", quality_notes: ["resolver logging was duplicated"] });
   expect((v.rows as Json[]).length).toBeLessThanOrEqual(20);
   expect(v.card).toEqual([{ id: "c1", title: f.s.state.cards.c1!.title }]);
   expect(v.provenance).toEqual({
     query: "q1", source: "dns-logs", source_hash: f.sample.registry.source("dns-logs")!.hash,
-    text: "select distinct name from dns where answer = $value and ts >= $window_from and ts < $window_to",
+    text: "select name, min(ts) as first_seen, max(ts) as last_seen, count(*) as events from dns where answer = $value and ts >= $window_from and ts < $window_to group by name order by first_seen, name",
     bound: { value: START }, window: { ...WINDOW }, why: "who talked to it", by: "researcher-g1", issued: issued.ts,
     result_sha256: q.result!.blob, rows_hash: q.rows_hash,
   });

@@ -15,6 +15,15 @@ export type Actor =
 export interface BlobRef { blob: string; bytes: number; media?: string }
 export interface TimeWindow { from: string | null; to: string | null }
 export interface Observable { type: string; value: string }
+/** What a result says about when a value was seen: the earliest and latest time (UTC, `YYYY-MM-DDTHH:MM:SS.mmmZ`) and how many times; null when unknown. */
+export interface Span { first: string | null; last: string | null; count: number | null }
+/** A value a pivot found, with when it was seen; `points` (time, count) only for a pivot that declares the points shape. */
+export interface Sighting extends Span { type: string; value: string; points: [string, number][] }
+/** What a pivot's result observed, from every row: the value it ran on, the span over every row, and what it found (at most 100; `more` past that). */
+export interface Observed { pivot: string; from: Observable; span: Span; found: Sighting[]; more: number; unread: number }
+/** At most this many sightings on a card, and this many points on a sighting (design 6b §5.4). */
+export const MAX_SIGHTINGS = 100;
+export const MAX_POINTS = 24;
 export type Coverage =
   | { kind: "full" }
   | { kind: "partial"; reason: "row_limit" | "timeout" | "window_clipped" | "source_error" | "budget"; detail?: string };
@@ -44,6 +53,8 @@ export interface Card {
   why: string;
   event_time: string | null;
   quality_notes: string[];
+  /** What the pivot's result observed; only on a card made by a pivot's own query (from 6b). */
+  observed?: Observed;
 }
 
 // ---------- plans ----------

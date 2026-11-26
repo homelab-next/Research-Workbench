@@ -31,11 +31,15 @@ export interface SourceManifest {
   cost: { weight: number; unit: string }; limits: { max_rows: number; timeout_ms: number };
   quality: string; quality_notes: QualityNote[]; tables: TableManifest[]; endpoints: EndpointManifest[];
 }
+/** The columns of a pivot's result that say when a value was seen: a span (`first`, `last`) or points (`at`), each with an optional count. */
+export type PivotTimes = { kind: "span"; first: string; last: string; count: string | null } | { kind: "points"; at: string; count: string | null };
 export interface PivotManifest {
   id: string; title: string; hash: string; from: string; to: string; source: string; query: string; needs_window: boolean;
   weight: number | null; empty_means: "proven-negative" | "not-seen"; yields: Record<string, string>;
   /** The inventory the pivot looks the value up in, if any; its completeness decides what an empty answer means. */
   inventory: string | null;
+  /** The pivot's time columns, if it declares them. */
+  times: PivotTimes | null;
 }
 
 const str: Schema = { type: "string" };
@@ -134,6 +138,7 @@ export const PIVOTS_SCHEMA: Schema = {
           empty_means: { type: "string", enum: [...EMPTY_MEANS] },
           yields: { type: "object", additionalProperties: str },
           inventory: name,
+          times: { type: "object", additionalProperties: false, properties: { first: name, last: name, at: name, count: name } },
         },
       },
     },
@@ -246,6 +251,21 @@ export function toPivot(item: Record<string, Json>, hash: string): PivotManifest
   return {
     id: i.id, title: i.title ?? i.id, hash, from: i.from, to: i.to, source: i.source, query: i.query,
     needs_window: i.needs_window ?? false, weight: i.weight ?? null, empty_means: i.empty_means ?? "not-seen", yields: i.yields ?? {},
-    inventory: i.inventory ?? null,
+    inventory: i.inventory ?? null, times: toTimes(i.id, i.times),
   };
+}
+
+/** A pivot's times declaration: first and last together, or at alone; count optional. Throws ManifestError for any other shape. */
+function toTimes(id: string, t: Record<string, string> | undefined): PivotTimes | null {
+  if (t === undefined) return null;
+  const count = t.count ?? null;
+  if (t.at !== undefined && t.first === undefined && t.last === undefined) return { kind: "points", at: t.at, count };
+  if (t.at === undefined && t.first !== undefined && t.last !== undefined) return { kind: "span", first: t.first, last: t.last, count };
+  throw new ManifestError(`pivot "${id}": times needs first and last together, or at alone`);
+}
+
+/** The columns a times declaration names, in declaration order. */
+export function timesColumns(t: PivotTimes): string[] {
+  const named = t.kind === "span" ? [t.first, t.last] : [t.at];
+  return t.count === null ? named : [...named, t.count];
 }

@@ -98,6 +98,7 @@ pivots:
   - { id: seen, title: Seen, from: address, to: address, source: flows, query: "select dst from flows where src = {value}", empty_means: not-seen, yields: { dst: address } }
   - { id: paid_rep, title: Paid reputation, from: address, to: address, source: rep, query: reputation, empty_means: not-seen, yields: { address: address } }
   - { id: free_rep, title: Free reputation, from: address, to: address, source: rep, query: reputation, weight: 0, empty_means: not-seen, yields: { address: address } }
+  - { id: spans, title: Peers with times, from: address, to: address, source: flows, query: "select dst, min(ts) as first_seen, max(ts) as last_seen from flows where src = {value} group by dst", empty_means: not-seen, yields: { dst: address }, times: { first: first_seen, last: last_seen } }
   - { id: windowed, title: Windowed peers, from: address, to: address, source: flows, query: "select dst from flows where src = {value} and ts >= {window.from} and ts < {window.to}", needs_window: true, empty_means: proven-negative, yields: { dst: address } }
 `,
 });
@@ -849,4 +850,36 @@ test("a pivot with no inventory keeps its card body and its query has no invento
     expect((await card("address_to_domains", "203.0.113.250")).body).toBe("No rows · not seen (not proof of absence)");
     expect(Object.hasOwn(lastIssued().payload, "inventory")).toBe(false);
   });
+});
+
+// ---------- 6b: what a pivot's result observed ----------
+const cardOf = (r: Awaited<ReturnType<typeof runQuery>>): Card => {
+  if (r.status !== "done" || r.card === null) throw new Error(JSON.stringify(r));
+  return (s.entries().find((e) => e.type === "card.created" && (e.payload as { card: Card }).card.id === r.card)!.payload as { card: Card }).card;
+};
+
+test("a pivot's card carries what the result observed, from every row, and its event time", async () => {
+  const pivot = registry.pivot("spans")!;
+  expect(pivot.times).toEqual({ kind: "span", first: "first_seen", last: "last_seen", count: null });
+  const rows = Array.from({ length: 60 }, (_, i) => [`198.51.100.${i}`, `2026-01-${String(2 + (i % 20)).padStart(2, "0")}T00:00:00.000Z`, "2026-01-25T00:00:00.000Z"]);
+  const r = await runQuery(s, stubDeps({ columns: ["dst", "first_seen", "last_seen"], rows }), { ...base, text: pivot.query, pivot });
+  const c = cardOf(r);
+  expect(c.observed!.found.length).toBe(60); expect(c.rows.length).toBe(50);
+  expect(c.event_time).toBe(c.observed!.span.first);
+  expect(c.observed).toMatchObject({ pivot: "spans", from: { type: "address", value: "192.0.2.17" }, span: { first: "2026-01-02T00:00:00.000Z", last: "2026-01-25T00:00:00.000Z", count: null }, more: 0, unread: 0 });
+  expect(s.state.cards[c.id]!.observed).toEqual(c.observed!);
+});
+
+test("a pivot without times still gives its card the values it found, with no times", async () => {
+  const pivot = registry.pivot("peers")!;
+  const r = await runQuery(s, deps, { ...base, text: pivot.query, pivot });
+  const c = cardOf(r);
+  expect(c.observed!.found.map((f) => f.value)).toEqual(["198.51.100.0", "198.51.100.1", "198.51.100.2"]);
+  expect(c.observed!.span).toEqual({ first: null, last: null, count: null });
+  expect(c.event_time).toBeNull();
+});
+
+test("a card from an ad-hoc query has no observed and no event time", async () => {
+  const r = await runQuery(s, deps, base);
+  expect("observed" in cardOf(r)).toBe(false); expect(cardOf(r).event_time).toBeNull();
 });

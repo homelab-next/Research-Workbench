@@ -10,6 +10,7 @@ import type { Bound, Connector, ConnectorPool, QueryOutcome, QueryRequest } from
 import type { Observables } from "./observables";
 import type { InventoryManifest } from "./inventories";
 import { pivotWeight } from "./manifests";
+import { observe } from "./observe";
 import type { PivotManifest, Registry, SourceManifest } from "./registry";
 import { GuardError } from "./sqlguard";
 
@@ -351,12 +352,15 @@ async function issueAndRun(session: CaseSession, deps: RunnerDeps, q: Issue): Pr
         for (const t of source.tables) for (const c of t.columns) if (c.type !== null && !Object.hasOwn(hints, c.name)) hints[c.name] = c.type;
         Object.assign(hints, pivot?.yields ?? {});
         cardId = ids.next("card");
+        // what the pivot's result observed, read once from every row (not the preview)
+        const observed = pivot === null ? null : observe(pivot, String(req.bound.value), out.columns, out.rows, deps.observables);
         const card: Card = {
           id: cardId, title: q.title, body: bodyOf(rows, out.coverage, empty, inv), kind: "result",
           made_by: q.actor.kind, query, columns: out.columns, column_types: deps.observables.columnTypes(out.columns, hints, out.rows),
           rows: out.rows.slice(0, CARD_PREVIEW_ROWS).map((row) => row.map(previewCell)), row_count: rows, coverage: out.coverage, empty, marking: source.marking,
-          source: source.id, step: q.step, subgoal: q.subgoal, why: q.why, event_time: null,
+          source: source.id, step: q.step, subgoal: q.subgoal, why: q.why, event_time: observed?.span.first ?? null,
           quality_notes: source.quality_notes.filter((n) => overlaps(n, req.window)).map((n) => n.id),
+          ...(observed === null ? {} : { observed }),
         };
         // a card the fold would refuse must not leave a done query with no card: refuse the whole commit instead
         if (!isCard(card)) throw new Error("the card built from the result is malformed");

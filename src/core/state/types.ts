@@ -76,6 +76,8 @@ export interface JobState {
 export interface QueryState {
   id: string; source: string; text: string; why: string; window: TimeWindow; by: Actor;
   step: string | null; verifies: string | null; purpose: QueryPurpose;
+  /** The pivot the query ran, and the value it was bound to (when that is a string); null otherwise. */
+  pivot: string | null; value: string | null;
   issued_seq: number; issued_ts: string;
   status: "running" | "done" | "failed";
   rows: number | null; rows_hash: string | null; coverage: Coverage | null; result: BlobRef | null;

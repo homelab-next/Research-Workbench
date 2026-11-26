@@ -208,9 +208,9 @@ test("the planted story is in the data", async () => {
   const sign = await pivot("account_to_signin_addresses", "j.doe");
   expect(sign.status === "done" && sign.data.map((r) => r[0]).sort()).toEqual(["192.0.2.17", "203.0.113.50"]);
   const dns = await pivot("address_to_domains", "198.51.100.77");
-  expect(dns.status === "done" && dns.data).toEqual([["cdn-update.example.org"]]);
+  expect(dns.status === "done" && dns.data).toEqual([["cdn-update.example.org", "2026-11-20T03:16:00.000Z", "2026-11-23T21:16:00.000Z", 16]]);
   const clients = await pivot("domain_to_clients", "cdn-update.example.org");
-  expect(clients.status === "done" && clients.data).toEqual([["192.0.2.17"]]);
+  expect(clients.status === "done" && clients.data).toEqual([["192.0.2.17", "2026-11-20T03:16:00.000Z", "2026-11-23T21:16:00.000Z", 16]]);
   const db = new Database(join(root, "data", "flows.sqlite"), { readonly: true });
   try {
     const rows = db.query("select src, dport, bytes, ts from flows where dst = '198.51.100.77' order by ts").all() as { src: string; dport: number; bytes: number; ts: string }[];
@@ -243,4 +243,22 @@ test("ensureSampleData generates once and then leaves the data alone", () => {
   ensureSampleData(r);
   expect(statSync(path).mtimeMs).toBe(stamp);
   expect(readFileSync(join(r, "data", "dns.jsonl"), "utf8")).toBe("kept\n");
+});
+
+test("the sample's windowed pivots give observed times", async () => {
+  const r = await pivot("address_to_domains", "198.51.100.77");
+  if (r.status !== "done" || r.card === null) throw new Error(JSON.stringify(r));
+  const c = s.state.cards[r.card]!;
+  expect(c.columns).toEqual(["name", "first_seen", "last_seen", "events"]);
+  expect(c.observed!.found.length).toBeGreaterThan(0);
+  expect(c.observed!.found.every((f) => f.first !== null && f.last !== null && f.count !== null && f.first <= f.last)).toBe(true);
+  expect(c.observed!.unread).toBe(0);
+  expect(c.event_time).toBe(c.observed!.span.first);
+  const p = await pivot("address_to_internal_peers", "198.51.100.77");
+  if (p.status !== "done" || p.card === null) throw new Error(JSON.stringify(p));
+  const peers = s.state.cards[p.card]!.observed!;
+  expect(peers.found.length).toBeGreaterThan(0);
+  expect(peers.found.every((f) => f.points.length > 0)).toBe(true);
+  expect(peers.unread).toBe(0);
+  for (const id of ["domain_to_clients", "asset_to_accounts", "account_to_signin_addresses"]) expect(registry.pivot(id)!.times).toMatchObject({ kind: "span", count: "events" });
 });

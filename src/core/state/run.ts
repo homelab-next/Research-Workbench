@@ -118,8 +118,11 @@ function applyQuery(s: CaseState, entry: Entry): CaseState {
         return malformed(s, entry);
       }
       if (Object.hasOwn(s.queries, query)) return s;
+      const bound = entry.payload.bound as unknown;
+      const value = isObj(bound) && isStr(bound.value) ? bound.value : null;
+      const pivot = isStr(entry.payload.pivot) ? entry.payload.pivot : null;
       const q: QueryState = {
-        id: query, source, text, why, window, by: entry.actor, step, verifies, purpose,
+        id: query, source, text, why, window, by: entry.actor, step, verifies, purpose, pivot, value,
         issued_seq: entry.seq, issued_ts: entry.ts, status: "running",
         rows: null, rows_hash: null, coverage: null, result: null, error: null, card: null,
       };

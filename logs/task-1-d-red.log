@@ -1,0 +1,22 @@
+bun test v1.3.14 (0d9b296a)
+
+tests/core/state-cards.test.ts:
+
+# Unhandled error between tests
+-------------------------------
+SyntaxError: Export named 'isObserved' not found in module '/home/ansible/Research-Workbench/src/core/state/shapes.ts'.
+-------------------------------
+
+
+tests/core/state-observed.test.ts:
+
+# Unhandled error between tests
+-------------------------------
+error: Cannot find module '../../src/core/state/observed' from '/home/ansible/Research-Workbench/tests/core/state-observed.test.ts'
+-------------------------------
+
+
+ 0 pass
+ 2 fail
+ 2 errors
+Ran 2 tests across 2 files. [58.00ms]

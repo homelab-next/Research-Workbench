@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { apply, cardLocation, fold, initial } from "../../src/core/state";
 import { applyWith } from "../../src/core/state/apply";
 import type { CaseState } from "../../src/core/state";
-import type { Entry, Payloads } from "../../src/core/types";
+import type { Entry, Observed, Payloads } from "../../src/core/types";
+import { isObserved } from "../../src/core/state/shapes";
 import { EntryBuilder, card } from "../helpers/entries";
 
 const CASE: Payloads["case.created"] = {
@@ -463,4 +464,45 @@ test("a duplicate card.created or lane.created is a no-op for cards and lanes", 
   expect(s.incoming).toEqual(before.incoming);
   expect(s.lanes).toEqual(before.lanes);
   expect(s.target).toBe("l1");
+});
+
+// ---------- 6b: what a card observed ----------
+const OBSERVED: Observed = {
+  pivot: "address_to_domains", from: { type: "address", value: "198.51.100.77" },
+  span: { first: "2026-11-17T01:00:00.000Z", last: "2026-11-19T05:00:00.000Z", count: 8 },
+  found: [{ type: "domain", value: "a.example.com", first: "2026-11-17T01:00:00.000Z", last: "2026-11-19T05:00:00.000Z", count: 8, points: [["2026-11-17T01:00:00.000Z", 8]] }],
+  more: 0, unread: 0,
+};
+
+test("a card's observed is kept by the fold; a card without it folds as before; a malformed one is skipped", () => {
+  const b = new EntryBuilder();
+  b.add("card.created", { card: card("c1", { observed: OBSERVED }) });
+  b.add("card.created", { card: card("c2") });
+  b.add("card.created", { card: card("c3", { observed: { ...OBSERVED, found: [{ type: "domain", value: "a.example.com", first: "17 Nov", last: null, count: null, points: [] }] } }) });
+  const s = fold(b.entries);
+  expect(s.cards.c1!.observed).toEqual(OBSERVED); expect("observed" in s.cards.c2!).toBe(false);
+  expect(s.cards.c3).toBeUndefined(); expect(s.skipped.map((x) => x.type)).toEqual(["card.created"]);
+});
+
+test("isObserved refuses each malformed part, and more than the limits", () => {
+  const bad: unknown[] = [
+    null, [], { ...OBSERVED, pivot: 1 }, { ...OBSERVED, from: { type: "address" } }, { ...OBSERVED, span: { first: null, last: null } },
+    { ...OBSERVED, span: { ...OBSERVED.span, count: -1 } }, { ...OBSERVED, span: { ...OBSERVED.span, count: 1.5 } }, { ...OBSERVED, more: -1 }, { ...OBSERVED, unread: "0" },
+    { ...OBSERVED, span: { ...OBSERVED.span, first: "2026-11-17T01:00:00Z" } },
+    { ...OBSERVED, found: [{ ...OBSERVED.found[0]!, points: [["2026-11-17T01:00:00.000Z"]] }] },
+    { ...OBSERVED, found: [{ ...OBSERVED.found[0]!, points: [["2026-11-17T01:00:00.000Z", 1, 2]] }] },
+    { ...OBSERVED, found: Array.from({ length: 101 }, () => OBSERVED.found[0]!) },
+    { ...OBSERVED, found: [{ ...OBSERVED.found[0]!, points: Array.from({ length: 25 }, () => ["2026-11-17T01:00:00.000Z", 1]) }] },
+  ];
+  for (const x of bad) expect(isObserved(x)).toBe(false);
+  expect(isObserved(OBSERVED)).toBe(true);
+});
+
+test("the fold does not share or change the card's observed", () => {
+  const given = card("c1", { observed: structuredClone(OBSERVED) });
+  const b = new EntryBuilder();
+  b.add("card.created", { card: given });
+  const s = fold(b.entries);
+  expect(given.observed).toEqual(OBSERVED);
+  expect(s.cards.c1!.observed).toEqual(OBSERVED);
 });

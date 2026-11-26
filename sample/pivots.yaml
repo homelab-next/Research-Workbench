@@ -5,28 +5,31 @@ pivots:
     from: address
     to: address
     source: flows
-    query: "select src as peer from flows where dst = {value} and ts >= {window.from} and ts < {window.to}"
+    query: "select src as peer, ts from flows where dst = {value} and ts >= {window.from} and ts < {window.to}"
     needs_window: true
     empty_means: not-seen
     yields: { peer: address }
+    times: { at: ts }
   - id: address_to_domains
     title: Names that resolved to the address
     from: address
     to: domain
     source: dns-logs
-    query: "select distinct name from dns where answer = {value} and ts >= {window.from} and ts < {window.to}"
+    query: "select name, min(ts) as first_seen, max(ts) as last_seen, count(*) as events from dns where answer = {value} and ts >= {window.from} and ts < {window.to} group by name order by first_seen, name"
     needs_window: true
     empty_means: not-seen
     yields: { name: domain }
+    times: { first: first_seen, last: last_seen, count: events }
   - id: domain_to_clients
     title: Clients that looked the name up
     from: domain
     to: address
     source: dns-logs
-    query: "select distinct client from dns where name = {value} and ts >= {window.from} and ts < {window.to}"
+    query: "select client, min(ts) as first_seen, max(ts) as last_seen, count(*) as events from dns where name = {value} and ts >= {window.from} and ts < {window.to} group by client order by first_seen, client"
     needs_window: true
     empty_means: not-seen
     yields: { client: address }
+    times: { first: first_seen, last: last_seen, count: events }
   - id: address_to_asset_by_lease
     title: Asset holding the address, by lease record
     from: address
@@ -50,19 +53,21 @@ pivots:
     from: asset
     to: account
     source: signins
-    query: "select distinct account from signins where host = {value} and ts >= {window.from} and ts < {window.to}"
+    query: "select account, min(ts) as first_seen, max(ts) as last_seen, count(*) as events from signins where host = {value} and ts >= {window.from} and ts < {window.to} group by account order by first_seen, account"
     needs_window: true
     empty_means: not-seen
     yields: { account: account }
+    times: { first: first_seen, last: last_seen, count: events }
   - id: account_to_signin_addresses
     title: Addresses the account signed in from
     from: account
     to: address
     source: signins
-    query: "select distinct from_address from signins where account = {value} and ts >= {window.from} and ts < {window.to}"
+    query: "select from_address, min(ts) as first_seen, max(ts) as last_seen, count(*) as events from signins where account = {value} and ts >= {window.from} and ts < {window.to} group by from_address order by first_seen, from_address"
     needs_window: true
     empty_means: not-seen
     yields: { from_address: address }
+    times: { first: first_seen, last: last_seen, count: events }
   - id: address_to_verdict
     title: Reputation verdict for the address
     from: address

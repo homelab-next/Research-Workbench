@@ -6,11 +6,12 @@ import { sha256Hex } from "../core/hash";
 import type { Ledger } from "../core/ledger";
 import type { Actor } from "../core/types";
 import type { RootConfig } from "./config";
-import { ManifestError, parseManifestFile, pivotWeight, toPivot, toSource, toType, validateBody } from "./manifests";
+import { ManifestError, parseManifestFile, pivotWeight, timesColumns, toPivot, toSource, toType, validateBody } from "./manifests";
 import type { LoadedManifest, PivotManifest, SourceManifest } from "./manifests";
 import { compileType, MAX_VALUE_LENGTH, PATTERN_PROBE_LIMIT_MS, probePattern } from "./observables";
 import type { ObservableType } from "./observables";
 import { toInventory } from "./inventories";
+import { escapeRe } from "./sqlguard";
 import type { InventoryManifest } from "./inventories";
 import { fromText, toPlaybook } from "./playbooks";
 import type { PlaybookManifest } from "./playbooks";
@@ -265,10 +266,20 @@ export class Registry {
           this.reject(root.path, path, `type "${id}": pattern ${JSON.stringify(item.pattern)} refused: ${(err as Error).message}`);
           continue;
         }
+        let pivot: PivotManifest | null = null;
+        if (parsed.kind === "pivots") {
+          try {
+            pivot = toPivot(item, hash);
+          } catch (err) {
+            if (!(err instanceof ManifestError)) throw err;
+            this.reject(root.path, path, err.message);
+            continue;
+          }
+        }
         const title = (item.title as string | undefined) ?? id;
         if (!this.add({ ...base, kind: single, id, title, body: item, text: null })) continue;
-        if (parsed.kind === "types") this.typeById.set(id, toType(item));
-        else this.pivotById.set(id, toPivot(item, hash));
+        if (pivot === null) this.typeById.set(id, toType(item));
+        else this.pivotById.set(id, pivot);
       }
       return;
     }
@@ -345,9 +356,34 @@ export class Registry {
       }
       else if (missingType !== undefined) reject("pivot", p.id, `pivot "${p.id}": type "${missingType}" is not a known observable type`);
       else if (!Object.values(p.yields).includes(p.to)) reject("pivot", p.id, `pivot "${p.id}": yields maps no column to its target type "${p.to}"`);
-      else if (p.inventory !== null) this.crossCheckInventory(p, home, reject);
+      else {
+        const times = this.timesProblem(p);
+        if (times !== null) reject("pivot", p.id, times);
+        else if (p.inventory !== null) this.crossCheckInventory(p, home, reject);
+      }
     }
     this.crossCheckPlaybooks();
+  }
+
+  /**
+   * A pivot's times: the columns it names differ, none is a yielded value, and each is a word of its query (for an http source: a column
+   * of the endpoint the query names). This catches a typo before a run; it does not prove the source returns the column.
+   */
+  private timesProblem(p: PivotManifest): string | null {
+    if (p.times === null) return null;
+    const named = timesColumns(p.times);
+    const twice = named.find((c, i) => named.indexOf(c) !== i);
+    if (twice !== undefined) return `pivot "${p.id}": times names the column "${twice}" twice`;
+    const yielded = named.find((c) => Object.hasOwn(p.yields, c));
+    if (yielded !== undefined) return `pivot "${p.id}": times column "${yielded}" is a yielded value`;
+    const source = this.sourceById.get(p.source)!;
+    if (source.connector === "http") {
+      const columns = source.endpoints.find((e) => e.name === p.query)?.columns ?? [];
+      const missing = named.find((c) => !columns.includes(c));
+      return missing === undefined ? null : `pivot "${p.id}": times column "${missing}" is not a column of the endpoint ${p.query}`;
+    }
+    const missing = named.find((c) => !new RegExp(`(?<![\\w])${escapeRe(c)}(?![\\w])`).test(p.query));
+    return missing === undefined ? null : `pivot "${p.id}": times column "${missing}" is not in its query`;
   }
 
   /**

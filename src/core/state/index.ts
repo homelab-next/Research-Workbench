@@ -10,7 +10,8 @@ export { applyCards, cardLocation } from "./cards";
 export { applyPlaybooks } from "./playbooks";
 export { applyConflicts, keepText, namesFinding, ruledFindings, rulingText, runConflicts } from "./conflicts";
 export { CARD_REF, cardRefs } from "./cites";
-export { cardFields, caseFields, isCard, isCaseCreated, isCoverage, isObservable, isTimeWindow } from "./shapes";
+export { cardFields, caseFields, isCard, isCaseCreated, isCoverage, isObservable, isObserved, isTimeWindow } from "./shapes";
+export * from "./observed";
 export * from "./types";
 
 export function initial(): CaseState {

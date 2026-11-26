@@ -14,6 +14,13 @@ example addresses (192.0.2.x, 198.51.100.x, 203.0.113.x), example.com/.net/.org 
 The story: account `j.doe` signs in to `ws-17.example.net` from an address it has never used, and minutes
 later that workstation starts calling `198.51.100.77` every ten minutes. Start from that address.
 
+## Pivots
+
+The five windowed pivots in `pivots.yaml` declare `times`, the columns of their result that say when a value was seen: four
+return each value with its first and last time and a count (`times: { first: first_seen, last: last_seen, count: events }`),
+and the flows pivot returns one row per connection with its time (`times: { at: ts }`). The workbench reads those columns from
+every row of the result and records on the card what was observed and when, which the Timeline and the Graph draw from.
+
 ## Playbook and inventories
 
 - `playbooks/address-triage.yaml`: Triage an address. It asks the asset list, falls back to the lease records only when the asset list came back empty (a branch taken or skipped), looks up the names that resolved to the address and, for each name found (up to 5), who looked it up (a fan-out). It ends on the asset step, so the outcome is the asset list's answer. Run it from the Pivot panel; the scripted run asks two of these lookups already, so the playbook reuses them.
