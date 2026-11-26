@@ -3,6 +3,7 @@ import type { Schema } from "../core/schema";
 import { canonical } from "../core/canonical";
 import { sha256Hex } from "../core/hash";
 import { CARD_REF, cardRefs } from "../core/state/cites";
+import { BASIS_TEXT, PERSON_SOURCE } from "../core/state/person";
 import type { CardState } from "../core/state/types";
 import type { Actor, Draft, Finding, Marking, Product, Section } from "../core/types";
 import { SECTIONS, strictest } from "../core/types";
@@ -176,6 +177,27 @@ export class DraftWork {
   }
 }
 
+const cardNumber = (id: string): number => Number(/^c(\d+)$/.exec(id)?.[1] ?? Number.MAX_SAFE_INTEGER);
+
+/**
+ * The sources entry for the person's statements a revision cites: each statement in id order, how the person knows, and what cites it
+ * ("cited by f1, f2", "cited in the narrative" or "cited by f1 and in the narrative"). Null when no statement is cited.
+ */
+function personLine(work: DraftWork, cited: readonly CardState[]): string | null {
+  const said = cited.filter((c) => c.person !== undefined).sort((a, b) => {
+    const x = cardNumber(a.id), y = cardNumber(b.id);
+    return x < y ? -1 : x > y ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+  if (said.length === 0) return null;
+  const narrative = new Set(Object.values(work.narrativeCites).flat());
+  const parts = said.map((c) => {
+    const by = work.findings.filter((f) => f.cites.includes(c.id)).map((f) => f.id);
+    const where = by.length === 0 ? "cited in the narrative" : `cited by ${by.join(", ")}${narrative.has(c.id) ? " and in the narrative" : ""}`;
+    return `${c.id} (${BASIS_TEXT[c.person!.basis]}; ${where})`;
+  });
+  return `Statements by the person running the investigation, not data from a source and not checked by the workbench: ${parts.join(", ")}.`;
+}
+
 export function buildProduct(work: DraftWork, facts: {
   objective: string; question: string; case_marking: Marking; cards: Readonly<Record<string, CardState>>;
   source: (id: string) => SourceManifest | null;
@@ -206,7 +228,11 @@ export function buildProduct(work: DraftWork, facts: {
   }
   const prev = work.previous;
   const kept = new Map((prev === null ? [] : prev.sources).map((x) => [x.source, x]));
+  // the person's line is built from this revision's citations alone: a statement no longer cited leaves it
+  kept.delete(PERSON_SOURCE);
   for (const x of sources) kept.set(x.source, x);
+  const person = personLine(work, cited);
+  if (person !== null) kept.set(PERSON_SOURCE, { source: PERSON_SOURCE, quality: person });
   const allSources = [...kept.values()].sort((a, b) => (a.source < b.source ? -1 : a.source > b.source ? 1 : 0));
   const product: Product = {
     objective: facts.objective, question: facts.question, marking: strictest(facts.case_marking, ...cited.map((c) => c.marking), ...(prev === null ? [] : [prev.marking]), ...(facts.written_at ?? [])),

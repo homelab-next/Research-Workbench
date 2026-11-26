@@ -6,7 +6,7 @@ import { canonical } from "../core/canonical";
 import { sha256Hex } from "../core/hash";
 import type { CaseState } from "../core/state";
 import { MARKINGS } from "../core/types";
-import type { CheckFinding, Coverage, Draft, EmptyMeans, Marking } from "../core/types";
+import type { CheckFinding, Coverage, Draft, EmptyMeans, Marking, PersonBasis } from "../core/types";
 import { citedOf } from "../agents/draft";
 import type { Profile } from "../agents/context";
 import { schemaOf } from "../agents/context";
@@ -16,7 +16,10 @@ import type { CheckManifest } from "./manifests";
 export interface CheckInput {
   check: string;
   draft: { n: number; hash: string; product: Draft["product"] };
-  cards: Record<string, { id: string; title: string; source: string | null; marking: Marking; coverage: Coverage | null; empty: EmptyMeans | null; row_count: number; quality_notes: string[] }>;
+  cards: Record<string, { id: string; title: string; source: string | null; marking: Marking; coverage: Coverage | null; empty: EmptyMeans | null; row_count: number; quality_notes: string[];
+    /** Only on a statement by the person: how they know it and the question it answers. */
+    person?: { basis: PersonBasis; answers: string | null };
+  }>;
   sources: Record<string, { quality: string; quality_notes: { id: string; text: string }[]; marking: Marking }>;
   schema: Json; standard: Json; markings: Marking[];
   objective: { id: string; title: string } | null; question: string;
@@ -35,7 +38,11 @@ export function checkInput(check: string, state: Readonly<CaseState>, draft: Dra
   for (const id of cited) {
     if (!Object.hasOwn(state.cards, id)) continue;
     const c = state.cards[id]!;
-    cards[id] = { id: c.id, title: c.title, source: c.source, marking: c.marking, coverage: c.coverage, empty: c.empty, row_count: c.row_count, quality_notes: [...c.quality_notes] };
+    cards[id] = {
+      id: c.id, title: c.title, source: c.source, marking: c.marking, coverage: c.coverage, empty: c.empty, row_count: c.row_count, quality_notes: [...c.quality_notes],
+      // only a statement carries it, so an input that cites none is byte for byte what it was
+      ...(c.person === undefined ? {} : { person: { basis: c.person.basis, answers: c.person.answers } }),
+    };
     const s = c.source === null ? null : registry.source(c.source);
     if (c.source !== null && s !== null && !Object.hasOwn(sources, c.source)) {
       sources[c.source] = { quality: s.quality, quality_notes: s.quality_notes.map((n) => ({ id: n.id, text: n.text })), marking: s.marking };

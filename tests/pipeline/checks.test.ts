@@ -15,6 +15,7 @@ import { CHECK_MAX_OUTPUT, checkInput, runCheck } from "../../src/pipeline/check
 import { loadChecks } from "../../src/pipeline/manifests";
 import type { CheckManifest } from "../../src/pipeline/manifests";
 import { checksRunner } from "../../src/pipeline/stages/checks";
+import { personCard } from "../../src/pipeline/person";
 import { copySample } from "../helpers/sample-root";
 import { fixture, person } from "../helpers/tools-fixture";
 
@@ -503,5 +504,32 @@ test("a blocking failure fails the stage as before, and no note is written even 
     const end = await checksRunner(env);
     expect(env.session.state.drafts).toHaveLength(1);
     expect(end).toMatchObject({ kind: "finished", outcome: "fail", draft_hash: d.hash, reason: "hard failed: bad" });
+  } finally { close(); }
+});
+
+test("a check is told which cited cards are the person's statements; an input with none is byte for byte what it was", () => {
+  const { env, close } = stageRig({});
+  try {
+    const d = latestDraft(env.session.state)!;
+    const before = canonical(checkInput("x", env.session.state, d, env.deps.registry, env.deps.profile) as never);
+    const statement = (statement: string, basis: "did" | "unstated"): string => {
+      let id = "";
+      env.session.commit((_s, ids) => {
+        id = ids.next("card");
+        return [{ type: "card.created", actor: person, payload: { card: personCard(id, { title: `Statement: ${statement}`, statement, basis, detail: "", about: [], answers: null, marking: "TLP:GREEN" }) } }];
+      });
+      return id;
+    };
+    // c2..c4 are padding so the statement is c5
+    for (let i = 0; i < 3; i++) statement(`padding ${i}`, "unstated");
+    expect(statement("ws-17 is mine", "did")).toBe("c5");
+    // the draft cites no statement: its input is what it was, and the result card has the fields it had
+    expect(canonical(checkInput("x", env.session.state, d, env.deps.registry, env.deps.profile) as never)).toBe(before);
+    const input = checkInput("x", env.session.state, { ...d, cited: ["c1", "c5"] }, env.deps.registry, env.deps.profile);
+    expect(input.cards.c5!.person).toEqual({ basis: "did", answers: null });
+    expect("person" in input.cards.c1!).toBe(false);
+    expect(Object.keys(input.cards.c1!)).toEqual(["id", "title", "source", "marking", "coverage", "empty", "row_count", "quality_notes"]);
+    expect(input.cards.c5).toMatchObject({ source: null, row_count: 0 });
+    expect(env.session.state.skipped).toEqual([]);
   } finally { close(); }
 });

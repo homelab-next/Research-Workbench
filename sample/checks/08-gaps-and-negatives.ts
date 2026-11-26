@@ -16,8 +16,9 @@ for (const id of cited) {
   if (card.coverage !== null && card.coverage.kind === "partial") {
     if (!names(gaps, id)) fail("gaps_and_limits", `${id} has partial coverage (${card.coverage.reason}) and is not named in the gaps and limits`);
   }
-  // a result with no rows that is not a proven negative over full coverage is a gap, not evidence: gaps_and_limits is where it belongs
-  if (card.row_count === 0 && !(card.empty === "proven-negative" && card.coverage !== null && card.coverage.kind === "full")) {
+  // a result with no rows that is not a proven negative over full coverage is a gap, not evidence: gaps_and_limits is where it belongs.
+  // A statement by the person has no rows by nature: it is their word, not an empty result.
+  if (card.person === undefined && card.row_count === 0 && !(card.empty === "proven-negative" && card.coverage !== null && card.coverage.kind === "full")) {
     const by = product.key_findings.filter((f: { cites: string[] }) => f.cites.includes(id));
     for (const f of by) fail(f.id, `${f.id} cites ${id}, which has no rows and is not a proven negative with full coverage`);
     const asEvidence = ["summary", "assessment", "alternatives"].filter((k) => names(product[k], id));

@@ -294,3 +294,52 @@ test("the first change term is the standard's first; a standard with no change t
   expect(composeChange("premier avis", "", "premier avis")).toBe("Premier avis.");
   expect(composeChange("conforme a", "", "premier avis")).toBe("Conforme a the earlier judgment.");
 });
+
+const said = (id: string, basis: "saw" | "did" | "told" | "unstated"): CardState =>
+  ({ id, source: null, marking: "TLP:GREEN", quality_notes: [], row_count: 0, person: { basis, detail: "", about: [], answers: null } } as unknown as CardState);
+const personLine = (p: Product): string | undefined => p.sources.find((x) => x.source === "the person")?.quality;
+
+test("a product that cites a statement names the person in its sources, with each statement and what cites it", () => {
+  const w = new DraftWork(null);
+  w.setFinding(f("a", ["c1", "c5"]), null);
+  w.setSection("summary", "as the person was told", ["c6"]);
+  const cards = { c1: card("c1", "dns", "TLP:GREEN"), c5: said("c5", "did"), c6: said("c6", "told") };
+  const product = buildProduct(w, facts(cards));
+  expect(product.sources.find((x) => x.source === "the person")!.quality).toBe(
+    "Statements by the person running the investigation, not data from a source and not checked by the workbench: c5 (did it myself; cited by f1), c6 (was told; cited in the narrative).");
+  expect(product.sources.map((x) => x.source)).toEqual(["dns", "the person"]);
+  // several findings, a finding and the narrative, and ids in number order
+  const w2 = new DraftWork(null);
+  w2.setFinding(f("a", ["c10"]), null);
+  w2.setFinding(f("b", ["c10", "c9"]), null);
+  w2.setSection("assessment", "x", ["c9"]);
+  expect(personLine(buildProduct(w2, facts({ c9: said("c9", "saw"), c10: said("c10", "unstated") })))).toBe(
+    "Statements by the person running the investigation, not data from a source and not checked by the workbench: c9 (saw it myself; cited by f2 and in the narrative), c10 (did not say how; cited by f1, f2).");
+});
+
+test("the person's line is rebuilt each time: a draft that no longer cites a statement drops it, though other sources are kept", () => {
+  const cards = { c1: card("c1", "dns", "TLP:GREEN"), c2: card("c2", "assets", "TLP:GREEN"), c5: said("c5", "did"), c6: said("c6", "told") };
+  const w1 = new DraftWork(null);
+  w1.setFinding(f("a", ["c1", "c5"]), null);
+  w1.setFinding(f("b", ["c2", "c6"]), null);
+  const p1 = buildProduct(w1, facts(cards));
+  expect(personLine(p1)).toContain("c5 (did it myself; cited by f1), c6 (was told; cited by f2)");
+  const w2 = new DraftWork(p1);
+  w2.setFinding(f("a2", ["c1", "c5"]), "f1");
+  const p2 = buildProduct(w2, facts(cards));
+  expect(personLine(p2)).toBe("Statements by the person running the investigation, not data from a source and not checked by the workbench: c5 (did it myself; cited by f1).");
+  // assets is kept from the earlier revision, as every source is
+  expect(p2.sources.map((x) => x.source)).toEqual(["assets", "dns", "the person"]);
+  const w3 = new DraftWork(p2);
+  w3.setFinding(f("a3", ["c1"]), "f1");
+  const p3 = buildProduct(w3, facts(cards));
+  expect(personLine(p3)).toBeUndefined();
+  expect(p3.sources.map((x) => x.source)).toEqual(["assets", "dns"]);
+});
+
+test("a product citing no statement has the sources it had before this change", () => {
+  const w = new DraftWork(null);
+  w.setFinding(f("a", ["c1", "c3"]), null);
+  const cards = { c1: card("c1", "dns", "TLP:GREEN", ["n1"]), c3: card("c3", "assets", "TLP:GREEN"), c5: said("c5", "did") };
+  expect(buildProduct(w, facts(cards)).sources).toEqual([{ source: "assets", quality: "fair" }, { source: "dns", quality: "good duplicated" }]);
+});

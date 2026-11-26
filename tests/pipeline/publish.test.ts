@@ -34,6 +34,7 @@ import { fold } from "../../src/core/state";
 import { EntryBuilder } from "../helpers/entries";
 import { fixture, person, PLAN } from "../helpers/tools-fixture";
 import type { Fixture } from "../helpers/tools-fixture";
+import { addStatement, personCard } from "../../src/pipeline/person";
 
 const human = person;
 const researcher: Actor = { kind: "agent", id: "researcher-g1", stage: "research", profile: "investigation", model: "m", effort: null, where: "machine" };
@@ -549,4 +550,57 @@ test("previewBundle gives the reason when there is no draft", () => {
 test("previewBundle gives the reason when the Publish stage has not named the draft", async () => {
   const r = await gated({ publish: async () => ({ ...PASS, draft_hash: latestDraft(f.s.state)?.hash ?? null }) });
   expect(previewBundle(f.s, r.deps)).toEqual({ reasons: ["the Publish stage has not named this draft"] });
+});
+
+/** c1 and c2 as cards() makes them, two statements c3 and c4 no draft cites, and c5: the person did it. */
+function withStatements(): void {
+  cards();
+  for (const s of ["padding one", "padding two"]) addStatement(f.s, f.sample.deps, { actor: human, statement: s, basis: "unstated", detail: "", about: [], marking: null });
+  const id = addStatement(f.s, f.sample.deps, {
+    actor: human, statement: "The device at 192.0.2.17 is the meeting-room TV.", basis: "did", detail: "I installed it", about: [{ type: "address", value: "192.0.2.17" }], marking: null,
+  });
+  expect(id).toBe("c5");
+}
+
+test("the product says which findings rest on the person's word, and the provenance says how the person knows", () => {
+  withStatements();
+  const product = productFor(1);
+  product.key_findings[0]!.cites = ["c1", "c5"];
+  const files = buildBundle(f.s, draftOf(product, 1, human, "r"), { title: "T", note: "n" }, { seq: 1, hash: "x" }, 1).files;
+  expect(files["product.md"]).toContain("Citations: [c1] [c5].\nRests on the person's statement: [c5] (did it myself). A statement, not data from a source.\n");
+  // f2 cites no statement and has no such line
+  expect(files["product.md"]!.match(/Rests on/g)).toHaveLength(1);
+  expect(files["provenance.md"]).toContain("- Source: the person (a statement, not data from a source)");
+  expect(files["provenance.md"]).toContain("- How they know: did it myself: I installed it");
+  expect(files["provenance.md"]).toContain("- About: address 192.0.2.17");
+  expect(files["provenance.md"]).not.toContain("- Answers:");
+  const rows = JSON.parse(files["provenance.json"]!) as Record<string, Json>[];
+  expect(rows.find((r) => r.card === "c5")).toMatchObject({ by: "human:analyst", person: { basis: "did", detail: "I installed it", answers: null } });
+  expect(rows.find((r) => r.card === "c5")!.person).toEqual({ basis: "did", detail: "I installed it", about: [{ type: "address", value: "192.0.2.17" }], answers: null, question: null });
+  expect("person" in rows.find((r) => r.card === "c1")!).toBe(false);
+});
+
+test("a statement that answers a question says so in the provenance, with the question's text", () => {
+  cards();
+  f.s.commit((_s, ids) => [{ type: "question.asked", actor: researcher, payload: { question: { id: ids.next("question"), text: "What is the device at 192.0.2.17?", why: "w", cards: [], about: [], blocking: false } } }]);
+  f.s.commit((_s, ids) => [{ type: "card.created", actor: human, payload: { card: personCard(ids.next("card"), {
+    title: "Statement: the TV", statement: "the TV", basis: "saw", detail: "", about: [], answers: "ask-1", marking: "TLP:GREEN",
+  }) } }]);
+  const product = productFor(1);
+  product.key_findings[1]!.cites = ["c2", "c3"];
+  const files = buildBundle(f.s, draftOf(product, 1, human, "r"), { title: "T", note: "n" }, { seq: 1, hash: "x" }, 1).files;
+  expect(files["provenance.md"]).toContain("- Answers: ask-1 (What is the device at 192.0.2.17?)");
+  expect(files["provenance.md"]).not.toContain("- About:");
+  expect((JSON.parse(files["provenance.json"]!) as Record<string, Json>[]).find((r) => r.card === "c3")!.person).toMatchObject({ answers: "ask-1", question: "What is the device at 192.0.2.17?" });
+});
+
+test("a bundle of a draft that cites no statement is byte for byte what it was", () => {
+  cards();
+  const draft = draftOf(productFor(1), 1, human, "r");
+  const before = buildBundle(f.s, draft, { title: "T", note: "n" }, { seq: 1, hash: "x" }, 1);
+  for (const s of ["one", "two", "three"]) addStatement(f.s, f.sample.deps, { actor: human, statement: s, basis: "told", detail: "", about: [], marking: null });
+  const after = buildBundle(f.s, draft, { title: "T", note: "n" }, { seq: 1, hash: "x" }, 1);
+  expect(after).toEqual(before);
+  expect((JSON.parse(after.files["provenance.json"]!) as Record<string, Json>[]).some((r) => "person" in r)).toBe(false);
+  expect(after.files["product.md"]).not.toContain("Rests on");
 });

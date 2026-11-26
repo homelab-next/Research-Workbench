@@ -1,5 +1,7 @@
 import { beforeAll, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { PERSON_SOURCE } from "../../src/core/state";
 import { canonical } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
 import type { Json } from "../../src/core/canonical";
@@ -250,4 +252,42 @@ test("check 8 accepts a not-seen card cited in gaps_and_limits, and refuses it i
     i.draft.product[k] += " The address is absent [c4].";
     expect(await run("gaps-and-negatives", i)).toMatchObject({ pass: false, findings: [{ where: k, message: expect.stringContaining(`the ${k} cites c4, which has no rows`) }] });
   }
+});
+
+/** The good input with f1 also citing c5, a statement by the person. */
+const withStatement = (): CheckInput => {
+  const i = good();
+  i.cards.c5 = { id: "c5", title: "Statement: ws-17 is mine", source: null, marking: "TLP:GREEN", coverage: null, empty: null, row_count: 0, quality_notes: [], person: { basis: "did", answers: null } };
+  i.draft.product.key_findings[0]!.cites = ["c2", "c3", "c5"];
+  return i;
+};
+const PERSON_LINE = "Statements by the person running the investigation, not data from a source and not checked by the workbench: c5 (did it myself; cited by f1).";
+
+test("source-quality fails a finding that rests on a statement the sources do not name", async () => {
+  const message = "f1 rests on the person's statement c5, and the sources do not say so";
+  expect(await run("source-quality", withStatement())).toMatchObject({ pass: false, findings: [{ where: "sources", message }] });
+  const other = withStatement();
+  other.draft.product.sources.push({ source: PERSON_SOURCE, quality: "Statements by the person: c6 (was told; cited by f2)." });
+  expect(await run("source-quality", other)).toMatchObject({ pass: false, findings: [{ where: "sources", message }] });
+  // c50 is not c5
+  const longer = withStatement();
+  longer.draft.product.sources.push({ source: PERSON_SOURCE, quality: "c50 (did it myself; cited by f1)." });
+  expect(await run("source-quality", longer)).toMatchObject({ pass: false, findings: [{ where: "sources", message }] });
+  const named = withStatement();
+  named.draft.product.sources.push({ source: PERSON_SOURCE, quality: PERSON_LINE });
+  expect(await run("source-quality", named)).toMatchObject({ pass: true, findings: [] });
+});
+
+test("gaps-and-negatives does not treat a statement as an empty result", async () => {
+  const i = withStatement();
+  i.draft.product.sources.push({ source: PERSON_SOURCE, quality: PERSON_LINE });
+  i.draft.product.summary += " The person says ws-17 is theirs [c5].";
+  expect(await run("gaps-and-negatives", i)).toMatchObject({ pass: true, findings: [] });
+  // the same card without person is an empty result, and fails
+  delete i.cards.c5!.person;
+  expect(await run("gaps-and-negatives", i)).toMatchObject({ pass: false });
+});
+
+test("the checks and the workbench spell the person's source the same", () => {
+  expect(readFileSync(join(SAMPLE, "checks", "05-source-quality.ts"), "utf8")).toContain(JSON.stringify(PERSON_SOURCE));
 });

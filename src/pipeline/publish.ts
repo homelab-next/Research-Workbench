@@ -3,11 +3,11 @@ import { mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import type { Json } from "../core/canonical";
-import { canonical, parseJson } from "../core/canonical";
+import { canonical, isPlainObject, parseJson } from "../core/canonical";
 import { sha256Hex } from "../core/hash";
 import type { CaseSession } from "../core/session";
-import { blockers, latestDraft } from "../core/state";
-import type { Actor, Draft, Entry, EntryInput, Marking } from "../core/types";
+import { BASIS_TEXT, blockers, latestDraft } from "../core/state";
+import type { Actor, Draft, Entry, EntryInput, Marking, Observable, PersonBasis } from "../core/types";
 import { strictest } from "../core/types";
 import { logToStderr } from "../core/deliver";
 import { citedOf } from "../agents/draft";
@@ -47,20 +47,34 @@ interface Provenance {
   card: string; title: string | null; source: string | null; source_hash: string | null; query: string | null; text: string | null; bound: Json; window: Json;
   why: string | null; by: string | null; issued: string | null; marking: Marking | null; coverage: Json; empty: string | null; rows: number | null;
   rows_hash: string | null; result_sha256: string | null;
+  /** Only on a statement by the person: how they know it, what it is about, and the question it answers with that question's text. */
+  person?: { basis: PersonBasis; detail: string; about: Observable[]; answers: string | null; question: string | null };
 }
 
 function provenanceOf(session: CaseSession, draft: Draft): Provenance[] {
   const ids = citedOf(draft);
   const issued = new Map<string, Extract<Entry, { type: "query.issued" }>>();
   const result = new Map<string, Extract<Entry, { type: "query.result" }>>();
+  /** Who wrote each card: the actor of its card.created entry. */
+  const made = new Map<string, Actor>();
   for (const e of session.entries()) {
     if (e.type === "query.issued") issued.set(e.payload.query, e);
     else if (e.type === "query.result") result.set(e.payload.query, e);
+    else if (e.type === "card.created" && isPlainObject(e.payload.card) && typeof e.payload.card.id === "string" && !made.has(e.payload.card.id)) made.set(e.payload.card.id, e.actor);
   }
   return ids.map((id): Provenance => {
     const c = Object.hasOwn(session.state.cards, id) ? session.state.cards[id]! : null;
     if (c === null) {
       return { card: id, title: null, source: null, source_hash: null, query: null, text: null, bound: null, window: null, why: null, by: null, issued: null, marking: null, coverage: null, empty: null, rows: null, rows_hash: null, result_sha256: null };
+    }
+    if (c.person !== undefined) {
+      const p = c.person;
+      const question = p.answers !== null && Object.hasOwn(session.state.questions, p.answers) ? session.state.questions[p.answers]!.text : null;
+      return {
+        card: id, title: c.title, source: null, source_hash: null, query: null, text: null, bound: null, window: null, why: c.why, by: made.has(id) ? who(made.get(id)!) : c.made_by,
+        issued: null, marking: c.marking, coverage: null, empty: null, rows: c.row_count, rows_hash: null, result_sha256: null,
+        person: { basis: p.basis, detail: p.detail, about: p.about.map((o) => ({ type: o.type, value: o.value })), answers: p.answers, question },
+      };
     }
     const q = c.query === null ? undefined : issued.get(c.query);
     const r = c.query === null ? undefined : result.get(c.query);
@@ -73,13 +87,24 @@ function provenanceOf(session: CaseSession, draft: Draft): Provenance[] {
   });
 }
 
-function productMarkdown(draft: Draft, title: string): string {
+/** The line under a finding that cites the person's statements: "Rests on the person's statement: [c5] (did it myself). A statement, not data from a source." */
+function restsOn(cites: readonly string[], statements: ReadonlyMap<string, PersonBasis>): string[] {
+  const said = cites.filter((id) => statements.has(id));
+  if (said.length === 0) return [];
+  const list = said.map((id) => `[${id}] (${BASIS_TEXT[statements.get(id)!]})`).join(", ");
+  return [said.length === 1
+    ? `Rests on the person's statement: ${list}. A statement, not data from a source.`
+    : `Rests on the person's statements: ${list}. Statements, not data from a source.`];
+}
+
+/** `statements`: the cited cards that are the person's statements, with how the person knows each. */
+function productMarkdown(draft: Draft, title: string, statements: ReadonlyMap<string, PersonBasis>): string {
   const p = draft.product;
   const cites = (ids: string[]): string => (ids.length === 0 ? "none" : ids.map((c) => `[${c}]`).join(" "));
   const list = (items: string[]): string => (items.length === 0 ? "None." : items.map((x) => `- ${x}`).join("\n"));
   const findings = p.key_findings.map((f) => [
     `### ${f.id}. ${f.statement}`, "",
-    `Likelihood: ${f.likelihood}. Confidence: ${f.confidence} (${f.confidence_basis}).`, `Citations: ${cites(f.cites)}.`,
+    `Likelihood: ${f.likelihood}. Confidence: ${f.confidence} (${f.confidence_basis}).`, `Citations: ${cites(f.cites)}.`, ...restsOn(f.cites, statements),
     `Assumptions: ${f.assumptions.length === 0 ? "none" : f.assumptions.join("; ")}.`, `Reasoning: ${f.reasoning}`,
   ].join("\n"));
   return [
@@ -99,7 +124,14 @@ function productMarkdown(draft: Draft, title: string): string {
 
 function provenanceMarkdown(rows: Provenance[], marking: Marking): string {
   const text = (v: unknown): string => (v === null ? "none" : typeof v === "string" ? v : JSON.stringify(v));
-  const cards = rows.map((r) => [
+  const cards = rows.map((r) => r.person !== undefined ? [
+    // a statement has no query: how the person knows takes the query's lines
+    `## [${r.card}] ${r.title ?? "(card not in the case)"}`, "",
+    "- Source: the person (a statement, not data from a source)", `- How they know: ${text(r.why)}`,
+    ...(r.person.about.length === 0 ? [] : [`- About: ${r.person.about.map((o) => `${o.type} ${o.value}`).join(", ")}`]),
+    ...(r.person.answers === null ? [] : [`- Answers: ${r.person.answers}${r.person.question === null ? "" : ` (${r.person.question})`}`]),
+    `- By: ${text(r.by)}`, `- Marking: ${text(r.marking)}`,
+  ].join("\n") : [
     `## [${r.card}] ${r.title ?? "(card not in the case)"}`, "",
     `- Source: ${text(r.source)} (hash ${text(r.source_hash)})`, `- Query ${text(r.query)}: ${text(r.text)}`, `- Bound values: ${text(r.bound)}`, `- Window: ${text(r.window)}`,
     `- Why: ${text(r.why)}`, `- By: ${text(r.by)}`, `- Issued: ${text(r.issued)}`, `- Marking: ${text(r.marking)}`, `- Coverage: ${text(r.coverage)}`, `- If empty, it means: ${text(r.empty)}`,
@@ -113,7 +145,7 @@ export function buildBundle(session: CaseSession, draft: Draft, cover: { title: 
   const prov = provenanceOf(session, draft);
   const files: Record<string, string> = {
     "product.json": canonical(draft.product as unknown as Json),
-    "product.md": productMarkdown(draft, cover.title),
+    "product.md": productMarkdown(draft, cover.title, new Map(prov.flatMap((r) => (r.person === undefined ? [] : [[r.card, r.person.basis] as const])))),
     "provenance.json": canonical(prov as unknown as Json),
     "provenance.md": provenanceMarkdown(prov, draft.product.marking),
   };
