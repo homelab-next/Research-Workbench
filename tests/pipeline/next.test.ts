@@ -342,6 +342,30 @@ test("a ruled point is not raised again: no new conflict on it, and a review tha
   expect(nextStep(mixed, roled, { likelihood: LIKELIHOOD })).toMatchObject({ kind: "start", stage: "assemble", sent_back: { from: "evaluate" } });
 });
 
+test("a ruling settles only what it was about: another point on the same finding goes back, and so does a draft that does not hold the ruling", () => {
+  // the person ruled on f25's likelihood (follow Challenge: keep likely); later drafts are reviewed again by Evaluate
+  const after = (next: ReturnType<typeof draftWith>, evFindings: { check: string; where: string; message: string }[]) => disagreement([EV_F25], (b) => {
+    b.add("review.conflict", { conflict: conflictOf() });
+    b.add("review.ruled", { conflict: "k1", follow: "challenge", note: "" }, { actor: { kind: "human", id: "analyst" } });
+    b.add("stage.sent_back", { from: "evaluate", to: "assemble", reason: "ruled", count: 1 });
+    started(b, "assemble", 3); b.add("draft.revised", { draft: next }, { stage: "assemble" }); finished(b, "assemble", "pass", null, next.hash, 3);
+    started(b, "checks", 3); finished(b, "checks", "pass", null, next.hash, 3);
+    started(b, "evaluate", 3); b.add("evaluation.made", { draft_hash: next.hash, pass: false, findings: evFindings }); finished(b, "evaluate", "fail", evFindings[0]!.message, next.hash, 3);
+  });
+  const holds = draftWith(3, [fnd("f25", "likely"), fnd("f26", "very likely")]);
+  // CASE-3: a point about f25's citations is not the ruled point; it goes back to the analyst like any other
+  const cites = { check: "citation support", where: "f25", message: "f25 cites only c20, which holds no address" };
+  expect(nextStep(after(holds, [cites]), roled, { likelihood: LIKELIHOOD })).toMatchObject({ kind: "start", stage: "assemble", sent_back: { from: "evaluate", reason: cites.message } });
+  // a point on f25's confidence is not the likelihood the person ruled on either
+  const conf = { check: "support", where: "f25", message: "f25's confidence should be high: three cards agree" };
+  expect(nextStep(after(holds, [conf]), roled, { likelihood: LIKELIHOOD })).toMatchObject({ kind: "start", stage: "assemble", sent_back: { from: "evaluate" } });
+  // CASE-3: the draft moved f25 off the ruled value; the work goes back with the ruling, whatever the reviewer asked
+  const off = draftWith(3, [fnd("f25", "almost certain"), fnd("f26", "very likely")]);
+  const step = nextStep(after(off, [EV_F25]), roled, { likelihood: LIKELIHOOD });
+  expect(step).toMatchObject({ kind: "start", stage: "assemble", sent_back: { from: "evaluate" } });
+  expect((step as { sent_back: { reason: string } }).sent_back.reason).toStartWith(`the draft does not hold the person's ruling on f25 (${CONFLICT_REASON}): follow Challenge: keep likely`);
+});
+
 // ---- caps per draft, and a fresh allowance on a person's resume (task 17 item 3) ----
 
 const person = { actor: { kind: "human", id: "analyst" } as const };

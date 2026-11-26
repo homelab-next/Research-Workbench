@@ -1,7 +1,7 @@
 import { latestDraft, namesFinding, ruledFindings, rulingText, runConflicts } from "../core/state";
-import type { CaseState } from "../core/state";
+import type { CaseState, ConflictState } from "../core/state";
 import { CONFIDENCES } from "../core/types";
-import type { ReviewConflict } from "../core/types";
+import type { Product, ReviewConflict } from "../core/types";
 import type { Pipeline, Role } from "./manifests";
 import { findingChanges } from "./review-points";
 
@@ -95,13 +95,58 @@ export function reviewConflict(state: Readonly<CaseState>, pipeline: Pipeline, s
     }
     if (fresh.length > 0) return { kind: "conflict", fresh, reason: pauseReason(fresh.map((c) => c.reason)) };
   }
-  // a point on a ruled finding is not sent back: when that is all the reviewer raised, the run waits for the person
-  const onRuled = [...ruled].filter((f) => points.some((p) => namesFinding(p, f)));
-  if (onRuled.length > 0 && points.every((p) => onRuled.some((f) => namesFinding(p, f)))) {
+  const rulings = [...ruledFindings(state).values()];
+  // a draft that does not hold a ruling goes back with the ruling, beside the reviewer's other points
+  const unheld = rulings.filter((c) => holds(d.product, c) === false);
+  if (unheld.length > 0) {
+    const said = unheld.map((c) => `the draft does not hold the person's ruling on ${c.finding} (${c.reason}): ${rulingText(state, c)}`).join("; ");
+    const rest = points.filter((p) => !rulings.some((c) => reopens(p, c)));
+    return { kind: "ruled", reason: rest.length === 0 ? said : `${said}. Also: ${rest.join("; ")}` };
+  }
+  // a point that would move a ruled finding back is not sent back: when that is all the reviewer raised, the run waits for the person.
+  // a ruling settles only what it was about: another point on the same finding (its cards, its wording) goes back as usual
+  const onRuled = rulings.filter((c) => points.some((p) => reopens(p, c))).map((c) => c.finding);
+  if (onRuled.length > 0 && points.every((p) => rulings.some((c) => reopens(p, c)))) {
     const R = titleOf(state, pipeline, stage);
     return { kind: "only_ruled", reason: `${R} objects only to ${onRuled.join(", ")}, which the person has ruled on; a ruled point is not sent back. Edit the draft, or resume for ${R} to review it again.` };
   }
   return null;
+}
+
+/** The value the person's ruling keeps: the reviewer they followed asked for it. Null for a ruling that follows neither (a note only). */
+function ruledValue(c: ConflictState): { present: boolean; value: string | null } | null {
+  if (c.ruling === null) return null;
+  const keep = c.ruling.follow === c.changed_for ? true : c.ruling.follow === c.raised_by ? false : null;
+  if (keep === null) return null;
+  switch (c.change) {
+    case "dropped": return { present: !keep, value: null };
+    case "added": return { present: keep, value: null };
+    case "likelihood":
+    case "confidence": return { present: true, value: keep ? c.now : c.earlier };
+  }
+}
+
+/** Whether the draft holds the ruling on its finding; null when the ruling keeps no value to check. */
+export function holds(product: Product, c: ConflictState): boolean | null {
+  const want = ruledValue(c);
+  if (want === null) return null;
+  const f = product.key_findings.find((x) => x.id === c.finding);
+  if (!want.present || f === undefined) return want.present === (f !== undefined);
+  if (c.change === "likelihood") return f.likelihood === want.value;
+  if (c.change === "confidence") return f.confidence === want.value;
+  return true;
+}
+
+const ABOUT: Record<ReviewConflict["change"], RegExp> = {
+  likelihood: /likel|probab|chance|certain|overclaim|overstat|understat/i,
+  confidence: /confiden/i,
+  dropped: /restor|reinstat|drop|remov|delet|omit|missing/i,
+  added: /restor|reinstat|drop|remov|delet|omit|missing|should not|add/i,
+};
+
+/** Whether a reviewer's point is about what the person ruled on: it names the finding and speaks to the change ruled on (its likelihood, its confidence, or whether it stays). */
+export function reopens(point: string, c: ConflictState): boolean {
+  return namesFinding(point, c.finding) && ABOUT[c.change].test(point);
 }
 
 const pauseReason = (reasons: string[]): string => `${reasons.join(". ")}. The person rules on it in the Narrative lens: follow one reviewer, or write a note.`;
