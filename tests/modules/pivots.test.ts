@@ -82,3 +82,19 @@ test("an unknown pivot is refused", async () => {
   expect(bad.status).toBe("refused");
   expect(s.entries().some((e) => e.type === "query.issued")).toBe(false);
 });
+
+test("the wrapper reads only a done result, and only the pivot's yields columns", () => {
+  const result: RunQueryResult = {
+    status: "done", query: "q1", card: null, outcome: "answered", rows: 5, rows_hash: "h", coverage: { kind: "full" },
+    columns: ["domain", "other"],
+    data: [["example.org", "x"], ["example.org", "y"], [null, "z"], ["not a domain", "w"], ["a.example.net", "v"]],
+  };
+  expect(yielded(p, result, observables)).toEqual([{ type: "domain", value: "example.org" }, { type: "domain", value: "a.example.net" }]);
+  // an unrelated column whose values match the type is not read
+  const other: RunQueryResult = { ...result, columns: ["name", "domain"], data: [["example.net", null], ["x.example.org", "example.org"]] };
+  expect(yielded(p, other, observables)).toEqual([{ type: "domain", value: "example.org" }]);
+  // a result that is not done yields nothing, whatever it carries
+  expect(yielded(p, { status: "refused", reasons: [] }, observables)).toEqual([]);
+  const notDone = { ...result, status: "failed" } as unknown as RunQueryResult;
+  expect(yielded(p, notDone, observables)).toEqual([]);
+});
