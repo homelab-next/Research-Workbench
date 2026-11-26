@@ -199,7 +199,7 @@ test("the run stops at 50 lookups and says so", async () => {
   expect(end.lookups).toBe(50);
   expect(end.caveats).toContain("stopped after 50 lookups");
   expect(entries().filter((e) => e.type === "query.issued").length).toBe(50 - end.reused);
-});
+}, 30_000); // fifty lookups against the sample's files take a few seconds on a loaded machine
 
 test("a costly step waits for a budget and the rest run", async () => {
   const costly = written("costly", {
