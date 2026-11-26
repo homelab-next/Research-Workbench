@@ -45,14 +45,19 @@ function previousFindings(session: CaseSession, d: Draft): PackPart {
   });
 }
 
-export const FIRST_JUDGMENT = "first judgment";
-/** Said when an answer carries a change kind the record rules out. */
-export const NOTHING_PUBLISHED = `nothing has been published in this case before, so the change is '${FIRST_JUDGMENT}'`;
-/** The answer schema with change_kind allowing only "first judgment": what a case with no earlier publication allows. Other schemas are unchanged. */
-export function firstJudgmentOnly(schema: Schema): Schema {
+/** Said when an answer carries a change kind the record rules out. `first` is the standard's first change term. */
+export const nothingPublished = (first: string): string => `nothing has been published in this case before, so the change is '${first}'`;
+/** The answer schema with change_kind allowing exactly the standard's change terms. A schema with no change_kind is unchanged. */
+export function changeKinds(schema: Schema, terms: readonly string[]): Schema {
   const kind = schema.properties?.change_kind;
-  if (kind === undefined || !Array.isArray(kind.enum) || !kind.enum.includes(FIRST_JUDGMENT)) return schema;
-  return { ...schema, properties: { ...schema.properties, change_kind: { ...kind, enum: [FIRST_JUDGMENT] } } };
+  if (kind === undefined) return schema;
+  return { ...schema, properties: { ...schema.properties, change_kind: { ...kind, enum: [...terms] } } };
+}
+/** The answer schema with change_kind allowing only the first change term: what a case with no earlier publication allows. Other schemas are unchanged. */
+export function firstJudgmentOnly(schema: Schema, first: string): Schema {
+  const kind = schema.properties?.change_kind;
+  if (kind === undefined || !Array.isArray(kind.enum) || !kind.enum.includes(first)) return schema;
+  return { ...schema, properties: { ...schema.properties, change_kind: { ...kind, enum: [first] } } };
 }
 
 /** The reason for the draft: why this revision exists. */
@@ -83,7 +88,8 @@ export async function assembleRunner(env: StageEnv): Promise<StageEnd> {
   const latest = latestDraft(state);
   // a finding's wording is composed from the profile standard's terms, read from the standard: one place
   const standard = deps.profile.standard === null ? null : deps.registry.get("standard", deps.profile.standard);
-  const work = new DraftWork(latest?.product ?? null, termsOf(standard?.body ?? null));
+  const terms = termsOf(standard?.body ?? null);
+  const work = new DraftWork(latest?.product ?? null, terms);
 
   const extras: PackPart[] = [];
   let fixes: PackPart | null;
@@ -121,10 +127,13 @@ export async function assembleRunner(env: StageEnv): Promise<StageEnd> {
   ].join("\n");
   const actorId = deps.profile.stages[stage.id]?.agent ?? "analyst";
   // the change follows the record: with nothing published in this case, the only change is a first judgment
-  const first = state.published.length === 0
-    ? { narrow: firstJudgmentOnly, explain: (a: Json): string[] => (isPlainObject(a) && typeof a.change_kind === "string" && a.change_kind !== FIRST_JUDGMENT ? [NOTHING_PUBLISHED] : []) }
-    : {};
-  const end = await stageAgent(env, { actor_id: actorId, task, extras, draft: work, draft_hash: latest?.hash ?? null, ...first });
+  // the kinds are the standard's change terms; its first is the only one while nothing is published
+  const nothing = state.published.length === 0;
+  const narrowing = terms === null ? {} : {
+    narrow: (s: Schema): Schema => (nothing ? firstJudgmentOnly(changeKinds(s, terms.change_terms), terms.first_change) : changeKinds(s, terms.change_terms)),
+    ...(nothing ? { explain: (a: Json): string[] => (isPlainObject(a) && typeof a.change_kind === "string" && a.change_kind !== terms.first_change ? [nothingPublished(terms.first_change)] : []) } : {}),
+  };
+  const end = await stageAgent(env, { actor_id: actorId, task, extras, draft: work, draft_hash: latest?.hash ?? null, ...narrowing });
   if (end.kind !== "output") return end;
   const output = end.output as { change_kind?: string; change_detail?: string; assumptions?: string[] };
 
@@ -150,7 +159,7 @@ export async function assembleRunner(env: StageEnv): Promise<StageEnd> {
     product = buildProduct(work, {
       objective, question: m.asked, case_marking: m.marking, cards: now.cards, source: (id) => deps.registry.source(id),
       untrusted: (id) => { const src = deps.registry.source(id); return src === null || deps.registry.rootOf(src.dir)?.trusted !== true; },
-      assumptions: output.assumptions ?? [], change: output.change_kind === undefined ? "" : composeChange(output.change_kind, output.change_detail ?? ""), written_at,
+      assumptions: output.assumptions ?? [], change: output.change_kind === undefined ? "" : composeChange(output.change_kind, output.change_detail ?? "", terms?.first_change ?? ""), written_at,
     });
   } catch (err) {
     if (err instanceof ToolError) return { kind: "stalled", reason: `${titleOf(env)}: ${err.message}` };

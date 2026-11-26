@@ -264,15 +264,15 @@ test("the likelihood terms a claim holds are found as whole phrases, longest fir
 });
 
 test("the change is composed from its kind and its detail", () => {
-  expect(composeChange("first judgment", "on this question")).toBe("First judgment: on this question.");
-  expect(composeChange("first judgment", "")).toBe("First judgment.");
-  expect(composeChange("consistent with", "the judgment published as product 1")).toBe("Consistent with the judgment published as product 1.");
-  expect(composeChange("changes", "the earlier judgment: the account is now named.")).toBe("Changes the earlier judgment: the account is now named.");
-  expect(composeChange("changes", "")).toBe("Changes the earlier judgment.");
-  expect(composeChange("consistent with", "")).toBe("Consistent with the earlier judgment.");
+  expect(composeChange("first judgment", "on this question", "first judgment")).toBe("First judgment: on this question.");
+  expect(composeChange("first judgment", "", "first judgment")).toBe("First judgment.");
+  expect(composeChange("consistent with", "the judgment published as product 1", "first judgment")).toBe("Consistent with the judgment published as product 1.");
+  expect(composeChange("changes", "the earlier judgment: the account is now named.", "first judgment")).toBe("Changes the earlier judgment: the account is now named.");
+  expect(composeChange("changes", "", "first judgment")).toBe("Changes the earlier judgment.");
+  expect(composeChange("consistent with", "", "first judgment")).toBe("Consistent with the earlier judgment.");
   // a detail that repeats its kind is not doubled
-  expect(composeChange("consistent with", "Consistent with product 1")).toBe("Consistent with product 1.");
-  expect(composeChange("first judgment", "First judgment on this question.")).toBe("First judgment: on this question.");
+  expect(composeChange("consistent with", "Consistent with product 1", "first judgment")).toBe("Consistent with product 1.");
+  expect(composeChange("first judgment", "First judgment on this question.", "first judgment")).toBe("First judgment: on this question.");
 });
 
 test("the form exceptions note is appended to gaps_and_limits, replaces an earlier one, and leaves text with no note untouched", () => {
@@ -284,4 +284,13 @@ test("the form exceptions note is appended to gaps_and_limits, replaces an earli
   expect(withFormExceptions(noted, [])).toBe("Flows were cut off.");
   expect(withFormExceptions("", [x[0]!])).toBe("Form exceptions noted:\n- change (change): empty");
   expect(withFormExceptions("untouched \n", [])).toBe("untouched \n");
+});
+
+test("the first change term is the standard's first; a standard with no change terms gives no terms", () => {
+  expect(ICD203().first_change).toBe("first judgment");
+  const body = Bun.YAML.parse(readFileSync(join(import.meta.dir, "..", "..", "sample", "context", "standards", "icd203.yaml"), "utf8")) as Record<string, unknown>;
+  expect(termsOf({ ...body, change_terms: [] })).toBeNull();
+  expect(termsOf({ ...body, change_terms: ["premier avis", "conforme a"] })!.first_change).toBe("premier avis");
+  expect(composeChange("premier avis", "", "premier avis")).toBe("Premier avis.");
+  expect(composeChange("conforme a", "", "premier avis")).toBe("Conforme a the earlier judgment.");
 });

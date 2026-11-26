@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Json } from "../../src/core/canonical";
@@ -740,4 +740,28 @@ test("the person's ruling is recorded in their name, goes to Assemble as a fixed
   }
   expect(f.s.state.drafts.at(-1)!.product.key_findings[0]!.likelihood).toBe("likely");
   expect(ofType("review.conflict")).toHaveLength(1);
+});
+
+const FOUR = ["first judgment", "consistent with", "changes", "withdraws"];
+const withFourTerms = (): void => { (f.sample.registry.get("standard", "icd203")!.body as { change_terms: string[] }).change_terms = [...FOUR]; };
+
+test("the change kinds the answer schema allows are the standard's own terms: only the first before anything is published", async () => {
+  withFourTerms();
+  expect(readFileSync(join(import.meta.dir, "..", "..", "sample", "context", "schemas", "assemble-output.yaml"), "utf8")).not.toContain("consistent");
+  structured = true;
+  const r = rig({ analyst: [FIRST[0]!, answer("withdraws"), answer("first judgment")], evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
+  expect(await go(r)).toMatchObject({ status: "waiting", waiting: "publish" });
+  expect(packedKinds(0)).toEqual(["first judgment"]);
+  expect(structuredKinds()).toEqual([["first judgment"]]);
+});
+
+test("the change kinds the answer schema allows are the standard's own terms: all of them once something is published", async () => {
+  withFourTerms();
+  structured = true;
+  f.s.commit(() => [{ type: "product.published", actor: person, payload: { n: 1, draft_hash: "0".repeat(64), head_hash: "0".repeat(64), dir: "bundle-1", bundle: f.s.blobs.put("{}") } }]);
+  const r = rig({ analyst: [FIRST[0]!, answer("withdraws", []), answer("withdraws")], evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
+  expect(await go(r)).toMatchObject({ status: "waiting", waiting: "publish" });
+  expect(packedKinds(0)).toEqual(FOUR);
+  expect(structuredKinds()).toEqual([FOUR]);
+  expect(f.s.state.drafts[0]!.product.change).toBe("Withdraws detail.");
 });

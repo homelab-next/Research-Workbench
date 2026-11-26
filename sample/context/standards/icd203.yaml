@@ -1,7 +1,7 @@
 kind: standard
 id: icd203
 title: Likelihood and confidence terms (after ICD 203)
-note: Check these terms and ranges against the published directive before relying on them.
+note: Check these terms and ranges against the published directive before relying on them. The first change term is the one for a first judgment.
 likelihood:
   - { term: almost no chance,   also: [remote chance],                         range: [1, 5] }
   - { term: very unlikely,      also: [highly improbable],                range: [5, 20] }

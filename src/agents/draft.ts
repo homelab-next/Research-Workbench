@@ -19,6 +19,8 @@ export interface StandardTerms {
   names: { text: string; term: string }[];
   judgment_markers: string[];
   change_terms: string[];
+  /** The first change term: the one that says this is a first judgment. */
+  first_change: string;
 }
 
 const strList = (x: unknown): string[] | null => (Array.isArray(x) && x.every((v) => typeof v === "string") ? [...x] as string[] : null);
@@ -29,7 +31,7 @@ export function termsOf(body: unknown): StandardTerms | null {
   const b = body as Record<string, unknown>;
   const markers = strList(b.judgment_markers);
   const change = strList(b.change_terms);
-  if (!Array.isArray(b.likelihood) || b.likelihood.length === 0 || markers === null || change === null) return null;
+  if (!Array.isArray(b.likelihood) || b.likelihood.length === 0 || markers === null || change === null || change.length === 0) return null;
   const likelihood: string[] = [];
   const names: StandardTerms["names"] = [];
   for (const l of b.likelihood as unknown[]) {
@@ -41,7 +43,7 @@ export function termsOf(body: unknown): StandardTerms | null {
     for (const t of [term, ...also]) names.push({ text: t.toLowerCase(), term });
   }
   names.sort((a, b2) => b2.text.length - a.text.length);
-  return { likelihood, names, judgment_markers: markers, change_terms: change };
+  return { likelihood, names, judgment_markers: markers, change_terms: change, first_change: change[0]! };
 }
 
 
@@ -83,14 +85,14 @@ export function composeStatement(likelihood: string, claim: string, terms: Stand
 
 /**
  * The product's change from earlier judgments, composed by code from its kind (a change term of the standard) and the analyst's detail, so that
- * it always starts with the term. A detail that repeats the kind is not doubled.
+ * it always starts with the term. A detail that repeats the kind is not doubled. `first` is the standard's first change term, the one a first judgment takes.
  */
-export function composeChange(kind: string, detail: string): string {
+export function composeChange(kind: string, detail: string, first: string): string {
   let d = detail.trim();
   if (d.toLowerCase().startsWith(kind.toLowerCase())) d = d.slice(kind.length).replace(/^[\s,:]+/, "");
   d = d.replace(/[\s.]+$/, "");
   const head = kind.charAt(0).toUpperCase() + kind.slice(1);
-  if (kind.toLowerCase() === "first judgment") return d === "" ? `${head}.` : `${head}: ${d}.`;
+  if (kind.toLowerCase() === first.toLowerCase()) return d === "" ? `${head}.` : `${head}: ${d}.`;
   return `${head} ${d === "" ? "the earlier judgment" : d}.`;
 }
 

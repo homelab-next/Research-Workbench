@@ -218,7 +218,7 @@ test("a composed draft passes checks 2, 6 and 10 by construction, for every like
   for (const kind of terms.change_terms) {
     for (const detail of ["", "the earlier judgment, with the account now named", `${kind} draft 1`]) {
       const i = good();
-      i.draft.product.change = composeChange(kind, detail);
+      i.draft.product.change = composeChange(kind, detail, terms.first_change);
       if (kind !== "first judgment") i.earlier = [{ n: 1, hash: "a".repeat(64) }];
       expect({ kind, detail, r: await run("change", i) }).toMatchObject({ r: { pass: true, findings: [] } });
     }
