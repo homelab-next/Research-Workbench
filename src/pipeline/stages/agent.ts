@@ -12,6 +12,7 @@ import { assemblePack, fitProblem, packBudget, slotContext } from "../../agents/
 import { DEFAULT_CONTEXT } from "../../agents/providers/local";
 import type { ModelInfo, Provider } from "../../agents/providers/types";
 import type { DraftWork, Forced } from "../../agents/draft";
+import { citedOf } from "../../agents/draft";
 import type { ToolContext, ToolName } from "../../agents/tools";
 import type { SeekLimits } from "../../modules/seeker";
 import { DEFAULT_LIMITS } from "../../modules/seeker";
@@ -211,10 +212,22 @@ export function agentActor(session: CaseSession, actorId: string): AgentActor {
   return e.actor;
 }
 
-/** The cards a draft's findings cite, as pack parts (a card that no longer exists is left out). */
+/** Every card the draft cites, as pack parts: the findings' cards in finding order, then the rest of citedOf(draft). A card no longer in the case is left out. */
 export function citedCardParts(session: CaseSession, registry: Registry, draft: Draft): PackPart[] {
-  const ids = [...new Set(draft.product.key_findings.flatMap((f) => f.cites))];
+  const first = [...new Set(draft.product.key_findings.flatMap((f) => f.cites))];
+  const ids = [...first, ...citedOf(draft).filter((id) => !first.includes(id))];
   return ids.filter((id) => Object.hasOwn(session.state.cards, id)).map((id) => packPart({ card: session.state.cards[id]!, registry }));
+}
+
+/** The ids citedOf(draft) names that are not in the case, sorted as citedOf sorts. */
+export function citedGone(session: CaseSession, draft: Draft): string[] {
+  return citedOf(draft).filter((id) => !Object.hasOwn(session.state.cards, id));
+}
+
+/** The line a reviewer's task carries when the draft cites cards the case no longer holds; null when it holds them all. */
+export function citedGoneLine(session: CaseSession, draft: Draft): string | null {
+  const gone = citedGone(session, draft);
+  return gone.length === 0 ? null : `Cited by the draft but no longer in the case: ${gone.join(", ")}. Say so; do not judge what they held.`;
 }
 
 /** The draft's product as a part the model cannot lose from its context. It carries the product's marking. */

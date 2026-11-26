@@ -4,7 +4,7 @@ import type { CheckFinding } from "../../core/types";
 import type { StageEnd, StageEnv } from "../engine";
 import { ContextError } from "../../agents/context";
 import { reviewPointsPart } from "../review-points";
-import { agentActor, citedCardParts, draftPart, noSchema, stageAgent, titleOf } from "./agent";
+import { agentActor, citedCardParts, citedGoneLine, draftPart, noSchema, stageAgent, titleOf } from "./agent";
 
 /** Evaluate: checks the draft pinned at the start of the stage against the cards it cites. The verdict is recorded against that draft's hash. */
 export async function evaluateRunner(env: StageEnv): Promise<StageEnd> {
@@ -18,6 +18,7 @@ export async function evaluateRunner(env: StageEnv): Promise<StageEnd> {
     `Evaluate draft ${d.n}.`,
     "Check that every finding is supported by what its cited cards say. Verify a card where it matters.",
     "Reply with pass, and for each problem the check, where it is and what is wrong.",
+    ...[citedGoneLine(session, d)].filter((x) => x !== null),
   ].join("\n");
   const actorId = deps.profile.stages[stage.id]?.agent ?? "evaluator";
   const extras = [draftPart(session, d), ...citedCardParts(session, deps.registry, d)];

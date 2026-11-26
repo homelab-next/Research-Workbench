@@ -332,6 +332,55 @@ test("Evaluate records its verdict against the hash it examined", async () => {
   expect(requestText("evaluator", 0)).toContain("ws-17 talks to the proxy");
 });
 
+/** A draft whose one finding cites c1 and whose gaps_and_limits names c2 and c3; `assessment` is the text of its assessment section. */
+const CITING_GAPS = (assessment = "stated"): ScriptReply[] => [
+  calls(finding("it is internal", ["c1"]), section("summary", "all clear", ["c1"]), section("gaps_and_limits", "c2 and c3 were empty [c2, c3]"), section("alternatives", "stated"), section("assessment", assessment)),
+  out("first"),
+];
+/** The ids of the cards in the pack of the first request the named stage made. */
+const packCards = (stage: string): string[] =>
+  ofType("model.request").filter((e) => e.actor.kind === "agent" && e.actor.stage === stage)[0]!.payload.pack.filter((i) => i.kind === "card").map((i) => i.id);
+/** cards() and a third, c3. */
+function threeCards(): void {
+  f.s.commit((_st, ids) => [{ type: "card.created", actor: person, payload: { card: card(ids.next("card"), { title: "Leases", body: "no lease", source: "assets", marking: "TLP:GREEN" }) } }]);
+}
+
+test("Evaluate's pack holds a card the draft cites only in Gaps and limits", async () => {
+  const r = rig({ analyst: CITING_GAPS(), evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
+  cards();
+  threeCards();
+  r.engine.start(person);
+  await r.engine.advance();
+  accept();
+  await r.engine.advance();
+  expect(packCards("evaluate")).toEqual(["c1", "c2", "c3"]);
+});
+
+test("Challenge's pack holds the same cards, the findings' cards first", async () => {
+  const r = rig({ analyst: CITING_GAPS(), evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
+  cards();
+  threeCards();
+  r.engine.start(person);
+  await r.engine.advance();
+  accept();
+  await r.engine.advance();
+  expect(packCards("challenge")).toEqual(["c1", "c2", "c3"]);
+});
+
+test("a cited card that is no longer in the case is named in the reviewer's task", async () => {
+  const r = rig({ analyst: CITING_GAPS("as c9 shows, it is internal"), evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
+  cards();
+  threeCards();
+  r.engine.start(person);
+  await r.engine.advance();
+  accept();
+  await r.engine.advance();
+  const line = "Cited by the draft but no longer in the case: c9. Say so; do not judge what they held.";
+  expect(requestText("evaluator", 0)).toContain(line);
+  expect(requestText("adversary", 0)).toContain(line);
+  expect(packCards("evaluate")).toEqual(["c1", "c2", "c3"]);
+});
+
 test("a failed evaluation sends the draft back to Assemble with the finding as the reason", async () => {
   const bad = say({ pass: false, findings: [{ check: "support", where: "f1", message: "f1 is not supported by c1" }, { check: "support", where: "f2", message: "second" }] });
   const r = rig({ analyst: [...FIRST, ...SECOND], evaluator: [bad, EVAL_PASS], adversary: [CHALLENGE_PASS] });

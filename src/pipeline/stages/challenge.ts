@@ -4,7 +4,7 @@ import type { PackPart } from "../../agents/context";
 import type { StageEnd, StageEnv } from "../engine";
 import { ContextError, packPart } from "../../agents/context";
 import { reviewPointsPart } from "../review-points";
-import { citedCardParts, draftPart, noSchema, stageAgent, titleOf } from "./agent";
+import { citedCardParts, citedGoneLine, draftPart, noSchema, stageAgent, titleOf } from "./agent";
 
 /** Challenge: the adversary argues against the draft pinned at the start. A must-address challenge still open against that hash fails the stage. */
 export async function challengeRunner(env: StageEnv): Promise<StageEnd> {
@@ -40,6 +40,7 @@ export async function challengeRunner(env: StageEnv): Promise<StageEnd> {
     `Challenge draft ${d.n}.`,
     "Argue against it: look for what the cards do not show, other explanations and weak confidence. Verify a card where it matters.",
     "Raise a challenge for each objection (must_address if the draft cannot stand without an answer), then reply with the output.",
+    ...[citedGoneLine(session, d)].filter((x) => x !== null),
   ].join("\n");
   const end = await stageAgent(env, { actor_id: deps.profile.stages[stage.id]?.agent ?? "adversary", task, extras, draft_hash: d.hash });
   if (end.kind !== "output") return end;

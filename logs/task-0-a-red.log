@@ -1,0 +1,63 @@
+bun test v1.3.14 (0d9b296a)
+
+tests/pipeline/stages-analysis.test.ts:
+351 |   threeCards();
+352 |   r.engine.start(person);
+353 |   await r.engine.advance();
+354 |   accept();
+355 |   await r.engine.advance();
+356 |   expect(packCards("evaluate")).toEqual(["c1", "c2", "c3"]);
+                                      ^
+error: expect(received).toEqual(expected)
+
+@@ -2,4 +2,3 @@
+    "c1",
+-   "c2",
+-   "c3",
+  ]
+
+- Expected  - 2
++ Received  + 0
+
+      at <anonymous> (/home/ansible/Research-Workbench/tests/pipeline/stages-analysis.test.ts:356:33)
+(fail) Evaluate's pack holds a card the draft cites only in Gaps and limits [60.71ms]
+362 |   threeCards();
+363 |   r.engine.start(person);
+364 |   await r.engine.advance();
+365 |   accept();
+366 |   await r.engine.advance();
+367 |   expect(packCards("challenge")).toEqual(["c1", "c2", "c3"]);
+                                       ^
+error: expect(received).toEqual(expected)
+
+@@ -2,4 +2,3 @@
+    "c1",
+-   "c2",
+-   "c3",
+  ]
+
+- Expected  - 2
++ Received  + 0
+
+      at <anonymous> (/home/ansible/Research-Workbench/tests/pipeline/stages-analysis.test.ts:367:34)
+(fail) Challenge's pack holds the same cards, the findings' cards first [33.01ms]
+374 |   r.engine.start(person);
+375 |   await r.engine.advance();
+376 |   accept();
+377 |   await r.engine.advance();
+378 |   const line = "Cited by the draft but no longer in the case: c9. Say so; do not judge what they held.";
+379 |   expect(requestText("evaluator", 0)).toContain(line);
+                                            ^
+error: expect(received).toContain(expected)
+
+Expected to contain: "Cited by the draft but no longer in the case: c9. Say so; do not judge what they held."
+Received: "{\"effort\":null,\"key\":\"evaluator\",\"messages\":[{\"content\":\"## Rules for every agent\\n- Propose, never write.\\n- Cite cards by id in brackets.\\n- Never call an empty result proof unless the card says proven negative.\\n- Every tool call needs a why.\\n- Reply with JSON only when a schema is given.\\n\\n\\n## Evaluator\\nYou are the evaluator. You check the draft against its cards and report each place it does not hold.\\n\\n\\n## Goal\\nCheck the draft against its cards and report what does not hold.\\n\\n## Evaluate output\\nReply with one JSON object that matches this schema — not the schema itself.\\n{\\n  \\\"type\\\": \\\"object\\\",\\n  \\\"additionalProperties\\\": false,\\n  \\\"required\\\": [\\n    \\\"pass\\\",\\n    \\\"findings\\\"\\n  ],\\n  \\\"properties\\\": {\\n    \\\"pass\\\": {\\n      \\\"type\\\": \\\"boolean\\\"\\n    },\\n    \\\"findings\\\": {\\n      \\\"type\\\": \\\"array\\\",\\n      \\\"items\\\": {\\n        \\\"type\\\": \\\"object\\\",\\n        \\\"additionalProperties\\\": false,\\n        \\\"required\\\": [\\n          \\\"check\\\",\\n          \\\"where\\\",\\n          \\\"message\\\"\\n        ],\\n        \\\"properties\\\": {\\n          \\\"check\\\": {\\n            \\\"type\\\": \\\"string\\\"\\n          },\\n          \\\"where\\\": {\\n            \\\"type\\\": \\\"string\\\"\\n          },\\n          \\\"message\\\": {\\n            \\\"type\\\": \\\"string\\\"\\n          }\\n        }\\n      }\\n    }\\n  }\\n}\\nExample:\\n{\\\"pass\\\":false,\\\"findings\\\":[]}\\n\\n## Intelligence cycle\\n{\\n  \\\"kind\\\": \\\"framework\\\",\\n  \\\"id\\\": \\\"intel-cycle\\\",\\n  \\\"title\\\": \\\"Intelligence cycle\\\",\\n  \\\"phases\\\": {\\n    \\\"direction\\\": {\\n      \\\"title\\\": \\\"Direction\\\"\\n    },\\n    \\\"collection\\\": {\\n      \\\"title\\\": \\\"Collection\\\"\\n    },\\n    \\\"processing\\\": {\\n      \\\"title\\\": \\\"Processing\\\"\\n    },\\n    \\\"analysis\\\": {\\n      \\\"title\\\": \\\"Analysis\\\"\\n    },\\n    \\\"dissemination\\\": {\\n      \\\"title\\\": \\\"Dissemination\\\"\\n    },\\n    \\\"feedback\\\": {\\n      \\\"title\\\": \\\"Feedback\\\"\\n    }\\n  }\\n}\\n\\n## Likelihood and confidence terms (after ICD 203)\\n{\\n  \\\"kind\\\": \\\"standard\\\",\\n  \\\"id\\\": \\\"icd203\\\",\\n  \\\"title\\\": \\\"Likelihood and confidence terms (after ICD 203)\\\",\\n  \\\"note\\\": \\\"Check these terms and ranges against the published directive before relying on them. The first change term is the one for a first judgment.\\\",\\n  \\\"likelihood\\\": [\\n    {\\n      \\\"term\\\": \\\"almost no chance\\\",\\n      \\\"also\\\": [\\n        \\\"remote chance\\\"\\n      ],\\n      \\\"range\\\": [\\n        1,\\n        5\\n      ]\\n    },\\n    {\\n      \\\"term\\\": \\\"very unlikely\\\",\\n      \\\"also\\\": [\\n        \\\"highly improbable\\\"\\n      ],\\n      \\\"range\\\": [\\n        5,\\n        20\\n      ]\\n    },\\n    {\\n      \\\"term\\\": \\\"unlikely\\\",\\n      \\\"also\\\": [\\n        \\\"improbable\\\"\\n      ],\\n      \\\"range\\\": [\\n        20,\\n        45\\n      ]\\n    },\\n    {\\n      \\\"term\\\": \\\"roughly even chance\\\",\\n      \\\"also\\\": [\\n        \\\"roughly even odds\\\"\\n      ],\\n      \\\"range\\\": [\\n        45,\\n        55\\n      ]\\n    },\\n    {\\n      \\\"term\\\": \\\"likely\\\",\\n      \\\"also\\\": [\\n        \\\"probable\\\",\\n        \\\"probably\\\"\\n      ],\\n      \\\"range\\\": [\\n        55,\\n        80\\n      ]\\n    },\\n    {\\n      \\\"term\\\": \\\"very likely\\\",\\n      \\\"also\\\": [\\n        \\\"highly probable\\\"\\n      ],\\n      \\\"range\\\": [\\n        80,\\n        95\\n      ]\\n    },\\n    {\\n      \\\"term\\\": \\\"almost certain\\\",\\n      \\\"also\\\": [\\n        \\\"almost certainly\\\",\\n        \\\"nearly certain\\\"\\n      ],\\n      \\\"range\\\": [\\n        95,\\n        99\\n      ]\\n    }\\n  ],\\n  \\\"confidence\\\": [\\n    \\\"low\\\",\\n    \\\"moderate\\\",\\n    \\\"high\\\"\\n  ],\\n  \\\"judgment_markers\\\": [\\n    \\\"we assess\\\",\\n    \\\"we judge\\\",\\n    \\\"we estimate\\\"\\n  ],\\n  \\\"change_terms\\\": [\\n    \\\"first judgment\\\",\\n    \\\"consistent with\\\",\\n    \\\"changes\\\"\\n  ]\\n}\\n\\n## The case\\nCase CASE-1: t\\nAsked: a\\nWhy: w\\nStarting from: address 198.51.100.77\\nWindow: 2026-11-17T00:00:00.000Z to 2026-11-24T00:00:00.000Z\\n\\n## Draft 1 (116008e2a6d7)\\n{\\n  \\\"alternatives\\\": \\\"stated\\\",\\n  \\\"assessment\\\": \\\"as c9 shows, it is internal\\\",\\n  \\\"assumptions\\\": [\\n    \\\"the records are current\\\"\\n  ],\\n  \\\"change\\\": \\\"First judgment: first.\\\",\\n  \\\"gaps_and_limits\\\": \\\"c2 and c3 were empty [c2, c3]\\\",\\n  \\\"key_findings\\\": [\\n    {\\n      \\\"assumptions\\\": [],\\n      \\\"cites\\\": [\\n        \\\"c1\\\"\\n      ],\\n      \\\"confidence\\\": \\\"high\\\",\\n      \\\"confidence_basis\\\": \\\"the record\\\",\\n      \\\"id\\\": \\\"f1\\\",\\n      \\\"likelihood\\\": \\\"likely\\\",\\n      \\\"reasoning\\\": \\\"matches\\\",\\n      \\\"statement\\\": \\\"We assess it is likely that it is internal.\\\"\\n    }\\n  ],\\n  \\\"marking\\\": \\\"TLP:AMBER\\\",\\n  \\\"objective\\\": \\\"\\\",\\n  \\\"question\\\": \\\"a\\\",\\n  \\\"sources\\\": [\\n    {\\n      \\\"quality\\\": \\\"The asset list is complete for internal hosts, so an address absent from it is not internal.\\\",\\n      \\\"source\\\": \\\"assets\\\"\\n    }\\n  ],\\n  \\\"summary\\\": \\\"all clear\\\"\\n}\\n\\n## Card c1: Asset record\\nCard c1: Asset record\\nws-17 is a managed laptop\\nSource: assets\\nCoverage: full\\nEmpty means: not stated\\nColumns: a\\nRows (1 of 1):\\n[\\\"x\\\"]\",\"role\":\"system\"},{\"content\":\"Evaluate draft 1.\\nCheck that every finding is supported by what its cited cards say. Verify a card where it matters.\\nReply with pass, and for each problem the check, where it is and what is wrong.\\n\\nTurn 1 of 16.\",\"role\":\"user\"}],\"model\":\"sample-run\",\"ordinal\":0,\"tools\":[{\"description\":\"List the cards in the case (not discarded ones), optionally for one sub-goal.\",\"name\":\"list_cards\",\"parameters\":{\"additionalProperties\":false,\"properties\":{\"subgoal\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"why\":{\"description\":\"why you are doing this, in a sentence\",\"maxLength\":500,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"why\"],\"type\":\"object\"}},{\"description\":\"Read one card: its rows, coverage, quality notes and the exact query behind it.\",\"name\":\"read_card\",\"parameters\":{\"additionalProperties\":false,\"properties\":{\"card\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"why\":{\"description\":\"why you are doing this, in a sentence\",\"maxLength\":500,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"why\",\"card\"],\"type\":\"object\"}},{\"description\":\"Re-run the query behind a card and say whether the result matches.\",\"name\":\"verify_card\",\"parameters\":{\"additionalProperties\":false,\"properties\":{\"card\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"why\":{\"description\":\"why you are doing this, in a sentence\",\"maxLength\":500,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"why\",\"card\"],\"type\":\"object\"}}]}"
+
+      at <anonymous> (/home/ansible/Research-Workbench/tests/pipeline/stages-analysis.test.ts:379:39)
+(fail) a cited card that is no longer in the case is named in the reviewer's task [30.69ms]
+
+ 0 pass
+ 41 filtered out
+ 3 fail
+ 6 expect() calls
+Ran 3 tests across 1 file. [196.00ms]
