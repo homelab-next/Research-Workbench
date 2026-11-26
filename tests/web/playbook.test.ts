@@ -139,7 +139,9 @@ test("in replay both buttons are disabled", async () => {
 });
 
 // pure: the verdict is read from the run alone
-const lk = (value: string, outcome: PlaybookRunState["steps"][string]["lookups"][number]["outcome"]) => ({ value, outcome, rows: outcome === "answered" ? 1 : 0, query: "q1", card: null, reused: false, detail: "" });
+const lk = (value: string, outcome: PlaybookRunState["steps"][string]["lookups"][number]["outcome"], card: string | null = null) => ({ value, outcome, rows: outcome === "answered" ? 1 : 0, query: "q1", card, reused: false, detail: "" });
+/** The cards as the record holds them: what each empty answer proves was decided when it was asked. */
+const cards = { proven: { empty: "proven-negative" }, unseen: { empty: "not-seen" } } as const;
 const run = (steps: [string, string, ReturnType<typeof lk>[]][]): PlaybookRunState => ({
   job: "job-1", playbook: "does-it-belong", title: "Does it belong?", inputs: [], window: SAMPLE_WINDOW, plan_step: null, started_seq: 1, status: "empty", end_step: null,
   steps: Object.fromEntries(steps.map(([id, pivot, lookups]) => [id, { job: "job-1", step: id, pivot, status: "ran", reason: "", lookups, found: [], left: 0 }])),
@@ -150,8 +152,27 @@ const ref = {
   inventories: [{ id: "ia", title: "A", holds: "asset", scope: "hosts", complete: true }, { id: "ib", title: "B", holds: "asset", scope: "leases", complete: false }],
 };
 test("belongsVerdict: a failed lookup in a complete inventory is not a negative", () => {
-  expect(belongsVerdict(run([["i1", "pa", [lk("v", "failed")]], ["i2", "pb", [lk("v", "empty")]]]), ref)).toEqual({ verdict: "could not tell", text: "Could not tell" });
-  expect(belongsLines(run([["i1", "pa", [lk("v", "failed")]]]), ref)[0]!.line).toBe("A: could not tell (failed)");
-  expect(belongsVerdict(run([["i1", "pa", [lk("v", "empty")]]]), ref).verdict).toBe("not known: proven");
-  expect(belongsVerdict(run([["i1", "pa", [lk("v", "empty")]], ["i2", "pb", [lk("v", "answered")]]]), ref).verdict).toBe("known");
+  expect(belongsVerdict(run([["i1", "pa", [lk("v", "failed")]], ["i2", "pb", [lk("v", "empty", "unseen")]]]), ref, cards)).toEqual({ verdict: "could not tell", text: "Could not tell" });
+  expect(belongsLines(run([["i1", "pa", [lk("v", "failed")]]]), ref, cards)[0]!.line).toBe("A: could not tell (failed)");
+  expect(belongsVerdict(run([["i1", "pa", [lk("v", "empty", "proven")]]]), ref, cards).verdict).toBe("not known: proven");
+  expect(belongsVerdict(run([["i1", "pa", [lk("v", "empty", "proven")]], ["i2", "pb", [lk("v", "answered")]]]), ref, cards).verdict).toBe("known");
+});
+
+test("belongsVerdict: what an empty answer proves is the record's, not today's reference", () => {
+  // final review I2: the lookup was recorded not seen (the inventory was not complete when it was asked); the reference now says complete
+  const asked = run([["i1", "pa", [lk("v", "empty", "unseen")]]]);
+  expect(belongsVerdict(asked, ref, cards)).toEqual({ verdict: "not seen", text: "Not seen in any inventory; none is complete, so this proves nothing" });
+  expect(belongsLines(asked, ref, cards)[0]!.line).toBe("Not in A · not proof: it is not declared complete");
+  // and the reverse: recorded proven, while the reference now says the inventory is not complete
+  const proven = run([["i2", "pb", [lk("v", "empty", "proven")]]]);
+  expect(belongsVerdict(proven, ref, cards)).toEqual({ verdict: "not known: proven", text: "Not a known asset: proven for leases" });
+  // an empty answer with no card proves nothing
+  expect(belongsVerdict(run([["i1", "pa", [lk("v", "empty")]]]), ref, cards).verdict).toBe("not seen");
+});
+
+test("belongsVerdict: a hit whose pivot has left the reference is still known; an empty one there could not be told", () => {
+  const none = { pivots: [], inventories: [] };
+  expect(belongsVerdict(run([["i1", "gone", [lk("v", "answered")]]]), none, cards).verdict).toBe("known");
+  expect(belongsLines(run([["i1", "gone", [lk("v", "answered")]]]), none, cards)[0]!.line).toBe("In gone");
+  expect(belongsVerdict(run([["i1", "gone", [lk("v", "empty", "proven")]]]), none, cards).verdict).toBe("could not tell");
 });

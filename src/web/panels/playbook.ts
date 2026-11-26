@@ -62,9 +62,9 @@ export function makePlaybookBlock(ui: Ui, store: CaseStore, nav: Pick<Nav, "focu
     const box = h("div", { class: "playbook-trail", role: "status" });
     const status = run.status === "interrupted" ? "Interrupted: the server stopped. Run it again; answered lookups are reused." : run.status === "running" ? "Running" : `Finished: ${run.status}`;
     if (run.playbook === BELONGS && run.status !== "running") {
-      const v = belongsVerdict(run, ui.ref);
+      const v = belongsVerdict(run, ui.ref, store.shown.cards);
       box.append(h("p", { class: `belongs-verdict ${v.verdict.replace(/[^a-z]+/g, "-")}` }, v.text),
-        h("div", { class: "belongs-lines" }, belongsLines(run, ui.ref).map((l) => h("p", { class: "belongs-line", data: { inventory: l.inventory } }, l.line))));
+        h("div", { class: "belongs-lines" }, belongsLines(run, ui.ref, store.shown.cards).map((l) => h("p", { class: "belongs-line", data: { inventory: l.inventory } }, l.line))));
     }
     box.append(h("p", { class: `status ${run.status}` }, status));
     for (const id of run.order) {
