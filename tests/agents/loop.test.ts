@@ -905,3 +905,57 @@ test("an endpoint that refuses a named tool_choice (400) is sent required, and t
     expect(reqs[2]!.cause).toBe(ofType("model.response")[1]!.seq);
   } finally { m.stop(); f.ctx.draft = null; }
 });
+
+// ---- dev CASE-3: a missing section is forced whatever the re-ask was spent on, and forcing takes no turn of the budget ----
+const emptyReply = { json: { choices: [{ finish_reason: "stop", message: { content: "" } }] } };
+const bad = { json: { choices: [{ finish_reason: "stop", message: { content: `{"n":"one"}` } }] } };
+/** A model that calls the forced tool when a tool is named, and otherwise answers over whatever the draft holds. */
+const obliging = (n: number) => (b: Body) => (typeof b.tool_choice === "object" && b.tool_choice !== null ? forcedCall(b) : answer(n));
+const local = (url: string) => new LocalProvider({ id: "lm", base_url: url, where: "machine", credential: null, secrets: new Secrets({}, null), context: null, efforts: [], timeout_ms: 5000 });
+
+test("an empty reply re-asked while sections are missing: the next requests force them, then the answer turn (the re-ask was spent on the empty reply)", async () => {
+  const { work, over } = drafting();
+  const m = startModelStandin({ replies: [emptyReply, obliging(1), obliging(1), obliging(2)] });
+  try {
+    const end = await runAgent(f.s, spec(local(m.url), over));
+    expect(end).toMatchObject({ kind: "done", output: { n: 2 } });
+    const bodies = m.requests.filter((r) => r.method === "POST").map((r) => JSON.parse(r.body) as Body);
+    expect(bodies.map((b) => b.tool_choice ?? null)).toEqual([null, NAMED, NAMED, "none"]);
+    expect(narrativeEnum(bodies[1]!)).toEqual(["alternatives", "assessment"]);
+    expect(narrativeEnum(bodies[2]!)).toEqual(["assessment"]);
+    expect(bodies[3]!.response_format).toMatchObject({ type: "json_schema", json_schema: { name: "assemble-output" } });
+    expect(work.sections).toMatchObject({ alternatives: "stated", assessment: "stated" });
+    expect(ofType("model.request").map((e) => JSON.parse(text(e.payload.messages)) as Body)).toEqual(bodies);
+  } finally { m.stop(); f.ctx.draft = null; }
+});
+
+test("an answer over missing sections does not spend the corrective re-ask: a later answer that fails its schema is still re-asked once", async () => {
+  const { over } = drafting();
+  const m = startModelStandin({ replies: [answer(1), forcedCall, forcedCall, bad, answer(3)] });
+  try {
+    const end = await runAgent(f.s, spec(local(m.url), over));
+    expect(end).toMatchObject({ kind: "done", output: { n: 3 } });
+  } finally { m.stop(); f.ctx.draft = null; }
+});
+
+test("forced requests take no turn of the budget: an answer over missing sections on the last turn is followed by the forced calls and one more answer turn", async () => {
+  const { work, over } = drafting();
+  const m = startModelStandin({ replies: [obliging(1), obliging(1), obliging(1), obliging(2)] });
+  try {
+    const end = await runAgent(f.s, spec(local(m.url), { ...over, max_turns: 1 }));
+    expect(end).toMatchObject({ kind: "done", output: { n: 2 } });
+    const bodies = m.requests.filter((r) => r.method === "POST").map((r) => JSON.parse(r.body) as Body);
+    expect(bodies.map((b) => b.tool_choice ?? null)).toEqual(["none", NAMED, NAMED, "none"]);
+    expect(work.sections).toMatchObject({ alternatives: "stated", assessment: "stated" });
+  } finally { m.stop(); f.ctx.draft = null; }
+});
+
+test("a model that answers a forced request instead of calling the tool still ends: the second such answer is invalid", async () => {
+  const { over } = drafting();
+  const m = startModelStandin({ replies: [answer(1), answer(1), answer(1), answer(1)] });
+  try {
+    const end = await runAgent(f.s, spec(local(m.url), over));
+    expect(end).toMatchObject({ kind: "invalid", returned: "an answer over an unfinished draft" });
+    expect(m.requests.filter((r) => r.method === "POST").length).toBeLessThanOrEqual(3);
+  } finally { m.stop(); f.ctx.draft = null; }
+});

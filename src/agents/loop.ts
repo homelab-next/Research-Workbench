@@ -18,6 +18,8 @@ export const MAX_TURNS = 16;
 /** The re-ask for a reply that came back empty while the model wrote its answer into its reasoning. */
 export const EMPTY_REASK = "Your reply was empty; your answer went into your reasoning. Put the JSON answer in the reply itself.";
 const DECLINE_CHARS = 2000;
+/** How many forced requests take no turn of the budget: past this, a forced request is an ordinary turn. */
+export const MAX_FREE_FORCED = 8;
 
 /** The line each request's task text ends with: which turn this is, and near the end what is left to do. */
 export function turnLine(turn: number, of: number, missing: readonly string[] = []): string {
@@ -46,8 +48,10 @@ export interface AgentSpec {
   lacking?: () => string[];
   /** The re-ask for an answer given while `lacking` names something. */
   lackingAsk?: (missing: string[]) => string;
-  /** After that re-ask, the tool each request makes the model call while `lacking` names something (tool_choice names it, its parameters
-   * narrowed); once nothing is missing the next request is the answer turn (tool_choice none, structured output). Absent: nothing is forced. */
+  /** The tool each request makes the model call while `lacking` names something, from the moment an answer is accepted or re-asked over
+   * an unfinished draft, whatever the re-ask was spent on (tool_choice names it, its parameters narrowed); once nothing is missing the next
+   * request is the answer turn (tool_choice none, structured output). A forced request takes neither the corrective re-ask nor a turn of the
+   * budget (up to MAX_FREE_FORCED of them). Absent: nothing is forced. */
   force?: (missing: string[]) => Forced | null;
   /** The seq of the entry this work answers (a question): put on the agent's own request and block entries, so a reader links them to it by cause rather than by position. */
   cause?: number;
@@ -159,8 +163,11 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
   let reasked = false;
   // set when a routing turn's reply held no tool call: from then on the stage's model takes every turn, with no tool on offer
   let answerNow = false;
-  // set by the re-ask over an unfinished draft when the spec can force a tool: from then on each request forces what is still missing
+  // set when an answer is accepted or re-asked over an unfinished draft and the spec can force a tool: from then on each request forces
+  // what is still missing
   let forcing = false;
+  // forced requests sent so far: up to MAX_FREE_FORCED take no turn of the budget
+  let forcedSent = 0;
   // set when the endpoint refused a tool_choice naming a tool (400): from then on a forced request sends "required"
   let namedRefused = false;
   // the failed attempt of this turn that is being made once more, and the seq of its response, which causes the new request
@@ -168,6 +175,12 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
   let retryCause: number | null = null;
   const maxTurns = spec.max_turns ?? MAX_TURNS;
   const put = (data: Uint8Array | string): BlobRef => session.blobs.put(data);
+  /** What would be forced for `missing`: the spec's choice, if it is one of this agent's tools. */
+  const forceFor = (missing: string[]): Forced | null => {
+    if (missing.length === 0) return null;
+    const c = spec.force?.(missing) ?? null;
+    return c !== null && (spec.tools as readonly string[]).includes(c.tool) ? c : null;
+  };
 
   for (let turn = 0; turn < maxTurns; turn++) {
     // 1. stop checks
@@ -177,8 +190,14 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
       const { usage } = runUsage(session.state);
       if (usage.input + usage.output >= run.budget_tokens) return { kind: "stopped", why: "budget" };
     }
+    // after an answer over an unfinished draft: what is missing is forced, one request at a time, and while free a forced request is not
+    // the last turn (it takes no turn of the budget); when nothing is missing, this is the answer turn
+    const missing = spec.lacking?.() ?? [];
+    const free = forcedSent < MAX_FREE_FORCED;
+    const forced = forcing && !answerNow && (free || turn < maxTurns - 1) ? forceFor(missing) : null;
+    const freeForced = forced !== null && free;
     // a routing turn goes to the fast model: not the last turn, not a re-ask, tools on offer, and not "answer now"
-    const last = turn === maxTurns - 1;
+    const last = turn === maxTurns - 1 && forced === null;
     const routing = spec.fast !== undefined && !last && !reasked && !answerNow && spec.tools.length > 0;
     const via = routing ? spec.fast!.provider : provider;
     const viaModel = routing ? spec.fast!.model : spec.model;
@@ -197,11 +216,9 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     const ordinal = session.entries().filter((e) => e.type === "model.request" && e.actor.kind === "agent" && e.actor.id === actor.id
       && e.payload.provider === via.id && e.payload.model === viaModel).length;
     // the task text says which turn this is; on the last the reply can only be the answer: no tool is offered to run, and output is structured
-    const missing = spec.lacking?.() ?? [];
-    const sent = messages.map((m, i) => (i === 1 ? { ...m, content: `${spec.task}\n\n${turnLine(turn + 1, maxTurns, missing)}` } : m));
-    // after the re-ask over an unfinished draft: what is missing is forced, one request at a time; when nothing is, this is the answer turn
-    const candidate = forcing && !last && !answerNow && missing.length > 0 ? spec.force?.(missing) ?? null : null;
-    const forced = candidate !== null && (spec.tools as readonly string[]).includes(candidate.tool) ? candidate : null;
+    const line = forced === null ? turnLine(turn + 1, maxTurns, missing)
+      : `Turn ${turn + 1} of ${maxTurns}. The draft still has no ${missing.join(", ")}: propose it now; your final answer comes after.`;
+    const sent = messages.map((m, i) => (i === 1 ? { ...m, content: `${spec.task}\n\n${line}` } : m));
     const answerTurn = forcing && !last && missing.length === 0;
     const offered = toolSpecs(spec.tools, ctx).map((t) => (forced?.narrow !== undefined && t.name === forced.tool ? { ...t, parameters: forced.narrow(t.parameters) } : t));
     const req: TurnRequest = { model: viaModel, effort: viaEffort, messages: sent, tools: offered, key: actor.id, ordinal };
@@ -373,6 +390,8 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
       // the next request carries only the calls that ran, so it does not grow with a reply's excess
       messages.push({ role: "assistant", content: result.content, tool_calls: toRun }, ...results);
       if (extra > 0) messages.push({ role: "user", content: `${skippedNote}: at most ${MAX_CALLS} tool calls of a reply are run. Call again for what you still need.` });
+      // a free forced request takes no turn of the budget
+      if (freeForced) { forcedSent++; turn--; }
       continue;
     }
 
@@ -390,7 +409,16 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
       if (errors.length === 0) {
         const missing = spec.lacking?.() ?? [];
         if (missing.length === 0) return { kind: "done", content: result.content, output: found.value, calls };
-        // a complete-looking answer over an unfinished draft: it uses the one re-ask, and the work goes on with its tools
+        // a complete-looking answer over an unfinished draft. When what is missing can be forced (and this reply was not itself to a forced
+        // request), it is forced: the re-ask is not used, and on the last turn the answer turn comes again after the forced requests.
+        if (forced === null && free && forceFor(missing) !== null) {
+          reasked = true;
+          forcing = true;
+          messages.push({ role: "assistant", content: result.content }, { role: "user", content: spec.lackingAsk?.(missing) ?? `The draft still has no ${missing.join(", ")}; finish it, then answer` });
+          if (last) turn--;
+          continue;
+        }
+        // otherwise it uses the one re-ask, and the work goes on with its tools
         if (++failures >= 2) return { kind: "invalid", errors: [`the draft still has no ${missing.join(", ")}`], returned: "an answer over an unfinished draft", calls };
         reasked = true;
         forcing = spec.force !== undefined;
@@ -401,9 +429,14 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     }
     if (++failures >= 2) return { kind: "invalid", errors, returned: returnedWord(empty, found, spec.schema), calls };
     reasked = true;
+    // a re-ask while the draft is unfinished: what is missing is forced first, then the answer turn carries the corrected answer
+    const lacks = spec.lacking?.() ?? [];
+    const forceNext = forceFor(lacks) !== null;
+    if (forceNext) forcing = true;
+    const ask = empty ? EMPTY_REASK : `Your reply did not match the required output: ${errors.join("; ")}. Reply again with the corrected JSON only.`;
     messages.push(
       { role: "assistant", content: result.content },
-      { role: "user", content: empty ? EMPTY_REASK : `Your reply did not match the required output: ${errors.join("; ")}. Reply again with the corrected JSON only.` },
+      { role: "user", content: forceNext ? `${ask} ${spec.lackingAsk?.(lacks) ?? `The draft still has no ${lacks.join(", ")}; finish it, then answer`}.` : ask },
     );
   }
   return { kind: "stopped", why: "turns" };
