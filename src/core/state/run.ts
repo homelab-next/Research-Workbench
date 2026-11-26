@@ -15,7 +15,8 @@ const isStep = (x: unknown): x is PlanStep =>
   && isObservable(x.from) && isStr(x.to) && isTimeWindow(x.window)
   && isBool(x.needs_window) && isBool(x.free) && isNum(x.weight) && (x.estimate === null || isCost(x.estimate))
   && isOneOf(x.empty_means, EMPTY_MEANS) && isStrList(x.warnings)
-  && (x.playbook === undefined || (isObj(x.playbook) && isStr(x.playbook.id) && isStr(x.playbook.hash) && Array.isArray(x.playbook.inputs) && x.playbook.inputs.every(isObservable)));
+  && (x.playbook === undefined || (isObj(x.playbook) && isStr(x.playbook.id) && isStr(x.playbook.hash) && Array.isArray(x.playbook.inputs) && x.playbook.inputs.every(isObservable)))
+  && (x.pins === undefined || isStr(x.pins));
 const isInventoryRef = (x: unknown): boolean => x === undefined || (isObj(x) && isStr(x.id) && isStr(x.hash) && isBool(x.complete));
 const isSubGoal = (x: unknown): boolean => isObj(x) && isStr(x.id) && isStr(x.title) && isStr(x.question) && isStrList(x.steps);
 const isPlan = (x: unknown): x is Plan =>

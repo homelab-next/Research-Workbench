@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Plan } from "../../src/core/types";
 import { loadConfig } from "../../src/modules/config";
+import { stepPins } from "../../src/modules/pins";
 import { Registry } from "../../src/modules/registry";
 import { DEFAULT_LIMITS } from "../../src/modules/seeker";
 import { acceptPlan, buildPlan, denyPlan, estimateStep, PlanRefused, requestReplan, spendPlanBudget } from "../../src/pipeline/plans";
@@ -414,4 +415,21 @@ test("each way a playbook sub-goal can be wrong is refused with its reason", () 
   const neither = pbOut();
   delete neither.subgoals[0]!.playbook;
   expect(buildPlan("", neither, deps(), pbFrame, null)).toEqual({ errors: [shape] });
+});
+
+test("every step of a built plan carries pins, and a playbook step's pins change when one of its pivots changes", () => {
+  const route = { title: "Reputation", question: "What is known?", have: [{ type: "address", value: START }], want: "verdict", route: ["address_to_verdict"] };
+  const both: PlanOutput = { goal: "g", subgoals: [route, pbOut().subgoals[0]!] };
+  const plan = buildPlan("plan-1", both, deps(), pbFrame, null) as Plan;
+  expect(plan.steps).toHaveLength(2);
+  for (const st of plan.steps) expect(st.pins).toMatch(/^[0-9a-f]{64}$/);
+  expect(plan.steps[0]!.pins).toBe(stepPins(f.sample.registry, plan.steps[0]!)!);
+  // a copy of the root with one line appended to pivots.yaml: every pivot's hash is the file's, so each changes
+  const root = join(dir, "changed");
+  cpSync(f.sample.root, root, { recursive: true });
+  appendFileSync(join(root, "pivots.yaml"), "# changed\n");
+  const changed = Registry.load([{ path: root, trusted: true, credentials: [] }]);
+  const pb = plan.steps.find((s) => s.playbook !== undefined)!;
+  expect(changed.playbook("address-triage")!.hash).toBe(pb.playbook!.hash);
+  expect(stepPins(changed, pb)).not.toBe(pb.pins);
 });

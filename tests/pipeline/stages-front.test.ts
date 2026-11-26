@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Json } from "../../src/core/canonical";
@@ -685,6 +685,22 @@ test("a playbook changed since the plan was accepted is not run", async () => {
   expect(ofType("step.finished")[0]!.payload).toMatchObject({ step: "s1", outcome: "blocked", cards: [], note: "the playbook address-triage changed since the plan was accepted; re-plan to use it" });
   expect(ofType("query.issued")).toEqual([]);
   expect(ofType("job.started")).toEqual([]);
+});
+
+test("a playbook step whose pivot changed since acceptance is not run: it finishes blocked", async () => {
+  const plan = pbPlan(pbGoal());
+  const r = rig({ orchestrator: [say(PB_FRAME)], planner: [say(plan), say(plan)] });
+  await toGate(r);
+  r.engine.acceptPlan({ actor: person });
+  // every pivot's hash is its file's: one line appended changes them all; the playbook file is untouched
+  appendFileSync(join(f.sample.root, "pivots.yaml"), "# changed\n");
+  reload(r);
+  expect(r.deps.registry.playbook("address-triage")!.hash).toBe(f.s.state.plan.current!.steps[0]!.playbook!.hash);
+  await r.engine.advance();
+  // the run is then sent back to Plan, which proposes a new plan: the step as it finished under the accepted one is in its step.finished
+  const step = (id: string) => ofType("step.finished").find((e) => e.payload.step === id)!.payload;
+  expect(step("s1")).toMatchObject({ outcome: "blocked", cards: [], note: "a pivot of the playbook address-triage changed since the plan was accepted; re-plan to use it" });
+  expect(ofType("query.issued")).toEqual([]);
 });
 
 test("a playbook that no longer fits when Research starts it finishes its step blocked with the reason, and the stage does not throw", async () => {

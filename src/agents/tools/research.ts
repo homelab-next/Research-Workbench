@@ -3,6 +3,7 @@ import type { CaseSession } from "../../core/session";
 import type { Plan, PlanStep, StepOutcome, TimeWindow } from "../../core/types";
 import { strictest } from "../../core/types";
 import { pivotWeight } from "../../modules/manifests";
+import { stepPins } from "../../modules/pins";
 import { bindPivot, runPivot, yielded } from "../../modules/pivots";
 import { answeredBefore, reuseNote } from "../../modules/reuse";
 import type { Reused } from "../../modules/reuse";
@@ -140,6 +141,15 @@ async function runStepTool(ctx: ToolContext, args: Record<string, Json>): Promis
     return { ok: true, summary, view: json(view), marking: markings.length === 0 ? null : strictest(...markings) };
   }
   if (ctx.subgoal !== null && step.subgoal !== ctx.subgoal) throw new ToolError(`step ${id} belongs to sub-goal ${step.subgoal}, not ${ctx.subgoal}`);
+  // a step recorded with pins runs only on the pivot and inventory the person accepted; one that changed (or cannot be pinned now) blocks it
+  if (step.pins !== undefined && stepPins(ctx.deps.registry, step) !== step.pins) {
+    const note = `the pivot ${step.pivot} changed since the plan was accepted; re-plan to use it`;
+    ctx.session.commit(() => [
+      { type: "step.started", actor: ctx.actor, ...ctx.link, payload: { step: id } },
+      { type: "step.finished", actor: ctx.actor, ...ctx.link, payload: { step: id, outcome: "blocked", cards: [], note } },
+    ]);
+    return { ok: true, summary: note, view: { status: "blocked", step: id, note }, marking: null };
+  }
   const value = step.from.value !== "" ? step.from.value : str(args.value);
   if (value === "") throw new ToolError("this step needs a value from an earlier step");
   const pivot = ctx.deps.registry.pivot(step.pivot);

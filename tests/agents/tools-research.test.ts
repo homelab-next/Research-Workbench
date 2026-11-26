@@ -3,7 +3,8 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import type { Json } from "../../src/core/canonical";
 import { execTool, parseCall } from "../../src/agents/tools";
-import type { Payloads } from "../../src/core/types";
+import type { Payloads, PlanStep } from "../../src/core/types";
+import { stepPins } from "../../src/modules/pins";
 import type { RunQueryResult } from "../../src/modules/runner";
 import { agent, fixture, person, PLAN, START, WINDOW } from "../helpers/tools-fixture";
 import type { Fixture } from "../helpers/tools-fixture";
@@ -452,4 +453,39 @@ test("a finished step read back with no card carries its source's marking", asyn
   const r = await f.call("run_step", { step: "s1", why: "w" });
   expect(r).toMatchObject({ ok: true, view: { status: "already_run", outcome: "failed" } });
   expect(r.marking).toBe("TLP:AMBER");
+});
+
+test("run_step on a route step whose pivot changed since acceptance finishes it blocked and sends nothing", async () => {
+  const st: PlanStep = {
+    id: "s1", subgoal: "g1", pivot: "address_to_domains", source: "dns-logs", from: { type: "address", value: START }, to: "domain", window: WINDOW,
+    needs_window: true, free: true, weight: 0, estimate: null, empty_means: "not-seen", warnings: [],
+  };
+  st.pins = stepPins(f.sample.registry, st)!;
+  f.s.commit((_st, ids) => [{
+    type: "plan.proposed", actor: agent,
+    payload: { plan: { id: ids.next("plan"), goal: "g", window: WINDOW, subgoals: [{ id: "g1", title: "Names", question: "Which names?", steps: ["s1"] }], steps: [st] } },
+  }]);
+  f.s.commit(() => [{ type: "plan.accepted", actor: person, payload: { plan: "plan-2", steps: ["s1"], budgets: {} } }]);
+  const pivot = f.sample.registry.pivot("address_to_domains")!;
+  const hash = pivot.hash;
+  pivot.hash = "a-changed-pivot";
+  try {
+    const result = await f.call("run_step", { why: "w", step: "s1" });
+    expect(result).toMatchObject({ ok: true, view: { status: "blocked", step: "s1" } });
+    expect(f.s.state.plan.steps.s1).toMatchObject({ status: "blocked", note: "the pivot address_to_domains changed since the plan was accepted; re-plan to use it" });
+    expect(issued()).toEqual([]);
+  } finally { pivot.hash = hash; }
+});
+
+test("a step recorded without pins runs as before", async () => {
+  // PLAN() from the fixture has no pins: a changed pivot does not stop the lookup
+  expect(f.s.state.plan.current!.steps[0]!.pins).toBeUndefined();
+  const pivot = f.sample.registry.pivot("address_to_asset")!;
+  const hash = pivot.hash;
+  pivot.hash = "a-changed-pivot";
+  try {
+    const r = await f.call("run_step", { why: "w", step: "s1" });
+    expect(r.ok).toBe(true);
+    expect(issued()).toHaveLength(1);
+  } finally { pivot.hash = hash; }
 });

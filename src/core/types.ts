@@ -54,6 +54,8 @@ export interface PlanStep {
   free: boolean; weight: number; estimate: Cost | null; empty_means: EmptyMeans; warnings: string[];
   /** A step that is a playbook: its id, its manifest hash when the plan was made, and the values it starts from. A step without it is a pivot. */
   playbook?: { id: string; hash: string; inputs: Observable[] };
+  /** What the person accepted, as one hash (stepPins): the pivot and its inventory, or the playbook and each of its steps' pivots. A step without it is not checked. */
+  pins?: string;
 }
 export interface SubGoal { id: string; title: string; question: string; steps: string[] }
 export interface Plan { id: string; goal: string; window: TimeWindow; subgoals: SubGoal[]; steps: PlanStep[] }

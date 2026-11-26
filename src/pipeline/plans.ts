@@ -3,6 +3,7 @@ import type { CaseSession } from "../core/session";
 import type { Actor, Cost, EntryInput, Plan, PlanStep, TimeWindow, Where } from "../core/types";
 import { mayGo } from "../agents/pack";
 import { runPivot } from "../modules/pivots";
+import { stepPins } from "../modules/pins";
 import { playbookProblem } from "../modules/playbook-run";
 import { runProposal } from "../modules/proposals";
 import type { RunnerDeps, RunQueryResult } from "../modules/runner";
@@ -94,6 +95,8 @@ export function buildPlan(
         id: stepId, subgoal: goalId, pivot: hop.pivot, source: hop.source,
         from: { type: hop.from, value: n === 0 ? sg.have.find((h) => h.type === hop.from)!.value : "" }, to: hop.to,
         window: { ...frame.window }, needs_window: hop.needs_window, free: hop.free, weight: hop.weight, estimate: null, empty_means: hop.empty_means, warnings,
+        // the seeker offers only loaded pivots, so the pins can be computed
+        pins: stepPins(deps.registry, { pivot: hop.pivot })!,
       });
     });
     subgoals.push({ id: goalId, title: sg.title, question: sg.question, steps: ids });
@@ -129,6 +132,8 @@ function playbookStep(
     id: stepId, subgoal: goalId, pivot: "", source: "", from: { ...first }, to: sg.want, window: { ...frame.window },
     needs_window: pivots.some((x) => x.needs_window), free: true, weight: 0, estimate: null, empty_means: last.empty_means, warnings,
     playbook: { id: p.id, hash: p.hash, inputs: have },
+    // the playbook and every pivot it names are loaded (checked above), so the pins can be computed
+    pins: stepPins(deps.registry, { pivot: "", playbook: { id: p.id, hash: p.hash, inputs: have } })!,
   };
 }
 

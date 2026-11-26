@@ -9,6 +9,7 @@ import type { PackPart } from "../../agents/context";
 import { execTool, TOOLS } from "../../agents/tools";
 import type { ToolContext } from "../../agents/tools";
 import { stepLine } from "../../agents/tools/research";
+import { stepPins } from "../../modules/pins";
 import { beginPlaybook, runPlaybook } from "../../modules/playbook-run";
 import { spendPlanBudget } from "../plans";
 import type { StageEnd, StageEnv } from "../engine";
@@ -207,13 +208,16 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
     const link = { run: session.state.run.id, stage: stage.id };
     const output = (note: string): AgentStageEnd => ({ kind: "output", output: { note }, calls: [] });
     const p = deps.registry.playbook(ref.id);
-    if (p === null || p.hash !== ref.hash) {
-      const note = `the playbook ${ref.id} changed since the plan was accepted; re-plan to use it`;
+    // a step recorded with pins is checked against them: a pivot or inventory the playbook uses that changed (or cannot be pinned now) blocks it
+    const pinsMoved = step.pins !== undefined && stepPins(deps.registry, step) !== step.pins;
+    if (p === null || p.hash !== ref.hash || pinsMoved) {
+      const changed = p === null || p.hash !== ref.hash ? `the playbook ${ref.id} changed since the plan was accepted; re-plan to use it`
+        : `a pivot of the playbook ${ref.id} changed since the plan was accepted; re-plan to use it`;
       session.commit(() => [
         { type: "step.started", actor: PLAYBOOK, ...link, payload: { step: step.id } },
-        { type: "step.finished", actor: PLAYBOOK, ...link, payload: { step: step.id, outcome: "blocked", cards: [], note } },
+        { type: "step.finished", actor: PLAYBOOK, ...link, payload: { step: step.id, outcome: "blocked", cards: [], note: changed } },
       ]);
-      return output(note);
+      return output(changed);
     }
     const start = { playbook: p, inputs: ref.inputs, window: step.window, why: question, actor: PLAYBOOK, ...link, subgoal: step.subgoal, plan_step: step.id };
     let job: string;
