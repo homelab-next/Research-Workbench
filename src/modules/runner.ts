@@ -37,6 +37,11 @@ export interface RunQueryInput {
    * written when the result query is about to be issued (so a refusal or needs_budget leaves the proposal open) and is that query's cause.
    */
   accept?: { proposal: string; cause?: number; guard?: () => string | null } | null;
+  /**
+   * Set by the playbook runner: the query is a playbook's lookup, issued with purpose "playbook" (unless it verifies another). A playbook lookup
+   * is never an agent's and never spends a budget: a costly one is not priced or sent, it waits (needs_budget, with no proposal).
+   */
+  purpose?: "playbook";
 }
 
 export type RunQueryResult =
@@ -130,6 +135,8 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
   if (pivot !== null && pivot.source !== source.id) return { status: "refused", reasons: [`pivot ${pivot.id} is for source ${pivot.source}`] };
   // A pivot lends its weight, its empty meaning and its yields only to its own text; any other text is a query with no pivot.
   if (pivot !== null && input.text !== pivot.query) pivot = null;
+  const playbook = input.purpose === "playbook" && input.verifies == null;
+  if (playbook && input.actor.kind === "agent") return { status: "refused", reasons: ["a playbook's lookup is never an agent's"] };
   if (input.actor.kind === "agent" && pivot === null && !source.adhoc) {
     return { status: "refused", reasons: ["this source does not allow agent-written queries"] };
   }
@@ -160,6 +167,7 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
   let estimate: Cost | null = null;
   let cause: number | null = null;
   let estimateQuery: string | null = null;
+  if (weight > 0 && playbook) return { status: "needs_budget", proposal: null, estimate: null };
   if (weight > 0) {
     // An agent asking again for the same costly query is pointed at the proposal already waiting for a person.
     if (input.actor.kind === "agent") {
@@ -243,7 +251,7 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
   }
   const ran = await issueAndRun(session, deps, {
     ...base, req, rendered, pivot, why: input.why, verifies: input.verifies ?? null,
-    purpose: input.verifies != null ? "verify" : "result", estimate, cause: resultCause, makeCard: input.make_card !== false, title,
+    purpose: input.verifies != null ? "verify" : playbook ? "playbook" : "result", estimate, cause: resultCause, makeCard: input.make_card !== false, title,
   });
   return ran.result;
 }

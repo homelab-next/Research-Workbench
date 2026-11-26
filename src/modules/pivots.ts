@@ -22,6 +22,8 @@ export function bindPivot(pivot: PivotManifest, value: string, observables: Obse
 export interface PivotInput {
   pivot: string; value: string; window: TimeWindow; why: string; actor: Actor;
   step?: string | null; subgoal?: string | null; budget?: number | null; run?: string | null; stage?: string | null; job?: string | null;
+  /** Set by the playbook runner: the query is issued with purpose "playbook". */
+  purpose?: "playbook";
 }
 
 /** Runs one pivot on one value through the runner. An unknown pivot or a value of the wrong type is refused, not thrown. */
@@ -38,7 +40,7 @@ export async function runPivot(session: CaseSession, deps: RunnerDeps, input: Pi
   return runQuery(session, deps, {
     source: pivot.source, text: bound.text, bound: bound.bound, window: input.window, why: input.why, actor: input.actor, pivot,
     step: input.step ?? null, subgoal: input.subgoal ?? null, budget: input.budget ?? null,
-    run: input.run ?? null, stage: input.stage ?? null, job: input.job ?? null,
+    run: input.run ?? null, stage: input.stage ?? null, job: input.job ?? null, ...(input.purpose === undefined ? {} : { purpose: input.purpose }),
   });
 }
 

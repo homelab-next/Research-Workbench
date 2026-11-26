@@ -1,5 +1,6 @@
 import { canonical } from "../core/canonical";
 import type { CaseSession } from "../core/session";
+import { isAnswerPurpose } from "../core/types";
 import type { Payloads, TimeWindow } from "../core/types";
 import type { Bound } from "./connectors";
 import { rowsOfBlob } from "./connectors/rows";
@@ -15,7 +16,7 @@ export const reuseNote = (r: Reused): string => `reused ${r.reused.query} from $
 
 /**
  * The newest query in this case that answered the same pivot on the same bound values over the same window, when it can stand for running it
- * again: the same pivot and source manifests (their hashes), the pivot's own text, a result (not an estimate or a verify re-run) that is done
+ * again: the same pivot and source manifests (their hashes), the pivot's own text, an answer (a result or a playbook lookup, from a researcher, a person or a playbook alike; not an estimate or a verify re-run) that is done
  * with full coverage, and a card that was made for it and is not discarded. A partial or failed result, another window, value or manifest is
  * never reused. Its rows are read back from the stored result by the connector's own reader and must match the rows hash it was recorded
  * with; a result that does not read back is not reused. Writes nothing and contacts no source.
@@ -26,7 +27,7 @@ export function answeredBefore(session: CaseSession, deps: RunnerDeps, pivot: Pi
   const state = session.state;
   const key = canonical(bound);
   const candidates = Object.values(state.queries)
-    .filter((q) => q.status === "done" && q.purpose === "result" && q.source === source.id && q.window.from === window.from && q.window.to === window.to
+    .filter((q) => q.status === "done" && isAnswerPurpose(q.purpose) && q.source === source.id && q.window.from === window.from && q.window.to === window.to
       && q.coverage?.kind === "full" && q.card !== null && Object.hasOwn(state.cards, q.card) && !state.discarded.includes(q.card)
       && q.result !== null && q.rows !== null && q.rows_hash !== null)
     .sort((a, b) => b.issued_seq - a.issued_seq);

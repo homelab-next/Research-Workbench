@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { Workbench } from "../../src/core/workbench";
+import { beginPlaybook, runPlaybook } from "../../src/modules/playbook-run";
+import { sampleRoot } from "../helpers/sample-root";
+import { person, START, WINDOW } from "../helpers/tools-fixture";
 
 // Final review minor 17: runner.ts is the single custody point. No other file under src/ may contact a source through a
 // connector (run, estimate, estimateRequest), so a tool built on these modules cannot reach a source unrecorded.
@@ -43,4 +48,29 @@ test("no file under src/ other than runner.ts calls run, estimate or estimateReq
   expect(found).toEqual([]);
   // and the custody point does make them
   expect(connectorCalls(readFileSync(join(SRC, CUSTODY_POINT), "utf8")).length).toBeGreaterThanOrEqual(3);
+});
+
+test("a card from a playbook lookup traces to a query issued with purpose playbook, its result and a blob", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "custody-"));
+  const sample = sampleRoot(dir);
+  const wb = Workbench.open(join(dir, "wb"), { onError: () => {} });
+  try {
+    const s = wb.createCase({ title: "t", asked: "a", why: "w", starting: [{ type: "address", value: START }], window: WINDOW, objective: null, marking: "TLP:GREEN" }, person);
+    const start = { playbook: sample.registry.playbook("address-triage")!, inputs: [{ type: "address", value: START }], window: WINDOW, why: "w", actor: person };
+    const end = await runPlaybook(s, sample.deps, beginPlaybook(s, sample.deps, start), start);
+    expect(end!.cards.length).toBeGreaterThan(0);
+    const entries = s.entries();
+    for (const id of end!.cards) {
+      const card = s.state.cards[id]!;
+      const q = s.state.queries[card.query!]!;
+      expect(q.purpose).toBe("playbook");
+      const issued = entries.find((e) => e.seq === q.issued_seq);
+      expect(issued?.type === "query.issued" && issued.payload.query).toBe(card.query!);
+      expect(entries.some((e) => e.type === "query.result" && e.payload.query === q.id)).toBe(true);
+      expect(s.blobs.check(q.result!.blob)).toBe("ok");
+    }
+    expect(s.state.skipped).toEqual([]);
+  } finally {
+    try { wb.close(); } finally { sample.close(); rmSync(dir, { recursive: true, force: true }); }
+  }
 });

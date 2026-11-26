@@ -1,3 +1,4 @@
+import { isAnswerPurpose } from "../core/types";
 import type { Entry, Payloads } from "../core/types";
 
 export interface Lookup {
@@ -25,7 +26,7 @@ export function routeTrail(entries: readonly Entry[], job: string): { lookups: L
   }
   const lookups: Lookup[] = [];
   for (const e of entries) {
-    if (e.type !== "query.issued" || e.job !== job || e.payload.purpose !== "result") continue;
+    if (e.type !== "query.issued" || e.job !== job || !isAnswerPurpose(e.payload.purpose)) continue;
     const q = e.payload.query;
     const bound = e.payload.bound.value;
     const base = { query: q, pivot: e.payload.pivot, value: typeof bound === "string" ? bound : bound === undefined || bound === null ? "" : String(bound) };
