@@ -36,7 +36,9 @@ export class WorkbenchClosedError extends Error {
 }
 
 export interface NewCase { title: string; asked: string; why: string; starting: Observable[]; window: TimeWindow; objective: string | null; marking: Marking }
-export interface CaseSummary { id: string; title: string; marking: Marking; created_ts: string; run_status: RunState["status"]; phase: string | null; incoming: number; kept: number }
+export interface CaseSummary { id: string; title: string; marking: Marking; created_ts: string; run_status: RunState["status"]; phase: string | null; incoming: number; kept: number;
+  /** Jobs with status running: a job left so by a stopped process (a playbook started from the Pivot panel, say) has no run to say so. */
+  jobs_running: number }
 export type ErrorHandler = (error: unknown, entry?: Entry) => void;
 
 /** At most 9 digits, so the number is always an exact integer. */
@@ -224,6 +226,7 @@ export class Workbench {
           phase: s.phase,
           incoming: s.incoming.length,
           kept: s.lanes.reduce((count, l) => count + l.cards.length, 0),
+          jobs_running: Object.values(s.jobs).filter((j) => j.status === "running").length,
         });
       } catch (err) {
         this.reportError(new Error(`case ${id} could not be loaded: ${err instanceof Error ? err.message : String(err)}`, { cause: err }));

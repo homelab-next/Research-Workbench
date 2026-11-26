@@ -1,0 +1,23 @@
+bun test v1.3.14 (0d9b296a)
+
+tests/server/commands.test.ts:
+286 |   expect(s.app.hub.read(id).state.run.status).toBe("none");
+287 |   s.wb.session(id).close();
+288 |   const next = createApp({ config: s.config, wb: s.wb, deps, problems: [], assets: { html: "", js: "", css: "" }, origin: s.origin, onError: () => {} });
+289 |   try {
+290 |     const state = s.app.hub.read(id).state;
+291 |     expect(state.jobs[j1]!.status).toBe("failed");
+                                         ^
+error: expect(received).toBe(expected)
+
+Expected: "failed"
+Received: "running"
+
+      at <anonymous> (/home/ansible/Research-Workbench/tests/server/commands.test.ts:291:36)
+(fail) a playbook job left running by a stopped process, with no run, is recovered as soon as a new app starts [48.23ms]
+
+ 0 pass
+ 23 filtered out
+ 1 fail
+ 3 expect() calls
+Ran 1 test across 1 file. [103.00ms]

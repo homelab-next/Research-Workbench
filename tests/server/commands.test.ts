@@ -266,6 +266,37 @@ test("a case left running when the app closed reads interrupted as soon as a new
   }
 });
 
+test("a playbook job left running by a stopped process, with no run, is recovered as soon as a new app starts", async () => {
+  s = await served();
+  const id = await s.newCase();
+  const deps = (s.app.hub as unknown as { deps: EngineDeps }).deps;
+  // a playbook started from the Pivot panel (no run) and never finished, written without the hub: nothing has recovered it
+  const pb = deps.registry.playbook("address-triage")!;
+  const actor = { kind: "human" as const, id: s.config.user };
+  const window = { from: "2026-11-17T00:00:00.000Z", to: "2026-11-24T00:00:00.000Z" };
+  let j1 = "";
+  s.wb.session(id).commit((_st, ids) => (j1 = ids.next("job"), [
+    { type: "job.started", actor, job: j1, payload: { job: j1, title: "Playbook: Triage an address", kind: "playbook", source: null } },
+    { type: "playbook.started", actor, job: j1, payload: {
+      job: j1, playbook: pb.id, playbook_hash: pb.hash, title: pb.title, inputs: [{ type: "address", value: "198.51.100.77" }], window, why: "w", plan_step: null,
+      steps: pb.steps.map((x) => ({ id: x.id, pivot: x.pivot, pivot_hash: deps.registry.pivot(x.pivot)!.hash })),
+    } },
+  ]));
+  expect(s.app.hub.read(id).state.jobs[j1]!.status).toBe("running");
+  expect(s.app.hub.read(id).state.run.status).toBe("none");
+  s.wb.session(id).close();
+  const next = createApp({ config: s.config, wb: s.wb, deps, problems: [], assets: { html: "", js: "", css: "" }, origin: s.origin, onError: () => {} });
+  try {
+    const state = s.app.hub.read(id).state;
+    expect(state.jobs[j1]!.status).toBe("failed");
+    expect(state.playbooks[j1]!.status).toBe("interrupted");
+    expect(state.skipped).toEqual([]);
+    await next.hub.idle();
+  } finally {
+    await next.close();
+  }
+});
+
 test("a refusal that quotes a source error is scrubbed", async () => {
   s = await served();
   const id = await s.newCase();
