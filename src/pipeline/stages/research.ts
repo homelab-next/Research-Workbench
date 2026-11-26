@@ -1,19 +1,22 @@
 import type { Json } from "../../core/canonical";
 import type { Actor, Entry } from "../../core/types";
-import type { PlanStep } from "../../core/types";
+import type { PlanStep, StepOutcome } from "../../core/types";
 import { subgoalAnswered } from "../../core/state";
 import { ContextError, packPart } from "../../agents/context";
 import type { PackPart } from "../../agents/context";
+import { beginPlaybook, runPlaybook } from "../../modules/playbook-run";
 import { spendPlanBudget } from "../plans";
 import type { StageEnd, StageEnv } from "../engine";
 import { lastPass, noSchema, requestsOfPass, stageAgent, stageOfRole, titleOf } from "./agent";
 import type { AgentStageEnd } from "./agent";
 
 const ENGINE: Actor = { kind: "system", id: "engine" };
+const PLAYBOOK: Actor = { kind: "system", id: "playbook" };
 const DONE = new Set(["answered", "empty", "partial"]);
 
 interface Unit { sent_back?: boolean; actor_id: string; title: string; task: string; part: PackPart; subgoal: string | null; question: string | null;
-  /** The seq of the research.requested entry a sent-back unit answers. */ request?: number }
+  /** The seq of the research.requested entry a sent-back unit answers. */ request?: number;
+  /** The sub-goal's one accepted step when it is a playbook: code runs it, with no researcher. */ playbook: PlanStep | null }
 interface SubResult { id: string; title: string; outcome: "answered" | "blocked"; cards: string[]; note: string }
 
 const noteOf = (end: AgentStageEnd | undefined): string => {
@@ -88,7 +91,7 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
         n++;
         if (e.seq > lastFinished && (doneRequests.has(e.seq) || doneTitles.has(`Research: ${e.payload.question}`))) answeredBefore.push({ question: e.payload.question });
         else if (e.seq > lastFinished) {
-          units.push({ sent_back: true, actor_id: actorId(`r${n}`), title: `Research: ${e.payload.question}`, subgoal: null, question: e.payload.question, request: e.seq, task: TASK, part: questionPart(`question-r${n}`, e.payload.question, [e]) });
+          units.push({ sent_back: true, playbook: null, actor_id: actorId(`r${n}`), title: `Research: ${e.payload.question}`, subgoal: null, question: e.payload.question, request: e.seq, task: TASK, part: questionPart(`question-r${n}`, e.payload.question, [e]) });
         }
       }
     } else {
@@ -96,8 +99,9 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
         if (accepted(g).every((s) => DONE.has(statusOf(s)))) continue;
         if (carried.has(g.id)) continue;
         const steps = current.steps.filter((s) => accepted(g).includes(s.id));
+        const playbook = steps.length === 1 && steps[0]!.playbook !== undefined ? steps[0]! : null;
         units.push({
-          actor_id: actorId(g.id), title: `Research: ${g.title}`, subgoal: g.id, question: null,
+          playbook, actor_id: actorId(g.id), title: `Research: ${g.title}`, subgoal: g.id, question: null,
           task: `Research sub-goal ${g.id}. ${TASK} Run the accepted steps it lists with run_step, in order, then report what each returned.`,
           // the steps carry the planner's values, source and pivot: they are as strict as the question
           part: questionPart(`question-${g.id}`, [`Sub-goal ${g.id}: ${g.title}`, g.question, "Accepted steps:", ...steps.map(describeStep)].join("\n"), planRequests),
@@ -111,6 +115,7 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
 
   const results: (AgentStageEnd | undefined)[] = units.map(() => undefined);
   const runUnit = async (u: Unit): Promise<AgentStageEnd> => {
+    if (u.playbook !== null) return runPlaybookUnit(u.playbook, current.subgoals.find((g) => g.id === u.subgoal)!.question);
     let job = "";
     session.commit((s, ids) => {
       job = ids.next("job");
@@ -132,6 +137,56 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
     }
     close(end.kind === "output" ? "done" : "failed");
     return end;
+  };
+
+  /**
+   * A playbook step runs in code, as the workbench: no researcher, no model call. A playbook changed since the plan was accepted is not run.
+   * Pausing or finishing the run stops it before its next lookup; the step then finishes blocked and the stage stops.
+   */
+  const runPlaybookUnit = async (step: PlanStep, question: string): Promise<AgentStageEnd> => {
+    const ref = step.playbook!;
+    const link = { run: session.state.run.id, stage: stage.id };
+    const output = (note: string): AgentStageEnd => ({ kind: "output", output: { note }, calls: [] });
+    const p = deps.registry.playbook(ref.id);
+    if (p === null || p.hash !== ref.hash) {
+      const note = `the playbook ${ref.id} changed since the plan was accepted; re-plan to use it`;
+      session.commit(() => [
+        { type: "step.started", actor: PLAYBOOK, ...link, payload: { step: step.id } },
+        { type: "step.finished", actor: PLAYBOOK, ...link, payload: { step: step.id, outcome: "blocked", cards: [], note } },
+      ]);
+      return output(note);
+    }
+    const start = { playbook: p, inputs: ref.inputs, window: step.window, why: question, actor: PLAYBOOK, ...link, subgoal: step.subgoal, plan_step: step.id };
+    const job = beginPlaybook(session, deps.runner, start);
+    session.commit(() => [{ type: "step.started", actor: PLAYBOOK, ...link, job, payload: { step: step.id } }]);
+    let stopped = false;
+    const stop = (): boolean => {
+      const { status } = session.state.run;
+      if (status === "paused" || status === "finished") stopped = true;
+      return stopped;
+    };
+    const finish = (outcome: StepOutcome, cards: string[], note: string): void => {
+      session.commit(() => [{ type: "step.finished", actor: PLAYBOOK, ...link, job, payload: { step: step.id, outcome, cards, note } }]);
+    };
+    let end: Awaited<ReturnType<typeof runPlaybook>>;
+    try {
+      end = await runPlaybook(session, deps.runner, job, start, stop);
+    } catch (err) {
+      finish("failed", [], `playbook ${ref.id}: ${(err instanceof Error ? err.message : String(err)).split("\n")[0]}`);
+      throw err;
+    }
+    if (end === null) {
+      finish("blocked", [], `playbook ${ref.id}: its job ended before the playbook finished; stopped`);
+      return { kind: "stopped" };
+    }
+    const said = [`playbook ${ref.id}: ${end.lookups} lookups (${end.reused} reused), ${stopped ? "blocked" : end.outcome}`, ...end.caveats];
+    if (stopped) {
+      finish("blocked", end.end_cards, [...said, "stopped"].join("; "));
+      return { kind: "stopped" };
+    }
+    const note = said.join("; ");
+    finish(end.outcome, end.end_cards, note);
+    return output(note);
   };
 
   let next = 0;

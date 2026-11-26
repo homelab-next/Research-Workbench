@@ -229,3 +229,24 @@ test("a card from an untrusted root is titled by its source id, and read_card wi
   for (const bad of hostile) { expect(JSON.stringify(read.view)).not.toContain(bad); expect(JSON.stringify(listed.view)).not.toContain(bad); }
   expect((read.view as { provenance: { text: string } }).provenance.text).toBe("query text withheld: untrusted root");
 });
+
+test("list_playbooks gives each playbook, the type it finds, its most lookups, and whether it may be planned", async () => {
+  writeFileSync(join(f.sample.root, "playbooks", "rep-check.yaml"), [
+    "kind: playbook", "id: rep-check", "title: Reputation check", "about: Ask the reputation service.",
+    "inputs:", "  - { name: address, type: address }",
+    "steps:", "  - { id: rep, pivot: address_to_verdict, from: input.address }", "",
+  ].join("\n"));
+  const registry = Registry.load([{ path: f.sample.root, trusted: true, credentials: [] }]);
+  f.ctx.deps = { ...f.ctx.deps, registry };
+  const r = await f.call("list_playbooks", { why: "which playbooks fit" });
+  expect(r.ok).toBe(true);
+  expect(r.marking).toBeNull();
+  const { playbooks } = r.view as { playbooks: Record<string, unknown>[] };
+  expect(playbooks).toEqual([
+    {
+      id: "address-triage", title: "Triage an address", about: "Is the address a known asset, what names resolved to it, and who looked those names up.",
+      inputs: [{ name: "address", type: "address" }], finds: "asset", max_lookups: 8, may_plan: true,
+    },
+    { id: "rep-check", title: "Reputation check", about: "Ask the reputation service.", inputs: [{ name: "address", type: "address" }], finds: "verdict", max_lookups: 1, may_plan: false },
+  ]);
+});

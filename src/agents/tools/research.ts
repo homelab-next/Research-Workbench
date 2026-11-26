@@ -108,6 +108,7 @@ async function runStepTool(ctx: ToolContext, args: Record<string, Json>): Promis
     }
     throw new ToolError(`unknown step: ${id}`);
   }
+  if (step.playbook !== undefined) throw new ToolError(`step ${id} is a playbook; the engine runs it`);
   if (!ctx.session.state.plan.accepted_steps.includes(id)) throw new ToolError(`step ${id} was not accepted`);
   const had = Object.hasOwn(ctx.session.state.plan.steps, id) ? ctx.session.state.plan.steps[id]! : null;
   if (had !== null && had.status !== "pending" && had.status !== "running") throw new ToolError("this step has already run");

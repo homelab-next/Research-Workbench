@@ -51,6 +51,7 @@ export async function planRunner(env: StageEnv): Promise<StageEnd> {
     "Plan this investigation.",
     m === null ? "" : `The question asked: ${m.asked}`,
     `Reply with the goal and, for each sub-goal, its starting values, the type wanted and a route of pivot ids that the route finder offers (use find_routes).`,
+    `Where a playbook fits a sub-goal (use list_playbooks), give its id as "playbook" and an empty route; code runs it with no further model call.`,
   ].filter((x) => x !== "").join("\n");
 
   let errors: string[] = [];

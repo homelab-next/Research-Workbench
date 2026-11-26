@@ -405,3 +405,24 @@ test("an answer whose card a person discarded is not reused", async () => {
   expect(view(r).reused).toBeUndefined();
   expect(issued()).toHaveLength(2);
 });
+
+test("run_step on a playbook step is refused and writes nothing: the engine runs it", async () => {
+  const pb = f.sample.registry.playbook("address-triage")!;
+  f.s.commit((_st, ids) => [{
+    type: "plan.proposed", actor: agent,
+    payload: {
+      plan: {
+        id: ids.next("plan"), goal: "g", window: WINDOW, subgoals: [{ id: "g1", title: "Triage", question: "What is it?", steps: ["s1"] }],
+        steps: [{
+          id: "s1", subgoal: "g1", pivot: "", source: "", from: { type: "address", value: START }, to: "asset", window: WINDOW, needs_window: true, free: true, weight: 0,
+          estimate: null, empty_means: "proven-negative", warnings: [], playbook: { id: pb.id, hash: pb.hash, inputs: [{ type: "address", value: START }] },
+        }],
+      },
+    },
+  }]);
+  f.s.commit(() => [{ type: "plan.accepted", actor: person, payload: { plan: "plan-2", steps: ["s1"], budgets: {} } }]);
+  const head = f.s.head().seq;
+  const r = await f.call("run_step", { why: "w", step: "s1" });
+  expect(r).toMatchObject({ ok: false, summary: "step s1 is a playbook; the engine runs it" });
+  expect(f.s.head().seq).toBe(head);
+});

@@ -3,15 +3,19 @@ import type { CaseSession } from "../core/session";
 import type { Actor, Cost, EntryInput, Plan, PlanStep, TimeWindow, Where } from "../core/types";
 import { mayGo } from "../agents/pack";
 import { runPivot } from "../modules/pivots";
+import { playbookProblem } from "../modules/playbook-run";
 import { runProposal } from "../modules/proposals";
 import type { RunnerDeps, RunQueryResult } from "../modules/runner";
 import type { Hop, SeekLimits } from "../modules/seeker";
 import type { EngineDeps } from "./engine";
 
-/** What the planner's output says: sub-goals with a starting set, a wanted type and a route of pivot ids. Code builds the plan from it. */
+/**
+ * What the planner's output says: sub-goals with a starting set, a wanted type and either a route of pivot ids or a playbook (with an
+ * empty route). Code builds the plan from it.
+ */
 export interface PlanOutput {
   goal: string;
-  subgoals: { title: string; question: string; have: { type: string; value: string }[]; want: string; route: string[] }[];
+  subgoals: { title: string; question: string; have: { type: string; value: string }[]; want: string; route: string[]; playbook?: string }[];
 }
 
 export class PlanRefused extends Refused {
@@ -29,10 +33,13 @@ function shapeProblem(o: unknown): string | null {
   const bad = "the plan output is not in the required shape: ";
   if (!isPlainRecord(o) || !isText(o.goal) || !Array.isArray(o.subgoals) || o.subgoals.length === 0) return `${bad}it needs a goal and at least one sub-goal`;
   for (const g of o.subgoals) {
-    if (!isPlainRecord(g) || !isText(g.title) || !isText(g.question) || !isText(g.want) || !Array.isArray(g.have) || !Array.isArray(g.route) || g.route.length === 0
+    if (!isPlainRecord(g) || !isText(g.title) || !isText(g.question) || !isText(g.want) || !Array.isArray(g.have) || !Array.isArray(g.route)
       || !g.route.every(isText) || !g.have.every((h) => isPlainRecord(h) && isText(h.type) && isText(h.value))) {
       return `${bad}each sub-goal needs a title, question, want, have list and a route of pivot ids`;
     }
+    const byRoute = g.playbook === undefined && g.route.length > 0;
+    const byPlaybook = isText(g.playbook) && g.route.length === 0;
+    if (!byRoute && !byPlaybook) return `${bad}each sub-goal needs a route of pivot ids, or a playbook and an empty route`;
   }
   return null;
 }
@@ -55,6 +62,16 @@ export function buildPlan(
     const wrong = sg.have.find((h) => !deps.runner.observables.matches(h.type, h.value));
     if (wrong !== undefined) {
       errors.push(`${name}: "${wrong.value}" is not a ${wrong.type}`);
+      continue;
+    }
+    if (sg.playbook !== undefined) {
+      const built = playbookStep(sg.playbook, sg, name, `s${steps.length + 1}`, `g${i + 1}`, deps, frame);
+      if (typeof built === "string") {
+        errors.push(built);
+        continue;
+      }
+      steps.push(built);
+      subgoals.push({ id: built.subgoal, title: sg.title, question: sg.question, steps: [built.id] });
       continue;
     }
     const types = [...new Set(sg.have.map((h) => h.type))];
@@ -82,6 +99,37 @@ export function buildPlan(
     subgoals.push({ id: goalId, title: sg.title, question: sg.question, steps: ids });
   }
   return errors.length > 0 ? { errors } : { id, goal: output.goal, window: { ...frame.window }, subgoals, steps };
+}
+
+/**
+ * The one plan step a playbook sub-goal becomes, or the reason it cannot: the playbook must exist, have no costly lookup (a person starts
+ * one of those), take the sub-goal's values over the frame's window, find the wanted type, and use no unconfirmed source the frame rules out.
+ */
+function playbookStep(
+  id: string, sg: PlanOutput["subgoals"][number], name: string, stepId: string, goalId: string,
+  deps: Pick<EngineDeps, "registry" | "runner">, frame: { window: TimeWindow; limits: SeekLimits },
+): PlanStep | string {
+  const p = deps.registry.playbook(id);
+  if (p === null) return `${name}: there is no playbook ${id}`;
+  const costly = deps.registry.costlyPivots(p);
+  if (costly.length > 0) return `${name}: the playbook ${id} has costly lookups (${costly.join(", ")}); a person can start it from the Pivot panel`;
+  const have = sg.have.map((h) => ({ type: h.type, value: h.value }));
+  const problem = playbookProblem(deps.runner, p, have, frame.window);
+  if (problem !== null) return `${name}: ${problem}`;
+  // the registry loads a playbook only when every pivot it names is loaded
+  const pivots = p.steps.map((s) => deps.registry.pivot(s.pivot)!);
+  const last = deps.registry.pivot(p.steps.find((s) => s.id === p.end[0])!.pivot)!;
+  if (last.to !== sg.want) return `${name}: the playbook ${id} finds ${last.to}, not ${sg.want}`;
+  if (!frame.limits.allow_unconfirmed) {
+    const unconfirmed = pivots.map((x) => deps.registry.source(x.source)).find((s) => s !== null && !s.confirmed);
+    if (unconfirmed !== undefined && unconfirmed !== null) return `${name}: the playbook ${id} uses the unconfirmed source ${unconfirmed.id}`;
+  }
+  const first = have.find((h) => h.type === p.inputs[0]!.type)!;
+  return {
+    id: stepId, subgoal: goalId, pivot: "", source: "", from: { ...first }, to: sg.want, window: { ...frame.window },
+    needs_window: pivots.some((x) => x.needs_window), free: true, weight: 0, estimate: null, empty_means: last.empty_means, warnings: [],
+    playbook: { id: p.id, hash: p.hash, inputs: have },
+  };
 }
 
 function proposedPlan(session: CaseSession): Plan {

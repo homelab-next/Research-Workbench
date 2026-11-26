@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Json } from "../../src/core/canonical";
@@ -9,6 +9,8 @@ import { Providers } from "../../src/agents/providers";
 import { ScriptedProvider } from "../../src/agents/providers/scripted";
 import type { ScriptReply } from "../../src/agents/providers/scripted";
 import { loadConfig } from "../../src/modules/config";
+import { Registry } from "../../src/modules/registry";
+import { cheapestSeeker, DEFAULT_LIMITS } from "../../src/modules/seeker";
 import { Engine } from "../../src/pipeline/engine";
 import type { EngineDeps, StageEnd, StageRunner } from "../../src/pipeline/engine";
 import { loadPipeline } from "../../src/pipeline/manifests";
@@ -18,7 +20,7 @@ import { planRunner } from "../../src/pipeline/stages/plan";
 import { researchRunner } from "../../src/pipeline/stages/research";
 import { buildPlan } from "../../src/pipeline/plans";
 import { frameOf, lastOutput } from "../../src/pipeline/stages/agent";
-import { fixture, person } from "../helpers/tools-fixture";
+import { fixture, person, START, WINDOW } from "../helpers/tools-fixture";
 import type { Fixture } from "../helpers/tools-fixture";
 
 let f: Fixture;
@@ -558,4 +560,126 @@ test("a job recorded without a sub-goal id is still matched by its title", async
   expect(ofType("model.request").filter((e) => e.actor.id === "researcher-g1")).toEqual([]);
   expect(ofType("job.started").filter((e) => e.payload.subgoal === "g1")).toEqual([]);
   expect(ofType("job.started").filter((e) => e.payload.subgoal === "g2")).toHaveLength(1);
+});
+
+// ---------- a playbook sub-goal ----------
+
+const KNOWN = "192.0.2.17";
+/** The sample playbook has a lease step, on a source that is not confirmed: the frame allows one. */
+const PB_FRAME = { ...FRAME, limits: { ...FRAME.limits, allow_unconfirmed: true } };
+const pbGoal = (value = KNOWN, playbook = "address-triage", title = "Triage") =>
+  ({ title, question: "What is the address?", have: [{ type: "address", value }], want: "asset", route: [], playbook });
+const pbPlan = (...subgoals: object[]) => ({ goal: "what is the address", subgoals });
+/** The sample root as it is on disk now, loaded again, in place of the fixture's registry. */
+function reload(r?: Rig): void {
+  const registry = Registry.load([{ path: f.sample.root, trusted: true, credentials: [] }]);
+  f.sample.registry = registry;
+  f.sample.deps.registry = registry;
+  f.sample.seeker = cheapestSeeker(registry);
+  if (r !== undefined) { r.deps.registry = registry; r.deps.seeker = f.sample.seeker; }
+}
+const playbookFile = (name: string) => join(f.sample.root, "playbooks", `${name}.yaml`);
+
+test("Research runs a playbook sub-goal with no researcher and no model call, and the sub-goal is answered by its step", async () => {
+  const r = rig({});
+  const out = pbPlan(pbGoal());
+  f.s.commit((_st, ids) => [{ type: "plan.proposed", actor: person, payload: { plan: buildPlan(ids.next("plan"), out as never, r.deps, { window: WINDOW, limits: { ...DEFAULT_LIMITS, allow_unconfirmed: true } }, null) as never } }]);
+  f.s.commit(() => [{ type: "plan.accepted", actor: person, payload: { plan: "plan-1", steps: ["s1"], budgets: {} } }]);
+  const stage = r.deps.pipeline.stages.find((x) => x.role === "research")!;
+  const end = await researchRunner({ session: f.s, deps: r.deps, stage, attempt: 1, onNeedsBudget: async () => null });
+  expect(ofType("model.request")).toEqual([]);
+  expect(f.s.state.plan.steps.s1).toMatchObject({ status: "answered" });
+  expect(Object.values(f.s.state.jobs).map((j) => j.kind)).toEqual(["playbook"]);
+  expect(ofType("query.issued").length).toBeGreaterThan(0);
+  expect(ofType("query.issued").every((e) => e.payload.purpose === "playbook" && e.actor.kind === "system" && e.actor.id === "playbook" && e.payload.step === "s1")).toBe(true);
+  expect(end).toMatchObject({ kind: "finished", outcome: "pass" });
+  const job = Object.keys(f.s.state.jobs)[0]!;
+  const fin = f.s.state.playbooks[job]!;
+  expect(f.s.state.plan.steps.s1!.cards).toEqual(ofType("playbook.finished")[0]!.payload.end_cards);
+  expect(f.s.state.plan.steps.s1!.note).toStartWith("playbook address-triage: ");
+  expect(fin.status).toBe("answered");
+  const sg = (end as unknown as { output: { subgoals: { id: string; outcome: string; note: string }[] } }).output.subgoals;
+  expect(sg).toEqual([expect.objectContaining({ id: "g1", outcome: "answered", note: f.s.state.plan.steps.s1!.note })]);
+});
+
+test("a proven negative from the playbook's end step answers the sub-goal; a not-seen one does not", async () => {
+  // the sample playbook ends on the asset list, which is complete: 198.51.100.77 is not an asset, and that is the answer
+  const r = rig({ orchestrator: [say(PB_FRAME)], planner: [say(pbPlan(pbGoal(START)))] });
+  await toGate(r);
+  r.engine.acceptPlan({ actor: person });
+  await r.engine.advance();
+  expect(f.s.state.plan.steps.s1).toMatchObject({ status: "empty" });
+  expect(finished("research")[0]!.payload.outcome).toBe("pass");
+  expect((output("research").subgoals as { outcome: string }[]).map((g) => g.outcome)).toEqual(["answered"]);
+
+  // a fresh case: a playbook whose end step is the lease list, where an empty answer is only "not seen"
+  expect(f.s.state.skipped).toEqual([]);
+  f.close();
+  f = fixture(false);
+  writeFileSync(playbookFile("lease-check"), [
+    "kind: playbook", "id: lease-check", "title: Lease check", "inputs:", "  - { name: address, type: address }", "steps:",
+    "  - { id: asset, pivot: address_to_asset, from: input.address }", "  - { id: lease, pivot: address_to_asset_by_lease, from: input.address, when: asset.empty }",
+    "end: [lease]", "",
+  ].join("\n"));
+  reload();
+  const plan = pbPlan(pbGoal(START, "lease-check"));
+  const again = rig({ orchestrator: [say(PB_FRAME)], planner: [say(plan), say(plan)] });
+  await toGate(again);
+  again.engine.acceptPlan({ actor: person });
+  await again.engine.advance();
+  const first = finished("research")[0]!.payload;
+  expect(first.outcome).toBe("fail");
+  expect(JSON.parse(f.s.blobs.text(first.output!.blob)).subgoals.map((g: { outcome: string }) => g.outcome)).toEqual(["blocked"]);
+  const st = ofType("step.finished")[0]!.payload;
+  expect(st.outcome).toBe("empty");
+  expect(st.cards.map((c) => f.s.state.cards[c]!.empty)).toEqual(["not-seen"]);
+});
+
+test("a plan mixing a route sub-goal and a playbook sub-goal runs one researcher and one playbook", async () => {
+  const route = { title: "Reputation", question: "What is known?", have: [{ type: "address", value: START }], want: "verdict", route: ["address_to_verdict"] };
+  const r = rig({ orchestrator: [say(PB_FRAME)], planner: [say(pbPlan(route, pbGoal()))], "researcher-g1": [calls(call("run_step", { step: "s1" })), answered("verdict")] });
+  await toGate(r);
+  r.engine.acceptPlan({ actor: person, budgets: { s1: 1 } });
+  await r.engine.advance();
+  expect(ofType("job.started").map((e) => e.payload.kind).sort()).toEqual(["playbook", "research"]);
+  expect(ofType("model.request").filter((e) => e.stage === "research").every((e) => e.actor.id === "researcher-g1")).toBe(true);
+  expect(f.s.state.plan.steps.s1!.status).toBe("answered");
+  expect(f.s.state.plan.steps.s2!.status).toBe("answered");
+  expect(finished("research")[0]!.payload.outcome).toBe("pass");
+});
+
+test("pausing stops the playbook before its next lookup and leaves the step unanswered; resuming reuses what was answered", async () => {
+  const r = rig({ orchestrator: [say(PB_FRAME)], planner: [say(pbPlan(pbGoal()))] });
+  await toGate(r);
+  r.engine.acceptPlan({ actor: person });
+  const off = f.s.subscribe((e) => {
+    if (e.type === "playbook.step" && e.payload.status === "ran") { off(); r.engine.pause(person); }
+  });
+  await r.engine.advance();
+  expect(f.s.state.run.status).toBe("paused");
+  expect(f.s.state.plan.steps.s1).toMatchObject({ status: "blocked" });
+  expect(f.s.state.plan.steps.s1!.note).toEndWith("; stopped");
+  expect(ofType("query.issued")).toHaveLength(1);
+  expect(finished("research")).toEqual([]);
+  await r.engine.resume(person);
+  expect(f.s.state.plan.steps.s1).toMatchObject({ status: "answered" });
+  const [, again] = ofType("playbook.started").map((e) => e.payload.job);
+  expect(f.s.state.playbooks[again!]!.steps.asset!.lookups.map((l) => l.reused)).toEqual([true]);
+  expect(ofType("query.issued").filter((e) => e.payload.pivot === "address_to_asset")).toHaveLength(1);
+  expect(finished("research").at(-1)!.payload.outcome).toBe("pass");
+});
+
+test("a playbook changed since the plan was accepted is not run", async () => {
+  const plan = pbPlan(pbGoal());
+  const r = rig({ orchestrator: [say(PB_FRAME)], planner: [say(plan), say(plan)] });
+  await toGate(r);
+  r.engine.acceptPlan({ actor: person });
+  const file = playbookFile("address-triage");
+  writeFileSync(file, readFileSync(file, "utf8").replace("title: Triage an address", "title: Triage an address "));
+  reload(r);
+  expect(r.deps.registry.playbook("address-triage")!.hash).not.toBe(f.s.state.plan.current!.steps[0]!.playbook!.hash);
+  await r.engine.advance();
+  expect(ofType("step.finished")[0]!.payload).toMatchObject({ step: "s1", outcome: "blocked", cards: [], note: "the playbook address-triage changed since the plan was accepted; re-plan to use it" });
+  expect(ofType("query.issued")).toEqual([]);
+  expect(ofType("job.started")).toEqual([]);
 });

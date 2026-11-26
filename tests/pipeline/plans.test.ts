@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Plan } from "../../src/core/types";
 import { loadConfig } from "../../src/modules/config";
+import { Registry } from "../../src/modules/registry";
 import { DEFAULT_LIMITS } from "../../src/modules/seeker";
 import { acceptPlan, buildPlan, denyPlan, estimateStep, PlanRefused, requestReplan, spendPlanBudget } from "../../src/pipeline/plans";
 import type { PlanOutput } from "../../src/pipeline/plans";
@@ -366,4 +367,49 @@ test("a step the registry no longer prices as costly is refused with the plan's 
   await expect(estimateStep(f.s, free as never, { step: "s3", actor: person })).rejects.toThrow("this step is no longer priced as the plan says");
   expect(f.s.state.plan.estimates).toEqual({});
   expect(f.s.entries().slice(before).some((e) => e.type === "step.estimated")).toBe(false);
+});
+
+// ---------- a playbook sub-goal ----------
+
+/** The sample playbook steps a lease lookup (an unconfirmed source), so these frames allow one unless a test says otherwise. */
+const pbFrame = { window: WINDOW, limits: { ...DEFAULT_LIMITS, allow_unconfirmed: true } };
+const pbOut = (over: Partial<PlanOutput["subgoals"][number]> = {}): PlanOutput => ({
+  goal: "g", subgoals: [{ title: "Triage", question: "What is it?", have: [{ type: "address", value: START }], want: "asset", route: [], playbook: "address-triage", ...over }],
+});
+/** The sample root with one more playbook file, loaded as a fresh registry. */
+const withPlaybook = (id: string, body: string) => {
+  writeFileSync(join(f.sample.root, "playbooks", `${id}.yaml`), `kind: playbook\nid: ${id}\ntitle: ${id}\n${body}`);
+  const registry = Registry.load([{ path: f.sample.root, trusted: true, credentials: [] }]);
+  expect(registry.playbook(id)).not.toBeNull();
+  return { ...deps(), registry, runner: { ...f.sample.deps, registry } };
+};
+
+test("a playbook sub-goal becomes one free plan step that names the playbook and its hash", () => {
+  const registry = f.sample.registry;
+  const plan = buildPlan("plan-1", pbOut(), deps(), pbFrame, null) as Plan;
+  expect(plan.steps).toEqual([expect.objectContaining({
+    id: "s1", subgoal: "g1", pivot: "", source: "", to: "asset", free: true, weight: 0,
+    playbook: { id: "address-triage", hash: registry.playbook("address-triage")!.hash, inputs: [{ type: "address", value: START }] },
+  })]);
+  expect(plan.steps[0]).toMatchObject({ from: { type: "address", value: START }, window: WINDOW, needs_window: true, estimate: null, empty_means: "proven-negative", warnings: [] });
+  expect(plan.subgoals).toEqual([{ id: "g1", title: "Triage", question: "What is it?", steps: ["s1"] }]);
+});
+
+test("each way a playbook sub-goal can be wrong is refused with its reason", () => {
+  const name = 'sub-goal "Triage"';
+  expect(buildPlan("", pbOut({ playbook: "nope" }), deps(), pbFrame, null)).toEqual({ errors: [`${name}: there is no playbook nope`] });
+  const costly = withPlaybook("rep-check", "inputs:\n  - { name: address, type: address }\nsteps:\n  - { id: asset, pivot: address_to_asset, from: input.address }\n  - { id: rep, pivot: address_to_verdict, from: input.address }\nend: [asset]\n");
+  expect(buildPlan("", pbOut({ playbook: "rep-check" }), costly, pbFrame, null)).toEqual({
+    errors: [`${name}: the playbook rep-check has costly lookups (address_to_verdict); a person can start it from the Pivot panel`],
+  });
+  expect(buildPlan("", pbOut({ have: [{ type: "domain", value: "cdn-update.example.org" }] }), deps(), pbFrame, null)).toEqual({
+    errors: [`${name}: the playbook needs a address for address`],
+  });
+  expect(buildPlan("", pbOut({ want: "account" }), deps(), pbFrame, null)).toEqual({ errors: [`${name}: the playbook address-triage finds asset, not account`] });
+  expect(buildPlan("", pbOut(), deps(), frame, null)).toEqual({ errors: [`${name}: the playbook address-triage uses the unconfirmed source leases`] });
+  const shape = "the plan output is not in the required shape: each sub-goal needs a route of pivot ids, or a playbook and an empty route";
+  expect(buildPlan("", pbOut({ route: ["address_to_asset"] }), deps(), pbFrame, null)).toEqual({ errors: [shape] });
+  const neither = pbOut();
+  delete neither.subgoals[0]!.playbook;
+  expect(buildPlan("", neither, deps(), pbFrame, null)).toEqual({ errors: [shape] });
 });

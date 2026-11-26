@@ -16,7 +16,7 @@ import { SOURCE_TOOLS } from "./sources";
 
 export { TOOL_VIEW_CHARS, ToolError, VIEW_ROWS };
 
-export const TOOL_NAMES = ["list_sources", "describe_source", "find_routes", "run_step", "run_pivot", "run_query", "list_cards", "read_card", "verify_card",
+export const TOOL_NAMES = ["list_sources", "describe_source", "find_routes", "list_playbooks", "run_step", "run_pivot", "run_query", "list_cards", "read_card", "verify_card",
   "propose_assessment", "propose_narrative", "request_research", "raise_challenge", "answer_challenge"] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
 

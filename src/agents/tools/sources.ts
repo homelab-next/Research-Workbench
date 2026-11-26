@@ -1,4 +1,5 @@
 import { pivotWeight } from "../../modules/manifests";
+import { maxLookups } from "../../modules/playbooks";
 import type { Json } from "../../core/canonical";
 import type { ToolContext, ToolDef, ToolResult } from "./index";
 import { idArg, json, MAX_HAVE, MAX_ID, params, str, ToolError } from "./kit";
@@ -51,6 +52,19 @@ async function findRoutes(ctx: ToolContext, args: Record<string, Json>): Promise
   return ok(`${routes.length} routes`, json({ routes: routes.map((r) => ({ weight: r.weight, hops: r.hops })) }));
 }
 
+/** The playbooks a planner may name: playbooks come from trusted roots only, so their text is shown. May be planned when every lookup is free. */
+async function listPlaybooks(ctx: ToolContext): Promise<ToolResult> {
+  const { registry } = ctx.deps;
+  const playbooks = registry.playbooks().map((p) => {
+    const end = p.steps.find((s) => s.id === p.end[0]);
+    return {
+      id: p.id, title: p.title, about: p.about, inputs: p.inputs.map((i) => ({ name: i.name, type: i.type })),
+      finds: end === undefined ? "" : registry.pivot(end.pivot)?.to ?? "", max_lookups: maxLookups(p), may_plan: registry.costlyPivots(p).length === 0,
+    };
+  });
+  return ok(`${playbooks.length} playbooks`, json({ playbooks }));
+}
+
 export const SOURCE_TOOLS: ToolDef[] = [
   { name: "list_sources", description: "List the sources you may use, with their marking, whether they are free and how reliable they are.", parameters: params(), call: listSources },
   {
@@ -64,5 +78,9 @@ export const SOURCE_TOOLS: ToolDef[] = [
       want: idArg,
     }, ["have", "want"]),
     call: findRoutes,
+  },
+  {
+    name: "list_playbooks", description: "List the playbooks: fixed chains of lookups code runs with no model. Each says what it takes, the type it finds, and whether it may be planned.",
+    parameters: params(), call: listPlaybooks,
   },
 ];
