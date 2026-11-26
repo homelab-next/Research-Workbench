@@ -100,7 +100,9 @@ function lookupOf(session: CaseSession, value: string, r: RunQueryResult, reused
   switch (r.status) {
     case "done": {
       const empty = r.card !== null && Object.hasOwn(session.state.cards, r.card) ? session.state.cards[r.card]!.empty : null;
-      const detail = reused !== null ? reused : r.outcome === "partial" ? partialText(r) : r.outcome === "empty" ? (empty === "proven-negative" ? "proven negative" : "not seen") : "";
+      const meaning = r.outcome === "partial" ? partialText(r) : r.outcome === "empty" ? (empty === "proven-negative" ? "proven negative" : "not seen") : "";
+      // a reused lookup says where its answer came from and what that answer means
+      const detail = reused === null ? meaning : meaning === "" ? reused : `${reused} · ${meaning}`;
       return { value, outcome: r.outcome, rows: r.rows, query: r.query, card: r.card, reused: reused !== null, detail };
     }
     case "failed":
