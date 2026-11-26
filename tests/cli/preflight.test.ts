@@ -50,9 +50,6 @@ function env(url: string, extra: string[] = [], over: { roots?: string } = {}): 
   const tmp = tmpDir();
   const root = join(tmp, "root");
   newRoot(root, { base_url: url, model: "example/model-a" });
-  // a reply cap that fits the 65536 tokens these stand-ins load
-  const mf = join(root, "models", "local.yaml");
-  writeFileSync(mf, readFileSync(mf, "utf8").replace("max_output_tokens: 65536", "max_output_tokens: 16384"));
   const config = join(tmp, "config.yaml");
   const base = configFor(root).split("\n").filter((l) => l !== "");
   const lines = over.roots === undefined ? base : base.filter((l) => !/^roots:|^  - \{ path/.test(l)).concat([`roots: ${over.roots}`]);

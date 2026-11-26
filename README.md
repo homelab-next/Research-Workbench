@@ -185,9 +185,12 @@ It reads your files and asks your model server what it has. It never contacts a 
 - `manifests`, `pipeline`, `checks`: they load without a problem.
 - `lake sources`: none is open to agent-written queries. A note says an unguarded table or an unchecked certificate.
 - `pivots`: every pivot renders against the guard. This is where a refusal from the last section shows up.
-- `model listed`, `model loaded`, `context`: the model server lists the model, it is loaded, and its context holds at least 32768 tokens (change this with `--min-context`).
+- `model listed`, `model loaded`, `context`: the model server lists the model, it is loaded, and the context each request has holds at least 32768 tokens (change this with `--min-context`).
+- `context fit`: every stage's reply cap (`max_output_tokens`) leaves the pack its half of the context each request has. If it does not, the line names the cap that fits.
 - `marking policy`: every source's marking may go to every stage's model.
 - `model answers`: one fixed test question, with no case data, answered with a well-formed tool call. It is the only thing preflight sends anywhere, and no ledger records it. `--no-question` leaves it out.
+
+Load the model in one slot. If the server splits the context between several slots, each request has only its share, so `parallel` in the model manifest says how many slots share the context, and `context` is the whole of it. Preflight checks the reply caps against the share, and a stage whose cap does not fit stops before it calls the model.
 
 When `model loaded` fails, load the model in the model server's own loader, with a large context (131072 tokens is a good start), and run preflight again. Do not start a run on a model that loaded itself on the first request. An automatic load may use the server's small default context, and a run needs a large one.
 

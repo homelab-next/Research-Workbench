@@ -3,6 +3,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { loadProfile } from "../../src/agents/context";
+import { fitProblem } from "../../src/agents/pack";
 import { loadProviders } from "../../src/agents/providers";
 import { loadConfig } from "../../src/modules/config";
 import { Registry } from "../../src/modules/registry";
@@ -133,10 +134,10 @@ test("a sample holding a symbolic link or lacking a folder is refused before any
   expect(existsSync(root)).toBe(false);
 });
 
-test("the model manifest caps the model's output at 65536 tokens", () => {
+test("the model manifest caps the model's output at 16384 tokens", () => {
   const root = fresh();
   newRoot(root, { base_url: "http://127.0.0.1:1234/v1", model: "example/model-a" });
-  expect(readFileSync(join(root, "models", "local.yaml"), "utf8").split("\n")).toContain("max_output_tokens: 65536");
+  expect(readFileSync(join(root, "models", "local.yaml"), "utf8").split("\n")).toContain("max_output_tokens: 16384");
 });
 
 test("the model manifest asks for structured output", () => {
@@ -145,14 +146,25 @@ test("the model manifest asks for structured output", () => {
   expect(readFileSync(join(root, "models", "local.yaml"), "utf8").split("\n")).toContain("structured_output: true");
 });
 
-test("the model manifest carries the Qwen-recommended sampling and a 65536-token output limit, and loads", () => {
+test("the model manifest carries the Qwen-recommended sampling and a 16384-token output limit, and loads", () => {
   const root = fresh();
   newRoot(root, { base_url: "http://127.0.0.1:1234/v1", model: "example/model-a" });
   const body = Bun.YAML.parse(readFileSync(join(root, "models", "local.yaml"), "utf8")) as Record<string, unknown>;
-  expect(body.max_output_tokens).toBe(65536);
+  expect(body.max_output_tokens).toBe(16384);
   expect(body.sampling).toEqual({ temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0, presence_penalty: 1.5 });
   const registry = Registry.load([{ path: root, trusted: true, credentials: [] }]);
   const { providers, problems } = loadProviders(registry, new Secrets({}, null));
   expect([...registry.problems, ...problems]).toEqual([]);
-  expect(providers.get("local")!.max_output_tokens).toBe(65536);
+  expect(providers.get("local")!.max_output_tokens).toBe(16384);
+});
+
+test("the new root's stages and model carry the settings the first real run arrived at, and they fit 65536 tokens in one slot", () => {
+  const root = fresh();
+  newRoot(root, { base_url: "http://127.0.0.1:1234/v1", model: "example/model-a" });
+  const { pipeline } = loadPipeline(Registry.load([{ path: root, trusted: true, credentials: [] }]));
+  const by = Object.fromEntries(pipeline!.stages.filter((s) => s.runs === "agent").map((s) => [s.role, [s.max_output_tokens, s.max_turns]]));
+  expect(by).toEqual({ frame: [8192, 8], plan: [32768, 16], research: [16384, 24], assemble: [32768, 30], evaluate: [16384, 16], challenge: [16384, 16], publish: [16384, 8] });
+  const model = Bun.YAML.parse(readFileSync(join(root, "models", "local.yaml"), "utf8")) as Record<string, unknown>;
+  expect(model).toMatchObject({ max_output_tokens: 16384, timeout_ms: 600000, parallel: 1 });
+  for (const [cap] of Object.values(by)) expect(fitProblem(65536, cap as number)).toBeNull();
 });

@@ -32,6 +32,17 @@ function walk(dir: string, base = dir): string[] {
   return out.sort();
 }
 
+/** The reply cap and turn limit each agent stage gets in a new root, by role: what the first real run arrived at. Each cap fits 65536 tokens in one slot. */
+const STAGE_SETTINGS: Record<string, { max_output_tokens: number; max_turns: number }> = {
+  frame: { max_output_tokens: 8192, max_turns: 8 },
+  plan: { max_output_tokens: 32768, max_turns: 16 },
+  research: { max_output_tokens: 16384, max_turns: 24 },
+  assemble: { max_output_tokens: 32768, max_turns: 30 },
+  evaluate: { max_output_tokens: 16384, max_turns: 16 },
+  challenge: { max_output_tokens: 16384, max_turns: 16 },
+  publish: { max_output_tokens: 16384, max_turns: 8 },
+};
+
 /** Rewrites the one `model:` line of a stage whose parsed model is not null, and checks nothing else changed. */
 function pointStage(file: string, text: string, model: { provider: string; model: string }): string {
   const parsed = Bun.YAML.parse(text) as Record<string, unknown> | null;
@@ -40,11 +51,17 @@ function pointStage(file: string, text: string, model: { provider: string; model
   const at = lines.findIndex((l) => l.startsWith("model:"));
   if (at < 0) throw new Error(`${file}: the stage has a model but no line starting with "model:" to rewrite`);
   lines[at] = `model: { provider: ${model.provider}, model: ${JSON.stringify(model.model)}, effort: null }`;
+  const settings = typeof parsed.role === "string" && Object.hasOwn(STAGE_SETTINGS, parsed.role) ? STAGE_SETTINGS[parsed.role]! : null;
+  if (settings !== null) {
+    if (parsed.max_output_tokens !== undefined || parsed.max_turns !== undefined) throw new Error(`${file}: the stage already sets max_output_tokens or max_turns`);
+    lines.splice(at + 1, 0, `max_output_tokens: ${settings.max_output_tokens}`, `max_turns: ${settings.max_turns}`);
+  }
   const out = lines.join("\n");
   let again: Record<string, unknown> | null;
   try { again = Bun.YAML.parse(out) as Record<string, unknown> | null; } catch { again = null; }
-  const expected = { ...parsed, model: { provider: model.provider, model: model.model, effort: null } };
-  if (JSON.stringify(again) !== JSON.stringify(expected)) throw new Error(`${file}: the model line cannot be rewritten in place (write it on the one line "model: ...")`);
+  const expected = { ...parsed, model: { provider: model.provider, model: model.model, effort: null }, ...(settings === null ? {} : settings) };
+  const sorted = (v: unknown): string => JSON.stringify(v, (_k, x) => (x !== null && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.entries(x as object).sort(([a], [b]) => a.localeCompare(b))) : x));
+  if (sorted(again) !== sorted(expected)) throw new Error(`${file}: the model line cannot be rewritten in place (write it on the one line "model: ...")`);
   return out;
 }
 
@@ -97,7 +114,7 @@ export function newRoot(dir: string, opts: NewRootOptions): string[] {
     mkdirSync(join(dir, "models"));
     writeFileSync(join(dir, "models", `${provider}.yaml`), [
       "kind: model", `id: ${provider}`, "title: Local model", "provider: local", `where: ${where}`,
-      `base_url: ${JSON.stringify(opts.base_url)}`, "efforts: []", "timeout_ms: 300000", "max_output_tokens: 65536", "structured_output: true",
+      `base_url: ${JSON.stringify(opts.base_url)}`, "efforts: []", "timeout_ms: 600000", "parallel: 1", "max_output_tokens: 16384", "structured_output: true",
       // Qwen's own guidance for thinking mode; the presence penalty stops a reply looping on itself
       "sampling: { temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0, presence_penalty: 1.5 }", "",
     ].join("\n"));
