@@ -83,3 +83,5 @@ The slice is too large for one plan. It is built as five plans, in order. Each p
 4. The README
 5. The owner's root and configuration (outside the repository)
 6. The real investigation
+
+Proven on 2026-11-25: one investigation on the live lake with the local model reached the publish gate; chain intact.
