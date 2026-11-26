@@ -520,3 +520,42 @@ test("the planner's refusal reasons are a marked part, not task text", async () 
   expect(task).not.toContain("address_to_verdict");
   expect(asks[1]!.payload.pack.some((i) => i.id === "plan-refusal" && !i.fixed)).toBe(true);
 });
+
+/** The plan with both sub-goals under one title. */
+const sameTitle = () => ({ ...planOut(), subgoals: planOut().subgoals.map((g) => ({ ...g, title: "Look it up" })) });
+
+test("two sub-goals with the same title are each carried by their own finished job on resume", async () => {
+  const r = rig({ orchestrator: [say(FRAME)], planner: [say(sameTitle())], "researcher-g1": G1, "researcher-g2": G2 }, { parallel: 1 });
+  await toGate(r);
+  r.engine.acceptPlan({ actor: person, budgets: { s3: 1 } });
+  let turns = 0;
+  afterTurn = (actor) => { if (actor === "researcher-g1" && ++turns === 2) r.engine.pause(person); };
+  await r.engine.advance();
+  expect(f.s.state.run.status).toBe("paused");
+  expect(ofType("job.started").map((e) => e.payload.subgoal)).toEqual(["g1"]);
+  await r.engine.resume(person);
+  const of = (g: string) => ofType("job.started").filter((e) => e.payload.subgoal === g);
+  expect(of("g1")).toHaveLength(1);
+  expect(of("g2")).toHaveLength(1);
+  expect(ofType("model.request").filter((e) => e.actor.id === "researcher-g1")).toHaveLength(2);
+  expect(ofType("model.request").filter((e) => e.actor.id === "researcher-g2")).toHaveLength(2);
+  expect(finished("research").at(-1)!.payload.outcome).toBe("pass");
+});
+
+test("a job recorded without a sub-goal id is still matched by its title", async () => {
+  const r = rig({ orchestrator: [say(FRAME)], planner: [say(planOut())], "researcher-g1": G1, "researcher-g2": G2 }, { parallel: 1 });
+  await toGate(r);
+  r.engine.acceptPlan({ actor: person, budgets: { s3: 1 } });
+  const engine = { kind: "system" as const, id: "engine" };
+  f.s.commit((st, ids) => {
+    const job = ids.next("job");
+    return [
+      { type: "job.started" as const, actor: engine, run: st.run.id, stage: "research", job, payload: { job, title: "Research: Who uses it", kind: "research" as const, source: null } },
+      { type: "job.finished" as const, actor: engine, run: st.run.id, stage: "research", job, payload: { job, outcome: "done" as const } },
+    ];
+  });
+  await r.engine.advance();
+  expect(ofType("model.request").filter((e) => e.actor.id === "researcher-g1")).toEqual([]);
+  expect(ofType("job.started").filter((e) => e.payload.subgoal === "g1")).toEqual([]);
+  expect(ofType("job.started").filter((e) => e.payload.subgoal === "g2")).toHaveLength(1);
+});

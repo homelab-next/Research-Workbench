@@ -843,3 +843,20 @@ test("a step finished by reusing an answered query names that query; a reused th
   expect(s.skipped.map((x) => x.type)).toEqual(["step.finished"]);
   expect(s.plan.steps.s2).toEqual({ status: "pending", cards: [], note: "" });
 });
+
+test("a job names its sub-goal and request when it says so; an entry without them folds with both null; a malformed one is skipped", () => {
+  const b = new EntryBuilder();
+  b.add("job.started", { job: "j1", title: "T", kind: "research", source: null, subgoal: "g2", request: null });
+  b.add("job.started", { job: "j2", title: "U", kind: "research", source: null });
+  b.add("job.started", { job: "j3", title: "V", kind: "research", source: null, subgoal: null, request: 12 });
+  const s = fold(b.entries);
+  expect(s.jobs.j1).toMatchObject({ subgoal: "g2", request: null });
+  expect(s.jobs.j2).toMatchObject({ subgoal: null, request: null });
+  expect(s.jobs.j3).toMatchObject({ subgoal: null, request: 12 });
+  expect(s.skipped).toEqual([]);
+  b.add("job.started", { job: "j4", title: "W", kind: "research", source: null, subgoal: 7 as never });
+  b.add("job.started", { job: "j5", title: "X", kind: "research", source: null, request: "r" as never });
+  const bad = fold(b.entries);
+  expect(bad.skipped).toHaveLength(2);
+  expect(Object.keys(bad.jobs)).toEqual(["j1", "j2", "j3"]);
+});

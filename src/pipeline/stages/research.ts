@@ -12,7 +12,8 @@ import type { AgentStageEnd } from "./agent";
 const ENGINE: Actor = { kind: "system", id: "engine" };
 const DONE = new Set(["answered", "empty", "partial"]);
 
-interface Unit { sent_back?: boolean; actor_id: string; title: string; task: string; part: PackPart; subgoal: string | null; question: string | null }
+interface Unit { sent_back?: boolean; actor_id: string; title: string; task: string; part: PackPart; subgoal: string | null; question: string | null;
+  /** The seq of the research.requested entry a sent-back unit answers. */ request?: number }
 interface SubResult { id: string; title: string; outcome: "answered" | "blocked"; cards: string[]; note: string }
 
 const noteOf = (end: AgentStageEnd | undefined): string => {
@@ -60,7 +61,10 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
   /** Questions asked for whose researcher already finished in this pass: not asked again. */
   const answeredBefore: { question: string }[] = [];
   const doneJobs = new Set(entries.filter((e) => e.type === "job.finished" && e.payload.outcome === "done").map((e) => (e.type === "job.finished" ? e.payload.job : "")));
-  const doneTitles = new Set(entries.filter((e) => e.type === "job.started" && e.seq > lastFinished && doneJobs.has(e.payload.job)).map((e) => (e.type === "job.started" ? e.payload.title : "")));
+  // a finished job answers a request by the request's seq; a job recorded before that was written answers it by title
+  const doneStarts = entries.filter((e): e is Extract<Entry, { type: "job.started" }> => e.type === "job.started" && e.seq > lastFinished && doneJobs.has(e.payload.job));
+  const doneRequests = new Set(doneStarts.flatMap((e) => (typeof e.payload.request === "number" ? [e.payload.request] : [])));
+  const doneTitles = new Set(doneStarts.filter((e) => e.payload.request === undefined).map((e) => e.payload.title));
   /**
    * Sub-goals of the accepted plan whose researcher already finished (done) in this run since that plan was accepted, with that job: a resume
    * continues the stage, it does not start them again. Their outcome and cards are the steps' as recorded. A new plan starts fresh.
@@ -71,7 +75,8 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
     const runId = session.state.run.id;
     for (const e of entries) {
       if (e.type !== "job.started" || e.seq <= acceptedAt || e.run !== runId || e.stage !== stage.id || e.payload.kind !== "research" || !doneJobs.has(e.payload.job)) continue;
-      const g = goals.find((x) => `Research: ${x.title}` === e.payload.title);
+      // a job names its sub-goal by id; one recorded without the field is matched by its title
+      const g = e.payload.subgoal !== undefined ? goals.find((x) => x.id === e.payload.subgoal) : goals.find((x) => `Research: ${x.title}` === e.payload.title);
       if (g !== undefined && !carried.has(g.id)) carried.set(g.id, e.payload.job);
     }
   }
@@ -81,9 +86,9 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
       for (const e of entries) {
         if (e.type !== "research.requested") continue;
         n++;
-        if (e.seq > lastFinished && doneTitles.has(`Research: ${e.payload.question}`)) answeredBefore.push({ question: e.payload.question });
+        if (e.seq > lastFinished && (doneRequests.has(e.seq) || doneTitles.has(`Research: ${e.payload.question}`))) answeredBefore.push({ question: e.payload.question });
         else if (e.seq > lastFinished) {
-          units.push({ sent_back: true, actor_id: actorId(`r${n}`), title: `Research: ${e.payload.question}`, subgoal: null, question: e.payload.question, task: TASK, part: questionPart(`question-r${n}`, e.payload.question, [e]) });
+          units.push({ sent_back: true, actor_id: actorId(`r${n}`), title: `Research: ${e.payload.question}`, subgoal: null, question: e.payload.question, request: e.seq, task: TASK, part: questionPart(`question-r${n}`, e.payload.question, [e]) });
         }
       }
     } else {
@@ -109,7 +114,7 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
     let job = "";
     session.commit((s, ids) => {
       job = ids.next("job");
-      return [{ type: "job.started", actor: ENGINE, run: s.run.id, stage: stage.id, job, payload: { job, title: u.title, kind: "research", source: null } }];
+      return [{ type: "job.started", actor: ENGINE, run: s.run.id, stage: stage.id, job, payload: { job, title: u.title, kind: "research", source: null, subgoal: u.subgoal, request: u.request ?? null } }];
     });
     const close = (outcome: "done" | "failed"): void => {
       session.commit((s) => [{ type: "job.finished", actor: ENGINE, run: s.run.id, stage: stage.id, job, payload: { job, outcome } }]);

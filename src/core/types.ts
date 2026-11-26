@@ -145,7 +145,11 @@ export interface Payloads {
   "gate.waiting": { gate: "plan" | "publish" };
   "gate.passed": { gate: "plan" | "publish" };
   "budget.set": { tokens: number | null };
-  "job.started": { job: string; title: string; kind: "research" | "query" | "model" | "check" | "playbook"; source: string | null };
+  "job.started": { job: string; title: string; kind: "research" | "query" | "model" | "check" | "playbook"; source: string | null;
+    /** The plan sub-goal a research job answers, by id. */
+    subgoal?: string | null;
+    /** The seq of the research.requested entry a sent-back research job answers. */
+    request?: number | null };
   "job.finished": { job: string; outcome: "done" | "failed" };
   // plans
   "plan.proposed": { plan: Plan };

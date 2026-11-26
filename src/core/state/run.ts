@@ -160,10 +160,11 @@ function applyQuery(s: CaseState, entry: Entry): CaseState {
 function applyJobsAndProposals(s: CaseState, entry: Entry): CaseState {
   switch (entry.type) {
     case "job.started": {
-      const { job, title, kind, source } = entry.payload;
+      const { job, title, kind, source, subgoal, request } = entry.payload;
       if (!isStr(job) || !isStr(title) || !isOneOf(kind, JOB_KINDS) || !isStrOrNull(source)) return malformed(s, entry);
+      if (!(subgoal === undefined || isStrOrNull(subgoal)) || !(request === undefined || request === null || isNum(request))) return malformed(s, entry);
       if (Object.hasOwn(s.jobs, job)) return s;
-      const j: JobState = { id: job, title, kind, source, status: "running", started_ts: entry.ts, ended_ts: null };
+      const j: JobState = { id: job, title, kind, source, subgoal: subgoal ?? null, request: request ?? null, status: "running", started_ts: entry.ts, ended_ts: null };
       return { ...s, jobs: { ...s.jobs, [job]: j } };
     }
     case "job.finished": {

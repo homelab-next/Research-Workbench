@@ -66,6 +66,10 @@ export interface PlanState {
 }
 export interface JobState {
   id: string; title: string; kind: Payloads["job.started"]["kind"]; source: string | null;
+  /** The plan sub-goal the job answers, by id; null when the entry names none. */
+  subgoal: string | null;
+  /** The research.requested entry (its seq) the job answers; null when the entry names none. */
+  request: number | null;
   status: "running" | "done" | "failed"; started_ts: string; ended_ts: string | null;
 }
 export interface QueryState {
