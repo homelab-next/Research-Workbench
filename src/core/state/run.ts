@@ -90,16 +90,19 @@ function applyPlan(s: CaseState, entry: Entry): CaseState {
       return { ...s, plan: { ...p, estimates: Object.fromEntries([...Object.entries(p.estimates), [step, estimate]]) } };
     }
     case "step.started": {
-      const { step } = entry.payload;
-      if (!isStr(step)) return malformed(s, entry);
+      const { step, by } = entry.payload;
+      if (!isStr(step) || !(by === undefined || by === "workbench")) return malformed(s, entry);
       if (!has(p.steps, step)) return s;
-      return { ...s, plan: { ...p, steps: { ...p.steps, [step]: { ...p.steps[step]!, status: "running" } } } };
+      // who started it last: a start without `by` (a model's) clears the workbench's
+      const { by: _was, ...rest } = p.steps[step]!;
+      return { ...s, plan: { ...p, steps: { ...p.steps, [step]: { ...rest, status: "running", ...(by === undefined ? {} : { by }) } } } };
     }
     case "step.finished": {
       const { step, outcome, cards, note, reused } = entry.payload;
       if (!isStr(step) || !isOneOf(outcome, STEP_OUTCOMES) || !isStrList(cards) || !isStr(note) || !(reused === undefined || isStr(reused))) return malformed(s, entry);
       if (!has(p.steps, step)) return s;
-      return { ...s, plan: { ...p, steps: { ...p.steps, [step]: { status: outcome, cards, note } } } };
+      const by = p.steps[step]!.by;
+      return { ...s, plan: { ...p, steps: { ...p.steps, [step]: { status: outcome, cards, note, ...(by === undefined ? {} : { by }) } } } };
     }
     default:
       return s;

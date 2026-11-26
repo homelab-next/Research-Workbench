@@ -153,6 +153,7 @@ export function makeSteps(ui: Ui, open: Open, arg: string | null = null): View {
     if (left) kids.push(h("span", { class: "step-status" }, "not accepted"));
     else if (accepted && run !== null) {
       kids.push(h("span", { class: "step-status", title: run.note }, STEP_WORDS[run.status]));
+      if (run.by === "workbench") kids.push(tag(ui, "system", "workbench", "Run in code by the workbench; no model chose this lookup"));
       for (const c of run.cards) kids.push(cardChip(ui, c, (card) => nav.focusCard(card)));
     }
     return h("div", { class: `step${left ? " muted" : ""}`, data: { step: step.id } }, kids);

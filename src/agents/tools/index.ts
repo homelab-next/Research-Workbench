@@ -28,6 +28,8 @@ export interface ToolContext {
   subgoal: string | null; window: TimeWindow; limits: SeekLimits;
   /** Set by the engine. Called when a costly step raised a proposal; returns the result if the person's plan budget ran it, else null. */
   onNeedsBudget?: (proposal: string, step: string | null) => Promise<RunQueryResult | null>;
+  /** Set by Research when the workbench runs a step itself: the step is recorded as started by the workbench. */
+  in_code?: boolean;
 }
 /** `view` is what the model is given; `marking` is the marking of any source data in it. */
 export interface ToolResult { ok: boolean; summary: string; view: Json; marking: Marking | null }

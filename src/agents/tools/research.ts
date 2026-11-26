@@ -130,6 +130,7 @@ async function runStepTool(ctx: ToolContext, args: Record<string, Json>): Promis
   if (step.playbook !== undefined) throw new ToolError(`step ${id} is a playbook; the engine runs it`);
   if (!ctx.session.state.plan.accepted_steps.includes(id)) throw new ToolError(`step ${id} was not accepted`);
   const had = Object.hasOwn(ctx.session.state.plan.steps, id) ? ctx.session.state.plan.steps[id]! : null;
+  const by = ctx.in_code === true ? { by: "workbench" as const } : {};
   if (had !== null && had.status !== "pending" && had.status !== "running") {
     // a step finished before (by the workbench at the start of the job, or by an earlier call) is read back, not run again
     const cards = had.cards.flatMap((c) => (Object.hasOwn(ctx.session.state.cards, c) ? [ctx.session.state.cards[c]!] : []));
@@ -145,7 +146,7 @@ async function runStepTool(ctx: ToolContext, args: Record<string, Json>): Promis
   if (step.pins !== undefined && stepPins(ctx.deps.registry, step) !== step.pins) {
     const note = `the pivot ${step.pivot} changed since the plan was accepted; re-plan to use it`;
     ctx.session.commit(() => [
-      { type: "step.started", actor: ctx.actor, ...ctx.link, payload: { step: id } },
+      { type: "step.started", actor: ctx.actor, ...ctx.link, payload: { step: id, ...by } },
       { type: "step.finished", actor: ctx.actor, ...ctx.link, payload: { step: id, outcome: "blocked", cards: [], note } },
     ]);
     return { ok: true, summary: note, view: { status: "blocked", step: id, note }, marking: null };
@@ -161,13 +162,13 @@ async function runStepTool(ctx: ToolContext, args: Record<string, Json>): Promis
     const note = reuseNote(before);
     const cards = before.card === null || earlier.includes(before.card) ? earlier : [...earlier, before.card];
     ctx.session.commit(() => [
-      { type: "step.started", actor: ctx.actor, ...ctx.link, payload: { step: id } },
+      { type: "step.started", actor: ctx.actor, ...ctx.link, payload: { step: id, ...by } },
       { type: "step.finished", actor: ctx.actor, ...ctx.link, cause: before.reused.card_seq, payload: { step: id, outcome: before.outcome, cards, note, reused: before.query } },
     ]);
     return resultOf(ctx, before, pivot, pivot === null ? step.source : pivot.source);
   }
 
-  ctx.session.commit(() => [{ type: "step.started", actor: ctx.actor, ...ctx.link, payload: { step: id } }]);
+  ctx.session.commit(() => [{ type: "step.started", actor: ctx.actor, ...ctx.link, payload: { step: id, ...by } }]);
   const finish = (outcome: StepOutcome, cards: string[], note: string): void => {
     ctx.session.commit(() => [{ type: "step.finished", actor: ctx.actor, ...ctx.link, payload: { step: id, outcome, cards, note } }]);
   };

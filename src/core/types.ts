@@ -158,7 +158,8 @@ export interface Payloads {
   "plan.accepted": { plan: string; steps: string[]; budgets: Record<string, number> };
   "plan.denied": { plan: string; reason: string };
   "plan.replan_requested": { plan: string; note: string };
-  "step.started": { step: string };
+  /** `by` is "workbench" when code ran the step at the start of its job, with no model choosing the lookup. */
+  "step.started": { step: string; by?: "workbench" };
   /** `reused`: the query whose recorded answer finished the step, when none was run for it. */
   "step.finished": { step: string; outcome: StepOutcome; cards: string[]; note: string; reused?: string };
   /** A person asked for the price of a costly step before accepting the plan. `query` is the estimate query the source answered, when there was one. */

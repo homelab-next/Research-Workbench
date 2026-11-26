@@ -134,7 +134,7 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
     const { window, limits } = frameOf(env);
     const ctx: ToolContext = {
       session, deps: deps.runner, seeker: deps.seeker, actor: who.actor, link: { run: session.state.run.id, stage: stage.id, job },
-      draft: null, draft_hash: null, subgoal: u.subgoal, window, limits, onNeedsBudget: (p, step) => spendPlanBudget(session, deps.runner, p, step),
+      draft: null, draft_hash: null, subgoal: u.subgoal, window, limits, onNeedsBudget: (p, step) => spendPlanBudget(session, deps.runner, p, step), in_code: true,
     };
     const lines: string[] = [];
     const markings: Marking[] = [];
@@ -214,7 +214,7 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
       const changed = p === null || p.hash !== ref.hash ? `the playbook ${ref.id} changed since the plan was accepted; re-plan to use it`
         : `a pivot of the playbook ${ref.id} changed since the plan was accepted; re-plan to use it`;
       session.commit(() => [
-        { type: "step.started", actor: PLAYBOOK, ...link, payload: { step: step.id } },
+        { type: "step.started", actor: PLAYBOOK, ...link, payload: { step: step.id, by: "workbench" } },
         { type: "step.finished", actor: PLAYBOOK, ...link, payload: { step: step.id, outcome: "blocked", cards: [], note: changed } },
       ]);
       return output(changed);
@@ -228,12 +228,12 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
       // a playbook that no longer fits (a pivot that now needs a window, say) is not run: its step finishes blocked with the reason
       const note = `the playbook ${ref.id} cannot run: ${err.message}`;
       session.commit(() => [
-        { type: "step.started", actor: PLAYBOOK, ...link, payload: { step: step.id } },
+        { type: "step.started", actor: PLAYBOOK, ...link, payload: { step: step.id, by: "workbench" } },
         { type: "step.finished", actor: PLAYBOOK, ...link, payload: { step: step.id, outcome: "blocked", cards: [], note } },
       ]);
       return output(note);
     }
-    session.commit(() => [{ type: "step.started", actor: PLAYBOOK, ...link, job, payload: { step: step.id } }]);
+    session.commit(() => [{ type: "step.started", actor: PLAYBOOK, ...link, job, payload: { step: step.id, by: "workbench" } }]);
     let stopped = false;
     const stop = (): boolean => {
       const { status } = session.state.run;

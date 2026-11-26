@@ -763,6 +763,24 @@ test("a step whose value an earlier step finds is left to the researcher's run_s
   expect(f.s.blobs.text(asks[0]!.payload.messages.blob)).toContain("s2: not yet run");
 });
 
+test("a step Research runs in code is recorded as started by the workbench; one the researcher runs is not", async () => {
+  const r = rig({ orchestrator: [say(FRAME)], planner: [say(planOut())], "researcher-g1": [calls(call("run_step", { step: "s2", value: ASSET })), answered("accounts found")] });
+  await toGate(r);
+  r.engine.acceptPlan({ actor: person, steps: ["s1", "s2"] });
+  await r.engine.advance();
+  expect(ofType("step.started").map((e) => [e.payload.step, e.payload.by])).toEqual([["s1", "workbench"], ["s2", undefined]]);
+  expect(f.s.state.plan.steps.s1!.by).toBe("workbench");
+  expect("by" in f.s.state.plan.steps.s2!).toBe(false);
+});
+
+test("every step.started of a playbook step says the workbench ran it", async () => {
+  const r = rig({ orchestrator: [say(PB_FRAME)], planner: [say(pbPlan(pbGoal()))] });
+  await toGate(r);
+  r.engine.acceptPlan({ actor: person });
+  await r.engine.advance();
+  expect(ofType("step.started").map((e) => [e.payload.step, e.payload.by])).toEqual([["s1", "workbench"]]);
+});
+
 test("a step left running by an interrupted attempt is run in code on resume", async () => {
   // final review I3: a server stopped mid-step leaves step.started with no step.finished (recovery closes queries and jobs, not steps)
   const one = { goal: "is it ours", subgoals: [

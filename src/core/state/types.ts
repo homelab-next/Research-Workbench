@@ -62,7 +62,8 @@ export interface PlanState {
   budgets: Record<string, number>;
   /** The price a person asked for, per step of the current plan (null: asked, and none could be given). Cleared by every plan.proposed. */
   estimates: Record<string, Cost | null>;
-  steps: Record<string, { status: "pending" | "running" | StepOutcome; cards: string[]; note: string }>;
+  /** `by` is "workbench" when the step was last started by code, not by a model. */
+  steps: Record<string, { status: "pending" | "running" | StepOutcome; cards: string[]; note: string; by?: "workbench" }>;
 }
 export interface JobState {
   id: string; title: string; kind: Payloads["job.started"]["kind"]; source: string | null;

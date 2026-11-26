@@ -223,6 +223,27 @@ test("a plan decision for another plan id changes nothing", () => {
   expect(fold(b.entries).plan.status).toBe("proposed");
 });
 
+test("step.started by the workbench is kept on the step; without it the step folds as before", () => {
+  const b = new EntryBuilder();
+  b.add("plan.proposed", { plan: plan() });
+  b.add("plan.accepted", { plan: "plan-1", steps: ["s1", "s2"], budgets: {} });
+  b.add("step.started", { step: "s1", by: "workbench" });
+  b.add("step.started", { step: "s2" });
+  let s = fold(b.entries);
+  expect(s.plan.steps.s1!.by).toBe("workbench");
+  expect("by" in s.plan.steps.s2!).toBe(false);
+  // it stays on the step once it finishes
+  b.add("step.finished", { step: "s1", outcome: "answered", cards: [], note: "n" });
+  s = fold(b.entries);
+  expect(s.plan.steps.s1).toEqual({ status: "answered", cards: [], note: "n", by: "workbench" });
+  // anything else is malformed: skipped, state unchanged
+  const before = fold(b.entries);
+  b.add("step.started", { step: "s1", by: "someone" } as never);
+  s = fold(b.entries);
+  expect(s.skipped).toHaveLength(1);
+  expect(s.plan).toEqual(before.plan);
+});
+
 test("step.started and step.finished track each step", () => {
   const b = new EntryBuilder();
   b.add("plan.proposed", { plan: plan() });

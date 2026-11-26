@@ -129,6 +129,17 @@ test("Accept sends the checked steps and their budgets, and the run goes on to t
   expect(p.all(".lens .subgoal .goal-state").map((e) => e.textContent)).toContain("answered");
 });
 
+test("a step the workbench ran reads so", async () => {
+  await atGate();
+  p.fill("[aria-label='Budget for s3, in lookups']", "1");
+  p.click("[data-action=accept_plan]");
+  await settled();
+  expect(state().plan.steps.s1!.by).toBe("workbench");
+  const t = p.q('[data-step="s1"] .tag-system');
+  expect(t.textContent).toBe("workbench");
+  expect(t.getAttribute("title")).toBe("Run in code by the workbench; no model chose this lookup");
+});
+
 test("Deny needs a reason and ends the run", async () => {
   await atGate();
   p.click("[data-action=deny]");
