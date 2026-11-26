@@ -1,16 +1,24 @@
 // The seam with pivot (pivot docs/design.md §4): the workbench plans with pivot and keeps its own custody of every query.
 import { expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { canonical as pivotCanonical } from "pivot/base/canonical";
 import { sha256Hex as pivotSha } from "pivot/base/hash";
 import { validate as pivotValidate } from "pivot/base/schema";
+import { belongsPlaybook as pivotBelongs } from "pivot/catalogue/inventories";
+import { rowsHash as pivotRowsHash } from "pivot/plan/render";
 import type { Schema as PivotSchema } from "pivot/base/schema";
 import { canonical } from "../../src/core/canonical";
 import type { Json } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
 import { validate } from "../../src/core/schema";
 import type { Schema } from "../../src/core/schema";
+import { belongsPlaybook } from "../../src/modules/belongs";
+import { loadRegistry } from "../../src/modules/registry-record";
+import { rowsHash } from "../../src/modules/runner";
+import { copySample } from "../helpers/sample-root";
+
 
 const REPO = join(import.meta.dir, "..", "..");
 const SELF = "tests/repo/pivot-seam.test.ts";
@@ -160,4 +168,85 @@ test("the installed pivot is the tagged commit the lock file names", () => {
   // what is in node_modules is what the lock file names, and nothing points at a local copy
   expect(readFileSync(join(PIVOT, ".bun-tag"), "utf8").trim()).toBe(`homelab-next-pivot-${pinned![1]}`);
   expect(lock).not.toMatch(/pivot@(file|link|workspace):/);
+});
+
+/** What pivot computes that the workbench records or compares with a recorded value: these come from the workbench's own copies. */
+const DIGESTS = ["canonical", "sha256Hex", "rowsHash", "entryHash", "GENESIS", "belongsPlaybook"];
+/** The one file allowed to call pivot's belongsPlaybook: it takes the steps and hashes them itself. */
+const BELONGS = "src/modules/belongs.ts";
+
+/** Every value import or re-export, from pivot or from a shim of it, of a name in DIGESTS, as "path: name from spec". */
+function digestImports(): string[] {
+  const SRC = join(REPO, "src");
+  const shims = new Set(SHIMS.map((f) => join(REPO, f)));
+  const fromPivot = (spec: string, file: string): boolean => {
+    if (spec === "pivot" || spec.startsWith("pivot/")) return true;
+    if (!spec.startsWith(".")) return false;
+    const base = resolve(dirname(file), spec);
+    return [base, `${base}.ts`, join(base, "index.ts")].some((c) => shims.has(c));
+  };
+  const out: string[] = [];
+  for (const f of files(SRC)) {
+    const rel = relative(REPO, f);
+    const text = readFileSync(f, "utf8");
+    for (const m of text.matchAll(/\b(?:import|export)\s+(type\s+)?\{([^}]*)\}\s*from\s*"([^"]+)"/g)) {
+      if (m[1] !== undefined || !fromPivot(m[3]!, f)) continue;
+      for (const part of m[2]!.split(",")) {
+        const name = part.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0]!;
+        if (part.trim().startsWith("type ") || !DIGESTS.includes(name)) continue;
+        if (name === "belongsPlaybook" && rel === BELONGS) continue;
+        out.push(`${rel}: ${name} from ${m[3]}`);
+      }
+    }
+    for (const m of text.matchAll(/\bimport\s+\*\s+as\s+\w+\s+from\s*"([^"]+)"/g)) if (fromPivot(m[1]!, f)) out.push(`${rel}: * from ${m[1]}`);
+  }
+  return out;
+}
+
+test("every digest the ledger records or compares is the workbench's own, not pivot's", () => {
+  expect(digestImports()).toEqual([]);
+  // nor reached another way: pivot's base copies by any path, or a registry loaded without the workbench's own hash check
+  expect(where(/["']pivot\/base\//g).filter((w) => w.startsWith("src/"))).toEqual([]);
+  expect(where(/\bRegistry\.load\(/g).filter((w) => w.startsWith("src/"))).toEqual([expect.stringMatching(/^src\/modules\/registry-record\.ts:\d+$/)]);
+});
+
+const ROWS: [string[], Json[][]][] = [
+  [[], []],
+  [["a"], [[null]]],
+  [["a", "b"], [[1, "x"], [2.5, "y"], [-0.25, null]]],
+  [["n", "t", "o"], [[1e21, "unicode é ✓ 𝄞", { b: 1, a: [2, { d: null, c: true }] }], [Number.MAX_SAFE_INTEGER, "quote \" \\ \u0001", []]]],
+  [["dup", "dup"], [["same", "same"]]],
+  [["at"], [["2026-11-20T00:00:00.000Z"], ["2026-11-20T00:00:00.000Z"]]],
+];
+
+test("the workbench's rowsHash gives pivot's bytes on varied rows", () => {
+  for (const [columns, rows] of ROWS) {
+    expect(rowsHash(columns, rows)).toBe(pivotRowsHash(columns, rows));
+    expect(rowsHash(columns, rows)).toBe(sha256Hex(canonical({ columns, rows })));
+  }
+  // and over every vector, as one column
+  expect(rowsHash(["v"], VECTORS.map((v) => [v]))).toBe(pivotRowsHash(["v"], VECTORS.map((v) => [v])));
+});
+
+test("the workbench's does-it-belong playbook is pivot's, hashed by the workbench", () => {
+  const dir = mkdtempSync(join(tmpdir(), "rw-seam-"));
+  try {
+    copySample(join(dir, "sample"));
+    const registry = loadRegistry([{ path: join(dir, "sample"), trusted: true, credentials: [] }]);
+    const types = [...new Set(registry.pivots().filter((p) => p.inventory !== null).map((p) => p.from))];
+    expect(types.length).toBeGreaterThan(0);
+    for (const type of [...types, "no-such-type"]) {
+      const theirs = pivotBelongs(registry, type);
+      const ours = belongsPlaybook(registry, type);
+      expect(ours).toEqual(theirs);
+      if (ours === null) continue;
+      expect(ours.hash).toBe(sha256Hex(canonical(ours.steps.map((s) => {
+        const p = registry.pivot(s.pivot)!;
+        const inv = registry.inventory(p.inventory!)!;
+        return [p.id, p.hash, inv.id, inv.hash];
+      }))));
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

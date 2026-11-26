@@ -103,6 +103,40 @@ test("problems are recorded on the chain as module.rejected", () => {
   expect(c.read().filter(e => e.type === "module.rejected")).toHaveLength(1);
 });
 
+// ---------- task 13 fix I1: a hash the ledger records is the workbench's own sha256 of the file ----------
+/** Loads with pivot's Registry.load wrapped so that `spoil` can alter what it returns, as a pivot whose hash diverged would. */
+function loadSpoiled(roots: RootConfig[], spoil: (r: Registry) => void, c?: Ledger): () => Registry {
+  return () => {
+    const real = Registry.load;
+    Registry.load = (...args: Parameters<typeof Registry.load>) => { const r = real(...args); spoil(r); return r; };
+    try {
+      return loadRegistry(roots, c === undefined ? {} : { chain: c });
+    } finally {
+      Registry.load = real;
+    }
+  };
+}
+
+test("each manifest hash is held to the workbench's own sha256 of the file", () => {
+  const rootA = root(GOOD);
+  const r = loadRegistry([rootA]);
+  for (const m of r.manifests()) expect(m.hash).toBe(sha256Hex(readFileSync(m.path)));
+  for (const s of r.sources()) expect(s.hash).toBe(sha256Hex(readFileSync(r.get("source", s.id)!.path)));
+  for (const p of r.pivots()) expect(p.hash).toBe(sha256Hex(readFileSync(r.get("pivot", p.id)!.path)));
+});
+
+test("a manifest hash that is not the workbench's own refuses the load and records nothing", () => {
+  const rootA = root(GOOD);
+  const c = chain();
+  expect(loadSpoiled([rootA], (r) => { r.manifests()[0]!.hash = "0".repeat(64); }, c)).toThrow(/is not the workbench's own sha256/);
+  expect(loadSpoiled([rootA], (r) => { (r.source("dns-logs") as { hash: string }).hash = "1".repeat(64); }, c)).toThrow(/source "dns-logs".*is not the workbench's own sha256/);
+  expect(loadSpoiled([rootA], (r) => { (r.pivot("address_to_domains") as { hash: string }).hash = "2".repeat(64); }, c)).toThrow(/pivot "address_to_domains".*is not the workbench's own sha256/);
+  expect(c.read()).toHaveLength(0);
+  // a file changed after it was read is the same refusal: the hash would not be of the bytes on disk
+  expect(loadSpoiled([rootA], () => { writeFileSync(join(rootA.path, "sources/dns-logs.yaml"), SOURCE + "quality: later\n"); }, c)).toThrow(/is not the workbench's own sha256/);
+  expect(c.read()).toHaveLength(0);
+});
+
 const withFile = (file: string): string => sourceWith("s", `tables:\n  - { name: t, file: "${file}", format: csv }\n`);
 
 // ---------- final review finding 1: what a root may cause ----------

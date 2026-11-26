@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { sha256Hex } from "../core/hash";
 import type { Ledger } from "../core/ledger";
 import type { Actor } from "../core/types";
 import type { RootConfig } from "./config";
@@ -41,9 +43,37 @@ export function recordRegistry(registry: Registry, chain: Ledger, actor: Actor =
   if (inputs.length > 0) chain.appendMany(inputs);
 }
 
-/** Loads the roots with the workbench's trusted-only kinds, then records what loaded and what was refused when a chain is given. */
+/**
+ * Holds every hash the registry carries (module.loaded, and a source's, pivot's, playbook's or inventory's, which the ledger records
+ * as source_hash, pivot_hash and the manifest hashes) to the workbench's own sha256 of the file's bytes, so the ledger's meaning of
+ * those hashes does not rest on pivot's copy. Throws when one differs; a file changed after pivot read it differs too.
+ */
+export function checkOwnHashes(registry: Registry): void {
+  const own = new Map<string, string>();
+  const ownOf = (path: string): string => {
+    let h = own.get(path);
+    if (h === undefined) { h = sha256Hex(readFileSync(path)); own.set(path, h); }
+    return h;
+  };
+  const refuse = (what: string, path: string): never => {
+    throw new Error(`the hash of ${what} (${path}) is not the workbench's own sha256 of the file; it changed while loading, or pivot's hash differs. Nothing was recorded.`);
+  };
+  for (const m of registry.manifests()) if (m.hash !== ownOf(m.path)) refuse(`${m.kind} "${m.id}"`, m.path);
+  const typed: [string, { id: string; hash: string }[]][] = [
+    ["source", registry.sources()], ["pivot", registry.pivots()], ["playbook", registry.playbooks()], ["inventory", registry.inventories()],
+  ];
+  for (const [kind, items] of typed) {
+    for (const x of items) {
+      const m = registry.get(kind, x.id);
+      if (m === null || x.hash !== ownOf(m.path)) refuse(`${kind} "${x.id}"`, m?.path ?? "no file");
+    }
+  }
+}
+
+/** Loads the roots with the workbench's trusted-only kinds, holds its hashes to the workbench's own, then records what loaded and what was refused when a chain is given. */
 export function loadRegistry(roots: RootConfig[], opts: { chain?: Ledger; actor?: Actor } = {}): Registry {
   const registry = Registry.load(roots, { trustedOnlyKinds: WORKBENCH_TRUSTED_ONLY });
+  checkOwnHashes(registry);
   if (opts.chain !== undefined) recordRegistry(registry, opts.chain, opts.actor ?? DEFAULT_ACTOR);
   return registry;
 }

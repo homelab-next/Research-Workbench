@@ -3,7 +3,7 @@ import type { Json } from "../core/canonical";
 import { Refused } from "../core/refused";
 import type { Schema } from "../core/schema";
 import type { Observable } from "../core/types";
-import { belongsPlaybook } from "../modules/inventories";
+import { belongsPlaybook } from "../modules/belongs";
 import { beginPlaybook, runPlaybook } from "../modules/playbook-run";
 import type { PlaybookStart } from "../modules/playbook-run";
 import type { PlaybookManifest } from "../modules/playbooks";

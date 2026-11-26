@@ -12,11 +12,14 @@ import type { PivotManifest, Registry, SourceManifest } from "./registry";
 import { GuardError } from "./sqlguard";
 // What a pivot's answer proves, and the checks on a request, are pivot's pure planning code; sending the query stays here.
 import type { PlanDeps } from "pivot/connectors/deps";
-import { checkBound, rowsHash } from "pivot/plan/render";
+import { checkBound } from "pivot/plan/render";
 import { checkWindow, overlaps } from "pivot/plan/window";
 import { emptyMeans, readingOf } from "pivot/plan/proof";
 
-export { rowsHash } from "pivot/plan/render";
+/** sha256Hex(canonical({ columns, rows })): the rows_hash a query.result records, by the workbench's own copies (pivot's is held equal by tests/repo/pivot-seam.test.ts). */
+export function rowsHash(columns: string[], rows: Json[][]): string {
+  return sha256Hex(canonical({ columns, rows }));
+}
 
 export const CARD_PREVIEW_ROWS = 50;
 /** The longest a previewed card cell may be, in characters. The blob keeps every value whole. */
