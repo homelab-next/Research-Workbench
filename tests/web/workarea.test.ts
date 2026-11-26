@@ -395,3 +395,19 @@ test("the Stop reason stays typed when the server refuses it", async () => {
   q.fill(q.q(".stop-reason"), "because"); q.press("Enter"); await q.settle();
   expect((q.q(".stop-reason") as HTMLInputElement).value).toBe("because");
 });
+
+test("the phase strip says which draft was sent back and by which stage", async () => {
+  const q = await open();
+  const s = q.s.app.hub.read("CASE-1");
+  const latest = st(q).drafts.at(-1)!;
+  expect(latest.author).toMatchObject({ kind: "agent", stage: "assemble" });
+  s.commit(() => [
+    { type: "stage.finished", actor: { kind: "system", id: "t" }, payload: { stage: "checks", attempt: 9, outcome: "fail", draft_hash: latest.hash, output: null, reason: "a check failed" } },
+    { type: "stage.sent_back", actor: { kind: "system", id: "t" }, payload: { from: "checks", to: "assemble", reason: "a check failed", count: 1 } },
+  ]);
+  await q.settle();
+  const b = q.q("[data-stage=assemble]");
+  expect(b.textContent).toBe(`Assemble ↩ draft ${latest.n} sent back by Checks`);
+  expect(b.dataset.mark).toBe("sent back");
+  expect(b.textContent).not.toContain("✓");
+});

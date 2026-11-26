@@ -93,9 +93,25 @@ export function goals(state: CaseState): { done: number; of: number } {
   return { done: all.filter((g) => subgoalAnswered(state, g)).length, of: all.length };
 }
 
-export type StageMark = "passed" | "passed earlier draft" | "running" | "failed" | "waiting" | "declined" | "blocked" | "idle";
-/** A review stage reads "passed" only when it passed the latest draft's hash; a pass on an older draft reads "passed earlier draft". */
+export type StageMark = "passed" | "passed earlier draft" | "running" | "failed" | "waiting" | "declined" | "blocked" | "idle" | "sent back";
+
+/**
+ * The latest draft this stage wrote when a review stage has failed it: the draft's number and the title of the stage that sent it back.
+ * Null when the latest draft is not this stage's (an agent's, by stage id), when the stage is running or has ended otherwise, or when no review stage has failed.
+ */
+export function sentBack(state: CaseState, stage: StageState): { draft: number; by: string } | null {
+  const latest = latestDraft(state);
+  if (latest === null || latest.author.kind !== "agent" || latest.author.stage !== stage.id) return null;
+  if (stage.status !== "passed" && stage.status !== "idle") return null;
+  const { run } = state;
+  const named = Object.hasOwn(run.sent_back_to, stage.id) ? run.stages.find((x) => x.id === run.sent_back_to[stage.id]) : undefined;
+  const from = named ?? run.stages.find((x) => x.reviews && x.status === "failed");
+  return from === undefined ? null : { draft: latest.n, by: from.title };
+}
+
+/** A review stage reads "passed" only when it passed the latest draft's hash; a pass on an older draft reads "passed earlier draft". A stage whose draft a review stage failed reads "sent back". */
 export function stageMark(state: CaseState, stage: StageState): StageMark {
+  if (sentBack(state, stage) !== null) return "sent back";
   if (stage.status !== "passed") return stage.status;
   const latest = latestDraft(state);
   if (!stage.reviews || latest === null) return "passed";
@@ -142,4 +158,16 @@ export function runButton(state: CaseState): { label: string; command: "start_ru
       : { label: "Review plan", command: null, lens: "steps", disabled: false };
     case "finished": return { label: "Run again", command: "start_run", lens: null, disabled: false };
   }
+}
+
+/**
+ * The brief's two buttons from one list: at a gate the next-thing button stands for the run button; a resume is the run button's alone; and the
+ * next-thing button is dropped when its label or its command is the run button's.
+ */
+export function briefButtons(state: CaseState): { run: ReturnType<typeof runButton> | null; next: NextThing | null } {
+  const next0 = nextThing(state);
+  const rb = runButton(state);
+  if (state.run.status === "waiting" && next0 !== null) return { run: null, next: next0 };
+  const same = next0 !== null && (next0.label === rb.label || ("command" in next0 && rb.command !== null && next0.command === rb.command));
+  return { run: rb, next: next0 === null || same ? null : next0 };
 }

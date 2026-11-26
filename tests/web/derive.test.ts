@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { fold } from "../../src/core/state";
 import type { CaseState, CardState } from "../../src/core/state";
 import type { Card, Draft, Plan, PlanStep, Product, StageDef } from "../../src/core/types";
-import { cardStatus, goals, knownValues, nextThing, orderIncoming, runButton, stageMark } from "../../src/web/derive";
+import { briefButtons, cardStatus, goals, knownValues, nextThing, orderIncoming, runButton, sentBack, stageMark } from "../../src/web/derive";
 import { EntryBuilder, card } from "../helpers/entries";
 
 const stages: StageDef[] = [
@@ -155,4 +155,74 @@ test("while reviewers disagree, the run button opens the Narrative to settle it 
   expect(nextThing(withConflict)).toEqual({ label: "Settle the disagreement", lens: "narrative" });
   const ruled = { ...s, conflicts: { k1: { id: "k1", run: s.run.id, seq: 1, finding: "f1", ruling: { follow: "evaluate" } } } } as never;
   expect(runButton(ruled).command).toBe("resume");
+});
+
+const authored = (n: number, hash: string, author: Draft["author"]): Draft => ({ ...draft(n, hash), author });
+const analyst = { kind: "agent", id: "analyst", stage: "assemble", profile: "investigation", model: "m", effort: null, where: "machine" } as const;
+const reviewed: StageDef[] = [
+  { id: "assemble", title: "Assemble", phase: "analysis", runs: "agent", gate: null, reviews: false, model: null },
+  { id: "checks", title: "Checks", phase: "analysis", runs: "script", gate: null, reviews: true, model: null },
+  { id: "publish", title: "Publish", phase: "dissemination", runs: "human", gate: "publish", reviews: false, model: null },
+];
+/** A run whose stage Assemble wrote draft 3, with Checks's outcome on it; `by` is who wrote the draft. */
+function afterReview(outcome: "pass" | "fail", by: Draft["author"] = analyst): EntryBuilder {
+  const b = base();
+  b.add("run.started", { run: "run-1", pipeline: "p", pipeline_hash: "h", stages: reviewed });
+  b.add("stage.started", { stage: "assemble", attempt: 1 });
+  b.add("draft.revised", { draft: authored(3, "h3", by) });
+  b.add("stage.finished", { stage: "assemble", attempt: 1, outcome: "pass", draft_hash: "h3", output: null, reason: null });
+  b.add("stage.started", { stage: "checks", attempt: 1 });
+  b.add("stage.finished", { stage: "checks", attempt: 1, outcome, draft_hash: "h3", output: null, reason: outcome === "fail" ? "a check failed" : null });
+  return b;
+}
+const stageOf = (s: CaseState, id: string): CaseState["run"]["stages"][number] => s.run.stages.find((x) => x.id === id)!;
+
+test("the stage that wrote the latest draft reads 'sent back' once a review stage has failed it", () => {
+  const b = afterReview("fail");
+  b.add("run.paused", { reason: "the send-back cap" });
+  const s = fold(b.entries);
+  expect(stageMark(s, stageOf(s, "assemble"))).toBe("sent back");
+  expect(sentBack(s, stageOf(s, "assemble"))).toEqual({ draft: 3, by: "Checks" });
+  expect(sentBack(s, stageOf(s, "checks"))).toBeNull();
+  // sent back to it: the stage that did it is named from the send-back
+  b.add("stage.sent_back", { from: "checks", to: "assemble", reason: "a check failed", count: 1 });
+  const back = fold(b.entries);
+  expect(stageOf(back, "assemble").status).toBe("idle");
+  expect(sentBack(back, stageOf(back, "assemble"))).toEqual({ draft: 3, by: "Checks" });
+  expect(stageMark(back, stageOf(back, "assemble"))).toBe("sent back");
+});
+
+test("it reads running again as soon as it starts again, and passed when no review stage has failed the draft", () => {
+  const b = afterReview("fail");
+  b.add("stage.started", { stage: "assemble", attempt: 2 });
+  const running = fold(b.entries);
+  expect(stageMark(running, stageOf(running, "assemble"))).toBe("running");
+  expect(sentBack(running, stageOf(running, "assemble"))).toBeNull();
+  const ok = fold(afterReview("pass").entries);
+  expect(stageMark(ok, stageOf(ok, "assemble"))).toBe("passed");
+  expect(sentBack(ok, stageOf(ok, "assemble"))).toBeNull();
+});
+
+test("a draft a person wrote marks no stage as sent back", () => {
+  const s = fold(afterReview("fail", { kind: "human", id: "pat" }).entries);
+  for (const st of s.run.stages) expect(sentBack(s, st)).toBeNull();
+});
+
+test("the brief never offers two buttons with one label or one command, in any run state", () => {
+  const conflict = (s: CaseState): CaseState => ({ ...s, conflicts: { k1: { id: "k1", run: s.run.id, seq: 1, finding: "f1", ruling: null } } } as never);
+  const done = (() => { const b = base(); b.add("run.started", { run: "run-1", pipeline: "p", pipeline_hash: "h", stages }); b.add("run.finished", { outcome: "stopped" }); return fold(b.entries); })();
+  const EVERY_RUN_STATE: CaseState[] = [
+    gate("none"), gate("running"), gate("paused"), conflict(gate("paused")), conflict(gate("interrupted")), gate("interrupted"),
+    gate("plan"), gate("plan", { costly: true }), gate("publish"), gate("publish", { blocked: true }), done,
+  ];
+  for (const state of EVERY_RUN_STATE) {
+    const { run, next } = briefButtons(state);
+    if (run === null || next === null) continue;
+    expect(next.label).not.toBe(run.label);
+    expect("command" in next ? next.command : null).not.toBe(run.command ?? undefined);
+  }
+  // at a gate the next-thing button stands for the run button; a resume is the run button's alone
+  expect(briefButtons(gate("plan"))).toEqual({ run: null, next: nextThing(gate("plan")) });
+  expect(briefButtons(gate("paused"))).toEqual({ run: runButton(gate("paused")), next: null });
+  expect(briefButtons(conflict(gate("paused")))).toEqual({ run: runButton(conflict(gate("paused"))), next: null });
 });

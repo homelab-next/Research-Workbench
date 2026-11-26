@@ -5,7 +5,7 @@ import type { Child } from "../dom";
 import { clear } from "../dom";
 import type { LensId, Open } from "../app";
 import { markingChip } from "../chips";
-import { goals, nextThing, runButton, stageMark } from "../derive";
+import { briefButtons, goals, sentBack, stageMark } from "../derive";
 import type { StageMark } from "../derive";
 import { shortLocal } from "../time";
 import type { Ui, View } from "../ui";
@@ -13,7 +13,7 @@ import { AT_GATE } from "../ui";
 
 const PLAN_WORDS = { none: "no plan", proposed: "plan proposed", accepted: "plan accepted", denied: "plan denied", replanning: "re-planning" } as const;
 const SIGN: Record<StageMark, string> = {
-  passed: "✓ passed", "passed earlier draft": "✓ earlier draft", running: "● running", failed: "✗ failed", waiting: "◌ waiting", declined: "declined", blocked: "blocked", idle: "idle",
+  passed: "✓ passed", "passed earlier draft": "✓ earlier draft", running: "● running", "sent back": "↩ sent back", failed: "✗ failed", waiting: "◌ waiting", declined: "declined", blocked: "blocked", idle: "idle",
 };
 
 /** Re-runs `build` into `el` only when `sig` differs from the last call by value identity. */
@@ -104,19 +104,16 @@ export function makeBrief(ui: Ui, open: Open): View {
     const g = goals(state);
     const draft = latestDraft(state);
     const run = state.run;
-    const next0 = nextThing(state);
-    const rb = runButton(state);
-    // One button per state: at a gate the next-thing button stands for the run button; a resume is the run button's alone.
-    const atGate = run.status === "waiting" && next0 !== null;
-    const next = next0 !== null && (("command" in next0 && next0.command === "resume") || next0.label === rb.label) ? null : next0;
+    // One list, so no state shows two buttons with one label or one command
+    const { run: rb, next } = briefButtons(state);
     const status = (name: string, text: string, id: LensId): HTMLElement => h("button", { type: "button", class: "status", data: { status: name }, on: { click: () => lens(id) } }, text);
-    into2([meta?.asked, g.done, g.of, state.plan.status, draft?.n, run.status, run.waiting, next?.label, ro, stopping], () => [
+    into2([meta?.asked, g.done, g.of, state.plan.status, draft?.n, run.status, run.waiting, rb?.label, rb?.disabled, next?.label, ro, stopping], () => [
       h("span", { class: "asked" }, `Asked for: ${meta?.asked ?? ""}`),
       status("goals", `✔ ${g.done}/${g.of} goals`, "steps"),
       status("plan", PLAN_WORDS[state.plan.status], "steps"),
       draft === undefined || draft === null ? null : status("draft", `draft ${draft.n}`, "narrative"),
       h("span", { class: "right" },
-        atGate ? null : h("button", {
+        rb === null ? null : h("button", {
           type: "button", class: "run-button", disabled: ro || rb.disabled,
           on: { click: () => { if (rb.command !== null) void ui.act(rb.command); else if (rb.lens !== null) lens(rb.lens, AT_GATE); } },
         }, rb.label),
@@ -161,7 +158,8 @@ export function makeBrief(ui: Ui, open: Open): View {
       g.stages.forEach((s, si) => {
         if (si > 0) kids.push(h("span", { class: "sep" }, "▸"));
         const mark = stageMark(state, s);
-        const sign = mark === "running" && s.id === state.run.current && runningJobs > 1 ? `● ${runningJobs} running` : SIGN[mark];
+        const back = mark === "sent back" ? sentBack(state, s) : null;
+        const sign = back !== null ? `↩ draft ${back.draft} sent back by ${back.by}` : mark === "running" && s.id === state.run.current && runningJobs > 1 ? `● ${runningJobs} running` : SIGN[mark];
         kids.push(h("button", {
           type: "button", class: `stage-button mark-${mark.replace(/ /g, "-")}`, data: { stage: s.id, mark }, title: s.last_reason ?? `${s.title}: ${mark}`,
           on: { click: () => lens("pipeline", s.id) },
