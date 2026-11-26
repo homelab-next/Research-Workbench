@@ -231,6 +231,23 @@ A partial result keeps its "partial" wording and is never either of the last two
 
 "Does it belong?" is a button on the Pivot panel. It asks every inventory that takes the card's value, as one playbook made on the spot, and gives one verdict: a known asset; not a known asset (proven, because a complete inventory came back empty); not seen in any inventory (none is complete, so this proves nothing); or could not tell.
 
+### What was observed
+
+A pivot may say which of its result columns are times, with a `times` line in its manifest. There are two shapes:
+
+```yaml
+times: { first: first_seen, last: last_seen, count: events }   # one row per value, with its span and a count
+times: { at: ts }                                              # one row per event, with its time (count optional)
+```
+
+`first` and `last` go together; `at` stands alone; `count` is optional. Each name must be a column of the query (or of the http endpoint), must not also be a yielded column, and may be named only once. A pivot that breaks this is rejected with the reason and the rest of its file still loads.
+
+A card made by a pivot's own query carries `observed`, worked out from the result the runner already holds, in the same commit that makes the card: the value the pivot ran on, the span over every row, and the values it found, each with its first and last time, a count and a few points on a time line. Nothing is queried again, and the times are normalised UTC strings. A time that cannot be read is counted as unread, never guessed.
+
+Two lenses show it, both built from the recorded entries alone: the Timeline (key `T`), a row per value with a mark per card that saw it on the data's own time axis, and the Graph (key `G`), the observed values as nodes with the pivots that found one from another as edges. Two caps apply: a card keeps at most 100 sightings (24 points each; the rest are counted in `more`), and the Timeline draws at most 200 rows, while the Graph places at most 60 nodes and 12 neighbours of a node.
+
+Editing a pivots file changes the hash of every pivot in it, including a `times` line, so a lookup answered before the edit is not reused after it.
+
 ## Before a run
 
 ```bash
