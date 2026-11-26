@@ -67,7 +67,7 @@ export async function runRoute(session: CaseSession, deps: RunnerDeps, seeker: S
     found,
     proposal: r.status === "needs_budget" ? r.proposal : null, estimate: r.status === "needs_budget" ? r.estimate : null,
   }));
-  // The walker's caveats, worded as the workbench words them: a budget wait names the agent's proposal, and a refusal is not a caveat here.
+  // The walker's caveats, worded as the workbench words them: a budget wait names the agent's proposal, a refusal keeps the pivot caveat as pivot words it.
   const caveats: string[] = [];
   const caveat = (text: string): void => { if (!caveats.includes(text)) caveats.push(text); };
   for (const c of walked.caveats) {
@@ -76,7 +76,6 @@ export async function runRoute(session: CaseSession, deps: RunnerDeps, seeker: S
       for (const t of waits) caveat(t.proposal !== null ? `${t.hop.pivot}: needs a budget (proposal ${t.proposal})` : `${t.hop.pivot}: needs a budget`);
       continue;
     }
-    if (trail.some((t) => t.status === "refused" && (c === `${t.hop.pivot}: refused` || c.startsWith(`${t.hop.pivot}: refused (`)))) continue;
     caveat(c);
   }
   return {

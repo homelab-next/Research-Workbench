@@ -160,10 +160,11 @@ test("a refused hop is a roadblock", async () => {
   expect(r.blocked).toEqual(["ad"]);
 });
 
-test("a refused hop adds no caveat: the walk is pivot's, the caveats are the workbench's as before", async () => {
+test("a refused hop's caveat from pivot is shown to the analyst", async () => {
   const r = await go([{ type: "address", value: "not an address" }], "owner");
   expect(r.trail.map((t) => [t.hop.pivot, t.status])).toEqual([["ad", "refused"]]);
-  expect(r.caveats).toEqual([]);
+  expect(r.caveats).toHaveLength(1);
+  expect(r.caveats[0]!.startsWith("ad: refused")).toBe(true);
 });
 
 test("values given in have never count as reached: holding the goal type asks for other values of it", async () => {
