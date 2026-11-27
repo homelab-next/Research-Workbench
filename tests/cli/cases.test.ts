@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cases } from "../../src/cli/cases";
+import { cleanEnv } from "../helpers/clean-env";
 import { Workbench } from "../../src/core/workbench";
 import type { NewCase } from "../../src/core/workbench";
 import type { Actor, StageDef } from "../../src/core/types";
@@ -109,7 +110,7 @@ test("store list prints one line per case and filters with --search; it runs whi
   await run("unload", "CASE-2");
   writeFileSync(join(store, "CASE-9.TLP-RED.tar.gz"), "junk");
   out = [];
-  const holder = Bun.spawn(["bun", OPENER, data, "-", "-"], { stdout: "pipe", stderr: "pipe" });
+  const holder = Bun.spawn(["bun", OPENER, data, "-", "-"], { stdout: "pipe", stderr: "pipe", env: cleanEnv(data) });
   try {
     const reader = holder.stdout.getReader();
     let seen = "";
@@ -161,7 +162,7 @@ test("store delete asks for the id, deletes on a match and logs it; anything els
 
 test("unload and load while the workbench is held exit 1 with the lock's message", async () => {
   make();
-  const holder = Bun.spawn(["bun", OPENER, data, "-", "-"], { stdout: "pipe", stderr: "pipe" });
+  const holder = Bun.spawn(["bun", OPENER, data, "-", "-"], { stdout: "pipe", stderr: "pipe", env: cleanEnv(data) });
   try {
     const reader = holder.stdout.getReader();
     let seen = "";
