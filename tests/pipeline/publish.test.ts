@@ -30,7 +30,7 @@ import { reject } from "../../src/pipeline/publish";
 import { recordMops } from "../../src/pipeline/feedback";
 import { draftOf } from "../../src/agents/draft";
 import { Workbench } from "../../src/core/workbench";
-import { fold } from "../../src/core/state";
+import { fold, unloadDue } from "../../src/core/state";
 import { EntryBuilder } from "../helpers/entries";
 import { fixture, person, PLAN } from "../helpers/tools-fixture";
 import type { Fixture } from "../helpers/tools-fixture";
@@ -615,4 +615,63 @@ test("the product says which value the person set, with their note, and the prov
   expect(files["product.md"]).toContain(`Set by the person (likelihood ${f1.likelihood}, confidence high): It is the TV I installed.\n`);
   expect(files["product.md"]!.match(/Set by the person/g)).toHaveLength(1);
   expect(files["provenance.md"]).toContain(`# Overrules by the person\n\n- ${f1.id}: likelihood ${f1.likelihood}, confidence high. Note: It is the TV I installed. (by analyst)`);
+});
+
+const listing = (root: string): string[] => readdirSync(root).sort();
+
+test("approve with unload_after true writes gate.passed { gate: publish, unload_after: true }, and the state says so", async () => {
+  const r = await gated();
+  const s = f.s;
+  expect(s.state.archive.unload_after).toBe(false);
+  approve(s, r.deps, { actor: human, unload_after: true });
+  const passed = ofType("gate.passed").at(-1)!;
+  expect(passed.payload).toEqual({ gate: "publish", unload_after: true });
+  expect(passed.actor).toEqual(human);
+  expect(s.state.archive.unload_after).toBe(true);
+  expect(fold(s.entries()).archive.unload_after).toBe(true);
+});
+
+test("approve without it, or with false, writes gate.passed exactly as before", async () => {
+  const r = await gated();
+  r.engine.approve({ actor: human, unload_after: false });
+  const passed = ofType("gate.passed").at(-1)!;
+  expect(passed.payload).toEqual({ gate: "publish" });
+  expect(Object.hasOwn(passed.payload, "unload_after")).toBe(false);
+  expect(f.s.state.archive.unload_after).toBe(false);
+  await r.engine.advance();
+  await toGate(r);
+  r.engine.approve({ actor: human });
+  expect(ofType("gate.passed").at(-1)!.payload).toEqual({ gate: "publish" });
+  expect(f.s.state.archive.unload_after).toBe(false);
+});
+
+test("a run approved with the box ticked is due for unloading once it has finished as published, and not before", async () => {
+  const r = await gated();
+  expect(unloadDue(f.s.state)).toBe(false);
+  r.engine.approve({ actor: human, unload_after: true });
+  expect(f.s.state.run.status).toBe("running");
+  expect(unloadDue(f.s.state)).toBe(false);
+  const done = await r.engine.advance();
+  expect(done).toMatchObject({ status: "finished", outcome: "published" });
+  expect(ofType("run.finished").at(-1)!.payload.outcome).toBe("published");
+  expect(unloadDue(f.s.state)).toBe(true);
+  // a new run clears the choice
+  await toGate(r);
+  expect(unloadDue(f.s.state)).toBe(false);
+  expect(f.s.state.archive.unload_after).toBe(false);
+});
+
+test("the engine itself unloads nothing: after the run the case folder is where it was", async () => {
+  const r = await gated();
+  const before = listing(f.s.dir);
+  r.engine.approve({ actor: human, unload_after: true });
+  await r.engine.advance();
+  expect(unloadDue(f.s.state)).toBe(true);
+  expect(existsSync(f.s.dir)).toBe(true);
+  expect(listing(f.s.dir)).toEqual(before);
+  expect(readdirSync(join(f.s.dir, "..")).filter((n) => n.startsWith("."))).toEqual([]);
+  const types = new Set(f.s.entries().map((e) => e.type));
+  for (const t of ["case.unloaded", "case.unload_failed", "case.loaded"] as const) expect(types.has(t)).toBe(false);
+  expect(f.s.state.archive).toMatchObject({ pending: null, failed: null, unloads: 0 });
+  expect(verifyCase(f.s.dir).ok).toBe(true);
 });

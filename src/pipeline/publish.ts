@@ -8,7 +8,7 @@ import { sha256Hex } from "../core/hash";
 import type { CaseSession } from "../core/session";
 import { activeOverrules, BASIS_TEXT, blockers, holdsOverrule, latestDraft, overruleSays, overruleText } from "../core/state";
 import type { CaseState, Overrule, OverruleState } from "../core/state";
-import type { Actor, Draft, Entry, EntryInput, Marking, Observable, PersonBasis } from "../core/types";
+import type { Actor, Draft, Entry, EntryInput, Marking, Observable, Payloads, PersonBasis } from "../core/types";
 import { strictest } from "../core/types";
 import { logToStderr } from "../core/deliver";
 import { citedOf } from "../agents/draft";
@@ -242,10 +242,12 @@ export function previewBundle(session: CaseSession, deps: EngineDeps): Bundle | 
 /**
  * A person approves the draft the run waits on. Everything is checked again at this moment, from the ledger: the person, the gate, the hash against
  * the product, the product's marking against the cards it cites, and the publish rule. The bundle is written to a temporary folder and stored as a blob;
- * one commit records it, and only then is the folder moved to `published/<n>`, so a folder there always has its entry.
+ * one commit records it, and only then is the folder moved to `published/<n>`, so a folder there always has its entry. `unload_after` is the person's
+ * "Unload after publishing": it is recorded on gate.passed only when true, and nothing here unloads (the host does, once the run has finished).
  */
-export function approve(session: CaseSession, deps: EngineDeps, input: { actor: Actor }): { n: number; dir: string; draft_hash: string } {
+export function approve(session: CaseSession, deps: EngineDeps, input: { actor: Actor; unload_after?: boolean }): { n: number; dir: string; draft_hash: string } {
   const { actor } = input;
+  const passed: Payloads["gate.passed"] = input.unload_after === true ? { gate: "publish", unload_after: true } : { gate: "publish" };
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     atGate(session, actor);
     const made = previewBundle(session, deps);
@@ -263,7 +265,7 @@ export function approve(session: CaseSession, deps: EngineDeps, input: { actor: 
       session.commit((s, ids) => {
         if (s.seq !== head.seq) throw new Stale();
         const link = { run: s.run.id };
-        const entries: EntryInput[] = [{ type: "gate.passed", actor, ...link, payload: { gate: "publish" } }];
+        const entries: EntryInput[] = [{ type: "gate.passed", actor, ...link, payload: passed }];
         const loose = citedOf(d).filter((id) => Object.hasOwn(s.cards, id) && s.cards[id]!.place === "incoming");
         let lanes = s.lanes.map((l) => ({ id: l.id, subgoal: l.subgoal }));
         if (loose.length > 0 && lanes.length === 0) {

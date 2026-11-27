@@ -222,8 +222,11 @@ export class Engine {
     });
   }
 
-  /** A person approves the draft at the publish gate. Throws PublishRefused and writes nothing when it may not be published. Advances nothing; the anchor is made here. */
-  approve(input: { actor: Actor }): { n: number; dir: string; draft_hash: string } {
+  /**
+   * A person approves the draft at the publish gate. Throws PublishRefused and writes nothing when it may not be published. Advances nothing; the anchor is
+   * made here. `unload_after` is recorded, not acted on: the engine holds a session, not the workbench, so the host unloads once `unloadDue(state)`.
+   */
+  approve(input: { actor: Actor; unload_after?: boolean }): { n: number; dir: string; draft_hash: string } {
     return approve(this.session, this.deps, input);
   }
 
