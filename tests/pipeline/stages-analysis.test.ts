@@ -777,6 +777,18 @@ test("the open review points of both reviewers are one list: Assemble sees each 
   expect(packIds("analyst", 0)).not.toContain("review-points");
 });
 
+test("Assemble sees why the work came back to it: the send-back's reason, which can carry what code adds (a ruling, an uncitable card)", async () => {
+  // dev CASE-3: code added "c2 and c4 cannot be cited" to the send-back's reason, but the reason only labelled the draft; the model never read it
+  const r = rig({ analyst: [...FIRST, ...SECOND_ANSWERING, ...THIRD], evaluator: [EVAL_PASS, EVAL_F1, EVAL_PASS], adversary: [MUST, CHALLENGE_PASS, CHALLENGE_PASS] });
+  await go(r);
+  const back = f.s.entries().filter((e) => e.type === "stage.sent_back" && e.payload.to === "assemble").at(-1)!;
+  expect(back.type === "stage.sent_back" && back.payload.from).toBe("evaluate");
+  const text = requestText("analyst", 4);
+  expect(text).toContain(`Why the work came back to you (from Evaluate): ${back.type === "stage.sent_back" ? back.payload.reason : ""}`);
+  // the first pass was not sent back
+  expect(requestText("analyst", 0)).not.toContain("Why the work came back to you");
+});
+
 test("Evaluate's pack carries Challenge's points with the analyst's answers, and Challenge's pack carries Evaluate's latest points with the analyst's answer", async () => {
   const r = rig({ analyst: [...FIRST, ...SECOND_ANSWERING, ...THIRD], evaluator: [EVAL_PASS, EVAL_F1, EVAL_PASS], adversary: [MUST, CHALLENGE_PASS, CHALLENGE_PASS] });
   await go(r);
