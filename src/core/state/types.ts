@@ -129,6 +129,20 @@ export type OverruleState = Overrule & { earlier: Overrule[] };
 /** `run` is the run in progress when the challenge was raised (null when none). */
 export type ChallengeState = Challenge & { run: string | null; status: "open" | "answered"; answer: string | null; action: "revised" | "rebutted" | null };
 
+/** A case's moves out of and into the working set (case.unloaded, case.unload_failed, case.loaded), and the person's choice to unload it after publishing. */
+export interface ArchiveState {
+  /** The latest case.unloaded with no case.loaded or case.unload_failed after it: an unload under way, or one a stopped process left. */
+  pending: { store: string; head: { seq: number; hash: string }; by: string; seq: number; ts: string } | null;
+  /** The latest failed unload, until an unload or a load after it. */
+  failed: { reason: string; seq: number; ts: string } | null;
+  /** The latest load. */
+  loaded: { file: string; head: { seq: number; hash: string }; id: string; by: string; seq: number; ts: string } | null;
+  /** The person ticked "Unload after publishing" when they passed the publish gate of the current run, and no unload has been tried since. */
+  unload_after: boolean;
+  unloads: number;
+  loads: number;
+}
+
 export interface CaseState {
   seq: number;
   head_ts: string | null;
@@ -173,4 +187,6 @@ export interface CaseState {
   conversation: { turn: string; asked: string; answer: string | null; cites: string[]; request: string | null; asked_seq: number; ended: string | null }[];
   /** Model use by your agent (the conversation), kept apart from the run's: a question does not spend the run's budget. */
   agent_usage: { usage: Usage; calls: number };
+  /** Unloads and loads of the case, and the choice to unload it after publishing (slice 11). */
+  archive: ArchiveState;
 }

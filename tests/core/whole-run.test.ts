@@ -8,7 +8,7 @@ import { canonical } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
 import type { IdAllocator } from "../../src/core/ids";
 import type { CaseSession } from "../../src/core/session";
-import { blockers, fold, latestDraft, publishable, runUsage } from "../../src/core/state";
+import { blockers, fold, initialArchive, latestDraft, publishable, runUsage, unloadDue } from "../../src/core/state";
 import type { CaseState } from "../../src/core/state";
 import type { Actor, Draft, EntryInput, Plan, Product, StageDef } from "../../src/core/types";
 import { verifyCase } from "../../src/core/verify";
@@ -295,6 +295,53 @@ test("a ledger holding a statement, a question, its answer, an overrule and a re
   expect(final.overrules.f1).toMatchObject({ confidence: null, earlier: [{ confidence: "high" }] });
   expect(blockers(final, d3.hash)).not.toContain("The draft does not hold your overrule of f1 (likelihood almost certain)");
   expect(d2.hash).not.toBe(d3.hash);
+
+  const all = s.entries();
+  for (let n = 1; n <= all.length; n++) {
+    expect(live[n], `live state at ${n}`).toBeDefined();
+    expect(fold(all, n), `entry ${n} (${all[n - 1]!.type})`).toEqual(live[n]!);
+  }
+  wb.close();
+  wb = Workbench.open(dir, { onError });
+  expect(wb.session(s.id).state).toEqual(final);
+  expect(verifyCase(s.dir)).toMatchObject({ entries: all.length, firstBad: null });
+  expect(errors).toEqual([]);
+});
+
+// ---------- slice 11: unloads and loads ----------
+
+test("a ledger with none of slice 11's entries folds with an empty archive", () => {
+  const { s } = wholeRun();
+  const state = fold(s.entries());
+  expect(state.archive).toEqual(initialArchive());
+  expect(state.skipped).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test("a ledger holding an unload, a failed unload, a second unload, a load and a pass with unload_after folds the same at every entry as the live session saw it", () => {
+  const { s, live } = wholeRun();
+  const one = (input: EntryInput) => s.commit(() => [input]);
+  const code: Actor = { kind: "system", id: "workbench" };
+
+  // a second run, passed at the publish gate with the box ticked
+  s.commit((_st, ids) => [{ type: "run.started", payload: { run: ids.next("run"), pipeline: "investigate", pipeline_hash: "a".repeat(64), stages }, actor: system }]);
+  one({ type: "stage.started", payload: { stage: "publish", attempt: 1 }, actor: system, stage: "publish" });
+  one({ type: "gate.waiting", payload: { gate: "publish" }, actor: system });
+  one({ type: "gate.passed", payload: { gate: "publish", unload_after: true }, actor: human });
+  expect(s.state.archive.unload_after).toBe(true);
+  one({ type: "run.finished", payload: { outcome: "published" }, actor: system });
+  expect(unloadDue(s.state)).toBe(true);
+  // the workbench unloads it, fails, the person unloads it again, and loads it back
+  one({ type: "case.unloaded", payload: { store: "store", head: s.head() }, actor: code });
+  one({ type: "case.unload_failed", payload: { reason: "the store folder is not there" }, actor: code });
+  expect(unloadDue(s.state)).toBe(false);
+  one({ type: "case.unloaded", payload: { store: "store", head: s.head() }, actor: human });
+  const before = s.head();
+  one({ type: "case.loaded", payload: { file: `${s.id}.TLP-AMBER.tar.gz`, head: before, id: s.id }, actor: human });
+
+  const final = s.state;
+  expect(final.skipped).toEqual([]);
+  expect(final.archive).toMatchObject({ pending: null, failed: null, unload_after: false, unloads: 2, loads: 1, loaded: { head: before, id: s.id, by: "analyst" } });
 
   const all = s.entries();
   for (let n = 1; n <= all.length; n++) {

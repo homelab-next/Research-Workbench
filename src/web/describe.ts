@@ -108,6 +108,9 @@ const TABLE: Record<EntryType, [string | ((p: Loose) => string), Say]> = {
   "module.rejected": ["module rejected", (p) => join(str(p.path), str(p.error))],
   "setting.changed": ["setting changed", (p) => str(p.key)],
   "case.anchored": ["case anchored", (p) => join(str(p.why), typeof p.seq === "number" ? `entry ${p.seq}` : "")],
+  "case.unloaded": ["case unloaded", (p) => str(p.store)],
+  "case.unload_failed": ["unload failed", (p) => str(p.reason)],
+  "case.loaded": ["case loaded", (p) => str(p.file)],
 };
 
 /** One short plain sentence for an entry, and its particulars. Everything from the entry is text, and nothing here throws for an odd payload. */

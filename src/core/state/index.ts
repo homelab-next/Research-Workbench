@@ -1,9 +1,11 @@
 import type { Entry } from "../types";
 import { apply } from "./apply";
+import { initialArchive } from "./archive";
 import type { CaseState, IdKind } from "./types";
 
 export { apply, applyCase, countedKind, REDUCERS } from "./apply";
 export type { Reducer } from "./apply";
+export { applyArchive, initialArchive, unloadDue } from "./archive";
 export { applyRun, runUsage, stageFinishedCounts, subgoalAnswered } from "./run";
 export { applyAnalysis, blockers, latestDraft, notedExceptions, openMustAddress, proposalMarking, publishable } from "./analysis";
 export { applyCards, cardLocation } from "./cards";
@@ -58,6 +60,7 @@ export function initial(): CaseState {
     feedback: [],
     conversation: [],
     agent_usage: { usage: { input: 0, output: 0, reasoning: 0 }, calls: 0 },
+    archive: initialArchive(),
   };
 }
 

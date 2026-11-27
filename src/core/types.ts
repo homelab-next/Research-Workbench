@@ -158,7 +158,9 @@ export interface Payloads {
   "stage.finished": { stage: string; attempt: number; outcome: "pass" | "fail" | "declined"; draft_hash: string | null; output: BlobRef | null; reason: string | null };
   "stage.sent_back": { from: string; to: string; reason: string; count: number };
   "gate.waiting": { gate: "plan" | "publish" };
-  "gate.passed": { gate: "plan" | "publish" };
+  "gate.passed": { gate: "plan" | "publish";
+    /** The person's choice at the publish gate: unload the case once this run has published. */
+    unload_after?: boolean };
   "budget.set": { tokens: number | null };
   "job.started": { job: string; title: string; kind: "research" | "query" | "model" | "check" | "playbook"; source: string | null;
     /** The plan sub-goal a research job answers, by id. */
@@ -257,6 +259,12 @@ export interface Payloads {
   "setting.changed": { key: string; value: Json };
   /** Written on the workbench chain only: the head of a case when it was published or closed. A case fold ignores it. */
   "case.anchored": { case: string; seq: number; hash: string; why: "published" | "closed" };
+  // cases in and out of the working set
+  /** The case is being packed into a case file. `store` is the store folder's name only; `head` is the head before this entry. */
+  "case.unloaded": { store: string; head: { seq: number; hash: string } };
+  "case.unload_failed": { reason: string };
+  /** The case came from a case file. `head` is the head it arrived with (the head before this entry); `id` is the id it has here, the id in the file. */
+  "case.loaded": { file: string; head: { seq: number; hash: string }; id: string };
 }
 export type EntryType = keyof Payloads;
 
@@ -366,6 +374,7 @@ export const ENTRY_TYPES = listOf<EntryType>({
   "question.asked": true, "question.answered": true, "finding.overruled": true, "publish.rejected": true,
   "product.published": true, "feedback.recorded": true, "agent.asked": true, "agent.answered": true, "agent.ended": true,
   "module.loaded": true, "module.rejected": true, "setting.changed": true, "case.anchored": true,
+  "case.unloaded": true, "case.unload_failed": true, "case.loaded": true,
 });
 const ENTRY_TYPE_SET: ReadonlySet<string> = new Set(ENTRY_TYPES);
 export const isEntryType = (x: unknown): x is EntryType => typeof x === "string" && ENTRY_TYPE_SET.has(x);

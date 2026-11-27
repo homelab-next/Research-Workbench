@@ -88,3 +88,12 @@ test("a ruling, a question to the person, its answer and an overrule give their 
   expect(describe(sampleOf("finding.overruled", { ...o, likelihood: null, confidence: null, stays: null }), ref).detail).toBe("f1 · overrule withdrawn · It is the TV I installed.");
   expect(describe(sampleOf("finding.overruled", { finding: "f1", likelihood: 5 }), ref).detail).toBe("f1 · overrule withdrawn");
 });
+
+test("an unload, a failed unload and a load give their particulars", () => {
+  const head = { seq: 41, hash: "a".repeat(64) };
+  expect(describe(sampleOf("case.unloaded", { store: "store", head }), ref)).toEqual({ what: "case unloaded", detail: "store" });
+  expect(describe(sampleOf("case.unload_failed", { reason: "the store folder is not there" }), ref)).toEqual({ what: "unload failed", detail: "the store folder is not there" });
+  expect(describe(sampleOf("case.loaded", { file: "CASE-1.TLP-GREEN.tar.gz", head, id: "CASE-1" }), ref)).toEqual({ what: "case loaded", detail: "CASE-1.TLP-GREEN.tar.gz" });
+  expect(describe(sampleOf("case.loaded", { file: 7 }), ref)).toEqual({ what: "case loaded", detail: "7" });
+  expect(describe(sampleOf("case.unloaded", { store: null }), ref)).toEqual({ what: "case unloaded", detail: "" });
+});

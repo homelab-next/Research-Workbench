@@ -1,5 +1,6 @@
 import type { Entry } from "../types";
 import { applyAnalysis } from "./analysis";
+import { applyArchive } from "./archive";
 import { applyCards } from "./cards";
 import { isObj, isStr, malformed, recordSkip } from "./guards";
 import { applyPerson } from "./person";
@@ -40,10 +41,10 @@ export function applyCase(s: CaseState, entry: Entry): CaseState {
 }
 
 /**
- * One reducer per area; each takes the state and the entry and returns a state. Add new areas here. applyPerson comes before applyRun: it reads
- * the hold on run.resumed before applyRun clears it.
+ * One reducer per area; each takes the state and the entry and returns a state. Add new areas here. applyArchive and applyPerson come before
+ * applyRun: applyArchive reads the gate the run waits at on gate.passed, and applyPerson the hold on run.resumed, before applyRun clears them.
  */
-export const REDUCERS: readonly Reducer[] = [applyCase, applyCards, applyPerson, applyRun, applyAnalysis, applyPlaybooks];
+export const REDUCERS: readonly Reducer[] = [applyCase, applyArchive, applyCards, applyPerson, applyRun, applyAnalysis, applyPlaybooks];
 
 /** Leaves everything as it was except seq, head_ts and the record of what was skipped. */
 function skip(state: CaseState, entry: Entry, reason: string): CaseState {

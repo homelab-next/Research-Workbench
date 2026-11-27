@@ -304,11 +304,12 @@ test("ENTRY_TYPES lists every entry type once", () => {
   expect(new Set(ENTRY_TYPES).size).toBe(ENTRY_TYPES.length);
   expect(ENTRY_TYPES).toContain("case.created");
   expect(ENTRY_TYPES).toContain("setting.changed");
-  expect(ENTRY_TYPES.length).toBe(77);
+  expect(ENTRY_TYPES.length).toBe(80);
   expect(ENTRY_TYPES).toContain("review.conflict");
   expect(ENTRY_TYPES).toContain("review.ruled");
   expect(ENTRY_TYPES).toContain("route.finished");
   expect(ENTRY_TYPES).toContain("agent.ended");
+  for (const t of ["case.unloaded", "case.unload_failed", "case.loaded"] as const) expect(ENTRY_TYPES).toContain(t);
 });
 
 const agent = { kind: "agent", id: "a1", stage: "plan", profile: "p", model: "m", effort: null, where: "machine" } as const;
