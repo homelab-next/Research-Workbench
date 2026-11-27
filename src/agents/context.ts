@@ -145,13 +145,25 @@ function statementPart(card: CardState, p: PersonStatement, registry: Registry):
   return { kind: "card", id: card.id, title: `Card ${card.id}: ${title}`, text, marking: card.marking, fixed: false };
 }
 
+/** A card's extracted values are shown to a model at most this many at a time (in the pack, read_card and a lookup's result); the rest are counted. */
+export const EXTRACTED_SHOWN = 20;
+
 /** What the workbench extracted from a card's cells, as the pack lists it: code-derived values a model may pivot from; none when there are none. */
 export function extractedLines(card: CardState): string[] {
   if (card.extracted === undefined || card.extracted.length === 0) return [];
+  const more = card.extracted.length - EXTRACTED_SHOWN;
   return [
     "Extracted by the workbench (code-derived, from the field notes):",
-    ...card.extracted.map((x) => `- ${x.type} ${x.value} (rule ${x.rule} on column ${x.column}, row ${x.row + 1})`),
+    ...card.extracted.slice(0, EXTRACTED_SHOWN).map((x) => `- ${x.type} ${x.value} (rule ${x.rule} on column ${x.column}, row ${x.row + 1})`),
+    ...(more > 0 ? [`and ${more} more extracted values, not listed`] : []),
   ];
+}
+
+/** A card's extracted values as a tool's view holds them: at most EXTRACTED_SHOWN, and how many more; nothing when there are none. */
+export function extractedView(card: CardState): { extracted?: Json; extracted_more?: number } {
+  if (card.extracted === undefined) return {};
+  const more = card.extracted.length - EXTRACTED_SHOWN;
+  return { extracted: card.extracted.slice(0, EXTRACTED_SHOWN).map((x) => ({ ...x })) as unknown as Json, ...(more > 0 ? { extracted_more: more } : {}) };
 }
 
 /**

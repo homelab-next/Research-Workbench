@@ -1,6 +1,6 @@
 // Slice 9 goal 3: what the values the workbench extracted open up, listed by code for the planner, and the research stage's send-back.
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Workbench } from "../../src/core/workbench";
@@ -15,7 +15,7 @@ import { runPivot } from "../../src/modules/pivots";
 import { cheapestSeeker, DEFAULT_LIMITS } from "../../src/modules/seeker";
 import type { Seeker } from "../../src/modules/seeker";
 import type { Registry } from "../../src/modules/registry";
-import { GLEAN_PREFIX, DEFAULT_GLEAN_SENDBACKS, gleanOf, gleanPart, gleanSendBack, gleanText } from "../../src/pipeline/glean";
+import { GLEAN_PREFIX, DEFAULT_GLEAN_SENDBACKS, GLEAN_LIST_MAX, GLEAN_REASON_MAX, followable, gleanOf, gleanPart, gleanSendBack, gleanText, rankOpenings } from "../../src/pipeline/glean";
 import { loadConfig } from "../../src/modules/config";
 
 const human: Actor = { kind: "human", id: "analyst" };
@@ -158,7 +158,7 @@ test("a value extracted since the last accepted plan is listed with the pivots f
   expect(device).toMatchObject({ card: "c1", rule: "device", column: "message", marking: "TLP:AMBER", visited: false, covered: false });
   expect(device.leads).toEqual([{ pivot: "asset_to_accounts", title: "Accounts that signed in to the asset", cost: "free", reveals: "Which accounts signed in to this asset? Finds account." }]);
   // g1 is answered; g2 (its lease lookup found nothing) is open and wants an account, which asset_to_accounts reaches
-  expect(device.bears).toEqual([{ subgoal: "g2", title: "Who uses the device", want: "account", route: ["asset_to_accounts"] }]);
+  expect(device.bears).toEqual([{ subgoal: "g2", title: "Who uses the device", want: "account", route: ["asset_to_accounts"], weight: 0 }]);
   expect(g.openings[1]!.leads).toEqual([]);
   expect(g.openings[1]!.bears).toEqual([]);
 });
@@ -177,12 +177,14 @@ test("the planner's part says what each new value opens up, in code's words, as 
   expect(part).toMatchObject({ kind: "glean", id: "glean", title: "What the new values open up", fixed: false, marking: "TLP:AMBER" });
 });
 
-test("a value from before the last accepted plan is not new, and with nothing new there is no part", async () => {
+test("a value from before the last accepted plan is not new: offered again while not looked up, never followed", async () => {
   acceptPlan();
   await runStep("s1", START);
   acceptPlan();
-  expect(glean()!.openings).toEqual([]);
-  expect(gleanPart(s.state, s.entries(), { registry, seeker }, DEFAULT_LIMITS, [])).toBeNull();
+  const g = glean()!;
+  expect(g.openings.map((o) => [o.value, o.fresh, o.visited])).toEqual([[DEVICE, false, false], ["ap-9", false, false]]);
+  expect(followable(g.openings)).toEqual([]);
+  expect(gleanSendBack(s.state, s.entries(), g.openings, { cap: 2, stage: "research" })).toBeNull();
 });
 
 test("a value already looked up is visited, and one an accepted step starts from is covered: neither sends work back", async () => {
@@ -226,4 +228,74 @@ test("the cap is configurable and defaults to two", () => {
   const f = join(dir, "c.yaml");
   writeFileSync(f, "glean: { max_sendbacks: 0 }\n");
   expect(loadConfig({ path: f, env: {}, home: dir, repoRoot: dir }).glean).toEqual({ max_sendbacks: 0 });
+});
+
+// --- bounded: a card with hundreds of values gives a short list, grouped by type, and a short reason (I5)
+
+/** 300 more devices on the WiFi log, each with its own access point. */
+function manyDevices(n = 300): void {
+  appendFileSync(join(dir, "modules", "sources", "data", "wifi.jsonl"), Array.from({ length: n }, (_, i) => JSON.stringify({ ts: "2026-01-03T11:00:00.000Z", address: START, message: `ws-${i}.example.net 3f:9a connected to ap-${i % 40}. Connection Info: band=5GHz` })).join("\n") + "\n");
+}
+
+test("the planner's part lists at most 20 values, grouped by type with each type's pivots stated once, then says how many more", async () => {
+  manyDevices();
+  acceptPlan();
+  await runStep("s1", START);
+  await runStep("s2", START);
+  const g = glean()!;
+  expect(g.openings.length).toBeGreaterThan(GLEAN_LIST_MAX);
+  expect(GLEAN_LIST_MAX).toBe(20);
+  const text = gleanText(g.openings);
+  const listed = text.split("\n").filter((l) => l.startsWith("- "));
+  expect(listed).toHaveLength(20);
+  expect(text.split("pivots from asset:").length - 1).toBe(1);
+  expect(text).toContain(`and ${g.openings.length - 20} more values on card c1, not listed`);
+  expect(text.length).toBeLessThan(6000);
+  const part = gleanPart(s.state, s.entries(), { registry, seeker }, DEFAULT_LIMITS, [])!;
+  expect(part.text).toBe(text);
+});
+
+test("values are ranked: not yet looked up first, then those that reach an open sub-goal, then the cheapest route", async () => {
+  manyDevices(30);
+  acceptPlan();
+  await runStep("s1", START);
+  await runStep("s2", START);
+  await runPivot(s, deps, { pivot: "asset_to_accounts", value: DEVICE, window: win, why: "w", actor: human });
+  const ranked = rankOpenings(glean()!.openings);
+  // the devices reach g2; the access points (host) reach nothing; the device already looked up comes last
+  const kinds = ranked.map((o) => (o.visited ? "visited" : o.bears.length > 0 ? "bears" : "none"));
+  expect(kinds).toEqual([...kinds].sort((a, b) => ["bears", "none", "visited"].indexOf(a) - ["bears", "none", "visited"].indexOf(b)));
+  expect(ranked[ranked.length - 1]!.value).toBe(DEVICE);
+  expect(ranked[0]!.type).toBe("asset");
+  // within those that bear on a sub-goal, a cheaper route comes first
+  const bearing = ranked.filter((o) => !o.visited && o.bears.length > 0).map((o) => Math.min(...o.bears.map((b) => b.weight)));
+  expect(bearing).toEqual([...bearing].sort((a, b) => a - b));
+});
+
+test("the send-back names at most three values, then how many more", async () => {
+  manyDevices();
+  acceptPlan();
+  await runStep("s1", START);
+  await runStep("s2", START);
+  expect(GLEAN_REASON_MAX).toBe(3);
+  const openings = glean()!.openings;
+  const reason = gleanSendBack(s.state, s.entries(), openings, { cap: 2, stage: "research" })!;
+  expect(reason).toStartWith(GLEAN_PREFIX);
+  expect(reason.split(" opens ").length - 1).toBe(3);
+  expect(reason).toContain(`and ${followable(openings).length - 3} more`);
+  expect(reason.length).toBeLessThan(1000);
+});
+
+test("a value still not looked up is offered again after the plan is accepted again, but sends no work back", async () => {
+  acceptPlan();
+  await runStep("s1", START);
+  await runStep("s2", START);
+  await runPivot(s, deps, { pivot: "asset_to_accounts", value: DEVICE, window: win, why: "w", actor: human });
+  acceptPlan();
+  const g = glean()!;
+  // the device was looked up: not offered again; ap-9 was not: offered again, as not new
+  expect(g.openings.map((o) => [o.type, o.value, o.fresh])).toEqual([["host", "ap-9", false]]);
+  expect(gleanText(g.openings)).toContain("offered before, not yet looked up");
+  expect(gleanPart(s.state, s.entries(), { registry, seeker }, DEFAULT_LIMITS, [])).not.toBeNull();
+  expect(followable(g.openings)).toEqual([]);
 });

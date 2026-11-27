@@ -7,6 +7,7 @@ import type { Registry } from "../../modules/registry";
 import { revalidateCard } from "../../modules/revalidate";
 import { previewCell } from "../../modules/runner";
 import type { ToolContext, ToolDef, ToolResult } from "./index";
+import { extractedView } from "../context";
 import { idArg, json, params, scrub, scrubCoverage, str, ToolError, VIEW_ROWS } from "./kit";
 
 export { scrubCoverage };
@@ -67,7 +68,7 @@ async function readCard(ctx: ToolContext, args: Record<string, Json>): Promise<T
     id: c.id, title, body, columns: c.columns, rows: c.rows.slice(0, VIEW_ROWS).map((r) => r.map(previewCell)),
     row_count: c.row_count, coverage: scrubCoverage(ctx.deps.registry, c.coverage), empty: c.empty, marking: c.marking, quality_notes: notes, provenance,
     ...(c.person === undefined ? {} : { person: personView(ctx.deps.registry, c.person) }),
-    ...(c.extracted === undefined ? {} : { extracted: c.extracted.map((x) => ({ ...x })) }),
+    ...extractedView(c),
     // the title again under `card`, so a script's {{card:<title>}} can name this card
     card: [{ id: c.id, title }],
   };

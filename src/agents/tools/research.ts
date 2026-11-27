@@ -12,6 +12,7 @@ import { previewCell, runQuery } from "../../modules/runner";
 import type { RunQueryResult } from "../../modules/runner";
 import { cardBrief, scrubCoverage } from "./cards";
 import type { ToolContext, ToolDef, ToolResult } from "./index";
+import { extractedView } from "../context";
 import { idArg, json, MAX_BOUND_KEYS, MAX_BOUND_VALUE, MAX_TEXT, params, scrub, str, ToolError, VIEW_ROWS } from "./kit";
 
 /** What a finished query says in plain words. A partial result is never called a negative. */
@@ -39,7 +40,7 @@ export function resultOf(ctx: ToolContext, r: RunQueryResult, pivot: PivotManife
         columns: r.columns, data: r.data.slice(0, VIEW_ROWS).map((row) => row.map(previewCell)),
         found: pivot === null ? null : yielded(pivot, r, ctx.deps.observables).map((o) => o.value),
         // the values the field notes' rules pulled out of the cells, by code: things to pivot from
-        ...(card?.extracted === undefined ? {} : { extracted: card.extracted.map((x) => ({ ...x })) }),
+        ...(card === null ? {} : extractedView(card)),
       };
       const said = describe(r, empty);
       return { ok: true, summary: reused === null ? said : `${reuseNote(reused)} · ${said}`, view: json(view), marking: source === null ? null : source.marking };

@@ -132,7 +132,7 @@ export async function planRunner(env: StageEnv): Promise<StageEnd> {
     m === null ? "" : `The question asked: ${m.asked}`,
     `Reply with the goal and, for each sub-goal, its starting values, the type wanted and a route of pivot ids that the route finder offers (use find_routes).`,
     `Where a playbook fits a sub-goal (use list_playbooks), give its id as "playbook" and an empty route; code runs it with no further model call.`,
-    glean === null ? "" : `The part titled "What the new values open up" lists values the workbench extracted since the plan was last accepted, with the pivots from each and the open sub-goals each bears on. Choose which, if any, to follow: a sub-goal may start from one of them.`,
+    glean === null ? "" : `The part titled "What the new values open up" lists values the workbench extracted that are new since the plan was last accepted or not yet looked up (at most 20, the most useful first), with the pivots from each type and the open sub-goals each bears on. Choose which, if any, to follow: a sub-goal may start from one of them.`,
   ].filter((x) => x !== "").join("\n");
 
   let errors: string[] = [];
