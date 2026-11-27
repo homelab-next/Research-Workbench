@@ -49,6 +49,35 @@ CREATE TABLE IF NOT EXISTS entries (
   cause INTEGER, run TEXT, stage TEXT, job TEXT, prev_hash TEXT NOT NULL, hash TEXT NOT NULL
 );`;
 
+interface SchemaRow { type: string; name: string; tbl_name: string; sql: string | null }
+const SCHEMA_QUERY = "SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name";
+let expectedSchema: string | null = null;
+
+/**
+ * Why a ledger file's schema is not exactly the one Ledger.open makes (its tables and their indexes, and nothing else: no trigger, no view);
+ * null when it is. For a ledger from outside, such as a loaded case file, before anything is written to it: a trigger would run on that write.
+ */
+export function ledgerSchemaProblem(db: Database): string | null {
+  if (expectedSchema === null) {
+    const fresh = new Database(":memory:");
+    try {
+      fresh.exec(SCHEMA);
+      expectedSchema = JSON.stringify(fresh.query(SCHEMA_QUERY).all());
+    } finally {
+      fresh.close();
+    }
+  }
+  let rows: SchemaRow[];
+  try {
+    rows = db.query(SCHEMA_QUERY).all() as SchemaRow[];
+  } catch {
+    return "its schema cannot be read";
+  }
+  if (rows.some((r) => r.type === "trigger")) return "it holds a trigger";
+  if (rows.some((r) => r.type === "view")) return "it holds a view";
+  return JSON.stringify(rows) === expectedSchema ? null : "its tables are not the ledger's";
+}
+
 /** sha256Hex(prev_hash + "\n" + canonical({ seq, ts, case, actor, type, payload, cause, run, stage, job })). */
 export function entryHash(e: Omit<Entry, "hash">): string {
   const body = {

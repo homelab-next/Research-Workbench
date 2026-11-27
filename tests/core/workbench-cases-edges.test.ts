@@ -4,7 +4,9 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readManifest } from "../../src/core/casefile";
+import { Database } from "bun:sqlite";
+import { CaseFileError, extractCaseFile, readManifest, writeCaseFile } from "../../src/core/casefile";
+import type { CaseManifest, ManifestHeader } from "../../src/core/casefile";
 import { rawCaseFile } from "../helpers/tar";
 import type { CaseSession } from "../../src/core/session";
 import type { Actor } from "../../src/core/types";
@@ -222,4 +224,57 @@ test("a case file whose case.json names a ten-digit id is refused as not a case 
   const err = await refusalOf(wb.loadCase(ten, { actor: person }));
   expect((err as Error).message).toBe("case.json is not a case manifest");
   expect(ls(cases())).toEqual([".high-water"]);
+});
+
+// ---------- I3: the ledger a load takes in is exactly the one the workbench writes ----------
+
+/** Rewrites a case file from a changed copy of its folder, every hash made again, with the header given (default: the file's own). */
+async function repack(file: string, change: (folder: string) => void, header: (m: CaseManifest) => ManifestHeader = (m) => m): Promise<string> {
+  const folder = join(dir, `repack-${tick++}`);
+  const m = await extractCaseFile(file, folder);
+  change(folder);
+  const out = join(dir, `repacked-${tick++}.tar.gz`);
+  const { format: _f, workbench: _w, files: _files, ...rest } = header(m) as CaseManifest;
+  await writeCaseFile(folder, out, rest);
+  rmSync(folder, { recursive: true });
+  return out;
+}
+const sql = (folder: string, text: string): void => {
+  const db = new Database(join(folder, "ledger.sqlite"));
+  try { db.exec(text); } finally { db.close(); }
+};
+async function unloadedFile(): Promise<string> {
+  const s = wb.createCase(sample, person);
+  note(s, "one");
+  const r = await wb.unloadCase("CASE-1", { actor: person });
+  if (!r.ok) throw new Error(r.reason);
+  return r.path;
+}
+async function expectRefusedLoad(file: string, text: string): Promise<void> {
+  const before = ls(cases());
+  const err = await refusalOf(wb.loadCase(file, { actor: person }));
+  expect(err).toBeInstanceOf(CaseFileError);
+  expect((err as Error).message).toBe(text);
+  expect(ls(cases())).toEqual(before);
+}
+
+test("a ledger with a trigger that would change the case as its load is recorded is refused, and nothing is loaded", async () => {
+  const file = await unloadedFile();
+  const poisoned = await repack(file, (folder) => sql(folder,
+    "CREATE TRIGGER t AFTER INSERT ON entries BEGIN UPDATE entries SET payload = replace(payload, 'Sample', 'TAMPERED') WHERE seq = 1; END;"));
+  rmSync(file);
+  await expectRefusedLoad(poisoned, "the case's ledger is not one this workbench writes: it holds a trigger");
+  expect(ls(cases())).toEqual([".high-water"]);
+});
+
+test("a ledger with a view, a table or an index the workbench does not make is refused", async () => {
+  const file = await unloadedFile();
+  for (const [change, what] of [
+    ["CREATE VIEW v AS SELECT * FROM entries;", "it holds a view"],
+    ["CREATE TABLE extra (x);", "its tables are not the ledger's"],
+    ["CREATE INDEX i ON entries (type);", "its tables are not the ledger's"],
+    ["DROP TABLE meta; CREATE TABLE meta (key TEXT, value TEXT);", "its tables are not the ledger's"],
+  ] as const) {
+    await expectRefusedLoad(await repack(file, (folder) => sql(folder, change)), `the case's ledger is not one this workbench writes: ${what}`);
+  }
 });

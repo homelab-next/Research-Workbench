@@ -8,7 +8,7 @@ import type { Json } from "./canonical";
 import { CASE_ID, CaseFileError, caseFileName, MAX_CASE_NUMBER, checkCaseFile, DEFAULT_MAX_CASE_BYTES, extractCaseFile, readManifest, writeCaseFile } from "./casefile";
 import type { CaseManifest, ManifestHeader } from "./casefile";
 import { ignoreThrow, logToStderr } from "./deliver";
-import { Ledger } from "./ledger";
+import { Ledger, ledgerSchemaProblem } from "./ledger";
 import { Refused } from "./refused";
 import { CaseSession } from "./session";
 import { caseFields, fold, isCaseCreated } from "./state";
@@ -99,6 +99,16 @@ function syncDir(dir: string): void {
     // some file systems refuse fsync on a directory
   } finally {
     closeSync(fd);
+  }
+}
+
+/** `read` of the SQLite file at `path`, opened read-only. */
+function readOnly<T>(path: string, read: (db: Database) => T): T {
+  const db = new Database(path, { readonly: true });
+  try {
+    return read(db);
+  } finally {
+    db.close();
   }
 }
 
@@ -710,7 +720,10 @@ export class Workbench {
       await extractCaseFile(file, tmp, { max_bytes: this.maxCaseBytes });
       mkdirSync(join(tmp, "blobs"), { recursive: true });
       mkdirSync(join(tmp, "published"), { recursive: true });
-      // 4. the chain, its head, its id and its first entry are the ones case.json names
+      // 4. the ledger is exactly what Ledger.open makes, so nothing in it runs when case.loaded is written (a trigger, say)
+      const schema = readOnly(join(tmp, "ledger.sqlite"), ledgerSchemaProblem);
+      if (schema !== null) throw new CaseFileError(`the case's ledger is not one this workbench writes: ${schema}`);
+      // the chain, its head, its id and its first entry are the ones case.json names
       let report: ReturnType<typeof verifyCase>;
       try {
         report = verifyCase(tmp);
@@ -720,20 +733,19 @@ export class Workbench {
       if (!report.ok) throw new CaseFileError(`the case does not verify: ${formatReport(report).split("\n")[0]!}`);
       if (report.head !== m.head.hash || report.entries !== m.entries) throw new CaseFileError("the case does not verify: its head is not the one case.json names");
       if (report.case !== m.chain) throw new CaseFileError(`the case does not verify: its ledger is case ${report.case}, not ${m.chain}`);
-      const db = new Database(join(tmp, "ledger.sqlite"), { readonly: true });
-      let first: string | null;
-      try {
-        first = (db.query("SELECT hash FROM entries WHERE seq = 1").get() as { hash: string } | null)?.hash ?? null;
-      } finally {
-        db.close();
-      }
-      if (first !== m.origin) throw new CaseFileError("the case does not verify: its first entry is not the one case.json names");
+      if (hashAt(join(tmp, "ledger.sqlite"), 1) !== m.origin) throw new CaseFileError("the case does not verify: its first entry is not the one case.json names");
       // 5. the load, recorded in the case's own ledger
       const ledger = Ledger.open(join(tmp, "ledger.sqlite"), m.chain, { ...(this.now ? { now: this.now } : {}), onError: this.onError });
+      let loaded: Entry;
       try {
-        ledger.append({ type: "case.loaded", payload: { file: basename(file), head: { seq: m.head.seq, hash: m.head.hash }, id }, actor: opts.actor });
+        loaded = ledger.append({ type: "case.loaded", payload: { file: basename(file), head: { seq: m.head.seq, hash: m.head.hash }, id }, actor: opts.actor });
       } finally {
         ledger.close();
+      }
+      // and the chain is still the one verified, with case.loaded after it
+      const after = verifyCase(tmp);
+      if (!after.ok || after.entries !== m.entries + 1 || after.head !== loaded.hash || hashAt(join(tmp, "ledger.sqlite"), m.head.seq) !== m.head.hash) {
+        throw new CaseFileError("the case does not verify after its load was recorded");
       }
       // 6. the mark, then the commit point
       this.open();
