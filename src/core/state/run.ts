@@ -1,5 +1,5 @@
 import { EMPTY_MEANS, isMarking, GATES, JOB_KINDS, JOB_OUTCOMES, QUERY_PURPOSES, ROUTE_OUTCOMES, RUN_OUTCOMES, SECTIONS, STAGE_RUNS, STEP_OUTCOMES, VERIFY_OUTCOMES } from "../types";
-import type { Cost, Entry, ModelChoice, Plan, PlanStep, Proposal, RunHold, StageDef, SubGoal } from "../types";
+import type { Cost, Entry, ModelChoice, Payloads, Plan, PlanStep, Proposal, RunHold, StageDef, SubGoal } from "../types";
 import { has, isBool, isNum, isObj, isOneOf, isStr, isStrList, isStrOrNull, malformed } from "./guards";
 import { isBlobRefShape, isCard, isCount, isCoverage, isObservable, isStageFinishedShape, isTimeWindow } from "./shapes";
 import type { CaseState, JobState, PlanState, ProposalState, QueryState, RunState, StageState, Usage } from "./types";
@@ -33,7 +33,13 @@ const isProposal = (x: unknown): x is Proposal => {
 };
 
 const isHold = (x: unknown): x is RunHold =>
-  isObj(x) && (((x.kind === "ruled" || x.kind === "stage_runs" || x.kind === "question") && isStr(x.stage)) || (x.kind === "send_back" && isStr(x.edge)));
+  isObj(x) && (((x.kind === "ruled" || x.kind === "stage_runs" || x.kind === "question") && isStr(x.stage)) || (x.kind === "send_back" && isStr(x.edge))
+    || (x.kind === "child" && isStr(x.stage) && isStr(x.child)));
+
+/** A run.started the fold reads: a run id and stage definitions with distinct ids. applyLoops reads it too, so the two agree on which starts count. */
+export function isRunStartedShape(x: unknown): x is Payloads["run.started"] {
+  return isObj(x) && isStr(x.run) && Array.isArray(x.stages) && x.stages.every(isStageDef) && new Set(x.stages.map((d) => d.id)).size === x.stages.length;
+}
 
 /** The stage's count on the latest draft, begun again when the draft is another. */
 function repeatsOn(s: CaseState, stage: string): CaseState["run"]["repeats"][string] {
@@ -227,10 +233,8 @@ function applyPipeline(s: CaseState, entry: Entry): CaseState {
   const finished = s.run.status === "finished";
   switch (entry.type) {
     case "run.started": {
+      if (!isRunStartedShape(entry.payload)) return malformed(s, entry);
       const { run, stages } = entry.payload;
-      if (!isStr(run) || !Array.isArray(stages) || !stages.every(isStageDef) || new Set(stages.map((d) => d.id)).size !== stages.length) {
-        return malformed(s, entry);
-      }
       const built: StageState[] = stages.map((d) => ({
         ...d, model: Object.hasOwn(s.stage_models, d.id) ? s.stage_models[d.id]! : d.model, status: "idle", attempts: 0, last_reason: null,
       }));

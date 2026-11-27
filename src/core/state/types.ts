@@ -28,7 +28,7 @@ export interface StageState extends StageDef {
 export interface RunState {
   id: string | null;
   status: "none" | "running" | "paused" | "waiting" | "interrupted" | "finished";
-  outcome: "published" | "stopped" | null;
+  outcome: "published" | "stopped" | "completed" | null;
   pause_reason: string | null;
   waiting: "plan" | "publish" | null;
   stages: StageState[];
@@ -143,6 +143,26 @@ export interface ArchiveState {
   loads: number;
 }
 
+/** A child case one stage attempt of this case's run made, keyed `run/stage/attempt` (subloopKey), and what it gave back once it finished. */
+export interface SubloopState {
+  key: string; run: string; stage: string; attempt: number; child: string; loop: string; loop_hash: string; input_hash: string; inputs: BlobRef; depth: number; started_seq: number;
+  finished: null | { child_run: string; head: { seq: number; hash: string }; outcome: "published" | "completed" | "stopped"; output_hash: string; output: BlobRef; cards: string[]; seq: number };
+}
+/** The loop a case is for, the version its run is bound to, its parent when it is a child, and the children its runs made (slice 12). */
+export interface LoopState {
+  /** The loop the case was made for; null on a ledger from before slice 12 (read as the default loop). */
+  id: string | null;
+  /** A loop.bound not yet followed by its run.started. */
+  pending: { loop: string; version: number; hash: string; lock: BlobRef; seq: number } | null;
+  /** What the current run started with; null for a run with no loop.bound (one from before slice 12). */
+  bound: { loop: string; version: number; hash: string; lock: BlobRef; seq: number } | null;
+  /** Set on a child case: the stage of the parent's run that made it. */
+  parent: { case: string; run: string; stage: string; attempt: number; loop: string; input_hash: string; depth: number; floor: Marking } | null;
+  children: Record<string, SubloopState>;
+  /** Every subloop.started of the case, over all its runs. */
+  child_count: number;
+}
+
 export interface CaseState {
   seq: number;
   head_ts: string | null;
@@ -189,4 +209,6 @@ export interface CaseState {
   agent_usage: { usage: Usage; calls: number };
   /** Unloads and loads of the case, and the choice to unload it after publishing (slice 11). */
   archive: ArchiveState;
+  /** The case's loop, its bound version, its parent and its children (slice 12). */
+  loop: LoopState;
 }

@@ -26,7 +26,8 @@ const pivotFile = (spec: string): string | null => {
   return existsSync(f) ? f : null;
 };
 
-const IMPORT = /\b(?:import|export)\b[^;]*?\bfrom\s*["']([^"']+)["']|\bimport\s*\(?\s*["']([^"']+)["']/g;
+// a keyword right after a quote is a string's text (the value "import" of manifest.written's why), not an import
+const IMPORT = /(?<!["'])\b(?:import|export)\b[^;]*?\bfrom\s*["']([^"']+)["']|(?<!["'])\bimport\s*\(?\s*["']([^"']+)["']/g;
 
 /** Every file reachable from `entries` through relative imports. */
 function closure(entries: string[]): string[] {

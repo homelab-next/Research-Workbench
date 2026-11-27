@@ -1,6 +1,6 @@
 // Shape checks for the records the fold and the workbench share. Browser-safe: no runtime imports.
 import { CARD_KINDS, CARD_MAKERS, EMPTY_MEANS, isMarking, PERSON_BASES, STAGE_OUTCOMES } from "../types";
-import type { BlobRef, Card, ExtractedValue, Observable, Observed, Payloads, PersonStatement, Span, TimeWindow } from "../types";
+import type { BlobRef, Card, CardOrigin, ExtractedValue, Observable, Observed, Payloads, PersonStatement, Span, TimeWindow } from "../types";
 import { isNum, isObj, isOneOf, isStr, isStrList, isStrOrNull } from "./guards";
 import { isCoverage, isObserved } from "pivot/types";
 
@@ -21,8 +21,12 @@ export const isCard = (x: unknown): x is Card =>
   && (x.coverage === null || isCoverage(x.coverage)) && (x.empty === null || isOneOf(x.empty, EMPTY_MEANS))
   && isMarking(x.marking) && isStrOrNull(x.source) && isStrOrNull(x.step) && isStrOrNull(x.subgoal)
   && isStr(x.why) && isStrOrNull(x.event_time) && isStrList(x.quality_notes) && (x.observed === undefined || isObserved(x.observed))
-  && (x.person === undefined || isPersonStatement(x.person))
+  && (x.person === undefined || isPersonStatement(x.person)) && (x.from === undefined || isCardOrigin(x.from))
   && (x.extracted === undefined || (Array.isArray(x.extracted) && x.extracted.every(isExtractedValue)));
+
+/** The shape of a card's origin in another case: the case, the loop and run that made it, its card there or null, and that case's head hash. */
+export const isCardOrigin = (x: unknown): x is CardOrigin =>
+  isObj(x) && isStr(x.case) && isStr(x.loop) && isStr(x.run) && isStrOrNull(x.card) && isStr(x.head);
 
 /** The shape of one value an extract rule gave: code-derived, with its type, value, column, rule and a row count from 0. */
 export const isExtractedValue = (x: unknown): x is ExtractedValue =>
@@ -35,9 +39,11 @@ export function cardFields(c: Card): Card {
   const seen = c.observed === undefined ? fields : { ...fields, observed: observedFields(c.observed) };
   const observed = c.extracted === undefined ? seen
     : { ...seen, extracted: c.extracted.map((x): ExtractedValue => ({ type: x.type, value: x.value, column: x.column, rule: x.rule, row: x.row, by: "code" })) };
-  if (c.person === undefined) return observed;
+  const crossed = c.from === undefined ? observed
+    : { ...observed, from: { case: c.from.case, loop: c.from.loop, run: c.from.run, card: c.from.card, head: c.from.head } };
+  if (c.person === undefined) return crossed;
   const { basis, detail, about, answers } = c.person;
-  return { ...observed, person: { basis, detail, about: about.map((o) => ({ type: o.type, value: o.value })), answers } };
+  return { ...crossed, person: { basis, detail, about: about.map((o) => ({ type: o.type, value: o.value })), answers } };
 }
 
 /** The fields of an observed and nothing else, copied so the state shares nothing with the payload. */

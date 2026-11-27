@@ -567,3 +567,45 @@ test("a malformed person field is a malformed card; a card without person folds 
   expect("person" in s.cards.c4!).toBe(false);
   expect(s.skipped.map((x) => [x.seq, x.reason])).toEqual([[bad1.seq, "malformed card.created"], [bad2.seq, "malformed card.created"], [bad3.seq, "malformed card.created"]]);
 });
+
+// ---------- slice 12: a card from another case ----------
+const HH = "d".repeat(64);
+const ORIGIN = { case: "CASE-2", loop: "investigation", run: "run-1", card: "c3", head: HH };
+const returned = (id: string, over: Partial<Card> = {}): Card => card(id, {
+  kind: "note", made_by: "system", columns: [], column_types: [], rows: [], row_count: 0, coverage: null, title: "From CASE-2", body: "Seen (CASE-2 c3).", from: ORIGIN, ...over,
+});
+
+test("a card with from by code is kept with its origin; by a person or an agent it is skipped: a card from another case is recorded by the workbench", () => {
+  const agent = { kind: "agent", id: "a1", stage: "research", profile: "p", model: "m", effort: null, where: "machine" } as const;
+  const payload = { card: returned("c7") };
+  const b = new EntryBuilder();
+  b.add("card.created", payload, { actor: { kind: "system", id: "engine" } });
+  const tries = [
+    b.add("card.created", { card: returned("c8") }, { actor: PERSON }),
+    b.add("card.created", { card: returned("c9") }, { actor: agent }),
+  ];
+  const s = fold(b.entries);
+  expect(s.cards.c7!.from).toEqual({ case: "CASE-2", loop: "investigation", run: "run-1", card: "c3", head: HH });
+  expect(s.cards.c7!.from).not.toBe(payload.card.from);              // the state shares nothing with the payload
+  expect(Object.keys(s.cards)).toEqual(["c7"]);
+  expect(s.incoming).toEqual(["c7"]);
+  expect(s.skipped).toEqual(tries.map((e) => ({ seq: e.seq, type: "card.created", reason: "a card from another case is recorded by the workbench" })));
+});
+
+test("a from that is not a card origin is malformed; a card without from folds as before", () => {
+  const code = { kind: "system", id: "engine" } as const;
+  const b = new EntryBuilder();
+  const bad = [
+    b.add("card.created", { card: returned("c1", { from: { ...ORIGIN, case: 2 } as never }) }, { actor: code }),
+    b.add("card.created", { card: returned("c2", { from: { ...ORIGIN, card: 3 } as never }) }, { actor: code }),
+    b.add("card.created", { card: returned("c3", { from: { case: "CASE-2", loop: "investigation", run: "run-1", card: null } as never }) }, { actor: code }),
+    b.add("card.created", { card: returned("c4", { from: "CASE-2" as never }) }, { actor: code }),
+  ];
+  b.add("card.created", { card: returned("c5", { from: { ...ORIGIN, card: null } }) }, { actor: code });
+  b.add("card.created", { card: card("c6") });
+  const s = fold(b.entries);
+  expect(Object.keys(s.cards)).toEqual(["c5", "c6"]);
+  expect(s.cards.c5!.from).toEqual({ ...ORIGIN, card: null });
+  expect("from" in s.cards.c6!).toBe(false);
+  expect(s.skipped).toEqual(bad.map((e) => ({ seq: e.seq, type: "card.created", reason: "malformed card.created" })));
+});

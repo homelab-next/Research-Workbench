@@ -8,7 +8,7 @@ import { canonical } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
 import type { IdAllocator } from "../../src/core/ids";
 import type { CaseSession } from "../../src/core/session";
-import { blockers, fold, initialArchive, latestDraft, publishable, runUsage, unloadDue } from "../../src/core/state";
+import { blockers, fold, initialArchive, initialLoop, latestDraft, publishable, runUsage, unloadDue } from "../../src/core/state";
 import type { CaseState } from "../../src/core/state";
 import type { Actor, Draft, EntryInput, Plan, Product, StageDef } from "../../src/core/types";
 import { verifyCase } from "../../src/core/verify";
@@ -352,5 +352,85 @@ test("a ledger holding an unload, a failed unload, a second unload, a load and a
   wb = Workbench.open(dir, { onError });
   expect(wb.session(s.id).state).toEqual(final);
   expect(verifyCase(s.dir)).toMatchObject({ entries: all.length, firstBad: null });
+  expect(errors).toEqual([]);
+});
+
+// ---------- slice 12: loops, bound versions and sub-loop children ----------
+
+test("a ledger with none of slice 12's entries folds with an empty loop state and every other field as it was", () => {
+  // the file's whole run: state.loop toEqual initialLoop(), skipped []
+  const { s, live } = wholeRun();
+  const state = fold(s.entries());
+  expect(state.loop).toEqual(initialLoop());
+  expect(state.skipped).toEqual([]);
+  expect(state.run.outcome).toBe("published");
+  expect(Object.values(state.cards).some((c) => "from" in c)).toBe(false);
+  // every other field is the live session's, which knew nothing of loops
+  expect(state).toEqual(live[state.seq]!);
+  expect(errors).toEqual([]);
+});
+
+test("a ledger holding a loop set, a bound run, a child started and finished with two returned cards, and a child-hold pause folds the same at every entry as the live session saw it", () => {
+  // append them through a session, capturing session.state after each commit; fold(entries, seq) toEqual the captured state for every seq
+  const s: CaseSession = wb.createCase({
+    title: "Beaconing from 192.0.2.10", asked: "Is it beaconing?", why: "IDS alert", starting: [{ type: "ip", value: "192.0.2.10" }],
+    window: { from: null, to: null }, objective: null, marking: "TLP:AMBER",
+  }, human);
+  const live: CaseState[] = [];
+  live[1] = structuredClone(s.state);
+  s.subscribe((_e, st) => { live[st.seq] = structuredClone(st); });
+  const one = (input: EntryInput) => s.commit(() => [input]);
+  const looped: StageDef[] = [
+    { id: "plan", title: "Plan", phase: "direct", runs: "agent", gate: "plan", reviews: false, model: null },
+    { id: "investigate", title: "Investigate", phase: "collect", runs: "loop", gate: null, reviews: false, model: null },
+    { id: "assemble", title: "Assemble", phase: "produce", runs: "agent", gate: null, reviews: false, model: null },
+  ];
+  const hash = "b".repeat(64);
+  const childHead = { seq: 42, hash: "d".repeat(64) };
+
+  one({ type: "case.loop_set", payload: { loop: "triage" }, actor: human });
+  const lock = s.blobs.put(JSON.stringify({ loop: "triage", items: [] }), "application/json");
+  s.commit((_st, ids) => [
+    { type: "loop.bound", payload: { loop: "triage", version: 2, hash, lock }, actor: system },
+    { type: "run.started", payload: { run: ids.next("run"), pipeline: "triage", pipeline_hash: hash, stages: looped }, actor: system },
+  ]);
+  one({ type: "stage.started", payload: { stage: "investigate", attempt: 1 }, actor: system, stage: "investigate" });
+  const inputs = s.blobs.put(JSON.stringify({ question: "Is it beaconing?" }), "application/json");
+  one({ type: "subloop.started", payload: { stage: "investigate", attempt: 1, child: "CASE-2", loop: "investigation", loop_hash: "e".repeat(64), input_hash: "c".repeat(64), inputs, depth: 1 }, actor: system, stage: "investigate" });
+  one({ type: "run.paused", payload: { reason: "waiting on child CASE-2: it waits at its plan gate", hold: { kind: "child", stage: "investigate", child: "CASE-2" } }, actor: system });
+  expect(s.state.run).toMatchObject({ status: "paused", hold: { kind: "child", stage: "investigate", child: "CASE-2" } });
+  one({ type: "run.resumed", payload: {}, actor: system });
+  const output = s.blobs.put(JSON.stringify({ findings: [] }), "application/json");
+  s.commit((_st, ids) => {
+    const a = ids.next("card"), b = ids.next("card");
+    const from = (c: string | null) => ({ case: "CASE-2", loop: "investigation", run: "run-1", card: c, head: childHead.hash });
+    const note = (id: string, c: string | null) => card(id, {
+      kind: "note", made_by: "system", columns: [], column_types: [], rows: [], row_count: 0, coverage: null, title: "From CASE-2", body: "Seen (CASE-2 c3).", from: from(c),
+    });
+    return [
+      { type: "subloop.finished", payload: { stage: "investigate", attempt: 1, child: "CASE-2", child_run: "run-1", head: childHead, outcome: "published", output_hash: "f".repeat(64), output, cards: [a, b] }, actor: system, stage: "investigate" },
+      { type: "card.created", payload: { card: note(a, "c3") }, actor: system },
+      { type: "card.created", payload: { card: note(b, null) }, actor: system },
+    ];
+  });
+  one({ type: "stage.finished", payload: { stage: "investigate", attempt: 1, outcome: "pass", draft_hash: null, output: null, reason: null }, actor: system, stage: "investigate" });
+  one({ type: "run.finished", payload: { outcome: "completed" }, actor: system });
+
+  const final = s.state;
+  expect(final.skipped).toEqual([]);
+  expect(final.loop).toMatchObject({ id: "triage", pending: null, bound: { loop: "triage", version: 2, hash, lock }, parent: null, child_count: 1 });
+  expect(final.loop.children["run-1/investigate/1"]!.finished).toMatchObject({ child_run: "run-1", head: childHead, outcome: "published", cards: ["c1", "c2"] });
+  expect(final.cards.c1!.from).toEqual({ case: "CASE-2", loop: "investigation", run: "run-1", card: "c3", head: childHead.hash });
+  expect(final.run).toMatchObject({ status: "finished", outcome: "completed", hold: null });
+
+  const all = s.entries();
+  for (let n = 1; n <= all.length; n++) {
+    expect(live[n], `live state at ${n}`).toBeDefined();
+    expect(fold(all, n), `entry ${n} (${all[n - 1]!.type})`).toEqual(live[n]!);
+  }
+  wb.close();
+  wb = Workbench.open(dir, { onError });
+  expect(wb.session(s.id).state).toEqual(final);
+  expect(verifyCase(s.dir)).toMatchObject({ entries: all.length, firstBad: null, blobs: { bad: [] } });
   expect(errors).toEqual([]);
 });

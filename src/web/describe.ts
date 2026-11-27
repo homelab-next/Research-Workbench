@@ -111,6 +111,14 @@ const TABLE: Record<EntryType, [string | ((p: Loose) => string), Say]> = {
   "case.unloaded": ["case unloaded", (p) => str(p.store)],
   "case.unload_failed": ["unload failed", (p) => str(p.reason)],
   "case.loaded": ["case loaded", (p) => str(p.file)],
+  "case.loop_set": ["loop chosen", (p) => str(p.loop)],
+  "loop.bound": ["loop version", (p) => (typeof p.version === "number" ? `${str(p.loop)} v${p.version}` : str(p.loop))],
+  "subloop.child": ["child of", (p) => join(str(p.parent), str(p.stage))],
+  "subloop.started": ["sub-loop started", (p) => (str(p.child) === "" ? str(p.loop) : `${str(p.loop)} as ${str(p.child)}`)],
+  "subloop.finished": ["sub-loop finished", (p) => join(str(p.child), str(p.outcome))],
+  "loop.recorded": ["loop recorded", (p) => (typeof p.version === "number" ? `${str(p.loop)} v${p.version}` : str(p.loop))],
+  "loop.output": ["loop output recorded", (p) => join(str(p.loop), str(p.output), str(p.case))],
+  "manifest.written": ["manifest written", (p) => join(str(p.kind), str(p.id), str(p.path))],
 };
 
 /** One short plain sentence for an entry, and its particulars. Everything from the entry is text, and nothing here throws for an odd payload. */

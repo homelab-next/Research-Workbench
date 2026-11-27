@@ -900,3 +900,45 @@ test("a pause held for a question is recorded; a person's resume clears it and l
   b.add("run.paused", { reason: "r", hold: { kind: "question", stage: 5 } as never });
   expect(fold(b.entries).skipped.map((x) => x.reason)).toEqual(["malformed run.paused"]);
 });
+
+// ---------- slice 12: a stage that runs a loop, a completed run, a pause held for a child ----------
+test("a run.started whose stage runs a loop is read like any other", () => {
+  const b = new EntryBuilder();
+  const looped: StageDef[] = [...stages, { id: "investigate", title: "Investigate", phase: "collect", runs: "loop", gate: null, reviews: false, model: null }];
+  b.add("run.started", { run: "run-1", pipeline: "triage", pipeline_hash: "h", stages: looped });
+  const s = fold(b.entries);
+  expect(s.skipped).toEqual([]);
+  expect(s.run.status).toBe("running");
+  expect(s.run.stages.map((x) => [x.id, x.runs, x.status])).toEqual([["plan", "agent", "idle"], ["checks", "script", "idle"], ["investigate", "loop", "idle"]]);
+});
+
+test("run.finished with outcome completed finishes the run; an unknown outcome is still malformed", () => {
+  const b = started();
+  b.add("run.finished", { outcome: "completed" });
+  const s = fold(b.entries);
+  expect(s.run).toMatchObject({ status: "finished", outcome: "completed", waiting: null });
+  expect(s.skipped).toEqual([]);
+  const bad = started();
+  const e = bad.add("run.finished", { outcome: "done" } as never);
+  expect(fold(bad.entries).run.status).toBe("running");
+  expect(fold(bad.entries).skipped).toEqual([{ seq: e.seq, type: "run.finished", reason: "malformed run.finished" }]);
+});
+
+test("run.paused with a child hold keeps it, and a resume by code clears the pause and changes nothing else", () => {
+  // hold { kind: "child", stage: "investigate", child: "CASE-2" }; run.resumed by { kind: "system", id: "engine" }: status running, hold null, sendbacks and repeats as before
+  const b = started();
+  b.add("stage.started", { stage: "plan", attempt: 1 });
+  b.add("stage.sent_back", { from: "checks", to: "plan", reason: "again", count: 1 });
+  b.add("stage.started", { stage: "plan", attempt: 2 });
+  b.add("run.paused", { reason: "waiting on child CASE-2: plan gate", hold: { kind: "child", stage: "investigate", child: "CASE-2" } });
+  let s = fold(b.entries);
+  expect(s.run).toMatchObject({ status: "paused", pause_reason: "waiting on child CASE-2: plan gate", hold: { kind: "child", stage: "investigate", child: "CASE-2" } });
+  const before = s.run;
+  b.add("run.resumed", {}, { actor: { kind: "system", id: "engine" } });
+  s = fold(b.entries);
+  expect(s.run).toEqual({ ...before, status: "running", pause_reason: null, hold: null });
+  expect(s.skipped).toEqual([]);
+  b.add("run.paused", { reason: "r", hold: { kind: "child", stage: "investigate" } as never });
+  b.add("run.paused", { reason: "r", hold: { kind: "child", stage: "investigate", child: 2 } as never });
+  expect(fold(b.entries).skipped.map((x) => x.reason)).toEqual(["malformed run.paused", "malformed run.paused"]);
+});

@@ -47,7 +47,11 @@ export interface Card {
    * column of the result has an extract rule or none matched. Each carries the card's marking.
    */
   extracted?: ExtractedValue[];
+  /** Only on a card that crossed a case boundary (slice 12): a note the workbench made from what another case's loop gave back. */
+  from?: CardOrigin;
 }
+/** Where a card that crossed a case boundary came from: the other case, the loop and run that made it, its card there (null for one made from a finding or a section), and that case's head hash then. */
+export interface CardOrigin { case: string; loop: string; run: string; card: string | null; head: string }
 /** A value an extract rule pulled out of a result cell: by code, never by a model; its rule, its column and the first row (from 0) it was in. */
 export interface ExtractedValue { type: string; value: string; column: string; rule: string; row: number; by: "code" }
 /** How the person knows what they state: they saw it, did it, were told it, or did not say. */
@@ -74,7 +78,8 @@ export interface Plan { id: string; goal: string; window: TimeWindow; subgoals: 
 // ---------- pipeline ----------
 export interface StageDef {
   id: string; title: string; phase: string | null;
-  runs: "agent" | "script" | "human";
+  /** "loop": the stage runs another loop as a child case (slice 12). */
+  runs: "agent" | "script" | "human" | "loop";
   gate: "plan" | "publish" | null;
   /** True when this stage reviews the draft and must pass before publishing. */
   reviews: boolean;
@@ -116,7 +121,10 @@ export interface ReviewConflict {
  * blocking question to the person unanswered (`question`, written after that stage's pass, before the next stage starts) has those questions
  * waived, and the run goes on without the answer.
  */
-export type RunHold = { kind: "ruled"; stage: string } | { kind: "stage_runs"; stage: string } | { kind: "send_back"; edge: string } | { kind: "question"; stage: string };
+export type RunHold =
+  | { kind: "ruled"; stage: string } | { kind: "stage_runs"; stage: string } | { kind: "send_back"; edge: string } | { kind: "question"; stage: string }
+  /** A sub-loop stage waits on its child case (slice 12): only the engine's childSettled, or a person's resume, lifts it. */
+  | { kind: "child"; stage: string; child: string };
 /**
  * Why a query was issued: for its result, to price another query (an estimate), to re-run an earlier one (a verify), or as one lookup of a
  * playbook (no model chose it).
@@ -150,8 +158,8 @@ export interface Payloads {
   "run.paused": { reason: string; hold?: RunHold };
   "run.resumed": Record<string, never>;
   "run.interrupted": Record<string, never>;
-  /** `reason` is a person's, when they stopped the run with Engine.stop. */
-  "run.finished": { outcome: "published" | "stopped"; reason?: string };
+  /** `reason` is a person's, when they stopped the run with Engine.stop. `completed`: a loop with no publish gate reached its end (slice 12). */
+  "run.finished": { outcome: "published" | "stopped" | "completed"; reason?: string };
   "stage.model_set": { stage: string; choice: ModelChoice };
   "stage.pack_limit_set": { stage: string; max_marking: Marking | null };
   "stage.started": { stage: string; attempt: number };
@@ -265,6 +273,33 @@ export interface Payloads {
   "case.unload_failed": { reason: string };
   /** The case came from a case file. `head` is the head it arrived with (the head before this entry); `id` is the id it has here, the id in the file. */
   "case.loaded": { file: string; head: { seq: number; hash: string }; id: string };
+  // loops (slice 12)
+  /** The loop the case is for, written before its first run.started (in the commit of case.created). A ledger without it is a case of the default loop. */
+  "case.loop_set": { loop: string };
+  /** The loop version a run starts with: its id, its version number, its pipeline hash, and the lock (a blob of this case) that lists every manifest by hash. */
+  "loop.bound": { loop: string; version: number; hash: string; lock: BlobRef };
+  /** In a child case, in the commit of its case.created: the parent case and the run, stage and attempt that made it, what it was given, its depth and its marking floor. */
+  "subloop.child": { parent: string; run: string; stage: string; attempt: number; loop: string; input_hash: string; depth: number; floor: Marking };
+  /** In the parent: a sub-loop stage made (or adopted) a child case for this attempt, with its inputs as a blob of the parent. */
+  "subloop.started": { stage: string; attempt: number; child: string; loop: string; loop_hash: string; input_hash: string; inputs: BlobRef; depth: number };
+  /** In the parent: what the child gave back, at the child's head then, in one commit with the cards and proposals made from it. */
+  "subloop.finished": {
+    stage: string; attempt: number; child: string; child_run: string; head: { seq: number; hash: string };
+    outcome: "published" | "completed" | "stopped"; output_hash: string; output: BlobRef; cards: string[];
+  };
+  // workbench chain only; a case fold ignores them
+  /** A loop version as the registry resolved it: its two pipeline hashes and its lock. */
+  "loop.recorded": { loop: string; version: number; hash: string; legacy_hash: string | null; lock: BlobRef };
+  /** A declared output of a loop's run that ended published or completed, with its marking and value. */
+  "loop.output": {
+    loop: string; output: string; case: string; run: string; head: { seq: number; hash: string };
+    outcome: "published" | "completed"; marking: Marking; hash: string; value: BlobRef;
+  };
+  /** A person wrote a manifest into a root: where, what, its hash and the hash before, why, and the builder session it came from. */
+  "manifest.written": {
+    root: string; path: string; kind: string; id: string; hash: string; before: string | null;
+    why: "save" | "copy" | "import" | "builder"; session: string | null;
+  };
 }
 export type EntryType = keyof Payloads;
 
@@ -285,6 +320,11 @@ export const BLOB_FIELDS: { readonly [T in EntryType as BlobField<Payloads[T]> e
   "check.run": ["input", "output"],
   "stage.finished": ["output"],
   "product.published": ["bundle"],
+  "loop.bound": ["lock"],
+  "subloop.started": ["inputs"],
+  "subloop.finished": ["output"],
+  "loop.recorded": ["lock"],
+  "loop.output": ["value"],
 };
 
 /** The blob reference fields of payload P that may hold null. */
@@ -304,6 +344,11 @@ export const BLOB_NULLABLE: { readonly [T in keyof typeof BLOB_FIELDS]: { readon
   "check.run": { input: false, output: false },
   "stage.finished": { output: true },
   "product.published": { bundle: false },
+  "loop.bound": { lock: false },
+  "subloop.started": { inputs: false },
+  "subloop.finished": { output: false },
+  "loop.recorded": { lock: false },
+  "loop.output": { value: false },
 };
 
 /** True when the typed blob position `field` of entry type `type` may hold null (or is not a typed position at all). */
@@ -335,9 +380,10 @@ function listOf<T extends string>(members: { readonly [K in T]: true }): readonl
 
 export const SECTIONS = listOf<Section>({ summary: true, key_findings: true, gaps_and_limits: true, alternatives: true, assessment: true });
 export const GATES = listOf<NonNullable<StageDef["gate"]>>({ plan: true, publish: true });
-export const STAGE_RUNS = listOf<StageDef["runs"]>({ agent: true, script: true, human: true });
+export const STAGE_RUNS = listOf<StageDef["runs"]>({ agent: true, script: true, human: true, loop: true });
 export const STAGE_OUTCOMES = listOf<Payloads["stage.finished"]["outcome"]>({ pass: true, fail: true, declined: true });
-export const RUN_OUTCOMES = listOf<Payloads["run.finished"]["outcome"]>({ published: true, stopped: true });
+export const RUN_OUTCOMES = listOf<Payloads["run.finished"]["outcome"]>({ published: true, stopped: true, completed: true });
+export const SUBLOOP_OUTCOMES = listOf<Payloads["subloop.finished"]["outcome"]>({ published: true, completed: true, stopped: true });
 export const STEP_OUTCOMES = listOf<StepOutcome>({ answered: true, empty: true, partial: true, blocked: true, failed: true });
 export const JOB_KINDS = listOf<Payloads["job.started"]["kind"]>({ research: true, query: true, model: true, check: true, playbook: true });
 export const JOB_OUTCOMES = listOf<Payloads["job.finished"]["outcome"]>({ done: true, failed: true });
@@ -375,6 +421,8 @@ export const ENTRY_TYPES = listOf<EntryType>({
   "product.published": true, "feedback.recorded": true, "agent.asked": true, "agent.answered": true, "agent.ended": true,
   "module.loaded": true, "module.rejected": true, "setting.changed": true, "case.anchored": true,
   "case.unloaded": true, "case.unload_failed": true, "case.loaded": true,
+  "case.loop_set": true, "loop.bound": true, "subloop.child": true, "subloop.started": true, "subloop.finished": true,
+  "loop.recorded": true, "loop.output": true, "manifest.written": true,
 });
 const ENTRY_TYPE_SET: ReadonlySet<string> = new Set(ENTRY_TYPES);
 export const isEntryType = (x: unknown): x is EntryType => typeof x === "string" && ENTRY_TYPE_SET.has(x);

@@ -97,3 +97,18 @@ test("an unload, a failed unload and a load give their particulars", () => {
   expect(describe(sampleOf("case.loaded", { file: 7 }), ref)).toEqual({ what: "case loaded", detail: "7" });
   expect(describe(sampleOf("case.unloaded", { store: null }), ref)).toEqual({ what: "case unloaded", detail: "" });
 });
+
+test("a loop chosen, a loop version, a child's parent and a sub-loop started and finished give their particulars", () => {
+  const lock = { blob: "a".repeat(64), bytes: 10 };
+  expect(describe(sampleOf("case.loop_set", { loop: "triage" }), ref)).toEqual({ what: "loop chosen", detail: "triage" });
+  expect(describe(sampleOf("loop.bound", { loop: "triage", version: 3, hash: "b".repeat(64), lock }), ref)).toEqual({ what: "loop version", detail: "triage v3" });
+  expect(describe(sampleOf("subloop.child", { parent: "CASE-1", run: "run-1", stage: "investigate", attempt: 1, loop: "investigation", input_hash: "c", depth: 1, floor: "TLP:AMBER" }), ref))
+    .toEqual({ what: "child of", detail: "CASE-1 · investigate" });
+  expect(describe(sampleOf("subloop.started", { stage: "investigate", attempt: 1, child: "CASE-2", loop: "investigation", loop_hash: "h", input_hash: "c", inputs: lock, depth: 1 }), ref))
+    .toEqual({ what: "sub-loop started", detail: "investigation as CASE-2" });
+  expect(describe(sampleOf("subloop.finished", { stage: "investigate", attempt: 1, child: "CASE-2", child_run: "run-1", head: { seq: 8, hash: "d" }, outcome: "published", output_hash: "e", output: lock, cards: [] }), ref))
+    .toEqual({ what: "sub-loop finished", detail: "CASE-2 · published" });
+  // read loosely: a missing or odd field is left out, never thrown on
+  expect(describe(sampleOf("loop.bound", { loop: 7 }), ref)).toEqual({ what: "loop version", detail: "7" });
+  expect(describe(sampleOf("subloop.child", {}), ref).what).toBe("child of");
+});

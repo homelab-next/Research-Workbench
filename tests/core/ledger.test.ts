@@ -304,7 +304,7 @@ test("ENTRY_TYPES lists every entry type once", () => {
   expect(new Set(ENTRY_TYPES).size).toBe(ENTRY_TYPES.length);
   expect(ENTRY_TYPES).toContain("case.created");
   expect(ENTRY_TYPES).toContain("setting.changed");
-  expect(ENTRY_TYPES.length).toBe(80);
+  expect(ENTRY_TYPES.length).toBe(88);
   expect(ENTRY_TYPES).toContain("review.conflict");
   expect(ENTRY_TYPES).toContain("review.ruled");
   expect(ENTRY_TYPES).toContain("route.finished");

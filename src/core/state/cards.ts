@@ -74,6 +74,8 @@ export function applyCards(s: CaseState, entry: Entry): CaseState {
       if (c.person !== undefined && !(entry.actor.kind === "human" && c.made_by === "human" && c.kind === "note" && c.query === null && c.source === null
         && c.row_count === 0 && c.rows.length === 0 && c.columns.length === 0 && c.coverage === null && c.empty === null && c.event_time === null
         && c.observed === undefined && c.extracted === undefined)) return recordSkip(s, entry, "a person's statement is a person's");
+      // a card from another case is a note the workbench made from what that case gave back
+      if (c.from !== undefined && entry.actor.kind !== "system") return recordSkip(s, entry, "a card from another case is recorded by the workbench");
       if (Object.hasOwn(s.cards, c.id)) return s;
       const state: CardState = {
         ...cardFields(c), place: "incoming", lane: null, pinned: false,

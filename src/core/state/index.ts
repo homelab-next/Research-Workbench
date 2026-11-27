@@ -1,11 +1,13 @@
 import type { Entry } from "../types";
 import { apply } from "./apply";
 import { initialArchive } from "./archive";
+import { initialLoop } from "./loops";
 import type { CaseState, IdKind } from "./types";
 
 export { apply, applyCase, countedKind, REDUCERS } from "./apply";
 export type { Reducer } from "./apply";
 export { applyArchive, initialArchive, unloadDue } from "./archive";
+export { applyLoops, depthOf, initialLoop, loopOf, subloopKey } from "./loops";
 export { applyRun, runUsage, stageFinishedCounts, subgoalAnswered } from "./run";
 export { applyAnalysis, blockers, latestDraft, notedExceptions, openMustAddress, proposalMarking, publishable } from "./analysis";
 export { applyCards, cardLocation } from "./cards";
@@ -17,7 +19,7 @@ export {
   reopensOverrule, runQuestions, unheld, waitingOn,
 } from "./person";
 export type { GateChange } from "./person";
-export { cardFields, caseFields, isCard, isCaseCreated, isCoverage, isExtractedValue, isObservable, isObserved, isPersonStatement, isTimeWindow } from "./shapes";
+export { cardFields, caseFields, isCard, isCardOrigin, isCaseCreated, isCoverage, isExtractedValue, isObservable, isObserved, isPersonStatement, isTimeWindow } from "./shapes";
 export * from "./observed";
 export * from "./types";
 
@@ -61,6 +63,7 @@ export function initial(): CaseState {
     conversation: [],
     agent_usage: { usage: { input: 0, output: 0, reasoning: 0 }, calls: 0 },
     archive: initialArchive(),
+    loop: initialLoop(),
   };
 }
 
