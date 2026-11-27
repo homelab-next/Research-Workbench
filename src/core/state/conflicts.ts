@@ -124,6 +124,9 @@ function ruledValue(c: ConflictState): { present: boolean; value: string | null 
   }
 }
 
+/** True for a ruling that keeps a value (it follows one of the two reviewers): what can take an earlier overrule's place. */
+export const keepsValue = (c: ConflictState): boolean => ruledValue(c) !== null;
+
 /** Whether the draft holds the ruling on its finding; null when the ruling keeps no value to check. */
 export function holds(product: Product, c: ConflictState): boolean | null {
   const want = ruledValue(c);

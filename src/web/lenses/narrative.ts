@@ -715,7 +715,7 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
     draftBox.hidden = d === null;
     paint(questionsBox, [s.questions, s.run, s.cards, ro(), inflightVersion], () => questionsView(s));
     paint(headBox, [d, s.published, store.id, bundlesVersion], () => (d === null ? [] : headView(s, d)));
-    paint(bodyBox, edit !== null ? [edit] : [d, s.cards, s.overrules, ro(), inflightVersion, ui.ref.likelihood], () => (d === null ? [h("p", { class: "empty" }, "No draft yet.")] : edit !== null ? [edit.el] : readBody(s, d)));
+    paint(bodyBox, edit !== null ? [edit] : [d, s.cards, s.overrules, s.conflicts, ro(), inflightVersion, ui.ref.likelihood], () => (d === null ? [h("p", { class: "empty" }, "No draft yet.")] : edit !== null ? [edit.el] : readBody(s, d)));
     if (focusOverrule !== null && d !== null && edit === null) {
       const at = focusOverrule;
       const box = [...bodyBox.querySelectorAll("[data-finding]")].find((n) => n.getAttribute("data-finding") === at);

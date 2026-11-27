@@ -104,7 +104,8 @@ export function overrule(session: CaseSession, deps: Pick<EngineDeps, "pipeline"
     const was = Object.hasOwn(state.overrules, finding) ? state.overrules[finding]! : null;
     const o: Overrule = { finding, draft_hash, likelihood, confidence, stays, note, by: actor.id, seq: state.seq + 1, ts: state.head_ts ?? "" };
     const withdrawing = likelihood === null && confidence === null && stays === null;
-    const wasActive = was !== null && (was.likelihood !== null || was.confidence !== null || was.stays !== null);
+    // an overrule a later ruling on the finding has replaced is not active: there is nothing to withdraw, and the same values may be set again
+    const wasActive = was !== null && activeOverrules(state).some((x) => x.finding === finding);
     if (withdrawing && !wasActive) throw new OverruleRefused(`there is no overrule of ${finding} to withdraw`);
     if (wasActive && same(was, o)) throw new OverruleRefused(`that is already the overrule of ${finding}`);
     const { run } = state;

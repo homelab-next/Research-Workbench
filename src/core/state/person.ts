@@ -1,7 +1,7 @@
 // The person (slice 8): questions an agent puts to them, their answers, their statements, and their overrules. Browser-safe: imports only src/core.
 import { CONFIDENCES } from "../types";
 import type { Card, Entry, PersonBasis, Product, Question } from "../types";
-import { holds, namesFinding, ruledFindings, rulingText } from "./conflicts";
+import { holds, keepsValue, namesFinding, ruledFindings, rulingText } from "./conflicts";
 import { has, isBool, isObj, isOneOf, isStr, isStrList, isStrOrNull, malformed, recordSkip } from "./guards";
 import { isObservable } from "./shapes";
 import type { CaseState, Overrule, OverruleState, QuestionState } from "./types";
@@ -102,9 +102,13 @@ function overruleOf(o: OverruleState): Overrule {
   return { finding, draft_hash, likelihood, confidence, stays, note, by, seq, ts };
 }
 
-/** The overrules that set something (not withdrawn), in the order they were last made. */
+/**
+ * The overrules that set something (not withdrawn), in the order they were last made. An overrule that a ruling on the same finding, made after it
+ * and keeping a value, has replaced is left out: the person's later act holds (final review I2; ruledFindings leaves out the other way round).
+ */
 export const activeOverrules = (state: Readonly<CaseState>): OverruleState[] =>
-  Object.values(state.overrules).filter((o) => !withdrawn(o)).sort((a, b) => a.seq - b.seq);
+  Object.values(state.overrules).filter((o) => !withdrawn(o) && !Object.values(state.conflicts).some((c) => c.finding === o.finding && c.ruling !== null && c.ruling.seq > o.seq && keepsValue(c)))
+    .sort((a, b) => a.seq - b.seq);
 
 /** "likelihood almost certain, confidence high" | "must stay" | "dropped" | "overrule withdrawn". */
 export function overruleSays(o: Overrule): string {

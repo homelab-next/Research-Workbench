@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { apply, blockers, fold, initial, latestDraft, notedExceptions, publishable, revisedRulingReason, ruledFindings, runUsage } from "../../src/core/state";
+import { activeOverrules, apply, blockers, fold, initial, latestDraft, notedExceptions, publishable, revisedRulingReason, ruledFindings, runUsage, unheld } from "../../src/core/state";
 import type { CaseState } from "../../src/core/state";
 import type { Challenge, Draft, Entry, Product, StageDef } from "../../src/core/types";
 import { EntryBuilder } from "../helpers/entries";
@@ -607,6 +607,30 @@ test("an overrule of a ruled finding, made after the ruling, takes its place: ru
   b.add("finding.overruled", { finding: "f1", draft_hash: "h2", likelihood: null, confidence: null, stays: null, note: "I was wrong." }, { actor: person });
   s = fold(b.entries);
   expect([...ruledFindings(s).keys()]).toEqual(["f1"]);
+  expect(s.skipped).toEqual([]);
+});
+
+test("a ruling made after an overrule of the same finding takes its place: the person's later act wins, so a draft can hold it (final review I2)", () => {
+  const b = ruledRun();
+  b.add("review.ruled", { conflict: "k1", follow: "evaluate", note: "" }, { actor: person });
+  b.add("finding.overruled", { finding: "f1", draft_hash: "h2", likelihood: "very likely", confidence: null, stays: null, note: "It is the TV I installed." }, { actor: person });
+  // the overrule came after the first ruling: it holds, and the ruling is left out
+  let s = fold(b.entries);
+  expect(activeOverrules(s).map((o) => o.finding)).toEqual(["f1"]);
+  expect([...ruledFindings(s).keys()]).toEqual([]);
+  // the person revises the ruling to keep likely: now the ruling holds, and the overrule is left out
+  b.add("review.ruled", { conflict: "k1", follow: "challenge", note: "" }, { actor: person });
+  s = fold(b.entries);
+  expect(activeOverrules(s)).toEqual([]);
+  expect([...ruledFindings(s).keys()]).toEqual(["f1"]);
+  expect(unheld(s, withFinding("likely"))).toEqual([]);
+  expect(unheld(s, withFinding("very likely"))).toEqual(["The draft does not hold your ruling on f1 (follow Challenge: keep likely)"]);
+  // a ruling that keeps no value (a note only) does not take an overrule's place
+  b.add("finding.overruled", { finding: "f1", draft_hash: "h2", likelihood: "almost certain", confidence: null, stays: null, note: "No: it is the TV." }, { actor: person });
+  b.add("review.ruled", { conflict: "k1", follow: null, note: "both have a point" }, { actor: person });
+  s = fold(b.entries);
+  expect(activeOverrules(s).map((o) => o.likelihood)).toEqual(["almost certain"]);
+  expect(unheld(s, withFinding("almost certain"))).toEqual([]);
   expect(s.skipped).toEqual([]);
 });
 
