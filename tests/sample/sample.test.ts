@@ -75,7 +75,7 @@ test("the generator is deterministic", () => {
   makeSampleData(a);
   makeSampleData(b);
   const files = readdirSync(a).filter((f) => /\.(?:jsonl|csv|json)$/.test(f));
-  expect(files.sort()).toEqual(["assets.csv", "dns.jsonl", "leases.csv", "reputation.json", "signins.jsonl"]);
+  expect(files.sort()).toEqual(["assets.csv", "dns.jsonl", "leases.csv", "reputation.json", "signins.jsonl", "wifi.jsonl"]);
   for (const f of files) expect(readFileSync(join(a, f)).equals(readFileSync(join(b, f)))).toBe(true);
   const rows = (p: string): unknown[] => {
     const db = new Database(p, { readonly: true });
@@ -88,14 +88,14 @@ test("the generator is deterministic", () => {
 
 test("the sample root loads with no problems", () => {
   expect(loadRegistry([{ path: root, trusted: true, credentials: [] }]).problems).toEqual([]);
-  expect(registry.sources().map((x) => x.id).sort()).toEqual(["assets", "dns-logs", "flows", "leases", "reputation", "signins"]);
-  expect(registry.pivots()).toHaveLength(8);
+  expect(registry.sources().map((x) => x.id).sort()).toEqual(["assets", "dns-logs", "flows", "leases", "reputation", "signins", "wifi"]);
+  expect(registry.pivots()).toHaveLength(9);
   expect(registry.types().map((t) => t.id).sort()).toEqual(["account", "address", "asset", "domain", "host", "verdict"]);
 });
 
 test("the sample holds only reserved addresses and example domains", () => {
   const data = join(root, "data");
-  const text = ["dns.jsonl", "signins.jsonl", "assets.csv", "leases.csv", "reputation.json"].map((f) => readFileSync(join(data, f), "utf8"));
+  const text = ["dns.jsonl", "signins.jsonl", "assets.csv", "leases.csv", "reputation.json", "wifi.jsonl"].map((f) => readFileSync(join(data, f), "utf8"));
   const db = new Database(join(data, "flows.sqlite"), { readonly: true });
   try {
     for (const r of db.query("select src, dst from flows").all() as { src: string; dst: string }[]) text.push(`${r.src}\n${r.dst}`);

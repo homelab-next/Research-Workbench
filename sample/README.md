@@ -16,10 +16,19 @@ later that workstation starts calling `198.51.100.77` every ten minutes. Start f
 
 ## Pivots
 
-The five windowed pivots in `pivots.yaml` declare `times`, the columns of their result that say when a value was seen: four
+The six windowed pivots in `pivots.yaml` declare `times`, the columns of their result that say when a value was seen: four
 return each value with its first and last time and a count (`times: { first: first_seen, last: last_seen, count: events }`),
-and the flows pivot returns one row per connection with its time (`times: { at: ts }`). The workbench reads those columns from
+and the flows and WiFi pivots return one row per event with its time (`times: { at: ts }`). The workbench reads those columns from
 every row of the result and records on the card what was observed and when, which the Timeline and the Graph draw from.
+
+## Field notes: the WiFi log
+
+`sources/wifi.yaml` is a wireless controller's log. Its `message` column says what it `reveals` (the host name a device announced and
+the access point it joined) and has two `extract` rules (`device`, an asset, and `access_point`, a host). A second story is planted in
+it: a device joined the WiFi at `192.0.2.61`, an address no lease names, and only the connection message says it was
+`ws-17.example.net`. A card from `address_to_wifi` carries that value as `extracted`, Research sends the work back to Plan
+because it opens `asset_to_accounts` to an open sub-goal, and the planner can follow it. `tests/sample/glean-acceptance.test.ts`
+scripts that run.
 
 ## Playbook and inventories
 

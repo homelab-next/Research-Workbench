@@ -123,6 +123,16 @@ export function makeSampleData(dir: string): void {
   writeFileSync(join(dir, "assets.csv"), csvText(["asset", "address", "owner", "role"], all.map(h => [h.asset, h.address, h.owner, h.role])));
   writeFileSync(join(dir, "leases.csv"), csvText(["address", "asset", "since"], all.filter(h => h.address !== "192.0.2.17").map((h, i) => [h.address, h.asset, `2026-0${1 + (i % 9)}-0${1 + (i % 8)}`])));
 
+  // wifi: a device that joined the wireless network at an address no lease names; only the connection message says which device it was
+  const WIFI_ADDRESS = "192.0.2.61";
+  const wifi = [
+    { ts: "2026-11-18T08:02:11.000Z", address: WIFI_ADDRESS, ap: "ap-3", message: "ws-17.example.net 7c:01 connected to ap-3. Connection Info: band=5GHz rssi=-58" },
+    { ts: "2026-11-18T12:40:05.000Z", address: WIFI_ADDRESS, ap: "ap-3", message: "7c:01 disconnected from ap-3. Reason: idle" },
+    { ts: "2026-11-19T08:05:47.000Z", address: WIFI_ADDRESS, ap: "ap-4", message: "ws-17.example.net 7c:01 connected to ap-4. Connection Info: band=5GHz rssi=-61" },
+    { ts: "2026-11-19T09:15:00.000Z", address: "192.0.2.62", ap: "ap-4", message: "pr-2.example.net 0d:44 connected to ap-4. Connection Info: band=2.4GHz rssi=-70" },
+  ];
+  writeFileSync(join(dir, "wifi.jsonl"), jsonl(wifi));
+
   const reputation: Record<string, { verdict: string; first_seen: string }> = { [BEACON_TARGET]: { verdict: "suspicious", first_seen: "2026-11-19" } };
   for (const s of SERVICES) reputation[s] = { verdict: "benign", first_seen: "2025-03-02" };
   writeFileSync(join(dir, "reputation.json"), JSON.stringify(reputation, null, 2) + "\n");

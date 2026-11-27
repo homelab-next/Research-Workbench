@@ -73,7 +73,7 @@ test("list_sources and describe_source never show where a source is or how to si
   const text = JSON.stringify([listed.view, ...described.map((d) => d.view)]);
   for (const key of ['"location"', '"credential"', '"user"', '"root"', '"dir"', "127.0.0.1"]) expect(text).not.toContain(key);
   const sources = (listed.view as { sources: { id: string; free: boolean; adhoc: boolean }[] }).sources;
-  expect(sources.map((s) => s.id).sort()).toEqual(["assets", "dns-logs", "flows", "leases", "reputation", "signins"]);
+  expect(sources.map((s) => s.id).sort()).toEqual(["assets", "dns-logs", "flows", "leases", "reputation", "signins", "wifi"]);
   expect(sources.find((s) => s.id === "reputation")!.free).toBe(false);
   const flows = described[1]!.view as { tables: { name: string }[]; pivots: { id: string; free: boolean }[]; limits: { max_rows: number } };
   expect(flows.tables.map((t) => t.name)).toEqual(["flows"]);

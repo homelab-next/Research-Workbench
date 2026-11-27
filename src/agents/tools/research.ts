@@ -38,6 +38,8 @@ export function resultOf(ctx: ToolContext, r: RunQueryResult, pivot: PivotManife
         ...none, ...(reused === null ? {} : { reused: { query: reused.reused.query, at: reused.reused.at } }), status: r.status, outcome: r.outcome, card: card === null ? null : [cardBrief(ctx.deps.registry, card)], rows: r.rows, coverage: scrubCoverage(ctx.deps.registry, r.coverage), empty,
         columns: r.columns, data: r.data.slice(0, VIEW_ROWS).map((row) => row.map(previewCell)),
         found: pivot === null ? null : yielded(pivot, r, ctx.deps.observables).map((o) => o.value),
+        // the values the field notes' rules pulled out of the cells, by code: things to pivot from
+        ...(card?.extracted === undefined ? {} : { extracted: card.extracted.map((x) => ({ ...x })) }),
       };
       const said = describe(r, empty);
       return { ok: true, summary: reused === null ? said : `${reuseNote(reused)} · ${said}`, view: json(view), marking: source === null ? null : source.marking };

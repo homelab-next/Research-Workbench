@@ -76,3 +76,14 @@ pivots:
     query: lookup
     empty_means: not-seen
     yields: { verdict: verdict }
+  - id: address_to_wifi
+    title: WiFi messages for the address
+    answers: Which device held the address on the wireless network, and which access point it joined.
+    from: address
+    to: host
+    source: wifi
+    query: "select ts, ap, message from wifi where address = {value} and ts >= {window.from} and ts < {window.to} order by ts"
+    needs_window: true
+    empty_means: not-seen
+    yields: { ap: host }
+    times: { at: ts }

@@ -1,0 +1,30 @@
+kind: source
+id: wifi
+title: WiFi controller log
+connector: files
+location: ../data
+marking: "TLP:GREEN"
+where: machine
+purpose: Records which devices joined which wireless access points, and when.
+answers:
+  - which device held this address on the wireless network
+  - which access point did the device join
+quality: The controller logs every association it handles; the device's host name is given only inside the message text.
+tables:
+  - name: wifi
+    about: One row per message from the wireless controller.
+    file: wifi.jsonl
+    format: jsonl
+    time_column: ts
+    columns:
+      - { name: ts, meaning: When the controller logged the message. }
+      - { name: address, type: address, meaning: The address the device held. }
+      - { name: ap, type: host, meaning: The access point that logged the message. }
+      - name: message
+        meaning: The controller's message, as free text.
+        reveals: >-
+          A connection message names the host name the device announced, the last two bytes of its hardware address, and the access
+          point it joined, as "<host> <xx:xx> connected to <access point>. Connection Info: ...". A disconnection message names neither.
+        extract:
+          - { id: device, type: asset, pattern: '^(\S+) [0-9a-f]{2}:[0-9a-f]{2} connected to ' }
+          - { id: access_point, type: host, pattern: ' connected to (\S+?)\. Connection Info:' }
