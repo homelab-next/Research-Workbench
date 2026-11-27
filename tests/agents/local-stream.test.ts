@@ -144,6 +144,19 @@ test("tool calls split across chunks are reassembled", async () => {
   ] });
 });
 
+test("tool calls sent with no index are told apart by their id; a piece with no id continues the call before it", async () => {
+  const s = sseStandin([{ chunks: [
+    delta({ role: "assistant", tool_calls: [{ id: "call-1", type: "function", function: { name: "list_sources", arguments: "{\"why\": " } }] }),
+    delta({ tool_calls: [{ function: { arguments: "\"to see\"}" } }] }),
+    delta({ tool_calls: [{ id: "call-2", type: "function", function: { name: "list_cards", arguments: "{\"why\": \"and these\"}" } }] }),
+    delta({}, "tool_calls"),
+  ] }]);
+  expect(await provider(s.url).turn(req())).toMatchObject({ kind: "answer", stop: "tool_calls", tool_calls: [
+    { id: "call-1", name: "list_sources", arguments: "{\"why\": \"to see\"}" },
+    { id: "call-2", name: "list_cards", arguments: "{\"why\": \"and these\"}" },
+  ] });
+});
+
 test("a looping reasoning stream is cut early, with the repeated text and what was received", async () => {
   // 40000 repeats: about 6 MB if it were read to the end
   const s = sseStandin([{ chunks: looping("reasoning_content", 40000, [delta({ role: "assistant", content: "" })]), per_pull: 20 }]);

@@ -232,6 +232,8 @@ export class LocalProvider implements Provider {
       for (const where of ["reasoning", "content"] as const) {
         const hit = guards[where].feed(added[where]);
         if (hit === null) continue;
+        // up to SHOWN_CHARS of the model's own text go into this message, and so into the retry's note and the stage's reason: a person reads
+        // them there; no pack is built from them. It is scrubbed and checked for an echo like the rest of the reply.
         const message = this.#redact(`the model repeated itself in ${where === "reasoning" ? "its reasoning" : "its reply"}: "${oneLine(hit)}"`);
         const parsed = { ...asm.result({ finish: "loop", reasoning: false }), error: message };
         const raw = enc.encode(JSON.stringify(parsed));

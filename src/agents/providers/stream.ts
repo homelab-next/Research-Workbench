@@ -50,6 +50,8 @@ export class StreamAssembly {
   #reasoningAlt: string | null = null;
   #refusal: string | null = null;
   readonly #calls = new Map<number, CallParts>();
+  /** The key of the call the latest tool-call piece went to. */
+  #lastCall: number | null = null;
   #finish: Json = null;
   #usage: Json | undefined;
 
@@ -78,7 +80,7 @@ export class StreamAssembly {
     if (Array.isArray(d.tool_calls)) {
       d.tool_calls.forEach((c: unknown, at: number) => {
         if (!isPlainObject(c)) return;
-        const index = typeof c.index === "number" && Number.isInteger(c.index) ? c.index : at;
+        const index = this.#keyOf(c, at);
         const part = this.#calls.get(index) ?? { id: "", type: "function", name: "", arguments: "" };
         if (typeof c.id === "string" && c.id !== "" && part.id === "") part.id = c.id;
         if (typeof c.type === "string" && c.type !== "") part.type = c.type;
@@ -88,9 +90,23 @@ export class StreamAssembly {
           if (typeof f.arguments === "string") part.arguments += f.arguments;
         }
         this.#calls.set(index, part);
+        this.#lastCall = index;
       });
     }
     return added;
+  }
+
+  /**
+   * Which call a tool-call piece belongs to: its `index` when it has one (LM Studio and OpenAI send it). Without one, a piece with a new id
+   * starts a new call, one with a known id continues that call, and one with no id continues the call before it (or the one at its place).
+   */
+  #keyOf(c: Record<string, unknown>, at: number): number {
+    if (typeof c.index === "number" && Number.isInteger(c.index)) return c.index;
+    if (typeof c.id === "string" && c.id !== "") {
+      for (const [k, part] of this.#calls) if (part.id === c.id) return k;
+      return this.#calls.size === 0 ? at : Math.max(...this.#calls.keys()) + 1;
+    }
+    return this.#lastCall ?? at;
   }
 
   /** The reply as one completion; `finish` replaces the finish reason (a reply cut short), and `reasoning: false` leaves the reasoning out. */
