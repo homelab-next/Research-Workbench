@@ -299,3 +299,86 @@ test("a value still not looked up is offered again after the plan is accepted ag
   expect(gleanPart(s.state, s.entries(), { registry, seeker }, DEFAULT_LIMITS, [])).not.toBeNull();
   expect(followable(g.openings)).toEqual([]);
 });
+
+// --- the cap and the "new since" rule, each on its own (I6)
+
+const engine: Actor = { kind: "system", id: "engine" };
+const startRun = (): string => {
+  s.commit((_st, ids) => [{ type: "run.started", actor: human, payload: { run: ids.next("run"), pipeline: "p", pipeline_hash: "h", stages: [] } }]);
+  return s.state.run.id!;
+};
+const finish = (run: string, stage: string, reason: string, outcome: "fail" | "pass" = "fail"): void => {
+  s.commit(() => [{ type: "stage.finished", actor: engine, run, stage, payload: { stage, attempt: 1, outcome, draft_hash: null, output: null, reason } }]);
+};
+async function followableNow(): Promise<string> {
+  acceptPlan();
+  await runStep("s1", START);
+  await runStep("s2", START);
+  const reason = gleanSendBack(s.state, s.entries(), glean()!.openings, { cap: 2, stage: "research" });
+  expect(reason).toStartWith(GLEAN_PREFIX);
+  return reason!;
+}
+const sendBack = (cap = 2): string | null => gleanSendBack(s.state, s.entries(), glean()!.openings, { cap, stage: "research" });
+
+test("the cap counts this run's glean send-backs only: an earlier run's do not count", async () => {
+  const reason = await followableNow();
+  const earlier = startRun();
+  finish(earlier, "research", reason);
+  finish(earlier, "research", reason);
+  expect(sendBack()).toBeNull();
+  startRun();
+  expect(sendBack()).toStartWith(GLEAN_PREFIX);
+});
+
+test("the cap counts only Research's failures that sent back for new values", async () => {
+  const reason = await followableNow();
+  const run = startRun();
+  // another reason, another stage, a pass: none is a glean send-back
+  finish(run, "research", "no sub-goal could be answered: none");
+  finish(run, "research", "no sub-goal could be answered: none");
+  finish(run, "plan", reason);
+  finish(run, "plan", reason);
+  finish(run, "research", reason, "pass");
+  finish(run, "research", reason, "pass");
+  expect(sendBack()).toStartWith(GLEAN_PREFIX);
+  finish(run, "research", reason);
+  expect(sendBack()).toStartWith(GLEAN_PREFIX);
+  finish(run, "research", reason);
+  expect(sendBack()).toBeNull();
+});
+
+test("a value given before the plan was accepted and again after is not new, and sends no work back", async () => {
+  acceptPlan();
+  await runStep("s1", START);
+  acceptPlan();
+  await runStep("s2", START);
+  // the same message again, under a narrower window: a new card with the same values
+  const r = await runPivot(s, deps, { pivot: "address_to_wifi", value: START, window: { from: "2026-01-02T00:00:00.000Z", to: "2026-01-10T00:00:00.000Z" }, why: "w", actor: human });
+  expect(r.status).toBe("done");
+  const again = Object.values(s.state.cards).filter((c) => (c.extracted ?? []).some((x) => x.value === DEVICE));
+  expect(again).toHaveLength(2);
+  const g = glean()!;
+  expect(g.openings.find((o) => o.value === DEVICE)).toMatchObject({ card: again.sort((a, b) => a.created_seq - b.created_seq)[0]!.id, fresh: false });
+  expect(followable(g.openings)).toEqual([]);
+  expect(sendBack()).toBeNull();
+});
+
+test("a discarded card's values are not listed", async () => {
+  acceptPlan();
+  await runStep("s1", START);
+  await runStep("s2", START);
+  expect(glean()!.openings.length).toBe(2);
+  s.commit(() => [{ type: "card.discarded", actor: human, payload: { card: "c1" } }]);
+  expect(glean()!.openings).toEqual([]);
+  expect(gleanPart(s.state, s.entries(), { registry, seeker }, DEFAULT_LIMITS, [])).toBeNull();
+  expect(sendBack()).toBeNull();
+});
+
+test("a starting value is never listed", async () => {
+  s = wb.createCase({ title: "t2", asked: "a", why: "w", starting: [{ type: "address", value: START }, { type: "asset", value: DEVICE }], window: win, objective: null, marking: "TLP:GREEN" }, human);
+  acceptPlan();
+  await runStep("s1", START);
+  await runStep("s2", START);
+  expect(glean()!.openings.map((o) => o.value)).toEqual(["ap-9"]);
+  expect(sendBack()).toBeNull();
+});

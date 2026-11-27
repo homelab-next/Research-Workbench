@@ -23,6 +23,8 @@ import { researchRunner } from "../../src/pipeline/stages/research";
 import { buildPlan } from "../../src/pipeline/plans";
 import { frameOf, lastOutput } from "../../src/pipeline/stages/agent";
 import { fixture, person, START, WINDOW } from "../helpers/tools-fixture";
+import { runPivot } from "../../src/modules/pivots";
+import { GLEAN_PREFIX, gleanOf, gleanSendBack } from "../../src/pipeline/glean";
 import type { Fixture } from "../helpers/tools-fixture";
 
 let f: Fixture;
@@ -878,4 +880,23 @@ test("a free-text want is refused by validation with the list of allowed types; 
   const sent = formats.filter((x) => x.actor === "planner" && x.format !== null).map((x) => subgoalOf(x.format!.schema).properties!.want!.enum);
   expect(sent).toEqual([SAMPLE_TYPES]);
   expect(ofType("plan.proposed")).toEqual([]);
+});
+
+test("a Research pass Assemble sent back for a question never sends the work back for new values", async () => {
+  let assembled = 0;
+  const assemble: StageRunner = async (env): Promise<StageEnd> => {
+    if (assembled++ > 0) return { kind: "stopped" };
+    // a lookup made while assembling gives a new device no query has used, then the analyst asks for research
+    const r = await runPivot(env.session, f.sample.deps, { pivot: "address_to_wifi", value: "192.0.2.62", window: WINDOW, why: "w", actor: person });
+    expect(r.status).toBe("done");
+    analystAsks(env, ["Who owns the asset?"]);
+    return { kind: "finished", outcome: "fail", draft_hash: null, output: null, reason: "needs more research" };
+  };
+  await researched({ "researcher-g1": G1, "researcher-g2": G2, "researcher-r1": [say({ outcome: "answered", found: [], note: "owner found" })] }, { steps: ["s1", "s2"] }, { runners: { assemble } });
+  // the value would send the work back from a pass of its own
+  const g = gleanOf(f.s.state, f.s.entries(), { registry: f.sample.registry, seeker: f.sample.seeker }, DEFAULT_LIMITS)!;
+  expect(gleanSendBack(f.s.state, f.s.entries(), g.openings, { cap: 2, stage: "research" })).toStartWith(GLEAN_PREFIX);
+  // but the pass Assemble sent back answered its question and passed
+  expect(ofType("stage.sent_back").map((e) => [e.payload.from, e.payload.to])).toEqual([["assemble", "research"]]);
+  expect(finished("research").map((e) => [e.payload.outcome, e.payload.reason])).toEqual([["pass", null], ["pass", null]]);
 });

@@ -37,7 +37,7 @@ export interface Served {
 }
 
 /** The sample as a trusted root, a workbench, compose and an app, all in process; requests go straight to app.handle with the right Host and Origin. */
-export async function served(opts: { role?: Role; listen?: boolean; credential?: { name: string; value: string }; before?: (root: string) => void } = {}): Promise<Served> {
+export async function served(opts: { role?: Role; listen?: boolean; credential?: { name: string; value: string }; before?: (root: string) => void; config?: Partial<Config> } = {}): Promise<Served> {
   const dir = mkdtempSync(join(tmpdir(), "served-"));
   const sample = sampleRoot(dir);
   const cred = opts.credential;
@@ -50,6 +50,7 @@ export async function served(opts: { role?: Role; listen?: boolean; credential?:
     ...loadConfig({ env: {}, home: dir, repoRoot: dir }),
     data_dir: join(dir, "wb"), role: opts.role ?? "analyst",
     roots: [{ path: sample.root, trusted: true, credentials: cred === undefined ? [] : [cred.name] }],
+    ...opts.config,
   };
   const wb = Workbench.open(config.data_dir, { onError: () => {} });
   let host = `127.0.0.1:${PRETEND_PORT}`;
