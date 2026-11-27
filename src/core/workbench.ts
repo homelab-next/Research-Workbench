@@ -13,7 +13,7 @@ import { ignoreThrow, logToStderr } from "./deliver";
 import { Ledger, ledgerSchemaProblem } from "./ledger";
 import { Refused } from "./refused";
 import { CaseSession } from "./session";
-import { caseFields, fold, isCard, isCaseCreated, unloadDue } from "./state";
+import { builderMarking, builderOpen, caseFields, fold, isCard, isCaseCreated, unloadDue } from "./state";
 import type { CaseState, RunState } from "./state";
 import { CaseStoreFolder } from "./store";
 import type { StoreListing } from "./store";
@@ -54,6 +54,8 @@ export class CaseRefused extends Refused {
   }
 }
 
+/** A builder session, as the Loops page lists it: what it is about, its marking now, and what waits for the person. */
+export interface BuilderSummary { id: string; title: string; loop: string | null; marking: Marking; created_ts: string; open_changes: number; open_probes: number; turns: number }
 export interface NewCase { title: string; asked: string; why: string; starting: Observable[]; window: TimeWindow; objective: string | null; marking: Marking }
 export interface CaseSummary { id: string; title: string; marking: Marking; created_ts: string; run_status: RunState["status"]; phase: string | null; incoming: number; kept: number;
   /** Jobs with status running: a job left so by a stopped process (a playbook started from the Pivot panel, say) has no run to say so. */
@@ -83,6 +85,12 @@ export interface WorkbenchOptions {
   /** For tests: called before each step of an unload with the temporary file's path; a throw is that step failing. */
   beforeUnloadStep?: (step: UnloadStep, part: string) => void;
 }
+
+/** A builder session's id; `CASE_ID` never matches one, so nothing that walks the cases meets a builder session. */
+export const BUILD_ID = /^BUILD-[1-9][0-9]{0,8}$/;
+/** The folder of the builder sessions, under the data folder. */
+const BUILDERS = "builders";
+const BUILDER_ASKED = "Build or change a loop";
 
 /** The highest case number this data folder has given out or taken in, kept so an id is never given twice. */
 const MARK_FILE = ".high-water";
@@ -311,6 +319,8 @@ export class Workbench {
   private readonly lockKey: string;
   private closed = false;
   private readonly sessions: Record<string, CaseSession> = Object.create(null) as Record<string, CaseSession>;
+  /** Builder sessions held open, by BUILD-N: kept apart from the cases, so nothing that walks the cases meets one. */
+  private readonly builders: Record<string, CaseSession> = Object.create(null) as Record<string, CaseSession>;
   /** The cases an unload is packing, with their state as of case.unloaded. */
   private readonly unloading = new Map<string, { state: Readonly<CaseState>; created_ts: string }>();
   /** What checkedStore learned of each store file, so a file that has not changed is not read again. */
@@ -342,6 +352,7 @@ export class Workbench {
       mkdirSync(join(dataDir, "cases"), { recursive: true });
       mkdirSync(join(dataDir, "blobs"), { recursive: true });
       sweep(join(dataDir, "cases"), onError);
+      if (existsSync(join(dataDir, BUILDERS))) sweep(join(dataDir, BUILDERS), onError);
       const chain = Ledger.open(join(dataDir, "workbench.sqlite"), "workbench", { ...(opts.now ? { now: opts.now } : {}), onError });
       return new Workbench(dataDir, chain, opts, onError, lock, held);
     } catch (err) {
@@ -460,6 +471,125 @@ export class Workbench {
     return out;
   }
 
+  /**
+   * A builder session: a case-shaped ledger under <data>/builders/BUILD-N/. `loop` is the loop it is about (recorded as case.loop_set), null for
+   * the Loops page's. Its case.created has asked "Build or change a loop", no starting values and an open window. Throws TypeError, having
+   * written nothing, for an unknown marking, a loop that is not a non-empty string or null, or an agent as the actor.
+   */
+  createBuilder(input: { loop: string | null; marking: Marking }, actor: Actor): CaseSession {
+    this.open();
+    if (!isMarking(input?.marking)) throw new TypeError(`unknown marking ${JSON.stringify(input?.marking)}`);
+    const loop = input.loop;
+    if (loop !== null && !(typeof loop === "string" && loop !== "")) throw new TypeError("a builder session's loop is a non-empty string or null");
+    if (actor?.kind === "agent") throw new TypeError("a builder session is started by a person or the workbench");
+    mkdirSync(join(this.dataDir, BUILDERS), { recursive: true });
+    const n = Math.max(0, ...this.builderNumbers(), this.readMark(BUILDERS)) + 1;
+    if (n > MAX_CASE_NUMBER) throw new CaseRefused(`every builder id up to BUILD-${MAX_CASE_NUMBER} has been given out here; no new builder session can be made`);
+    const id = `BUILD-${n}`;
+    const payload = caseFields({
+      title: loop === null ? "Build a loop" : `Change the loop ${loop}`, asked: BUILDER_ASKED, why: "a builder session",
+      starting: [], window: { from: null, to: null }, objective: null, marking: input.marking, id,
+    });
+    // The mark first: once a folder can exist, its number can never be given out again.
+    this.raiseMark(n, BUILDERS);
+    let session: CaseSession;
+    try {
+      session = this.openBuilder(id, true);
+    } catch (err) {
+      rmSync(join(this.dataDir, BUILDERS, id), { recursive: true, force: true });
+      throw err;
+    }
+    try {
+      session.commit(() => {
+        const entries: EntryInput[] = [{ type: "case.created", payload, actor }];
+        if (loop !== null) entries.push({ type: "case.loop_set", payload: { loop }, actor });
+        return entries;
+      });
+    } catch (err) {
+      delete this.builders[id];
+      try {
+        session.close();
+      } finally {
+        rmSync(session.dir, { recursive: true, force: true });
+      }
+      throw err;
+    }
+    return session;
+  }
+
+  /** A builder session by its id. Throws CaseNotFoundError for an id that is not BUILD-N or has no ledger here. */
+  builder(id: string): CaseSession {
+    this.open();
+    if (typeof id !== "string" || !BUILD_ID.test(id)) throw new CaseNotFoundError(String(id));
+    if (Object.hasOwn(this.builders, id)) return this.builders[id]!;
+    if (!existsSync(join(this.dataDir, BUILDERS, id, "ledger.sqlite"))) throw new CaseNotFoundError(id);
+    return this.openBuilder(id, false);
+  }
+
+  /** A summary of every builder session, newest first. Reads each ledger and lets it go, as listCases does. */
+  listBuilders(): BuilderSummary[] {
+    this.open();
+    const out: BuilderSummary[] = [];
+    for (const n of this.builderNumbers().sort((a, b) => b - a)) {
+      const id = `BUILD-${n}`;
+      const path = join(this.dataDir, BUILDERS, id, "ledger.sqlite");
+      if (!existsSync(path)) continue;
+      try {
+        let state: Readonly<CaseState>;
+        let created_ts: string;
+        if (Object.hasOwn(this.builders, id)) {
+          const session = this.builders[id]!;
+          state = session.state;
+          created_ts = session.entries(0, 1)[0]?.ts ?? "";
+        } else {
+          const ledger = Ledger.open(path, id, { onError: this.onError });
+          try {
+            const entries = ledger.read();
+            state = fold(entries);
+            created_ts = entries[0]?.ts ?? "";
+          } finally {
+            ledger.close();
+          }
+        }
+        if (state.meta === null) continue;
+        const open = builderOpen(state);
+        out.push({
+          id, title: state.meta.title, loop: state.loop.id, marking: builderMarking(state), created_ts,
+          open_changes: open.changes.length, open_probes: open.probes.length, turns: state.conversation.length,
+        });
+      } catch (err) {
+        this.reportError(new Error(`builder session ${id} could not be loaded: ${err instanceof Error ? err.message : String(err)}`, { cause: err }));
+      }
+    }
+    return out;
+  }
+
+  private builderNumbers(): number[] {
+    const dir = join(this.dataDir, BUILDERS);
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir).filter((n) => BUILD_ID.test(n)).map((n) => Number(n.slice(6)));
+  }
+
+  /** Opens a builder session's ledger and keeps it. A builder session is never unloaded, so there is nothing to recover. */
+  private openBuilder(id: string, create: boolean): CaseSession {
+    const dir = join(this.dataDir, BUILDERS, id);
+    if (create) mkdirSync(dir, { recursive: true });
+    const ledger = Ledger.open(join(dir, "ledger.sqlite"), id, { ...(this.now ? { now: this.now } : {}), onError: this.onError });
+    try {
+      const session: CaseSession = new CaseSession({
+        id, dir, ledger, blobs: new BlobStore(join(dir, "blobs")), onError: this.onError,
+        onClose: () => {
+          if (this.builders[id] === session) delete this.builders[id];
+        },
+      });
+      this.builders[id] = session;
+      return session;
+    } catch (err) {
+      ledger.close();
+      throw err;
+    }
+  }
+
   /** The loaded case whose subloop.child names exactly this link; null when there is none. Reads ledgers, opens no session it does not already hold. */
   findChild(link: ChildLink): string | null {
     this.open();
@@ -533,6 +663,11 @@ export class Workbench {
     for (const id of Object.keys(this.sessions)) {
       const s = this.sessions[id]!;
       delete this.sessions[id];
+      attempt(() => s.close());
+    }
+    for (const id of Object.keys(this.builders)) {
+      const s = this.builders[id]!;
+      delete this.builders[id];
       attempt(() => s.close());
     }
     attempt(() => this.chain.close());
@@ -623,21 +758,21 @@ export class Workbench {
     return n;
   }
 
-  /** The number in cases/.high-water; 0 when there is none or it is not a number. */
-  private readMark(): number {
+  /** The number in `<folder>/.high-water` (cases/ when not given); 0 when there is none or it is not a number. */
+  private readMark(folder = "cases"): number {
     let text: string;
     try {
-      text = readFileSync(join(this.dataDir, "cases", MARK_FILE), "utf8").trim();
+      text = readFileSync(join(this.dataDir, folder, MARK_FILE), "utf8").trim();
     } catch {
       return 0;
     }
     return MARK.test(text) ? Number(text) : 0;
   }
 
-  /** Raises the mark to `n` (never lowers it): a temporary file, fsync, rename, fsync of cases/. Throws when it cannot be written. */
-  private raiseMark(n: number): void {
-    if (n <= this.readMark()) return;
-    const dir = join(this.dataDir, "cases");
+  /** Raises the mark of `folder` (cases/ when not given) to `n`, never lowering it: a temporary file, fsync, rename, fsync of the folder. Throws when it cannot be written. */
+  private raiseMark(n: number, folder = "cases"): void {
+    if (n <= this.readMark(folder)) return;
+    const dir = join(this.dataDir, folder);
     const tmp = join(dir, `${MARK_FILE}.${randomUUID()}.tmp`);
     try {
       const fd = openSync(tmp, "wx");

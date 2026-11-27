@@ -119,6 +119,19 @@ const TABLE: Record<EntryType, [string | ((p: Loose) => string), Say]> = {
   "loop.recorded": ["loop recorded", (p) => (typeof p.version === "number" ? `${str(p.loop)} v${p.version}` : str(p.loop))],
   "loop.output": ["loop output recorded", (p) => join(str(p.loop), str(p.output), str(p.case))],
   "manifest.written": ["manifest written", (p) => join(str(p.kind), str(p.id), str(p.path))],
+  "builder.proposed": ["change proposed", (p) => join(str(p.change), str(p.title), Array.isArray(p.files) ? plural(p.files.length, "files") : "")],
+  "builder.decided": [
+    (p) => (p.accepted === true ? "file of a change accepted" : p.accepted === false ? "file of a change rejected" : "decision on a change"),
+    (p) => join(str(p.change), typeof p.file === "number" ? `file ${p.file + 1}` : ""),
+  ],
+  "builder.probe_asked": ["probe asked for", (p) => {
+    const why = str(p.why);
+    return join(str(p.probe), str(p.source), str(p.pivot), str(loose(p.value).value), str(p.text), why === "" ? "" : `why: ${why}`);
+  }],
+  "builder.probe_decided": [
+    (p) => (p.approved === true ? "probe approved" : p.approved === false ? "probe rejected" : "probe decided"),
+    (p) => join(str(p.probe), str(p.outcome), str(p.detail)),
+  ],
 };
 
 /** One short plain sentence for an entry, and its particulars. Everything from the entry is text, and nothing here throws for an odd payload. */

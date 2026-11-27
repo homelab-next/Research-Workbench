@@ -1,12 +1,14 @@
 import type { Entry } from "../types";
 import { apply } from "./apply";
 import { initialArchive } from "./archive";
+import { initialBuilder } from "./builder";
 import { initialLoop } from "./loops";
 import type { CaseState, IdKind } from "./types";
 
 export { apply, applyCase, countedKind, REDUCERS } from "./apply";
 export type { Reducer } from "./apply";
 export { applyArchive, initialArchive, unloadDue } from "./archive";
+export { applyBuilder, builderMarking, builderOpen, initialBuilder } from "./builder";
 export { applyLoops, depthOf, initialLoop, loopOf, subloopKey } from "./loops";
 export { applyRun, runUsage, stageFinishedCounts, subgoalAnswered } from "./run";
 export { applyAnalysis, blockers, latestDraft, notedExceptions, openMustAddress, proposalMarking, publishable } from "./analysis";
@@ -25,7 +27,7 @@ export * from "./types";
 
 export function initial(): CaseState {
   const counters = {} as Record<IdKind, number>;
-  for (const k of ["card", "lane", "query", "job", "proposal", "challenge", "request", "call", "turn", "run", "plan", "conflict", "question"] as const) counters[k] = 0;
+  for (const k of ["card", "lane", "query", "job", "proposal", "challenge", "request", "call", "turn", "run", "plan", "conflict", "question", "change", "probe"] as const) counters[k] = 0;
   return {
     seq: 0,
     head_ts: null,
@@ -64,6 +66,7 @@ export function initial(): CaseState {
     agent_usage: { usage: { input: 0, output: 0, reasoning: 0 }, calls: 0 },
     archive: initialArchive(),
     loop: initialLoop(),
+    builder: initialBuilder(),
   };
 }
 

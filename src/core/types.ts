@@ -300,7 +300,18 @@ export interface Payloads {
     root: string; path: string; kind: string; id: string; hash: string; before: string | null;
     why: "save" | "copy" | "import" | "builder"; session: string | null;
   };
+  // a builder session's ledger only (slice 12, part B)
+  /** A change the builder proposes: `bundle` is a blob of the session, the canonical JSON of { files: [{ path, text }] }. It was checked as a save is before this entry was written. */
+  "builder.proposed": { change: string; title: string; why: string; root: string; files: ProposedFile[]; bundle: BlobRef };
+  /** A person's decision on one file of a change. `written` is the hash written, null for a rejection. */
+  "builder.decided": { change: string; file: number; accepted: boolean; written: string | null };
+  /** A probe the builder asks for: one pivot on one value, or one read-only query on one source. */
+  "builder.probe_asked": { probe: string; kind: "pivot" | "query"; source: string; pivot: string | null; value: Observable | null; text: string | null; window: TimeWindow; why: string };
+  /** A person's decision on a probe. `query` is the query that ran for it, null for a refusal or when nothing was sent. */
+  "builder.probe_decided": { probe: string; approved: boolean; query: string | null; outcome: "ran" | "refused" | "rejected"; detail: string };
 }
+/** One file of a proposed change: where it goes, what it is, and the sha256 of its text before (null for a new file) and after. */
+export interface ProposedFile { path: string; kind: string; id: string; before: string | null; after: string }
 export type EntryType = keyof Payloads;
 
 /** The fields of payload P whose type is a blob reference (or a blob reference or null). */
@@ -325,6 +336,7 @@ export const BLOB_FIELDS: { readonly [T in EntryType as BlobField<Payloads[T]> e
   "subloop.finished": ["output"],
   "loop.recorded": ["lock"],
   "loop.output": ["value"],
+  "builder.proposed": ["bundle"],
 };
 
 /** The blob reference fields of payload P that may hold null. */
@@ -349,6 +361,7 @@ export const BLOB_NULLABLE: { readonly [T in keyof typeof BLOB_FIELDS]: { readon
   "subloop.finished": { output: false },
   "loop.recorded": { lock: false },
   "loop.output": { value: false },
+  "builder.proposed": { bundle: false },
 };
 
 /** True when the typed blob position `field` of entry type `type` may hold null (or is not a typed position at all). */
@@ -383,6 +396,8 @@ export const GATES = listOf<NonNullable<StageDef["gate"]>>({ plan: true, publish
 export const STAGE_RUNS = listOf<StageDef["runs"]>({ agent: true, script: true, human: true, loop: true });
 export const STAGE_OUTCOMES = listOf<Payloads["stage.finished"]["outcome"]>({ pass: true, fail: true, declined: true });
 export const RUN_OUTCOMES = listOf<Payloads["run.finished"]["outcome"]>({ published: true, stopped: true, completed: true });
+export const PROBE_KINDS = listOf<Payloads["builder.probe_asked"]["kind"]>({ pivot: true, query: true });
+export const PROBE_OUTCOMES = listOf<Payloads["builder.probe_decided"]["outcome"]>({ ran: true, refused: true, rejected: true });
 export const SUBLOOP_OUTCOMES = listOf<Payloads["subloop.finished"]["outcome"]>({ published: true, completed: true, stopped: true });
 export const STEP_OUTCOMES = listOf<StepOutcome>({ answered: true, empty: true, partial: true, blocked: true, failed: true });
 export const JOB_KINDS = listOf<Payloads["job.started"]["kind"]>({ research: true, query: true, model: true, check: true, playbook: true });
@@ -423,6 +438,7 @@ export const ENTRY_TYPES = listOf<EntryType>({
   "case.unloaded": true, "case.unload_failed": true, "case.loaded": true,
   "case.loop_set": true, "loop.bound": true, "subloop.child": true, "subloop.started": true, "subloop.finished": true,
   "loop.recorded": true, "loop.output": true, "manifest.written": true,
+  "builder.proposed": true, "builder.decided": true, "builder.probe_asked": true, "builder.probe_decided": true,
 });
 const ENTRY_TYPE_SET: ReadonlySet<string> = new Set(ENTRY_TYPES);
 export const isEntryType = (x: unknown): x is EntryType => typeof x === "string" && ENTRY_TYPE_SET.has(x);

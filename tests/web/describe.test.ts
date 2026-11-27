@@ -112,3 +112,22 @@ test("a loop chosen, a loop version, a child's parent and a sub-loop started and
   expect(describe(sampleOf("loop.bound", { loop: 7 }), ref)).toEqual({ what: "loop version", detail: "7" });
   expect(describe(sampleOf("subloop.child", {}), ref).what).toBe("child of");
 });
+
+test("a proposed change, a decision on one of its files, a probe asked for and a probe decided give their particulars", () => {
+  const bundle = { blob: "a".repeat(64), bytes: 10 };
+  const file = { path: "loops/triage.yaml", kind: "loop", id: "triage", before: null, after: "b".repeat(64) };
+  expect(describe(sampleOf("builder.proposed", { change: "chg-1", title: "A triage loop", why: "asked", root: "sample", files: [file, file], bundle }), ref))
+    .toEqual({ what: "change proposed", detail: "chg-1 · A triage loop · 2 files" });
+  expect(describe(sampleOf("builder.decided", { change: "chg-1", file: 0, accepted: true, written: "b".repeat(64) }), ref)).toEqual({ what: "file of a change accepted", detail: "chg-1 · file 1" });
+  expect(describe(sampleOf("builder.decided", { change: "chg-1", file: 1, accepted: false, written: null }), ref)).toEqual({ what: "file of a change rejected", detail: "chg-1 · file 2" });
+  expect(describe(sampleOf("builder.probe_asked", { probe: "probe-1", kind: "pivot", source: "netflow", pivot: "flows-by-ip", value: { type: "ip", value: "192.0.2.10" }, text: null, window: { from: null, to: null }, why: "fields" }), ref))
+    .toEqual({ what: "probe asked for", detail: "probe-1 · netflow · flows-by-ip · 192.0.2.10 · why: fields" });
+  expect(describe(sampleOf("builder.probe_asked", { probe: "probe-2", kind: "query", source: "netflow", pivot: null, value: null, text: "SHOW TABLES", window: { from: null, to: null }, why: "tables" }), ref))
+    .toEqual({ what: "probe asked for", detail: "probe-2 · netflow · SHOW TABLES · why: tables" });
+  expect(describe(sampleOf("builder.probe_decided", { probe: "probe-1", approved: true, query: "q1", outcome: "ran", detail: "12 rows" }), ref)).toEqual({ what: "probe approved", detail: "probe-1 · ran · 12 rows" });
+  expect(describe(sampleOf("builder.probe_decided", { probe: "probe-1", approved: false, query: null, outcome: "rejected", detail: "not now" }), ref)).toEqual({ what: "probe rejected", detail: "probe-1 · rejected · not now" });
+  // read loosely: a missing or odd field is left out, never thrown on
+  expect(describe(sampleOf("builder.proposed", { change: 7, files: "x" }), ref)).toEqual({ what: "change proposed", detail: "7" });
+  expect(describe(sampleOf("builder.decided", {}), ref)).toEqual({ what: "decision on a change", detail: "" });
+  expect(describe(sampleOf("builder.probe_decided", {}), ref)).toEqual({ what: "probe decided", detail: "" });
+});

@@ -1,12 +1,12 @@
 import type {
   Actor, BlobRef, Card, Cost, Marking, Challenge, CheckFinding, Coverage, Draft, Finding, ModelChoice, Observable, Payloads,
-  Place, Plan, Proposal, Question, QueryPurpose, ReviewConflict, RunHold, StageDef, StepOutcome, TimeWindow,
+  Place, Plan, ProposedFile, Proposal, Question, QueryPurpose, ReviewConflict, RunHold, StageDef, StepOutcome, TimeWindow,
 } from "../types";
 
-export type IdKind = "card" | "lane" | "query" | "job" | "proposal" | "challenge" | "request" | "call" | "turn" | "run" | "plan" | "conflict" | "question";
+export type IdKind = "card" | "lane" | "query" | "job" | "proposal" | "challenge" | "request" | "call" | "turn" | "run" | "plan" | "conflict" | "question" | "change" | "probe";
 export const ID_PREFIX: Record<IdKind, string> = {
   card: "c", lane: "l", query: "q", job: "j", proposal: "p", challenge: "x",
-  request: "r", call: "t", turn: "u", run: "run-", plan: "plan-", conflict: "k", question: "ask-",
+  request: "r", call: "t", turn: "u", run: "run-", plan: "plan-", conflict: "k", question: "ask-", change: "chg-", probe: "probe-",
 };
 
 export interface CardState extends Card {
@@ -163,6 +163,20 @@ export interface LoopState {
   child_count: number;
 }
 
+/** A change the builder proposed (builder.proposed), with each file's decision by a person once made. */
+export interface BuilderChange {
+  id: string; title: string; why: string; root: string;
+  files: (ProposedFile & { decided: null | { accepted: boolean; written: string | null; by: string; seq: number } })[];
+  bundle: BlobRef; by: string; seq: number;
+}
+/** A probe the builder asked for (builder.probe_asked), with the person's decision once made. */
+export interface BuilderProbe {
+  id: string; kind: "pivot" | "query"; source: string; pivot: string | null; value: Observable | null; text: string | null; window: TimeWindow; why: string; by: string; seq: number;
+  decided: null | { approved: boolean; query: string | null; outcome: "ran" | "refused" | "rejected"; detail: string; by: string; seq: number };
+}
+/** What a builder session proposed and probed, and what the person decided (slice 12, part B). Empty in a case's ledger. */
+export interface BuilderState { changes: Record<string, BuilderChange>; probes: Record<string, BuilderProbe> }
+
 export interface CaseState {
   seq: number;
   head_ts: string | null;
@@ -211,4 +225,6 @@ export interface CaseState {
   archive: ArchiveState;
   /** The case's loop, its bound version, its parent and its children (slice 12). */
   loop: LoopState;
+  /** A builder session's changes and probes (slice 12, part B); empty for a case. */
+  builder: BuilderState;
 }

@@ -8,7 +8,7 @@ import { canonical } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
 import type { IdAllocator } from "../../src/core/ids";
 import type { CaseSession } from "../../src/core/session";
-import { blockers, fold, initialArchive, initialLoop, latestDraft, publishable, runUsage, unloadDue } from "../../src/core/state";
+import { blockers, builderMarking, builderOpen, fold, initialArchive, initialBuilder, initialLoop, latestDraft, publishable, runUsage, unloadDue } from "../../src/core/state";
 import type { CaseState } from "../../src/core/state";
 import type { Actor, Draft, EntryInput, Plan, Product, StageDef } from "../../src/core/types";
 import { verifyCase } from "../../src/core/verify";
@@ -431,6 +431,67 @@ test("a ledger holding a loop set, a bound run, a child started and finished wit
   wb.close();
   wb = Workbench.open(dir, { onError });
   expect(wb.session(s.id).state).toEqual(final);
+  expect(verifyCase(s.dir)).toMatchObject({ entries: all.length, firstBad: null, blobs: { bad: [] } });
+  expect(errors).toEqual([]);
+});
+
+// ---------- slice 12, part B: builder sessions ----------
+
+test("a case ledger with none of the four entries folds with an empty builder state and its other fields as they were", () => {
+  const { s, live } = wholeRun();
+  const state = fold(s.entries());
+  expect(state.builder).toEqual(initialBuilder());
+  expect(state.counters.change).toBe(0);
+  expect(state.counters.probe).toBe(0);
+  expect(state.skipped).toEqual([]);
+  expect(state).toEqual(live[state.seq]!);
+  expect(errors).toEqual([]);
+});
+
+test("a builder session's ledger folds the same at every entry as the live session saw it", () => {
+  const s = wb.createBuilder({ loop: "investigation", marking: "TLP:GREEN" }, human);
+  const live: CaseState[] = [];
+  // the first commit holds case.created and case.loop_set
+  live[1] = fold(s.entries(), 1);
+  live[s.state.seq] = structuredClone(s.state);
+  s.subscribe((_e, st) => { live[st.seq] = structuredClone(st); });
+  const one = (input: EntryInput) => s.commit(() => [input]);
+  const builder: Actor = { kind: "agent", id: "builder", stage: "builder", profile: "loop-builder", model: "scripted-m", effort: null, where: "machine" };
+  const after = "b".repeat(64);
+
+  s.commit((_st, ids) => [{ type: "agent.asked", payload: { turn: ids.next("turn"), text: "Add a triage loop", left_out: [], added: [] }, actor: human }]);
+  const bundle = s.blobs.put(canonical({ files: [{ path: "loops/triage.yaml", text: "id: triage\n" }] }), "application/json");
+  s.commit((_st, ids) => [{
+    type: "builder.proposed",
+    payload: { change: ids.next("change"), title: "A triage loop", why: "asked for", root: "sample", files: [{ path: "loops/triage.yaml", kind: "loop", id: "triage", before: null, after }], bundle },
+    actor: builder,
+  }]);
+  s.commit((_st, ids) => [{
+    type: "builder.probe_asked",
+    payload: { probe: ids.next("probe"), kind: "pivot", source: "netflow", pivot: "flows-by-ip", value: { type: "ip", value: "192.0.2.10" }, text: null, window: { from: null, to: null }, why: "fields" },
+    actor: builder,
+  }]);
+  expect(builderOpen(s.state)).toMatchObject({ changes: [{ id: "chg-1" }], probes: [{ id: "probe-1" }] });
+  one({ type: "builder.decided", payload: { change: "chg-1", file: 0, accepted: true, written: after }, actor: human });
+  s.commit((_st, ids) => [
+    { type: "card.created", payload: { card: card(ids.next("card"), { marking: "TLP:AMBER", made_by: "system", kind: "note", columns: [], column_types: [], rows: [], row_count: 0, coverage: null }) }, actor: system },
+    { type: "builder.probe_decided", payload: { probe: "probe-1", approved: true, query: null, outcome: "refused", detail: "the guard refused it" }, actor: human },
+  ]);
+
+  const final = s.state;
+  expect(final.skipped).toEqual([]);
+  expect(builderOpen(final)).toEqual({ changes: [], probes: [] });
+  expect(builderMarking(final)).toBe("TLP:AMBER");
+  expect(final.builder.changes["chg-1"]!.files[0]!.decided).toMatchObject({ accepted: true, written: after, by: "analyst" });
+
+  const all = s.entries();
+  for (let n = 1; n <= all.length; n++) {
+    expect(live[n], `live state at ${n}`).toBeDefined();
+    expect(fold(all, n), `entry ${n} (${all[n - 1]!.type})`).toEqual(live[n]!);
+  }
+  wb.close();
+  wb = Workbench.open(dir, { onError });
+  expect(wb.builder(s.id).state).toEqual(final);
   expect(verifyCase(s.dir)).toMatchObject({ entries: all.length, firstBad: null, blobs: { bad: [] } });
   expect(errors).toEqual([]);
 });
