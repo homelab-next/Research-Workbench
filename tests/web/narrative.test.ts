@@ -533,7 +533,7 @@ test("Approve carries the draft it shows, and a second press while the first is 
   p.click("[data-action=approve]");
   p.click("[data-action=approve]");
   await settled();
-  expect(log.filter((c) => c.command === "approve")).toEqual([{ command: "approve", args: { draft_hash: hash } }]);
+  expect(log.filter((c) => c.command === "approve")).toEqual([{ command: "approve", args: { draft_hash: hash, unload_after: false } }]);
   expect(state().run.outcome).toBe("published");
 });
 
@@ -940,4 +940,116 @@ test("no ruling control says a ruling is fixed for the rest of the run", async (
   await settled();
   expect(titles().some((t) => t.includes("fixed for the rest of the run"))).toBe(false);
   expect(p.text()).not.toContain("fixed for the rest of the run");
+});
+
+// ---------- slice 11: Unload after publishing ----------
+
+/** The sample case at the publish gate, the setting (and the role) set as the page's `me` says before the lens is opened. */
+async function atGateWith(me: { on_complete?: "keep" | "unload"; role?: "analyst" | "requester" }): Promise<Page> {
+  p = await page();
+  if (me.on_complete !== undefined) p.ui.me.cases = { ...p.ui.me.cases, on_complete: me.on_complete };
+  if (me.role !== undefined) p.ui.me.role = me.role;
+  const id = await p.s.newCase();
+  await p.s.toPublishGate(id);
+  p.win.location.hash = `#/case/${id}`;
+  await p.settle();
+  p.press("r");
+  await settled();
+  await settled();
+  return p;
+}
+const unloadBox = (): HTMLInputElement => p.q("[data-action=unload-after]") as HTMLInputElement;
+
+test("the publish gate has an Unload after publishing box beside Approve, off when the setting is keep and on when it is unload", async () => {
+  await atGateWith({ on_complete: "keep" });
+  expect(unloadBox().type).toBe("checkbox");
+  expect(unloadBox().getAttribute("aria-label")).toBe("Unload after publishing");
+  expect(unloadBox().checked).toBe(false);
+  expect(p.q(".gate-buttons").contains(unloadBox())).toBe(true);
+  expect(p.q(".gate-unload").title).toBe(`When this run has published, pack the case into the case store (${p.ui.me.cases.store}) and take it off the list`);
+  expect(p.q(".gate-unload").textContent).toContain("Unload after publishing");
+  await p.close();
+  await atGateWith({ on_complete: "unload" });
+  expect(unloadBox().checked).toBe(true);
+});
+
+test("ticking or clearing the box sends no command and writes no entry: the gate is still waiting", async () => {
+  await atGateWith({});
+  const log = sent();
+  const before = state().seq;
+  p.click(unloadBox());
+  await settled();
+  p.click(unloadBox());
+  await settled();
+  p.click(unloadBox());
+  await settled();
+  expect(log).toEqual([]);
+  expect(state().seq).toBe(before);
+  expect(state().run.waiting).toBe("publish");
+  expect(unloadBox().checked).toBe(true);
+});
+
+test("Approve sends the box's value with the draft hash", async () => {
+  await atGateWith({});
+  let log = sent();
+  const hash = latest().hash;
+  p.click(unloadBox());
+  await settled();
+  p.click("[data-action=approve]");
+  await settled();
+  expect(log.filter((c) => c.command === "approve")).toEqual([{ command: "approve", args: { draft_hash: hash, unload_after: true } }]);
+  await p.close();
+  await atGateWith({ on_complete: "unload" });
+  log = sent();
+  const hash2 = latest().hash;
+  p.click(unloadBox());
+  await settled();
+  expect(unloadBox().checked).toBe(false);
+  p.click("[data-action=approve]");
+  await settled();
+  expect(log.filter((c) => c.command === "approve")).toEqual([{ command: "approve", args: { draft_hash: hash2, unload_after: false } }]);
+});
+
+test("the box keeps what the person chose while the gate is redrawn, and starts from the setting again at the next gate", async () => {
+  await atGateWith({});
+  p.click(unloadBox());
+  await settled();
+  propose("summary", "Another thought.");
+  await blockerRaised();
+  expect(unloadBox().checked).toBe(true);
+  // the next gate is another run: it starts from the setting (keep) again
+  const run = state().run.id;
+  p.s.app.hub.read("CASE-1").commit(() => [{ type: "gate.passed", actor: { kind: "human", id: "analyst" }, run, payload: { gate: "publish", draft_hash: latest().hash } } as never]);
+  await settled();
+  expect(p.all("[data-action=unload-after]").length).toBe(0);
+});
+
+test("the box is off while replaying and for a view that may not approve", async () => {
+  await atGateWith({});
+  expect(unloadBox().disabled).toBe(false);
+  p.ui.me.role = "requester";
+  await blockerRaised();   // the gate is drawn again
+  expect(unloadBox().disabled).toBe(true);
+  p.ui.me.role = "analyst";
+  await blockerRaised();
+  expect(unloadBox().disabled).toBe(false);
+  p.store()!.goTo(p.store()!.live.seq);
+  await settled();
+  expect(unloadBox().disabled).toBe(true);
+});
+
+test("the box is not drawn at the plan gate or when the run is not waiting to publish", async () => {
+  p = await page();
+  const id = await p.s.newCase();
+  p.win.location.hash = `#/case/${id}`;
+  await p.settle();
+  p.press("r");
+  await settled();
+  expect(p.all("[data-action=unload-after]").length).toBe(0);
+  await p.close();
+  await atGateWith({});
+  p.click("[data-action=approve]");
+  await settled();
+  expect(state().run.outcome).toBe("published");
+  expect(p.all("[data-action=unload-after]").length).toBe(0);
 });

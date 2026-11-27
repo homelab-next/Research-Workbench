@@ -90,6 +90,8 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
   let inflightVersion = 0;
   /** What the server said when it refused a command, by the same key, shown beside the control that sent it until it is sent again (slice 10). */
   const refusals = new Map<string, string>();
+  /** What the person chose for "Unload after publishing", by run id; nothing is stored, and a run not seen yet starts from the setting. */
+  const unloadChoice = new Map<string, boolean>();
   /** The files each published bundle's recorded manifest lists, by product number. */
   const bundles = new Map<number, string[] | "loading" | "failed">();
   let bundlesVersion = 0;
@@ -576,6 +578,7 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
   // ---------- the gate ----------
   const gateView = (s: CaseState, d: Draft): Node[] => {
     if (s.run.waiting !== "publish") return [];
+    const wantsUnload = (): boolean => unloadChoice.get(s.run.id ?? "") ?? ui.me.cases.on_complete === "unload";
     const why = blockers(s, d.hash);
     const pv = currentPreview();
     const reasons = pv !== null && pv !== "failed" && "reasons" in pv ? pv.reasons : [];
@@ -586,16 +589,19 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
       : pv === null ? "Checking…" : pv === "failed" ? "The draft could not be checked" : reasons.length > 0 ? reasons.join("; ") : inflight.has("approve") ? "Publishing…" : `Publish draft ${d.n} as it is`;
     // the person's changes since this draft was made wait for their one send-back (slice 10): Approve says plainly that it publishes without them
     const changes = gateChanges(s, store.entries);
+    const unload = h("label", { class: "gate-unload", title: `When this run has published, pack the case into the case store (${ui.me.cases.store}) and take it off the list` },
+      h("input", { type: "checkbox", name: "Unload after publishing", data: { action: "unload-after" }, disabled: ro() || ui.me.role !== "analyst", checked: wantsUnload(), on: { change: (e) => { unloadChoice.set(s.run.id ?? "", (e.target as HTMLInputElement).checked); } } }),
+      " Unload after publishing");
     const approve = h("button", {
       type: "button", class: "primary", data: { action: "approve" }, disabled: ro() || !can,
       title: ro() ? REPLAY_REFUSAL : why2,
-      on: { click: () => { guarded("approve", "approve", { draft_hash: d.hash }); } },
+      on: { click: () => { guarded("approve", "approve", { draft_hash: d.hash, unload_after: wantsUnload() }); } },
     }, changes.length === 0 ? `Approve: publish draft ${d.n}` : `Approve without my changes: publish draft ${d.n}`);
     const reject = h("button", {
       type: "button", data: { action: "reject" }, disabled: ro(), title: ro() ? REPLAY_REFUSAL : "Reject this draft and say why",
       on: { click: () => { rejecting = true; sigs.delete(gateBox); render(); (gateBox.querySelector("[aria-label='Reason for rejecting the draft']") as HTMLElement | null)?.focus(); } },
     }, "Reject");
-    const out: Node[] = [h("div", { class: "gate-buttons" }, approve, reject)];
+    const out: Node[] = [h("div", { class: "gate-buttons" }, approve, unload, reject)];
     const approveRefused = refusalLine(h, refusals.get("approve"), "n:approve");
     if (approveRefused !== null) out.push(approveRefused);
     // what the person may still want to settle before passing the gate, beside its button; neither line passes or holds the gate
@@ -716,7 +722,7 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
     } else {
       el.querySelector(".no-draft")?.remove();
       paint(toolsBox, [d.hash, edit, ro(), s.run.status, s.cards === s.cards], () => toolsView(s, d));
-      paint(gateBox, [d.hash, s.run, s.reviews, s.challenges, s.published, s.questions, s.overrules, preview, store.live.seq, rejecting, ro(), inflightVersion], () => gateView(s, d));
+      paint(gateBox, [d.hash, s.run, s.reviews, s.challenges, s.published, s.questions, s.overrules, preview, store.live.seq, rejecting, ro(), ui.me.role, inflightVersion], () => gateView(s, d));
       paint(reviewBox, [d.hash, s.reviews, s.challenges, s.conflicts, s.run, s.published, s.cards, ro(), inflightVersion], () => reviewView(s, d));
       paint(previewBox, [wantsPreview(s), preview, store.live.seq, tab], () => (wantsPreview(s) ? previewView() : []));
     }
