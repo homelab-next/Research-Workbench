@@ -88,3 +88,8 @@ test("a spawned command reads its configuration from the given HOME", () => {
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("package.json's version is the workbench version a case file names", async () => {
+  const { WORKBENCH_VERSION } = await import("../../src/core/casefile");
+  expect(JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")).version).toBe(WORKBENCH_VERSION);
+});
