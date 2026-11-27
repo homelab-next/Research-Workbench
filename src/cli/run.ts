@@ -317,7 +317,7 @@ async function main(argv: string[]): Promise<number> {
           return 1;
         }
       }
-      session = wb.createCase({ ...input }, human, loopId === undefined ? {} : { loop: loopId });
+      session = wb.createCase({ ...input }, human, loopId === undefined ? { default_loop: deps.config.loops.default } : { loop: loopId });
     } else {
       session = wb.session(p.case!);
     }

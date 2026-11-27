@@ -79,6 +79,21 @@ test("createCase with no opts writes case.created alone, as before", () => {
   expect(s.state.skipped).toEqual([]);
 });
 
+test("createCase with a default loop records it on case.created and writes nothing else; a named loop still goes in case.loop_set", () => {
+  const s = wb.createCase(sample, person, { default_loop: "investigation" });
+  expect(s.entries().map((e) => e.type)).toEqual(["case.created"]);
+  expect(s.entries()[0]!.payload).toEqual({ ...sample, id: "CASE-1", loop: "investigation" });
+  expect(s.state.loop.id).toBe("investigation");
+  expect(s.state.meta).toEqual({ ...sample, id: "CASE-1" });
+  expect(summary("CASE-1")).toMatchObject({ loop: "investigation", parent: null });
+  expect(s.state.skipped).toEqual([]);
+  const named = wb.createCase(sample, person, { loop: "triage", default_loop: "investigation" });
+  expect(named.entries().map((e) => e.type)).toEqual(["case.created", "case.loop_set"]);
+  expect(Object.hasOwn(named.entries()[0]!.payload, "loop")).toBe(false);
+  expect(named.state.loop.id).toBe("triage");
+  expect(() => wb.createCase(sample, person, { default_loop: "" })).toThrow(TypeError);
+});
+
 test("createCase with a loop writes case.created and case.loop_set in one commit, and the summary names the loop", () => {
   const s = wb.createCase(sample, person, { loop: "triage" });
   expect(s.entries().map((e) => e.type)).toEqual(["case.created", "case.loop_set"]);

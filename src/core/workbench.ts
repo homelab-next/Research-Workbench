@@ -366,12 +366,13 @@ export class Workbench {
   }
 
   /**
-   * Makes a case, in one commit. `loop`: the loop the case is for (case.loop_set; omitted, none is recorded and the case is read as the default
-   * loop's). `link` and `cards`: a child case, with subloop.child and one card.created per card its inputs name, both by the engine. Throws
+   * Makes a case, in one commit. `loop`: the loop the case is for (case.loop_set). `default_loop`, used only when `loop` is omitted: the
+   * configuration's default loop, recorded as case.created's `loop` (still one entry); with neither, none is recorded and the case is read as
+   * the default loop's when its run starts. `link` and `cards`: a child case, with subloop.child and one card.created per card its inputs name, both by the engine. Throws
    * TypeError, having written nothing, for what the fold would not read: a link without a loop, a malformed link or card, cards without a link,
    * a child less strictly marked than its link's floor or than a card it is given, a child whose loop is not its link's.
    */
-  createCase(input: NewCase, actor: Actor, opts: { loop?: string; link?: ChildLink; cards?: Card[] } = {}): CaseSession {
+  createCase(input: NewCase, actor: Actor, opts: { loop?: string; default_loop?: string; link?: ChildLink; cards?: Card[] } = {}): CaseSession {
     this.open();
     if (!isMarking(input?.marking)) throw new TypeError(`unknown marking ${JSON.stringify(input?.marking)}`);
     const { loop, link } = opts;
@@ -395,7 +396,11 @@ export class Workbench {
     const id = `CASE-${n}`;
     // The seven case fields and nothing else, with the id last so nothing in the input can replace it.
     const { title, asked, why, starting, window, objective, marking } = input;
-    const payload = caseFields({ title, asked, why, starting, window, objective, marking, id });
+    // the default loop, when no loop is named, is recorded on case.created itself (no second entry), so a later change of the default does not re-home the case
+    const { default_loop } = opts;
+    if (default_loop !== undefined && (typeof default_loop !== "string" || default_loop === "")) throw new TypeError("a default loop is a loop's id");
+    const fields = caseFields({ title, asked, why, starting, window, objective, marking, id });
+    const payload = loop === undefined && default_loop !== undefined ? { ...fields, loop: default_loop } : fields;
     // Refuse what the fold would refuse, before anything is written.
     if (!isCaseCreated(payload)) throw new TypeError("a new case needs title, asked and why strings, starting observables, a time window and an objective string or null");
     // The mark first: once a folder can exist, its number can never be given out again.

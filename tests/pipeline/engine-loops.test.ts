@@ -434,6 +434,23 @@ function writeShortLoop(): void {
 }
 const passFrame: StageRunner = async () => ({ kind: "finished", outcome: "pass", draft_hash: null, output: null, reason: null });
 
+test("changing loops.default after a case was made does not re-home it: a case that recorded its loop at creation starts on it; an old case with none follows the default at run start", () => {
+  writeShortLoop();
+  const kept = wb.createCase(input, human, { default_loop: "investigation" });
+  sessions.push(kept);
+  const old = newCase();
+  (config.loops as { default: string }).default = "short";
+  expect(composed.deps.config.loops.default).toBe("short");
+  const boundLoop = (s: CaseSession): string | null => {
+    const e = s.entries().find((x) => x.type === "loop.bound");
+    return e !== undefined && e.type === "loop.bound" ? e.payload.loop : null;
+  };
+  Engine.open(kept, composed.deps, { runners: { frame: passFrame } }).start(human);
+  expect(boundLoop(kept)).toBe("investigation");
+  Engine.open(old, composed.deps, { runners: { frame: passFrame } }).start(human);
+  expect(boundLoop(old)).toBe("short");
+});
+
 test("a loop with no publish gate finishes as completed when its last stage passes, and is not anchored as closed", async () => {
   writeShortLoop();
   const s = newCase({ loop: "short" });

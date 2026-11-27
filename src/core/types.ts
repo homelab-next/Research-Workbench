@@ -151,7 +151,11 @@ export type Proposal =
 // ---------- entries ----------
 export interface Payloads {
   // case and run
-  "case.created": { id: string; title: string; asked: string; why: string; starting: Observable[]; window: TimeWindow; objective: string | null; marking: Marking };
+  /**
+   * `loop` (slice 12, optional): the loop the case was made for, recorded at creation (the configuration's loops.default when the person named
+   * none), so a later change of the default does not re-home it. A ledger without it is a case of whatever the default is when its run starts.
+   */
+  "case.created": { id: string; title: string; asked: string; why: string; starting: Observable[]; window: TimeWindow; objective: string | null; marking: Marking; loop?: string };
   "case.phase_changed": { phase: string };
   "run.started": { run: string; pipeline: string; pipeline_hash: string; stages: StageDef[] };
   /** `hold`: what a person's resume of this pause does besides resuming (see RunHold). */

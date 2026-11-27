@@ -143,7 +143,7 @@ export class CaseHub {
   }
 
   create(input: NewCase, actor: Actor, opts: { loop?: string } = {}): CaseSession {
-    return this.wb.createCase(input, actor, opts.loop === undefined ? {} : { loop: opts.loop });
+    return this.wb.createCase(input, actor, opts.loop === undefined ? { default_loop: this.deps.config.loops.default } : { loop: opts.loop });
   }
 
   /** Calls engine.advance() without waiting; a failure goes to onError. */

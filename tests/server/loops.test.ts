@@ -387,6 +387,16 @@ test("a body that names an actor is refused at every new route", async () => {
   expect(existsSync(s.config.loops.store)).toBe(false);
 });
 
+test("POST /api/cases with no loop records loops.default on case.created, in the one entry it writes", async () => {
+  s = await served();
+  const id = await s.newCase();
+  const entries = s.entries(id);
+  expect(entries.map((e) => e.type)).toEqual(["case.created"]);
+  expect(entries[0]!.payload).toMatchObject({ loop: s.config.loops.default });
+  expect(s.app.hub.read(id).state.loop.id).toBe(s.config.loops.default);
+  expect(s.app.hub.read(id).state.skipped).toEqual([]);
+});
+
 test("POST /api/cases with a loop makes a case for it; an unknown or unusable loop is refused by name", async () => {
   s = await served({ before: (root) => { writeTriage(root); brokenLoop(root); } });
   const id = await s.newCase({ loop: "triage" });

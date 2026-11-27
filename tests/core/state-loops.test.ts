@@ -51,6 +51,38 @@ test("a ledger with no case.loop_set has loop id null, and loopOf gives the fall
   expect(s.skipped).toEqual([]);
 });
 
+test("a loop on case.created is the case's loop: the meta keeps its seven fields, a later case.loop_set before the run still names another, and a loop that is not an id is malformed", () => {
+  const b = new EntryBuilder();
+  b.add("case.created", { ...CASE, loop: "triage" }, { actor: person });
+  const s = fold(b.entries);
+  expect(s.loop.id).toBe("triage");
+  expect(loopOf(s, "investigation")).toBe("triage");
+  expect(s.meta).toEqual(CASE);
+  expect(s.skipped).toEqual([]);
+  b.add("case.loop_set", { loop: "hunt" }, { actor: person });
+  expect(fold(b.entries).loop.id).toBe("hunt");
+  // replay: the state at the first entry is the case of the loop it was made for
+  expect(fold(b.entries, 1).loop.id).toBe("triage");
+  for (const loop of ["", 3, null]) {
+    const bad = new EntryBuilder();
+    bad.add("case.created", { ...CASE, loop } as unknown as Payloads["case.created"], { actor: person });
+    const f = fold(bad.entries);
+    expect(f.meta).toBeNull();
+    expect(f.loop.id).toBeNull();
+    expect(f.skipped).toHaveLength(1);
+  }
+});
+
+test("an old ledger, whose case.created has no loop, folds as before: the meta is the payload, the loop id null, and the fallback decides", () => {
+  const b = running();
+  const s = fold(b.entries);
+  expect(s.meta).toEqual(CASE);
+  expect(Object.hasOwn(s.meta!, "loop")).toBe(false);
+  expect(s.loop.id).toBeNull();
+  expect(loopOf(s, "hunt")).toBe("hunt");
+  expect(fold(b.entries, 1).loop.id).toBeNull();
+});
+
 test("case.loop_set by a person or by code sets the loop; after a run.started it is skipped: a case's loop is set before its first run", () => {
   const b = new EntryBuilder();
   b.add("case.created", CASE, { actor: person });

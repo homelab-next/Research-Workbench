@@ -60,9 +60,9 @@ export type CaseCreated = Payloads["case.created"];
 
 export const isCaseCreated = (x: unknown): x is CaseCreated =>
   isObj(x) && isStr(x.id) && isStr(x.title) && isStr(x.asked) && isStr(x.why) && Array.isArray(x.starting) && x.starting.every(isObservable)
-  && isTimeWindow(x.window) && isStrOrNull(x.objective) && isMarking(x.marking);
+  && isTimeWindow(x.window) && isStrOrNull(x.objective) && isMarking(x.marking) && (x.loop === undefined || (isStr(x.loop) && x.loop !== ""));
 
-/** The fields of a case.created payload and nothing else. */
+/** The seven case fields of a case.created payload and nothing else: the case's meta. Its `loop`, if any, is the case's loop (state.loop.id). */
 export function caseFields(c: CaseCreated): CaseCreated {
   const { id, title, asked, why, starting, window, objective, marking } = c;
   return { id, title, asked, why, starting, window, objective, marking };

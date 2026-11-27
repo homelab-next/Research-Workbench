@@ -39,7 +39,13 @@ export function countedKind(type: string): IdKind | undefined {
 
 /** The case itself: case.created and case.phase_changed. */
 export function applyCase(s: CaseState, entry: Entry): CaseState {
-  if (entry.type === "case.created") return isCaseCreated(entry.payload) ? { ...s, meta: caseFields(entry.payload) } : malformed(s, entry);
+  if (entry.type === "case.created") {
+    if (!isCaseCreated(entry.payload)) return malformed(s, entry);
+    const loop = entry.payload.loop;
+    // the loop recorded at creation is the case's loop, as a case.loop_set would make it; one an agent wrote decides nothing
+    const withLoop = loop !== undefined && entry.actor.kind !== "agent" && s.run.status === "none" ? { loop: { ...s.loop, id: loop } } : {};
+    return { ...s, meta: caseFields(entry.payload), ...withLoop };
+  }
   if (entry.type === "case.phase_changed") return isStr(entry.payload.phase) ? { ...s, phase: entry.payload.phase } : malformed(s, entry);
   return s;
 }
