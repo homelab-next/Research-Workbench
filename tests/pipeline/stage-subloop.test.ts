@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SAMPLE_START, SAMPLE_WINDOW } from "../../scripts/make-sample-data";
@@ -19,8 +19,8 @@ import { Engine } from "../../src/pipeline/engine";
 import type { EngineDeps, StageRunner } from "../../src/pipeline/engine";
 import type { LoopCatalog, ResolvedLoop } from "../../src/pipeline/loops";
 import type { StageManifest } from "../../src/pipeline/manifests";
-import { outputHash, outputsOf } from "../../src/pipeline/subloop";
-import type { ChildCases } from "../../src/pipeline/subloop";
+import { outputHash, outputsOf, readChild } from "../../src/pipeline/subloop";
+import type { ChildCases, ChildRef } from "../../src/pipeline/subloop";
 import { subloopRunner } from "../../src/pipeline/stages/subloop";
 import { sampleRoot } from "../helpers/sample-root";
 
@@ -54,27 +54,27 @@ class Host implements ChildCases {
     }
     return e;
   }
-  find(link: ChildLink): string | null { return wb.findChild(link); }
-  create(input: Parameters<ChildCases["create"]>[0], link: ChildLink, cards: Card[]): string {
+  find(link: ChildLink): ReturnType<ChildCases["find"]> {
+    const id = wb.findChild(link);
+    return id === null ? null : { id, origin: wb.loadedOrigin(id)! };
+  }
+  create(input: Parameters<ChildCases["create"]>[0], link: ChildLink, cards: Card[]): ReturnType<ChildCases["create"]> {
     const s = wb.createCase(input, ENGINE, { loop: link.loop, link, cards });
     sessions.push(s);
     this.created += 1;
     this.afterCreate?.();
-    return s.id;
+    return { id: s.id, origin: s.entries(0, 1)[0]!.hash };
   }
-  async drive(child: string): Promise<ReturnType<Engine["summary"]>> {
-    const e = this.engine(child);
-    if (wb.session(child).state.run.status === "none") e.start(ENGINE);
+  async drive(ref: ChildRef): Promise<ReturnType<Engine["summary"]>> {
+    if (this.read(ref) === null) throw new Error(`${ref.id} is not the child`);
+    const e = this.engine(ref.id);
+    if (wb.session(ref.id).state.run.status === "none") e.start(ENGINE);
     return e.advance();
   }
-  read(child: string): ReturnType<ChildCases["read"]> {
+  read(ref: ChildRef): ReturnType<ChildCases["read"]> {
     let s: CaseSession;
-    try { s = wb.session(child); } catch { return null; }
-    const stopped = s.entries().findLast((e) => e.type === "run.finished");
-    return {
-      state: s.state, head: s.head(), outputs: this.engine(child).loop?.manifest.outputs ?? {},
-      stop_reason: stopped !== undefined && stopped.type === "run.finished" ? stopped.payload.reason ?? null : null,
-    };
+    try { s = wb.session(ref.id); } catch { return null; }
+    return readChild(s, ref);
   }
 }
 
@@ -533,4 +533,45 @@ test("a person's pause made while the child is driven is kept: the stage does no
   const n = s.entries().length;
   await e.childSettled("CASE-2");
   expect(s.entries()).toHaveLength(n);
+});
+
+// ---- final review: the stage reads only its own child (C1)
+
+test("a finished child's recorded result is returned first: the stage run again with the child gone passes as recorded", async () => {
+  const { s, e } = await startParent();
+  await carryChild(e);
+  const c = child();
+  c.close();
+  rmSync(c.dir, { recursive: true, force: true });
+  const n = s.entries().length;
+  const end = await subloopRunner({ session: s, deps: { ...composed.deps, children: host }, stage: investigateOf(), attempt: 1, onNeedsBudget: async () => null });
+  expect(end).toMatchObject({ kind: "finished", outcome: "pass", output: { child: "CASE-2", outcome: "published" } });
+  expect(s.entries()).toHaveLength(n);
+});
+
+test("a case with the child's id that does not name this parent is not the child: the stage neither drives nor reads it, and says the child is not loaded", async () => {
+  const { s, e } = await startParent();
+  // the child goes away, and another workbench's CASE-2, an ordinary case, is put in its folder
+  const c = child();
+  const origin = c.entries()[0]!.hash;
+  c.close();
+  rmSync(c.dir, { recursive: true, force: true });
+  host.engines.delete("CASE-2");
+  const elsewhere = Workbench.open(join(dir, "elsewhere"), { onError: () => {} });
+  try {
+    elsewhere.createCase(input, human);
+    elsewhere.createCase({ ...input, title: "Someone else's" }, human);
+  } finally {
+    elsewhere.close();
+  }
+  cpSync(join(dir, "elsewhere", "cases", "CASE-2"), join(config.data_dir, "cases", "CASE-2"), { recursive: true });
+  const impostor = wb.session("CASE-2");
+  sessions.push(impostor);
+  expect(impostor.entries()[0]!.hash).not.toBe(origin);
+  const n = impostor.entries().length;
+  await e.resume(human);
+  expect(impostor.entries()).toHaveLength(n);
+  expect(s.state.run.pause_reason).toBe("waiting on child CASE-2: child CASE-2 is not loaded; load it from the store");
+  expect(await e.childSettled("CASE-2")).toMatchObject({ status: "paused" });
+  expect(ofType(s, "subloop.finished")).toHaveLength(0);
 });

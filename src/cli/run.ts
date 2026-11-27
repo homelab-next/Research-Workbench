@@ -12,7 +12,8 @@ import type { Card } from "../core/types";
 import { ConfigError, loadConfig } from "../modules/config";
 import { Engine, RunRefused } from "../pipeline/engine";
 import type { EngineDeps } from "../pipeline/engine";
-import type { ChildCases } from "../pipeline/subloop";
+import { notTheChild, readChild } from "../pipeline/subloop";
+import type { ChildCases, ChildRef } from "../pipeline/subloop";
 import { FeedbackRefused } from "../pipeline/feedback";
 import { PlanRefused } from "../pipeline/plans";
 import { PublishRefused } from "../pipeline/publish";
@@ -213,23 +214,26 @@ class Host implements ChildCases {
     }
     return e;
   }
-  find(link: ChildLink): string | null { return this.wb.findChild(link); }
-  create(input: Parameters<ChildCases["create"]>[0], link: ChildLink, cards: Card[]): string {
-    return this.wb.createCase(input, { kind: "system", id: "engine" }, { loop: link.loop, link, cards }).id;
+  find(link: ChildLink): ReturnType<ChildCases["find"]> {
+    const id = this.wb.findChild(link);
+    const origin = id === null ? null : this.wb.loadedOrigin(id);
+    return id === null || origin === null ? null : { id, origin };
   }
-  async drive(child: string): Promise<ReturnType<Engine["summary"]>> {
-    const e = this.engine(child);
-    if (this.wb.session(child).state.run.status === "none") e.start({ kind: "system", id: "engine" });
+  create(input: Parameters<ChildCases["create"]>[0], link: ChildLink, cards: Card[]): ReturnType<ChildCases["create"]> {
+    const made = this.wb.createCase(input, { kind: "system", id: "engine" }, { loop: link.loop, link, cards });
+    return { id: made.id, origin: made.entries(0, 1)[0]!.hash };
+  }
+  async drive(ref: ChildRef): Promise<ReturnType<Engine["summary"]>> {
+    // never a run on a case that is not this child: ids repeat across workbenches
+    if (this.read(ref) === null) throw new RunRefused(notTheChild(ref));
+    const e = this.engine(ref.id);
+    if (this.wb.session(ref.id).state.run.status === "none") e.start({ kind: "system", id: "engine" });
     return e.advance();
   }
-  read(child: string): ReturnType<ChildCases["read"]> {
+  read(ref: ChildRef): ReturnType<ChildCases["read"]> {
     let s: CaseSession;
-    try { s = this.wb.session(child); } catch { return null; }
-    const stopped = s.entries().findLast((e) => e.type === "run.finished");
-    return {
-      state: s.state, head: s.head(), outputs: this.engine(child).loop?.manifest.outputs ?? {},
-      stop_reason: stopped !== undefined && stopped.type === "run.finished" ? stopped.payload.reason ?? null : null,
-    };
+    try { s = this.wb.session(ref.id); } catch { return null; }
+    return readChild(s, ref);
   }
   close(): void {
     for (const e of this.engines.values()) { try { e.close(); } catch { /* closed */ } }

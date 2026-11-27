@@ -1,4 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
+import { copyFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import type { Entry } from "../../src/core/types";
 import type { AgentView, LoopView, ModelView, Preview } from "../../src/core/wire";
 import { served } from "../helpers/served";
@@ -174,4 +176,43 @@ test("your agent, the preview and the models of a child read the child's own loo
   expect(models.some((m) => m.provider === "scripted" && m.model === "sample-run")).toBe(true);
   expect(ofType(child, "loop.bound").map((e) => (e.payload as { version: number }).version)).toEqual([1]);
   expect(ofType(child, "run.paused")).toEqual([]);
+});
+
+test("a parent loaded without its child, on a workbench whose own case has the child's id, neither drives nor reads that case: it pauses saying the child is not loaded", async () => {
+  // workbench A: two cases, then a triage parent CASE-3 whose child is CASE-4, waiting at its plan gate; the parent alone is unloaded
+  s = await open();
+  await s.newCase();
+  await s.newCase();
+  const { parent, child } = await startParent();
+  expect([parent, child]).toEqual(["CASE-3", "CASE-4"]);
+  const started = ofType(parent, "subloop.started")[0]!.payload as { origin?: string };
+  expect(started.origin).toBe(s.entries(child)[0]!.hash);
+  const unloaded = await s.post(`/api/cases/${parent}/unload`, {});
+  expect(unloaded.status).toBe(200);
+  const { file } = (await unloaded.json()) as { file: string };
+  const bErrors: unknown[] = [];
+  const b = await served({ before: writeTriage, onError: (e) => { bErrors.push(e); } });
+  try {
+    // workbench B: four cases of its own; its CASE-3 is unloaded and deleted, so the id is free; its CASE-4 is no child of anything
+    for (let i = 1; i <= 4; i++) await b.newCase({ title: `B's own case ${i}`, marking: "TLP:AMBER" });
+    expect((await b.post("/api/cases/CASE-3/unload", {})).status).toBe(200);
+    const f3 = readdirSync(b.config.cases.store).find((f) => f.startsWith("CASE-3."))!;
+    expect((await b.post("/api/store/delete", { file: f3, id: "CASE-3" })).status).toBe(200);
+    copyFileSync(join(s.config.cases.store, file), join(b.config.cases.store, file));
+    expect((await b.post("/api/store/load", { file })).status).toBe(200);
+    const theirs = b.entries("CASE-4").length;
+    expect((await b.command("CASE-3", "resume")).status).toBe(200);
+    await b.app.hub.idle();
+    // B's own CASE-4 is untouched: no run, no entry
+    expect(b.entries("CASE-4").length).toBe(theirs);
+    expect(b.app.hub.read("CASE-4").state.run.status).toBe("none");
+    const run = b.app.hub.read("CASE-3").state.run;
+    expect(run.status).toBe("paused");
+    expect(run.pause_reason).toBe("waiting on child CASE-4: child CASE-4 is not loaded; load it from the store");
+    expect(b.entries("CASE-3").some((e) => e.type === "subloop.finished")).toBe(false);
+    for (const c of b.wb.listCases()) expect(b.app.hub.read(c.id).state.skipped).toEqual([]);
+  } finally {
+    await b.close();
+  }
+  expect(bErrors).toEqual([]);
 });

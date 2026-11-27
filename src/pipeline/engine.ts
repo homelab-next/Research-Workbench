@@ -38,7 +38,7 @@ import { recordFeedback } from "./feedback";
 import { feedbackRunner } from "./stages/feedback";
 import { publishRunner } from "./stages/publish";
 import { subloopRunner } from "./stages/subloop";
-import { childWaitReason, outputsOf } from "./subloop";
+import { childRefOf, childWaitReason, outputsOf } from "./subloop";
 import type { ChildCases } from "./subloop";
 
 export interface EngineDeps {
@@ -268,7 +268,13 @@ export class Engine {
    */
   async childSettled(child: string): Promise<RunSummary> {
     const children = this.deps.children;
-    const view = children === undefined ? null : (() => { try { return children.read(child); } catch { return null; } })();
+    // the child the run waits on, as its record names it: a case here with that id that is not that child settled nothing of this run's
+    const s0 = this.session.state;
+    const hold0 = s0.run.status === "paused" ? s0.run.hold : null;
+    const rec = hold0?.kind === "child" ? Object.values(s0.loop.children).find((c) => c.run === s0.run.id && c.stage === hold0.stage && c.child === child && c.finished === null) : undefined;
+    const ref = rec === undefined ? null : childRefOf(this.session.id, rec);
+    const view = children === undefined || ref === null ? null : (() => { try { return children.read(ref); } catch { return null; } })();
+    if (children !== undefined && ref !== null && view === null) return this.summary();
     const written = this.session.commit((s) => {
       const hold = s.run.status === "paused" ? s.run.hold : null;
       if (hold?.kind !== "child" || hold.child !== child) return [];

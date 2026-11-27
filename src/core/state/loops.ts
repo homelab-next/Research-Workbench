@@ -35,7 +35,7 @@ const isChild = (x: unknown): x is Payloads["subloop.child"] =>
   isObj(x) && isId(x.parent) && isId(x.run) && isId(x.stage) && isAttempt(x.attempt) && isId(x.loop) && isStr(x.input_hash) && isCount(x.depth) && isMarking(x.floor);
 const isStarted = (x: unknown): x is Payloads["subloop.started"] =>
   isObj(x) && isId(x.stage) && isAttempt(x.attempt) && isId(x.child) && isId(x.loop) && isStr(x.loop_hash) && isStr(x.input_hash)
-  && isBlobRefShape(x.inputs) && isCount(x.depth);
+  && isBlobRefShape(x.inputs) && isCount(x.depth) && (x.origin === undefined || isStr(x.origin));
 const isFinished = (x: unknown): x is Payloads["subloop.finished"] =>
   isObj(x) && isId(x.stage) && isAttempt(x.attempt) && isId(x.child) && isStr(x.child_run) && isHead(x.head) && isOneOf(x.outcome, SUBLOOP_OUTCOMES)
   && isStr(x.output_hash) && isBlobRefShape(x.output) && isStrList(x.cards);
@@ -95,7 +95,7 @@ export function applyLoops(s: CaseState, entry: Entry): CaseState {
       if (Object.hasOwn(s.loop.children, key)) return recordSkip(s, entry, "a sub-loop starts once for a stage's attempt");
       const child: SubloopState = {
         key, run, stage: p.stage, attempt: p.attempt, child: p.child, loop: p.loop, loop_hash: p.loop_hash, input_hash: p.input_hash,
-        inputs: copyRef(p.inputs), depth: p.depth, started_seq: entry.seq, finished: null,
+        inputs: copyRef(p.inputs), depth: p.depth, started_seq: entry.seq, origin: p.origin ?? null, finished: null,
       };
       // a computed key defines an own property, so a key holding "__proto__" is an ordinary key
       return withLoop(s, { children: { ...s.loop.children, [key]: child }, child_count: s.loop.child_count + 1 });

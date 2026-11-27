@@ -280,19 +280,22 @@ function rowsOf(ledgerPath: string): { case: string; rows: { seq: number; type: 
 }
 
 /**
- * For each subloop.finished of the case: the child's ledger holds an entry of that seq and hash, and its subloop.child names this case, run, stage, attempt
- * and input hash. A child that is not in `casesDir` is not_loaded and does not fail the report. Reads only; it does not recompute what came back.
+ * For each subloop.finished of the case: the child's ledger holds an entry of that seq and hash, its subloop.child names this case, run, stage, attempt
+ * and input hash and its first entry is the origin subloop.started recorded (when it recorded one). A child that is not in `casesDir` is
+ * not_loaded and does not fail the report. Reads only; it does not recompute what came back.
  */
 export function verifyLinks(caseDir: string, casesDir: string): LinkReport {
   const parent = rowsOf(join(caseDir, "ledger.sqlite"));
-  const started = new Map<string, { child: string; input_hash: string }>();
+  const started = new Map<string, { child: string; input_hash: string; origin: string | null }>();
   const links: LinkReport["links"] = [];
   for (const r of parent.rows) {
     const p = r.payload;
     if ((r.type !== "subloop.started" && r.type !== "subloop.finished") || !isObj(p) || typeof p.stage !== "string" || typeof p.attempt !== "number" || typeof p.child !== "string") continue;
     const key = `${r.run ?? ""}/${p.stage}/${p.attempt}`;
     if (r.type === "subloop.started") {
-      if (typeof p.input_hash === "string" && !started.has(key)) started.set(key, { child: p.child, input_hash: p.input_hash });
+      if (typeof p.input_hash === "string" && !started.has(key)) {
+        started.set(key, { child: p.child, input_hash: p.input_hash, origin: typeof p.origin === "string" ? p.origin : null });
+      }
       continue;
     }
     const out = (status: LinkReport["links"][number]["status"]): void => void links.push({ key, child: p.child as string, status });
@@ -309,10 +312,12 @@ export function verifyLinks(caseDir: string, casesDir: string): LinkReport {
       continue;
     }
     const link = child.rows.find((x) => x.type === "subloop.child" && x.seq <= 3)?.payload;
-    if (child.case !== p.child || !isObj(link) || link.parent !== parent.case || link.run !== r.run || link.stage !== p.stage || link.attempt !== p.attempt || link.input_hash !== opened.input_hash) {
+    if (child.case !== p.child || !isObj(link) || link.parent !== parent.case || link.run !== r.run || link.stage !== p.stage || link.attempt !== p.attempt || link.input_hash !== opened.input_hash
+      || (opened.origin !== null && child.rows[0]?.hash !== opened.origin)) {
       out("not_its_child");
       continue;
     }
+
     const head = isHead(p.head) ? p.head : null;
     const at = head === null ? undefined : child.rows.find((x) => x.seq === head.seq);
     out(at !== undefined && at.hash === head!.hash ? "matches" : "head_differs");

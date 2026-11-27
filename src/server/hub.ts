@@ -9,7 +9,8 @@ import { CaseNotFoundError, CaseRefused, unloadProblem } from "../core/workbench
 import type { ChildLink, NewCase, UnloadResult, Workbench } from "../core/workbench";
 import { Engine } from "../pipeline/engine";
 import type { EngineDeps, RunSummary } from "../pipeline/engine";
-import type { ChildCases } from "../pipeline/subloop";
+import { notTheChild, readChild } from "../pipeline/subloop";
+import type { ChildCases, ChildRef } from "../pipeline/subloop";
 
 /** Who unloads a case after publishing: the person chose it at approve; the workbench does it. */
 const WORKBENCH: Actor = { kind: "system", id: "workbench" };
@@ -67,26 +68,31 @@ export class CaseHub {
    * run is started by the engine and carried as far as it goes without a person. Nothing here passes a gate.
    */
   readonly children: ChildCases = {
-    find: (link: ChildLink) => this.wb.findChild(link),
-    create: (input: NewCase, link: ChildLink, cards: Card[]) => this.wb.createCase(input, ENGINE, { loop: link.loop, link, cards }).id,
-    drive: async (child: string): Promise<RunSummary> => {
-      const engine = this.engine(child);
-      if (this.wb.session(child).state.run.status === "none") engine.start(ENGINE);
+    find: (link: ChildLink) => {
+      const id = this.wb.findChild(link);
+      const origin = id === null ? null : this.wb.loadedOrigin(id);
+      return id === null || origin === null ? null : { id, origin };
+    },
+    create: (input: NewCase, link: ChildLink, cards: Card[]) => {
+      const made = this.wb.createCase(input, ENGINE, { loop: link.loop, link, cards });
+      return { id: made.id, origin: made.entries(0, 1)[0]!.hash };
+    },
+    drive: async (ref: ChildRef): Promise<RunSummary> => {
+      // never a run on a case that is not this child: ids repeat across workbenches
+      if (this.children.read(ref) === null) throw new CaseRefused(notTheChild(ref));
+      const engine = this.engine(ref.id);
+      if (this.wb.session(ref.id).state.run.status === "none") engine.start(ENGINE);
       return engine.advance();
     },
-    read: (child: string) => {
+    read: (ref: ChildRef) => {
       let session: CaseSession;
       try {
-        session = this.wb.session(child);
+        session = this.wb.session(ref.id);
       } catch (error) {
         if (gone(error)) return null;
         throw error;
       }
-      const stopped = session.entries().findLast((e) => e.type === "run.finished");
-      return {
-        state: session.state, head: session.head(), outputs: this.engine(child).loop?.manifest.outputs ?? {},
-        stop_reason: stopped !== undefined && stopped.type === "run.finished" ? stopped.payload.reason ?? null : null,
-      };
+      return readChild(session, ref);
     },
   };
 

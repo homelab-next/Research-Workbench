@@ -280,8 +280,11 @@ export interface Payloads {
   "loop.bound": { loop: string; version: number; hash: string; lock: BlobRef };
   /** In a child case, in the commit of its case.created: the parent case and the run, stage and attempt that made it, what it was given, its depth and its marking floor. */
   "subloop.child": { parent: string; run: string; stage: string; attempt: number; loop: string; input_hash: string; depth: number; floor: Marking };
-  /** In the parent: a sub-loop stage made (or adopted) a child case for this attempt, with its inputs as a blob of the parent. */
-  "subloop.started": { stage: string; attempt: number; child: string; loop: string; loop_hash: string; input_hash: string; inputs: BlobRef; depth: number };
+  /**
+   * In the parent: a sub-loop stage made (or adopted) a child case for this attempt, with its inputs as a blob of the parent. `origin` is the hash of the
+   * child's first entry: with the id, it is which case the child is (ids repeat across workbenches).
+   */
+  "subloop.started": { stage: string; attempt: number; child: string; loop: string; loop_hash: string; input_hash: string; inputs: BlobRef; depth: number; origin?: string };
   /** In the parent: what the child gave back, at the child's head then, in one commit with the cards and proposals made from it. */
   "subloop.finished": {
     stage: string; attempt: number; child: string; child_run: string; head: { seq: number; hash: string };

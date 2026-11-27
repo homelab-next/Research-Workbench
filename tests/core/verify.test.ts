@@ -558,7 +558,7 @@ const linkCase = { title: "T", asked: "Who?", why: "test", starting: [{ type: "a
 const engineActor = { kind: "system", id: "engine" } as const;
 const linkStages = [{ id: "investigate", title: "Investigate", phase: null, runs: "loop" as const, gate: null, reviews: false, model: null }];
 /** A parent whose run started a child at "investigate" and recorded it finished at `head` (the child's own head when not given). */
-function linkedParent(wb: Workbench, child: (parent: string) => CaseSession, head?: (c: CaseSession) => { seq: number; hash: string }): { parent: CaseSession; child: CaseSession } {
+function linkedParent(wb: Workbench, child: (parent: string) => CaseSession, head?: (c: CaseSession) => { seq: number; hash: string }, over: (c: CaseSession) => Record<string, unknown> = () => ({})): { parent: CaseSession; child: CaseSession } {
   const parent = wb.createCase(linkCase, human, { loop: "triage" });
   parent.commit((_s, ids) => [{ type: "run.started", actor: human, payload: { run: ids.next("run"), pipeline: "triage", pipeline_hash: "a".repeat(64), stages: linkStages } }]);
   parent.commit((st) => [{ type: "stage.started", actor: engineActor, run: st.run.id, stage: "investigate", payload: { stage: "investigate", attempt: 1 } }]);
@@ -566,7 +566,7 @@ function linkedParent(wb: Workbench, child: (parent: string) => CaseSession, hea
   c.commit(() => [{ type: "case.phase_changed", actor: human, payload: { phase: "direction" } }]);
   const at = head === undefined ? c.head() : head(c);
   parent.commit((st) => [
-    { type: "subloop.started", actor: engineActor, run: st.run.id, stage: "investigate", payload: { stage: "investigate", attempt: 1, child: c.id, loop: "investigation", loop_hash: "b".repeat(64), input_hash: LINK_HASH, inputs: parent.blobs.put("{}"), depth: 1 } },
+    { type: "subloop.started", actor: engineActor, run: st.run.id, stage: "investigate", payload: { stage: "investigate", attempt: 1, child: c.id, loop: "investigation", loop_hash: "b".repeat(64), input_hash: LINK_HASH, inputs: parent.blobs.put("{}"), depth: 1, ...over(c) } },
   ]);
   parent.commit((st) => [
     { type: "subloop.finished", actor: engineActor, run: st.run.id, stage: "investigate", payload: { stage: "investigate", attempt: 1, child: c.id, child_run: "run-1", head: at, outcome: "completed", output_hash: "f".repeat(64), output: parent.blobs.put("{}"), cards: [] } },
@@ -576,6 +576,19 @@ function linkedParent(wb: Workbench, child: (parent: string) => CaseSession, hea
 }
 const childOf = (wb: Workbench, over: Record<string, unknown> = {}) => (parent: string): CaseSession =>
   wb.createCase(linkCase, engineActor, { loop: "investigation", link: { parent, run: "run-1", stage: "investigate", attempt: 1, loop: "investigation", input_hash: LINK_HASH, depth: 1, floor: "TLP:GREEN", ...over } });
+
+test("verifyLinks: a child whose first entry is not the origin recorded is not_its_child", () => {
+  const wb = Workbench.open(join(root, "wb"), { onError: () => {} });
+  try {
+    const cases = join(root, "wb", "cases");
+    const same = linkedParent(wb, childOf(wb), undefined, (c) => ({ origin: c.entries(0, 1)[0]!.hash }));
+    expect(verifyLinks(same.parent.dir, cases).links[0]!.status).toBe("matches");
+    const other = linkedParent(wb, childOf(wb), undefined, () => ({ origin: "7".repeat(64) }));
+    expect(verifyLinks(other.parent.dir, cases)).toMatchObject({ ok: false, links: [{ status: "not_its_child" }] });
+  } finally {
+    wb.close();
+  }
+});
 
 test("verifyLinks: a finished child whose ledger holds the recorded head matches; a child folder removed is not_loaded and the report is ok; a child whose entry at that seq has another hash is head_differs and the report is not ok", () => {
   const wb = Workbench.open(join(root, "wb"), { onError: () => {} });

@@ -146,6 +146,8 @@ export interface ArchiveState {
 /** A child case one stage attempt of this case's run made, keyed `run/stage/attempt` (subloopKey), and what it gave back once it finished. */
 export interface SubloopState {
   key: string; run: string; stage: string; attempt: number; child: string; loop: string; loop_hash: string; input_hash: string; inputs: BlobRef; depth: number; started_seq: number;
+  /** The hash of the child's first entry, as subloop.started recorded it; null when it recorded none. */
+  origin: string | null;
   finished: null | { child_run: string; head: { seq: number; hash: string }; outcome: "published" | "completed" | "stopped"; output_hash: string; output: BlobRef; cards: string[]; seq: number };
 }
 /** The loop a case is for, the version its run is bound to, its parent when it is a child, and the children its runs made (slice 12). */

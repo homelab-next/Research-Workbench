@@ -7,7 +7,8 @@ import type { CaseState, SubloopState } from "../../core/state";
 import type { Actor, EntryInput } from "../../core/types";
 import type { ChildLink } from "../../core/workbench";
 import type { StageEnd, StageRunner } from "../engine";
-import { childWaitReason, inputsOf, outputHash, outputsOf, returnsOf } from "../subloop";
+import { childRefOf, childWaitReason, inputsOf, notTheChild, outputHash, outputsOf, returnsOf } from "../subloop";
+import type { ChildCases } from "../subloop";
 
 const ENGINE: Actor = { kind: "system", id: "engine" };
 export const NO_CHILDREN = "this workbench cannot run a sub-loop here";
@@ -38,20 +39,23 @@ export const subloopRunner: StageRunner = async (env) => {
   if (run === null) return { kind: "stalled", reason: `${stage.title} runs only inside a run` };
   const key = subloopKey(run, stage.id, attempt);
   const recorded = (s: Readonly<CaseState>): SubloopState | null => (Object.hasOwn(s.loop.children, key) ? s.loop.children[key]! : null);
+  const readOf = (rec: SubloopState): ReturnType<ChildCases["read"]> => children.read(childRefOf(session.id, rec));
 
   let rec = recorded(s0);
-  if (rec?.finished != null) return endOf(rec, children.read(rec.child)?.stop_reason ?? null);
+  // what was recorded stands, whether or not the child is loaded here now
+  if (rec?.finished != null) return endOf(rec, readOf(rec)?.stop_reason ?? null);
+
+  const loop = deps.loops?.current(spec.loop) ?? null;
+  if (loop === null) {
+    const why = deps.loops?.problems(spec.loop)[0];
+    return { kind: "stalled", reason: `${stage.title}: the loop "${spec.loop}" is not usable here${why === undefined ? "" : `: ${why}`}` };
+  }
 
   if (rec === null) {
     const { max_depth, max_children } = deps.config.loops;
     const depth = depthOf(s0) + 1;
     if (depth > max_depth) return { kind: "stalled", reason: `sub-loop depth cap of ${max_depth} reached` };
     if (s0.loop.child_count >= max_children) return { kind: "stalled", reason: `this case has started ${max_children} sub-loops, the cap` };
-    const loop = deps.loops?.current(spec.loop) ?? null;
-    if (loop === null) {
-      const why = deps.loops?.problems(spec.loop)[0];
-      return { kind: "stalled", reason: `${stage.title}: the loop "${spec.loop}" is not usable here${why === undefined ? "" : `: ${why}`}` };
-    }
     let made: ReturnType<typeof inputsOf>;
     try {
       made = inputsOf(s0, spec, loop.manifest.inputs, session.head().hash);
@@ -67,30 +71,31 @@ export const subloopRunner: StageRunner = async (env) => {
       if (s.run.id !== run || s.run.status === "finished" || recorded(s) !== null) return [];
       return [{
         type: "subloop.started", actor: ENGINE, run, stage: stage.id,
-        payload: { stage: stage.id, attempt, child, loop: spec.loop, loop_hash: loop.pipeline.hash, input_hash: made.input_hash, inputs: session.blobs.put(canonical(made.inputs as Json)), depth },
+        payload: { stage: stage.id, attempt, child: child.id, loop: spec.loop, loop_hash: loop.pipeline.hash, input_hash: made.input_hash, inputs: session.blobs.put(canonical(made.inputs as Json)), depth, origin: child.origin },
       }];
     });
     rec = recorded(session.state);
     if (rec === null) return { kind: "stopped" };
   }
 
+  const ref = childRefOf(session.id, rec);
   const child = rec.child;
-  const before = children.read(child);
-  if (before === null) return { kind: "waiting_child", child, reason: "it is not loaded here" };
+  const before = children.read(ref);
+  if (before === null) return { kind: "waiting_child", child, reason: notTheChild(ref) };
   if (before.state.run.status !== "finished") {
     try {
-      await children.drive(child);
+      await children.drive(ref);
     } catch (err) {
       return { kind: "waiting_child", child, reason: `it could not be carried on: ${firstLine(err)}` };
     }
   }
-  const view = children.read(child);
-  if (view === null) return { kind: "waiting_child", child, reason: "it is not loaded here" };
+  const view = children.read(ref);
+  if (view === null) return { kind: "waiting_child", child, reason: notTheChild(ref) };
   const { state: cs, head } = view;
   if (cs.run.status !== "finished" || cs.run.id === null) return { kind: "waiting_child", child, reason: childWaitReason(cs) };
 
   const outcome = cs.run.outcome ?? "stopped";
-  const outputs = outcome === "stopped" ? {} : outputsOf(cs, view.outputs);
+  const outputs = outcome === "stopped" ? {} : outputsOf(cs, loop.manifest.outputs);
   const output_hash = outputHash(outputs);
   const childRun = cs.run.id;
   session.commit((s, ids) => {

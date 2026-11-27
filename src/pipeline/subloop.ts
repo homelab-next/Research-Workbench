@@ -5,9 +5,9 @@ import { sha256Hex } from "../core/hash";
 import type { IdAllocator } from "../core/ids";
 import { Refused } from "../core/refused";
 import { CARD_REF, cardFields, cardRefs, latestDraft } from "../core/state";
-import type { CaseState } from "../core/state";
+import type { CaseState, SubloopState } from "../core/state";
 import { SECTIONS, strictest } from "../core/types";
-import type { Card, EntryInput, Finding, Marking, Product, Section } from "../core/types";
+import type { Card, Entry, EntryInput, Finding, Marking, Product, Section } from "../core/types";
 import type { ChildLink, NewCase } from "../core/workbench";
 import type { RunSummary } from "./engine";
 import type { LoopInput, LoopOutput } from "./loops";
@@ -210,15 +210,46 @@ export function childWaitReason(state: Readonly<CaseState>): string {
   }
 }
 
+/**
+ * Which case a parent's record names as its child: its id, the hash of its first entry (null when the record names none), and the link it was made
+ * for. Ids repeat across workbenches, so a case with this id is the child only when its subloop.child names this parent, run, stage, attempt and
+ * input hash, and its first entry is this one.
+ */
+export interface ChildRef { id: string; origin: string | null; parent: string; run: string; stage: string; attempt: number; input_hash: string }
+
+/** The child a parent's record names, as a ChildRef. */
+export const childRefOf = (parent: string, rec: Pick<SubloopState, "child" | "origin" | "run" | "stage" | "attempt" | "input_hash">): ChildRef =>
+  ({ id: rec.child, origin: rec.origin, parent, run: rec.run, stage: rec.stage, attempt: rec.attempt, input_hash: rec.input_hash });
+
+/** Whether a case (its state and the hash of its first entry) is the child `ref` names. */
+export function isChildOf(state: Readonly<CaseState>, origin: string | null, ref: ChildRef): boolean {
+  const p = state.loop.parent;
+  if (p === null || p.case !== ref.parent || p.run !== ref.run || p.stage !== ref.stage || p.attempt !== ref.attempt || p.input_hash !== ref.input_hash) return false;
+  return ref.origin === null || origin === ref.origin;
+}
+
+/** Why a host refuses to drive a case: it is not the child the parent's record names. */
+export const notTheChild = (ref: ChildRef): string => `child ${ref.id} is not loaded; load it from the store`;
+
+/** What a host's `read` gives of a child session: its state, head and why its run stopped; null when the session is not the child `ref` names. */
+export function readChild(session: { readonly state: Readonly<CaseState>; head(): { seq: number; hash: string }; entries(from?: number, to?: number): readonly Entry[] }, ref: ChildRef): ChildView | null {
+  if (!isChildOf(session.state, session.entries(0, 1)[0]?.hash ?? null, ref)) return null;
+  const stopped = session.entries().findLast((e) => e.type === "run.finished");
+  return { state: session.state, head: session.head(), stop_reason: stopped !== undefined && stopped.type === "run.finished" ? stopped.payload.reason ?? null : null };
+}
+
+export interface ChildView { state: Readonly<CaseState>; head: { seq: number; hash: string }; stop_reason?: string | null }
+
 /** What the engine needs of the host to run a sub-loop. The host has the workbench; the engine has a session. */
 export interface ChildCases {
-  find(link: ChildLink): string | null;
-  create(input: NewCase, link: ChildLink, cards: Card[]): string;
-  /** Starts the child's run when it has none, and carries it as far as it goes without a person. Never passes a gate. */
-  drive(child: string): Promise<RunSummary>;
+  /** The case a stopped process made for this link, with the hash of its first entry; null when there is none. */
+  find(link: ChildLink): { id: string; origin: string } | null;
+  create(input: NewCase, link: ChildLink, cards: Card[]): { id: string; origin: string };
   /**
-   * The child's state and head now, and its loop's declared outputs; null when the case is not loaded. `stop_reason`: why its run was stopped, when the
-   * host knows it.
+   * Starts the child's run when it has none, and carries it as far as it goes without a person. Never passes a gate. Throws Refused, doing
+   * nothing, when the case with that id is not the child `ref` names.
    */
-  read(child: string): { state: Readonly<CaseState>; head: { seq: number; hash: string }; outputs: Record<string, LoopOutput>; stop_reason?: string | null } | null;
+  drive(ref: ChildRef): Promise<RunSummary>;
+  /** The child's state and head now; null when no case here is the child `ref` names. `stop_reason`: why its run was stopped, when the host knows it. */
+  read(ref: ChildRef): ChildView | null;
 }

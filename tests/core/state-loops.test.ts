@@ -188,9 +188,20 @@ test("subloop.started opens a child under run/stage/attempt and counts it", () =
   expect(s.loop.children["run-1/investigate/1"]).toMatchObject({ child: "CASE-2", loop: "investigation", input_hash: IH, depth: 1, finished: null });
   expect(s.loop.children[subloopKey("run-1", "investigate", 1)]).toEqual({
     key: "run-1/investigate/1", run: "run-1", stage: "investigate", attempt: 1, child: "CASE-2", loop: "investigation", loop_hash: H, input_hash: IH,
-    inputs: lock, depth: 1, started_seq: e.seq, finished: null,
+    inputs: lock, depth: 1, started_seq: e.seq, origin: null, finished: null,
   });
   expect(s.skipped).toEqual([]);
+});
+
+test("subloop.started keeps the child's origin when it names one, and a malformed origin is skipped as malformed", () => {
+  const b = running();
+  b.add("subloop.started", { ...started(), origin: "o".repeat(64) }, { actor: code });
+  expect(fold(b.entries).loop.children["run-1/investigate/1"]!.origin).toBe("o".repeat(64));
+  const c = running();
+  c.add("subloop.started", { ...started(), origin: 7 } as unknown as ReturnType<typeof started>, { actor: code });
+  const s = fold(c.entries);
+  expect(s.loop.children).toEqual({});
+  expect(s.skipped).toHaveLength(1);
 });
 
 test("subloop.started with no run in progress, for a stage that is not the run's, or for a key already open is skipped", () => {
