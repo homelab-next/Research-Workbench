@@ -14,7 +14,7 @@
     "sample:fixture": "bun run sample/fixture/reputation-server.ts"
   },
   "dependencies": {
-    "pivot": "github:homelab-next/pivot#v0.1.1"
+    "pivot": "github:homelab-next/pivot#v0.2.0"
   },
   "devDependencies": {
     "@types/bun": "^1.4.5",
