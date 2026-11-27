@@ -9,6 +9,7 @@ import type { Seeker, SeekLimits } from "../../modules/seeker";
 import type { DraftWork } from "../draft";
 import type { ToolSpec } from "../providers/types";
 import { ANALYSIS_TOOLS } from "./analysis";
+import { BUILDER_TOOLS } from "./builder";
 import { CARD_TOOLS } from "./cards";
 import { params, scrub, TOOL_VIEW_CHARS, ToolError, VIEW_ROWS } from "./kit";
 import { PERSON_TOOLS } from "./person";
@@ -17,9 +18,42 @@ import { SOURCE_TOOLS } from "./sources";
 
 export { TOOL_VIEW_CHARS, ToolError, VIEW_ROWS };
 
-export const TOOL_NAMES = ["list_sources", "describe_source", "find_routes", "list_playbooks", "run_step", "run_pivot", "run_query", "list_cards", "read_card", "verify_card",
+const STAGE_TOOLS = ["list_sources", "describe_source", "find_routes", "list_playbooks", "run_step", "run_pivot", "run_query", "list_cards", "read_card", "verify_card",
   "propose_assessment", "propose_narrative", "request_research", "raise_challenge", "answer_challenge", "ask_person"] as const;
+/** The loop builder's tools (slice 12, part B). In the fixed list so the agent loop runs them unchanged; a stage manifest may not list one. */
+export const BUILDER_TOOL_NAMES = ["loop_catalogue", "adapter_catalogue", "list_connectors", "list_roots", "validate_manifest", "propose_change", "request_probe"] as const;
+/** Every tool the agent loop knows: a stage's, then the builder's. */
+export const TOOL_NAMES = [...STAGE_TOOLS, ...BUILDER_TOOL_NAMES] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
+/** The sixteen tools a stage manifest may list. */
+export const STAGE_TOOL_NAMES: readonly ToolName[] = STAGE_TOOLS;
+
+/** A file the builder proposes: `path` relative to the write root, `/` separated. The shape of loop-write's ManifestFile, which src/agents may not import. */
+export interface ManifestFile { path: string; text: string }
+/** What a save's check says of a set of files: the shape of loop-write's ChangeCheck. */
+export interface ChangeCheck { ok: boolean; problems: string[]; files: { path: string; kind: string; id: string; hash: string; before: string | null }[] }
+/** A loop as the builder's catalogue shows it. */
+export interface BuilderLoop {
+  id: string; title: string; about: string; version: number | null; hash: string | null; usable: boolean; problems: string[];
+  stages: { id: string; title: string; runs: string; gate: string | null; on_pass: string | null; on_fail: string | null; loop: string | null }[];
+}
+/** A root as the builder sees it: by its last path segment, never its path. */
+export interface BuilderRoot { name: string; trusted: boolean; writable: boolean; credentials: string[]; imported: boolean }
+/**
+ * What the builder's tools read and check through. Set only by the builder's server code; every tool refuses without it ("this tool is the
+ * loop builder's"). The functions read; `check` is checkChange and writes nothing in a root.
+ */
+export interface BuilderTools {
+  loops(): BuilderLoop[];
+  roots(): BuilderRoot[];
+  /** The write root's name, as roots() names it. */
+  root: string;
+  /** A manifest file of the write root, scrubbed; null when there is none or it is not a manifest. */
+  read(path: string): string | null;
+  check(files: ManifestFile[]): ChangeCheck;
+  /** The value of every secret the workbench holds: a file or a question that holds one is refused, and no view shows one. */
+  secrets: readonly string[];
+}
 
 export interface ToolContext {
   session: CaseSession; deps: RunnerDeps; seeker: Seeker; actor: Extract<Actor, { kind: "agent" }>;
@@ -33,6 +67,8 @@ export interface ToolContext {
   in_code?: boolean;
   /** At most this many unanswered questions to the person in a run (the config's questions.max_open); DEFAULT_MAX_OPEN when absent. */
   max_open_questions?: number;
+  /** The loop builder's reader and check (slice 12, part B); absent everywhere but a builder session. */
+  builder?: BuilderTools;
 }
 /** `view` is what the model is given; `marking` is the marking of any source data in it. */
 export interface ToolResult { ok: boolean; summary: string; view: Json; marking: Marking | null }
@@ -51,7 +87,7 @@ const unavailable = (name: ToolName): ToolDef => ({
   call: async () => ({ ok: false, summary: "not available", view: { error: "not available" }, marking: null }),
 });
 
-const defs = new Map<string, ToolDef>([...SOURCE_TOOLS, ...RESEARCH_TOOLS, ...CARD_TOOLS, ...ANALYSIS_TOOLS, ...PERSON_TOOLS].map((t) => [t.name, t]));
+const defs = new Map<string, ToolDef>([...SOURCE_TOOLS, ...RESEARCH_TOOLS, ...CARD_TOOLS, ...ANALYSIS_TOOLS, ...PERSON_TOOLS, ...BUILDER_TOOLS].map((t) => [t.name, t]));
 export const TOOLS = Object.fromEntries(TOOL_NAMES.map((n) => [n, defs.get(n) ?? unavailable(n)])) as Record<ToolName, ToolDef>;
 
 /** The specs a model is given; with the agent's context, each tool's parameters as they are in it. */

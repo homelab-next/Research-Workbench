@@ -2,7 +2,7 @@ import { isPlainObject } from "../core/canonical";
 import type { Marking, ModelChoice } from "../core/types";
 import type { InventoryView, ModelView, PivotView, PlaybookView, Reference, SourceView } from "../core/wire";
 import { termsOf } from "../agents/draft";
-import { TOOL_NAMES } from "../agents/tools";
+import { STAGE_TOOL_NAMES } from "../agents/tools";
 import { scrub } from "../agents/tools/kit";
 import { mayGo } from "../agents/pack";
 import { pivotWeight } from "../modules/manifests";
@@ -51,7 +51,7 @@ export function referenceOf(deps: EngineDeps): Reference {
     types: registry.types().map((t) => ({ id: t.id, title: shown(deps, t.title) })), sources, pivots, objectives, phases,
     profile: { id: deps.profile.id, title: shown(deps, deps.profile.title) }, send_back_cap: SEND_BACK_CAP, playbooks, inventories,
     likelihood: likelihoodTerms(deps),
-    stage_tools: [...TOOL_NAMES], stage_models: stageModels(deps),
+    stage_tools: [...STAGE_TOOL_NAMES], stage_models: stageModels(deps),
   };
 }
 

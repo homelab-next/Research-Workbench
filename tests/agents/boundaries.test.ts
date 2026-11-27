@@ -35,3 +35,24 @@ test("no file under src/agents/tools imports runProposal or names a budget", () 
     expect(`${f}: ${text.match(/\bbudget\s*:/)?.[0] ?? ""}`).toBe(`${f}: `);
   }
 });
+
+test("src/agents imports nothing that writes a manifest or the configuration, and builder.ts calls neither runQuery nor runPivot", () => {
+  const all = files(join(SRC, "agents"));
+  expect(all.some((f) => f.endsWith(join("tools", "builder.ts")))).toBe(true);
+  const WRITERS = /(?:modules\/(?:loop-write|loop-import|config-write|yaml-write)|core\/loopfile|core\/tar)(?:\.ts)?$/;
+  const FS_WRITE = /\b(?:writeFileSync|writeFile|appendFileSync|appendFile|writeSync|mkdirSync|mkdir|mkdtempSync|renameSync|rename|rmSync|rm|unlinkSync|unlink|copyFileSync|copyFile|cpSync|symlinkSync|linkSync|truncateSync|chmodSync|createWriteStream|openSync)\b/;
+  for (const f of all) {
+    const text = readFileSync(f, "utf8");
+    for (const spec of imports(text)) expect(`${f}: ${spec}`).not.toMatch(WRITERS);
+    // what a file takes from node:fs (or fs) is only ever a reader
+    for (const m of text.matchAll(/import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+["'](?:node:)?fs(?:\/promises)?["']/g)) {
+      expect(`${f}: ${m[1]!.match(FS_WRITE)?.[0] ?? ""}`).toBe(`${f}: `);
+    }
+    expect(`${f}: ${/import\s+\*\s+as\s+\w+\s+from\s+["'](?:node:)?fs/.test(text)}`).toBe(`${f}: false`);
+  }
+  const builder = readFileSync(join(SRC, "agents", "tools", "builder.ts"), "utf8");
+  expect(builder).not.toMatch(/\brunQuery\b/);
+  expect(builder).not.toMatch(/\brunPivot\b/);
+  expect(builder).not.toMatch(/\brunPlaybook\b|\brunProposal\b/);
+  for (const spec of imports(builder)) expect(`builder.ts: ${spec}`).not.toMatch(/modules\/(?:runner|pivots|playbook-run|proposals)$/);
+});

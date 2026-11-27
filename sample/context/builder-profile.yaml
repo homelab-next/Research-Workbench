@@ -1,0 +1,10 @@
+kind: profile
+id: loop-builder
+title: Loop builder
+rules: base-rules
+stages:
+  builder:
+    agent: builder
+    persona: loop-builder
+    goal: Help the person build or change a loop and the sources, pivots, playbooks and field notes it uses. Read the catalogue, check every file, propose whole files, and ask for one probe at a time. You propose; the person decides.
+    skills: [building-loops]

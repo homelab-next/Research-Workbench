@@ -48,6 +48,16 @@ test("a stage naming a tool outside the fixed list is left out with a problem", 
   expect(pipeline!.stages.map((s) => s.id)).not.toContain("frame");
 });
 
+test("a stage manifest that lists propose_change is refused: \"propose_change\" is the loop builder's, not a stage's", () => {
+  edit("frame", "[list_sources, describe_source]", "[list_sources, propose_change]");
+  const { pipeline, problems } = load();
+  expect(problems.some((p) => p.includes("frame") && p.includes(`"propose_change" is the loop builder's, not a stage's`))).toBe(true);
+  expect(pipeline!.stages.map((s) => s.id)).not.toContain("frame");
+  // stageFrom says the same of a body, whatever builder tool it names
+  const body = { kind: "stage", id: "x", title: "X", order: 1, runs: "agent", role: "frame", tools: ["request_probe"], model: { provider: "scripted", model: "m" } };
+  expect(stageFrom(body, "0".repeat(64), "X", true)).toBe(`"request_probe" is the loop builder's, not a stage's`);
+});
+
 test("a stage with an unknown role, a bad shape, or an agent with no model is left out with a problem", () => {
   edit("feedback", "role: feedback", "role: oracle");
   edit("checks", "order: 5", "order: five");

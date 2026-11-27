@@ -11,7 +11,7 @@ import { describeErrors, parseManifestFile } from "../modules/manifests";
 import type { LoadedManifest } from "../modules/manifests";
 import type { Registry } from "../modules/registry";
 import { staysInside } from "../modules/registry";
-import { TOOL_NAMES } from "../agents/tools";
+import { BUILDER_TOOL_NAMES, STAGE_TOOL_NAMES } from "../agents/tools";
 import type { ToolName } from "../agents/tools";
 import { SAMPLING_SCHEMA } from "../agents/providers/sampling";
 import type { Sampling } from "../agents/providers/types";
@@ -137,7 +137,9 @@ export function stageFrom(body: Record<string, Json>, hash: string, title: strin
     if (b.loop !== undefined || b.inputs !== undefined || b.returns !== undefined) return "only a stage that runs a loop has loop, inputs or returns";
   }
   const tools = b.tools ?? [];
-  const unknown = tools.find((t) => !(TOOL_NAMES as readonly string[]).includes(t));
+  const builders = tools.find((t) => (BUILDER_TOOL_NAMES as readonly string[]).includes(t));
+  if (builders !== undefined) return `"${builders}" is the loop builder's, not a stage's`;
+  const unknown = tools.find((t) => !(STAGE_TOOL_NAMES as readonly string[]).includes(t));
   if (unknown !== undefined) return `tool "${unknown}" is not in the fixed tool list`;
   const model = b.model == null ? null : { provider: b.model.provider, model: b.model.model, effort: b.model.effort ?? null };
   if (b.runs === "agent" && model === null) return "a stage that runs an agent needs a model";
