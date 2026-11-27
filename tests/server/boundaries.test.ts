@@ -238,7 +238,9 @@ test("entries and blobs reach the browser as recorded, and no response of any ki
   const location = new URL(await Bun.file(join(s.dir, "sample", "sources", "reputation.yaml")).text().then((t) => /location:\s*(\S+)/.exec(t)![1]!)).host;
   for (const { path, body } of seen.filter((x) => x.path.startsWith("/api/") && !x.path.includes("/blobs/") && !x.path.includes("/published/"))) {
     expect(`${path}: ${body.includes(location)}`).toBe(`${path}: false`);
-    expect(`${path}: ${body.includes(s.dir)}`).toBe(`${path}: false`);
+    // the one path shown is the case store's folder, to the analyst, in /api/me (slice 11)
+    const without = path === "/api/me" ? body.replace(JSON.stringify(join(s.dir, "wb", "store")), '""') : body;
+    expect(`${path}: ${without.includes(s.dir)}`).toBe(`${path}: false`);
   }
 });
 

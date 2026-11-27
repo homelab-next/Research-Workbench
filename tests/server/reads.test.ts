@@ -47,13 +47,27 @@ test("/api/me says who, in which role, at which origin, and the policy", async (
   expect(me.problems).toEqual([]);
 });
 
+test("GET /api/me names the store folder and the on-complete default", async () => {
+  s = await served();
+  const me = (await (await s.get("/api/me")).json()) as Me;
+  expect(me.cases).toEqual({ store: join(s.dir, "wb", "store"), on_complete: "keep" });
+  // the other views are told the folder's name, not where it is
+  const r = await served({ role: "requester" });
+  try {
+    expect(((await (await r.get("/api/me")).json()) as Me).cases).toEqual({ store: "store", on_complete: "keep" });
+  } finally {
+    await r.close();
+  }
+});
+
 const broken = (root: string): void => writeFileSync(join(root, "sources", "broken.yaml"), "kind: source\nid: broken\ntitle: Broken\nconnector: files\nlocation: /srv/private-lake/broken\nmarking: TLP:BOGUS\nwhere: machine\n");
 
 test("manifest problems reach the analyst with the path relative to its module root, never absolute", async () => {
   s = await served({ before: broken });
   expect(s.problems.length).toBeGreaterThan(0);
   expect(s.problems.join("\n")).toContain(s.dir);
-  const text = await (await s.get("/api/me")).text();
+  // the store folder is the one path the analyst is shown (it is theirs to open); every other field is checked for paths
+  const text = JSON.stringify({ ...((await (await s.get("/api/me")).json()) as Me), cases: null });
   expect(text).not.toContain(s.dir);
   expect(text).not.toContain("private-lake");
   const problems = (JSON.parse(text) as Me).problems;

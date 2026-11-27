@@ -58,10 +58,10 @@ defineCommand("pause", { args: NONE, then: then("pause"), perform: ({ engine, ac
 defineCommand("resume", {
   args: NONE, then: then("resume"),
   // resume drives by itself; the promise is the hub's to track
-  perform: ({ hub, engine, session, actor }) => {
+  perform: ({ hub, case: id, engine, session, actor }) => {
     const { status } = session.state.run;
     if (status !== "paused" && status !== "interrupted") throw new Refused(`there is no paused or interrupted run to resume; the run is ${status}`);
-    hub.background(engine.resume(actor));
+    hub.follow(id, engine.resume(actor));
   },
 });
 defineCommand("stop", { args: obj({ reason: str }), then: then("stop"), perform: ({ engine, actor }, a) => { engine.stop(actor, text(a, "reason")); } });
@@ -96,7 +96,7 @@ defineCommand("answer_challenge", {
 });
 defineCommand("rule_conflict", {
   args: obj({ conflict: str, follow: { type: ["string", "null"] }, note: str }), then: then("rule"),
-  perform: ({ hub, engine, session, actor }, a) => {
+  perform: ({ hub, case: caseId, engine, session, actor }, a) => {
     const id = text(a, "conflict");
     // a ruling revised at the publish gate waits there for the person's send_back_changes (slice 10)
     engine.rule(actor, id, a.follow as string | null, text(a, "note"));
@@ -105,15 +105,16 @@ defineCommand("rule_conflict", {
     const c = s.conflicts[id]!;
     const paused = s.run.status === "paused" && (s.run.pause_reason ?? "").includes(c.reason);
     const open = runConflicts(s).some((x) => x.ruling === null && (s.run.pause_reason ?? "").includes(x.reason));
-    if (paused && !open) hub.background(engine.resume(actor));
+    if (paused && !open) hub.follow(caseId, engine.resume(actor));
   },
 });
 defineCommand("approve", {
-  args: obj({ draft_hash: str }), then: then("approve"),
+  args: obj({ draft_hash: str, unload_after: { type: "boolean" } }, ["draft_hash"]), then: then("approve"),
   perform: ({ engine, session, actor }, a) => {
     // the draft the person saw: a newer one is not what they approved
     if (latestDraft(session.state) !== null && latestDraft(session.state)!.hash !== a.draft_hash) throw new SettingRefused("a newer draft arrived; review it before approving");
-    engine.approve({ actor });
+    // the person's "Unload after publishing": recorded on their gate.passed; the hub unloads once the run has finished
+    engine.approve({ actor, unload_after: a.unload_after === true });
   },
 });
 // "Send back to Assemble with my changes" (slice 10): the person's changes at the publish gate, sent back at once; it passes no gate

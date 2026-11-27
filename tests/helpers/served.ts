@@ -37,7 +37,7 @@ export interface Served {
 }
 
 /** The sample as a trusted root, a workbench, compose and an app, all in process; requests go straight to app.handle with the right Host and Origin. */
-export async function served(opts: { role?: Role; listen?: boolean; credential?: { name: string; value: string }; before?: (root: string) => void; config?: Partial<Config> } = {}): Promise<Served> {
+export async function served(opts: { role?: Role; listen?: boolean; credential?: { name: string; value: string }; before?: (root: string) => void; config?: Partial<Omit<Config, "cases">> & { cases?: Partial<Config["cases"]> } } = {}): Promise<Served> {
   const dir = mkdtempSync(join(tmpdir(), "served-"));
   const sample = sampleRoot(dir);
   const cred = opts.credential;
@@ -46,13 +46,17 @@ export async function served(opts: { role?: Role; listen?: boolean; credential?:
     process.env[cred.name] = cred.value;
   }
   opts.before?.(sample.root);
+  const loaded = loadConfig({ env: {}, home: dir, repoRoot: dir });
+  const { cases: casesGiven, ...rest } = opts.config ?? {};
   const config: Config = {
-    ...loadConfig({ env: {}, home: dir, repoRoot: dir }),
+    ...loaded,
     data_dir: join(dir, "wb"), role: opts.role ?? "analyst",
     roots: [{ path: sample.root, trusted: true, credentials: cred === undefined ? [] : [cred.name] }],
-    ...opts.config,
+    ...rest,
+    // the store follows this data folder unless the test names one
+    cases: { ...loaded.cases, store: join(rest.data_dir ?? join(dir, "wb"), "store"), ...casesGiven },
   };
-  const wb = Workbench.open(config.data_dir, { onError: () => {} });
+  const wb = Workbench.open(config.data_dir, { onError: () => {}, store: config.cases.store, max_case_bytes: config.cases.max_bytes });
   let host = `127.0.0.1:${PRETEND_PORT}`;
   let composed: ReturnType<typeof compose> | undefined;
   let running: Running | undefined;

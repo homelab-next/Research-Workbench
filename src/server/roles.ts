@@ -1,7 +1,7 @@
 import type { Config } from "../modules/config";
 
 export type Role = Config["role"];
-export type Reading = "page" | "me" | "cases" | "reference" | "entries" | "models" | "custody" | "blob" | "bundle" | "preview" | "routes" | "difference" | "agent";
+export type Reading = "page" | "me" | "cases" | "reference" | "entries" | "models" | "custody" | "blob" | "bundle" | "preview" | "routes" | "difference" | "agent" | "store";
 
 /** The analyst reads everything; the other views read the page and who they are, and nothing else. Checked on the server for every read. */
 export function mayRead(role: Role, what: Reading): boolean {

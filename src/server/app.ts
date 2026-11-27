@@ -24,6 +24,8 @@ import { CaseHub } from "./hub";
 import { mayDo, mayRead } from "./roles";
 import type { Reading } from "./roles";
 import { entryStream } from "./stream";
+import { deleteRoute, loadRoute, settingsRoute, storeRoute, unloadRoute } from "./store-routes";
+import type { StoreRouteDeps } from "./store-routes";
 import { agentView } from "./converse";
 import { routesFor } from "./seek";
 import { difference } from "../modules/revalidate";
@@ -140,6 +142,7 @@ export function createApp(opts: AppOptions): App {
     return shown(deps, problem);
   };
   const text = (body: string, type: string): Response => new Response(body, { headers: { "content-type": type } });
+  const store: StoreRouteDeps = { config, wb, hub, human: () => ({ kind: "human", id: config.user }), shown: (r) => shown(deps, r) };
 
   const routes: Route[] = [
     { method: "GET", path: /^\/$/, needs: { read: "page" }, kind: "page", handle: () => text(assets.html, "text/html; charset=utf-8") },
@@ -149,7 +152,8 @@ export function createApp(opts: AppOptions): App {
       method: "GET", path: /^\/api\/me$/, needs: { read: "me" }, kind: "api",
       handle: () => json(200, {
         user: config.user, role: config.role, origin, markings: [...MARKINGS], policy: config.marking_policy,
-        problems: opts.problems.map(problemView),
+        problems: opts.problems.map(problemView), // the analyst is shown where the store is; the other views only its name
+        cases: { store: config.role === "analyst" ? wb.store.dir : wb.store.name, on_complete: config.cases.on_complete },
       } satisfies Me),
     },
     { method: "GET", path: /^\/api\/cases$/, needs: { read: "cases" }, kind: "api", handle: () => json(200, wb.listCases()) },
@@ -192,7 +196,12 @@ export function createApp(opts: AppOptions): App {
         }
         const session = hub.read(params[0]!);
         if (after > session.head().seq) throw new Declined(409, ["the stream position is ahead of this case; reload from 0"]);
-        return entryStream(session, after, req.signal, (close) => { open.add(close); return () => { open.delete(close); }; });
+        // ended by the app when it closes, and by the hub, saying "unloaded", when the case is unloaded
+        return entryStream(session, after, req.signal, (close) => {
+          open.add(close);
+          const forget = hub.track(params[0]!, close);
+          return () => { open.delete(close); forget(); };
+        });
       },
     },
     {
@@ -216,6 +225,14 @@ export function createApp(opts: AppOptions): App {
       method: "GET", path: /^\/api\/cases\/([^/]+)\/custody$/, needs: { read: "custody" }, kind: "api",
       handle: ({ params }) => json(200, custodyOf(hub.read(params[0]!))),
     },
+    { method: "GET", path: /^\/api\/store$/, needs: { read: "store" }, kind: "api", handle: ({ url }) => storeRoute(store, url) },
+    {
+      method: "POST", path: /^\/api\/cases\/([^/]+)\/unload$/, needs: { command: "unload_case" }, kind: "api",
+      handle: async ({ params, body }) => unloadRoute(store, params[0]!, await body()),
+    },
+    { method: "POST", path: /^\/api\/store\/load$/, needs: { command: "load_case" }, kind: "api", handle: async ({ body }) => loadRoute(store, await body()) },
+    { method: "POST", path: /^\/api\/store\/delete$/, needs: { command: "delete_stored" }, kind: "api", handle: async ({ body }) => deleteRoute(store, await body()) },
+    { method: "POST", path: /^\/api\/settings$/, needs: { command: "set_setting" }, kind: "api", handle: async ({ body }) => settingsRoute(store, await body()) },
     {
       method: "POST", path: /^\/api\/cases$/, needs: { command: "create_case" }, kind: "api",
       handle: async ({ body }) => {

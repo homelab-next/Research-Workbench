@@ -216,3 +216,24 @@ test("a position ahead of the case's head is 409 with a reason to reload, from a
   expect(at.status).toBe(200);
   await at.body!.cancel();
 });
+
+test("a stream open on a case ends when the case is unloaded, and a new stream for it is 404", async () => {
+  const id = await s.newCase();
+  const res = await s.get(`/api/cases/${id}/entries`);
+  expect((await take(res, 1)).map((g) => g.id)).toEqual([1]);
+  const unloaded = await s.post(`/api/cases/${id}/unload`, {});
+  expect(unloaded.status).toBe(200);
+  // read to the end: the case.unloaded entry, then an "unloaded" event, then the stream is closed (no hang)
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let rest = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    rest += decoder.decode(value, { stream: true });
+  }
+  const blocks = rest.split("\n\n").filter((b) => b !== "" && !b.startsWith(":"));
+  expect(blocks.at(-1)).toBe(`event: unloaded\ndata: {"case":"${id}"}`);
+  expect(blocks.slice(0, -1).map((b) => (JSON.parse(/^data: (.*)$/m.exec(b)![1]!) as Entry).type)).toEqual(["case.unloaded"]);
+  expect((await s.get(`/api/cases/${id}/entries`)).status).toBe(404);
+});

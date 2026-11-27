@@ -1,4 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { Engine } from "../../src/pipeline/engine";
 import type { EngineDeps } from "../../src/pipeline/engine";
 import { PlanRefused } from "../../src/pipeline/plans";
@@ -88,6 +90,21 @@ test("a refusal is 409 with the engine's own words and writes nothing", async ()
   const before = s.entries(id).length;
   expect(await s.command(id, "approve")).toEqual({ status: 409, body: { ok: false, refused: [expect.stringContaining("publish")] } });
   expect(s.entries(id).length).toBe(before);
+});
+
+test("approve takes unload_after and records it on the person's gate.passed; any other type is 400", async () => {
+  s = await served();
+  const id = await s.newCase();
+  await s.toPublishGate(id);
+  expect((await s.command(id, "approve", { unload_after: "yes" })).status).toBe(400);
+  // the store is a file, so the unload after publishing fails and the case stays to be read
+  writeFileSync(join(s.dir, "wb", "store"), "not a folder");
+  expect((await s.command(id, "approve", { unload_after: true })).status).toBe(200);
+  const pass = s.entries(id).filter((e) => e.type === "gate.passed").at(-1)!;
+  expect(pass.payload).toEqual({ gate: "publish", unload_after: true });
+  expect(pass.actor).toEqual({ kind: "human", id: s.config.user });
+  await s.app.hub.idle();
+  expect(types(id)).toContain("case.unload_failed");
 });
 
 test("approving twice publishes once", async () => {

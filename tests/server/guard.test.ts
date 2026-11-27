@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { served } from "../helpers/served";
 import type { Served } from "../helpers/served";
@@ -162,4 +163,37 @@ test("the source binds the loopback address and names no other", () => {
   expect(text).not.toContain("0.0.0.0");
   expect(text).not.toMatch(/hostname:\s*["'](?!127\.0\.0\.1)/);
   expect(text).not.toContain('"::"');
+});
+
+test("every new route is refused for another Host, another Origin, a cross-site request, a non-JSON POST and a requester", async () => {
+  const id = await s.post("/api/cases", sampleCase).then(async (r) => ((await r.json()) as { id: string }).id);
+  const routes: { method: "GET" | "POST"; path: string; body: unknown }[] = [
+    { method: "GET", path: "/api/store", body: null },
+    { method: "POST", path: `/api/cases/${id}/unload`, body: {} },
+    { method: "POST", path: "/api/store/load", body: { file: "CASE-1.TLP-GREEN.tar.gz" } },
+    { method: "POST", path: "/api/store/delete", body: { file: "CASE-1.TLP-GREEN.tar.gz", id: "CASE-1" } },
+    { method: "POST", path: "/api/settings", body: { key: "cases.on_complete", value: "unload" } },
+  ];
+  const r = await served({ role: "requester" });
+  try {
+    for (const route of routes) {
+      const init = (extra: Record<string, string>): [Record<string, string>, RequestInit] => [
+        { "content-type": "application/json", ...extra },
+        route.method === "GET" ? {} : { method: "POST", body: JSON.stringify(route.body) },
+      ];
+      const go = (headers: Record<string, string>, i: RequestInit): Promise<Response> => ask(route.path, headers, i);
+      expect((await go(...init({ host: "evil.example:4747", origin: s.origin }))).status).toBe(421);
+      expect((await go(...init({ host, origin: "https://example.net" }))).status).toBe(403);
+      expect((await go(...init({ host, origin: s.origin, "sec-fetch-site": "cross-site" }))).status).toBe(403);
+      expect((await ask(route.path, { host, origin: s.origin, "content-type": "text/plain" }, { method: "POST", body: JSON.stringify(route.body ?? {}) })).status).toBe(403);
+      const asRequester = route.method === "GET" ? await r.get(route.path) : await r.post(route.path, route.body);
+      expect(asRequester.status).toBe(403);
+    }
+  } finally {
+    await r.close();
+  }
+  expect(s.wb.listCases().map((c) => c.id)).toEqual([id]);
+  expect(existsSync(join(s.dir, "wb", "store"))).toBe(false);
+  expect(existsSync(s.config.write_path)).toBe(false);
+  expect(s.wb.chain.read().some((e) => e.type === "setting.changed")).toBe(false);
 });

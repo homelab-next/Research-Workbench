@@ -15,7 +15,7 @@ defineCommand("answer_question", {
     properties: { question: str, answer: str, basis: { enum: [...PERSON_BASES] }, detail: str, about: ABOUT_SCHEMA, marking: { enum: [...MARKINGS, null] } },
   },
   then: "nothing",
-  perform: ({ hub, engine, session, deps, actor }, a) => {
+  perform: ({ hub, case: id, engine, session, deps, actor }, a) => {
     answerQuestion(session, deps.runner, {
       actor, question: a.question as string, answer: a.answer as string, basis: a.basis === undefined ? "unstated" : (a.basis as PersonBasis),
       detail: a.detail === undefined ? "" : (a.detail as string),
@@ -24,6 +24,6 @@ defineCommand("answer_question", {
     });
     // the run held for this stage's questions goes on once none is left: the person's resume, by their answer
     const { run } = session.state;
-    if (run.status === "paused" && run.hold?.kind === "question" && waitingOn(session.state, run.hold.stage).length === 0) hub.background(engine.resume(actor));
+    if (run.status === "paused" && run.hold?.kind === "question" && waitingOn(session.state, run.hold.stage).length === 0) hub.follow(id, engine.resume(actor));
   },
 });

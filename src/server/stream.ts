@@ -13,10 +13,11 @@ const enc = new TextEncoder();
  * land between them), then release the held entries and go on live. Each seq goes out once and in order. Entries are sent exactly as
  * recorded: one event each, `id:` the seq and `data:` the canonical JSON.
  * `track` is given the function that ends this stream and returns one that forgets it, so the app can end every open stream when it closes.
- * The stream also ends when the request is aborted or the response cancelled; either way the subscription is removed.
+ * Ended with "unloaded" (the case left the working set), the last thing sent is `event: unloaded` with `{"case":<id>}`, so a client can tell
+ * that end from a dropped connection. The stream also ends when the request is aborted or the response cancelled; either way the subscription is removed.
  */
-export function entryStream(session: CaseSession, after: number, signal: AbortSignal, track: (close: () => void) => () => void): Response {
-  let end: () => void = () => {};
+export function entryStream(session: CaseSession, after: number, signal: AbortSignal, track: (close: (why?: "unloaded") => void) => () => void): Response {
+  let end: (why?: unknown) => void = () => {};
   const body = new ReadableStream<Uint8Array>({
     async start(controller) {
       let last = after;
@@ -31,9 +32,12 @@ export function entryStream(session: CaseSession, after: number, signal: AbortSi
       const unsubscribe = session.subscribe((entry) => { if (live) send(entry); else held.push(entry); });
       let timer: ReturnType<typeof setInterval> | undefined;
       let untrack: () => void = () => {};
-      end = (): void => {
+      end = (why?: unknown): void => {
         if (ended) return;
         ended = true;
+        if (why === "unloaded") {
+          try { controller.enqueue(enc.encode(`event: unloaded\ndata: ${canonical({ case: session.id })}\n\n`)); } catch { /* already cancelled */ }
+        }
         unsubscribe();
         untrack();
         if (timer !== undefined) clearInterval(timer);

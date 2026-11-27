@@ -8,8 +8,23 @@ import type { EmptyMeans, Marking, ModelChoice, Observable, TimeWindow, Where } 
 /** The id of the playbook the server makes on the spot for "does it belong?"; no manifest may take it. pivot owns the name. */
 export { BELONGS_ID } from "pivot/types";
 
-export interface Me { user: string; role: "analyst" | "requester" | "leader"; origin: string; markings: Marking[]; policy: Record<Marking, Where[]>; problems: string[] }
-export interface CaseSummaryView { id: string; title: string; marking: Marking; created_ts: string; run_status: RunState["status"]; phase: string | null; incoming: number; kept: number }
+export interface Me {
+  user: string; role: "analyst" | "requester" | "leader"; origin: string; markings: Marking[]; policy: Record<Marking, Where[]>; problems: string[];
+  /** The case store's folder, and cases.on_complete: the default of "Unload after publishing". */
+  cases: { store: string; on_complete: "keep" | "unload" };
+}
+export interface CaseSummaryView { id: string; title: string; marking: Marking; created_ts: string; run_status: RunState["status"]; phase: string | null; incoming: number; kept: number;
+  /** Why the last unload of this case failed, or that one did not finish; null when none did. */
+  unload_failed: string | null }
+/** A case file in the store, as its case.json describes it. */
+export interface StoredCaseView {
+  file: string; bytes: number; id: string; title: string; asked: string; marking: Marking; starting: Observable[]; status: string;
+  outcome: "published" | "stopped" | null; published: number; head: string; entries: number; unloaded_ts: string; workbench: string;
+  /** This case is in the working set now. */
+  loaded: boolean;
+}
+/** The case store: its folder, the files in it newest first, the files named like case files that could not be read, and how many temporary files a stopped unload left. */
+export interface StoreView { store: string; cases: StoredCaseView[]; unreadable: { file: string; reason: string }[]; leftovers: number }
 export interface NewCaseInput { title: string; asked: string; why: string; starting: Observable[]; window: TimeWindow; objective: string | null; marking: Marking }
 export interface SourceView { id: string; title: string; connector: string; marking: Marking; where: Where; confirmed: boolean; adhoc: boolean; cost: { weight: number; unit: string }; quality: string }
 export interface PivotView { id: string; title: string; from: string; to: string; source: string; free: boolean; weight: number; needs_window: boolean; empty_means: EmptyMeans; inventory: string | null }

@@ -100,7 +100,7 @@ export async function serve(argv: string[], out: { log(line: string): void; erro
   })());
   try {
     // the lock first: a second serve on this data directory writes nothing and starts nothing, the sample and its fixture included
-    wb = Workbench.open(config.data_dir, { onError: (e) => out.error(`workbench: ${reason(e)}`) });
+    wb = Workbench.open(config.data_dir, { onError: (e) => out.error(`workbench: ${reason(e)}`), store: config.cases.store, max_case_bytes: config.cases.max_bytes });
     if (p.fixture !== null) {
       const root = config.roots[0];
       if (root === undefined) throw new ConfigError("--sample-fixture needs a root in the configuration");
