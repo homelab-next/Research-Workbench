@@ -9,6 +9,7 @@ import { pickView, soonView } from "./views/pick";
 import { caseStoreView } from "./views/casestore";
 import { loopsView } from "./views/loops";
 import { loopView } from "./views/loop";
+import { loopEditView } from "./views/loopedit";
 import { topBar } from "./views/topbar";
 import { caseScreenFor } from "./views/workarea";
 import { AT_GATE, makeSend } from "./ui";
@@ -105,7 +106,8 @@ export interface Shell {
   /** Reads the case list again (after an unload or a load from a screen that stays). */
   refreshCases(): void;
 }
-export type Screen = View & { focus?(): void };
+/** `leave` is asked before the app goes to another screen: false keeps this one (it has told the person why). */
+export type Screen = View & { focus?(): void; leave?(): boolean };
 
 export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { destroy(): void; actions(): Record<string, () => void> } {
   const { h, win, doc } = ui;
@@ -178,6 +180,8 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
     if (next.screen === "soon") { const wanted = next.mode; if (!MODES.some((m) => m.id === wanted)) next = { screen: "home" }; }
     const key = routeHash(next);
     if (key === routeKey && view !== null) return;
+    // a screen with work not saved may keep the person once: the address goes back to it
+    if (view?.leave !== undefined && !view.leave()) { win.location.hash = routeKey; return; }
     routeKey = key; route = next;
     view?.destroy?.(); view = null;
     toasts.dropUndo();                       // an Undo belongs to the case it was made in
@@ -209,8 +213,8 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
       case "store": view = caseStoreView(shell); break;
       case "soon": view = soonView(shell, next.mode); break;
       case "loops": view = loopsView(shell); break;
-      // the edit forms are Task 13's; until then the outline stands in for them
-      case "loop": case "loop_edit": view = loopView(shell, next.id); break;
+      case "loop": view = loopView(shell, next.id); break;
+      case "loop_edit": view = loopEditView(shell, next.id); break;
       case "case": view = (opts.caseScreen ?? caseScreenFor(ui))({ store: store!, nav }, (hs) => { handlers = hs; }); break;
     }
     clear(stage);

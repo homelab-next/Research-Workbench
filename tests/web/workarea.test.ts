@@ -500,17 +500,21 @@ test("a run paused on a child shows Open CASE-2 beside the reason; a pause with 
   const q = await parentAndChild();
   q.win.location.hash = "#/case/CASE-1";
   await q.settle();
-  const at = q.q(".topbar .pause-child");
-  expect(at.querySelector(".reason")!.textContent).toStartWith("Paused: waiting on child CASE-2: ");
+  const at = q.q(".pause-child");
+  expect(at.querySelector(".paused")!.textContent).toStartWith("Paused: waiting on child CASE-2: ");
   expect(at.querySelector("[data-action=open-child]")!.textContent).toBe("Open CASE-2");
-  q.click(".topbar [data-action=open-child]");
+  // the reason is said once on the screen, not again in the top bar (Task 13)
+  const said = (q.root.textContent ?? "").split("waiting on child CASE-2:").length - 1;
+  expect(said).toBe(1);
+  expect(q.root.querySelectorAll("[data-action=open-child]").length).toBe(1);
+  q.click("[data-action=open-child]");
   await q.settle();
   expect(q.win.location.hash).toBe("#/case/CASE-2");
   // the child, at its plan gate, paused by the person: a pause with no child hold says nothing of the kind
   expect((await q.s.command("CASE-2", "pause")).status).toBe(200);
   await q.settle();
   expect(q.s.app.hub.read("CASE-2").state.run.status).toBe("paused");
-  expect(q.root.querySelector(".topbar .pause-child")).toBeNull();
-  expect(q.root.querySelector(".topbar [data-action=open-child]")).toBeNull();
+  expect(q.root.querySelector(".pause-child")).toBeNull();
+  expect(q.root.querySelector("[data-action=open-child]")).toBeNull();
   expect(q.s.app.hub.read("CASE-2").state.skipped).toEqual([]);
 });

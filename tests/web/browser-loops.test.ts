@@ -57,6 +57,10 @@ async function theLoops(path: string): Promise<void> {
   // Export writes the file and names it; the list then shows it with what an import would do
   await tab.click("[data-screen=loop] [data-action=export]");
   await tab.waitFor(`(document.querySelector(".export-row .said")?.textContent ?? "").startsWith("Exported to investigation.v1.")`);
+  // its download link is this server's, and answers the file as an attachment
+  const href = await tab.evaluate<string>(`document.querySelector(".export-row a.download").getAttribute("href")`);
+  expect(href).toMatch(/^\/api\/loop-files\/investigation\.v1\.[0-9a-f]{12}\.loop\.tar\.gz$/);
+  expect(await tab.evaluate<string>(`fetch(${JSON.stringify(href)}).then((r) => r.status + " " + r.headers.get("content-disposition"))`)).toStartWith("200 attachment;");
   // New case from this loop goes to the form for it
   await tab.click("[data-screen=loop] [data-action=new-from-loop]");
   await tab.waitFor(`location.hash === "#/investigate/new/investigation" && document.querySelector(".loop-line")?.textContent === "Loop: Investigation"`);
@@ -69,9 +73,10 @@ async function theLoops(path: string): Promise<void> {
 
   // the parent waits on its child: Open CASE-2 beside the reason, and the child's way back
   await tab.evaluate(`location.hash = "#/case/${parent}"`);
-  await tab.waitFor(`(document.querySelector(".topbar [data-action=open-child]")?.textContent ?? "") === "Open CASE-2"`);
-  expect(await text(".topbar .pause-child .reason")).toStartWith("Paused: waiting on child CASE-2: ");
-  await tab.click(".topbar [data-action=open-child]");
+  await tab.waitFor(`(document.querySelector(".pause-child [data-action=open-child]")?.textContent ?? "") === "Open CASE-2"`);
+  expect(await text(".pause-child .paused")).toStartWith("Paused: waiting on child CASE-2: ");
+  expect(await tab.evaluate<number>(`document.body.textContent.split("waiting on child CASE-2:").length - 1`)).toBe(1);
+  await tab.click(".pause-child [data-action=open-child]");
   await tab.waitFor(`location.hash === "#/case/CASE-2" && (document.querySelector(".topbar [data-action=open-parent]")?.textContent ?? "") === "child of CASE-1"`);
   await tab.click(".topbar [data-action=open-parent]");
   await tab.waitFor(`location.hash === "#/case/CASE-1"`);

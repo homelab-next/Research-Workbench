@@ -313,7 +313,7 @@ export function loopRoutes(d: LoopRouteDeps): LoopRoute[] {
           const man = entryOf(id)?.manifest ?? null;
           const root = writeRoot(d.config, man);
           const path = man !== null && !man.implicit && man.root !== null && man.path !== null && resolve(man.root) === resolve(root) ? man.path : `loops/${id}.yaml`;
-          const check = checkChange(saveDeps(), root, [{ path, text: loopText(draft, (man?.version ?? 0) + 1) }]);
+          const check = checkChange(saveDeps(), root, [{ path, text: loopText(draft, (man?.version ?? 0) + 1, entryOf(id)?.loop ?? null) }]);
           return json(200, { ok: check.ok, problems: check.problems.map(d.shown) });
         });
       },

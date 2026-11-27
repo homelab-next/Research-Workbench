@@ -187,6 +187,7 @@ export function createApp(opts: AppOptions): App {
         user: config.user, role: config.role, origin, markings: [...MARKINGS], policy: config.marking_policy,
         problems: opts.problems.map(problemView), // the analyst is shown where the store is; the other views only its name
         cases: { store: config.role === "analyst" ? wb.store.dir : wb.store.name, on_complete: config.cases.on_complete },
+        loops: { default: config.loops.default },
       } satisfies Me),
     },
     {

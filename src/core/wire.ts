@@ -12,6 +12,8 @@ export interface Me {
   user: string; role: "analyst" | "requester" | "leader"; origin: string; markings: Marking[]; policy: Record<Marking, Where[]>; problems: string[];
   /** The case store's folder, and cases.on_complete: the default of "Unload after publishing". */
   cases: { store: string; on_complete: "keep" | "unload" };
+  /** The configuration's default loop (`loops.default`): a case of it says nothing of its loop on the case list. */
+  loops: { default: string };
 }
 export interface CaseSummaryView { id: string; title: string; marking: Marking; created_ts: string; run_status: RunState["status"]; phase: string | null; incoming: number; kept: number;
   /** Why the last unload of this case failed, or that one did not finish; null when none did. */
@@ -65,6 +67,10 @@ export interface Reference {
   inventories: InventoryView[];
   /** The profile standard's likelihood terms, least likely first; [] when it names none. */
   likelihood: string[];
+  /** The tool names a stage manifest may list, in the fixed list's order (the loop forms' checkboxes). */
+  stage_tools: string[];
+  /** Every model a stage of a loaded loop names, as model or fast model, once each (the loop forms' choice of model). */
+  stage_models: ModelChoice[];
 }
 export interface PlaybookView {
   id: string; title: string; about: string; inputs: { name: string; type: string }[];

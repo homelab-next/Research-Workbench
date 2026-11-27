@@ -1,11 +1,9 @@
 import type { LoopFileView, LoopSummaryView } from "../../core/wire";
 import type { H } from "../dom";
 import { clear } from "../dom";
+import { loopFileLink } from "../links";
 import { refusalLine } from "../refusal";
 import type { Screen, Shell } from "../app";
-
-/** The configuration's default loop (`loops.default`): a case of it says nothing about its loop on the case list. */
-export const DEFAULT_LOOP = "investigation";
 
 /** The first 12 hex of a hash: how every hash is shown; the whole hash is the element's title. */
 export const short = (hash: string): string => hash.slice(0, 12);
@@ -103,6 +101,7 @@ export function loopsView(shell: Shell): Screen {
       h("div", { class: "loop-file-actions" },
         h("button", { type: "button", data: { action: "import-loop" }, name: `Import ${f.file}`, disabled: blocked || busy.has(f.file),
           title: blocked ? "This file cannot be imported as things are: see why above" : "Import into a root that is not trusted", on: { click: () => importFile(f) } }, "Import"),
+        loopFileLink(h, ui.api.loopFilePath(f.file), "Download"),
         h("span", { class: "said", role: "status" }, said.get(f.file) ?? "")),
       refusalLine(h, refused.get(f.file), `import:${f.file}`));
   };

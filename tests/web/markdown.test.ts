@@ -75,7 +75,7 @@ test("the provenance fields are plain text: nothing in them can start a heading,
 });
 
 test("with no draft there is nothing to copy", () => {
-  expect(narrativeMarkdown(initial(), { types: [], sources: [], pivots: [], objectives: [], phases: [], profile: { id: "p", title: "p" }, send_back_cap: 3, playbooks: [], inventories: [], likelihood: [] })).toBe("");
+  expect(narrativeMarkdown(initial(), { types: [], sources: [], pivots: [], objectives: [], phases: [], profile: { id: "p", title: "p" }, send_back_cap: 3, playbooks: [], inventories: [], likelihood: [], stage_tools: [], stage_models: [] })).toBe("");
 });
 
 test("the banner is the strictest of the product's marking and every cited card's", async () => {

@@ -32,6 +32,8 @@ const BANNED: [string, RegExp][] = [
 const HANDLER_ATTRIBUTE = /\bsetAttribute(?:NS)?\s*\([^)]*?["'`]\s*on/i;
 /** What dom.ts alone may use. */
 const DOM_ONLY = new Set(["setAttribute", "createElement", "href or src", "setAttributeNode"]);
+/** links.ts makes the one other anchor (a loop file's download, slice 12): it may set attributes and make an element, from a fixed list, never on*. */
+const LINKS_ONLY = new Set(["setAttribute", "createElement"]);
 const SVG_ONLY = new Set(["setAttribute", "createElement"]);
 
 const SAMPLES: Record<string, string> = {
@@ -74,6 +76,7 @@ test("nothing under src/web uses an HTML sink", () => {
     const text = code(source(file));
         for (const [name, re] of BANNED) {
       if (file === join(WEB, "dom.ts") && DOM_ONLY.has(name)) continue;
+      if (file === join(WEB, "links.ts") && LINKS_ONLY.has(name)) continue;
       if (file === join(WEB, "svg.ts") && SVG_ONLY.has(name)) continue;
       if (re.test(text)) violations.push(`${relative(REPO, file)}: ${name}`);
     }
@@ -116,6 +119,13 @@ test("the dom helper's attribute names are a fixed list, none starting with on",
   const names = [...text.matchAll(/setAttribute\(\s*"([^"]+)"/g)].map((m) => m[1]!);
   expect(names.length).toBeGreaterThan(0);
   expect(names.filter((n) => /^on/i.test(n))).toEqual([]);
+});
+
+test("the links helper makes only an anchor, with attribute names from a fixed list, none starting with on", () => {
+  const text = code(source(join(WEB, "links.ts")));
+  expect([...text.matchAll(/createElement\(\s*"([^"]+)"/g)].map((m) => m[1])).toEqual(["a"]);
+  expect([...text.matchAll(/setAttribute\(\s*"([^"]+)"/g)].map((m) => m[1]).sort()).toEqual(["class", "download", "href", "rel"]);
+  expect(text).not.toMatch(/innerHTML|\.href\s*=|style/);
 });
 
 test("the svg helper writes attribute names from a fixed list, none starting with on", () => {

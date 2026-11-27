@@ -1,5 +1,4 @@
 import type { CaseSummaryView } from "../../core/wire";
-import { DEFAULT_LOOP } from "./loops";
 import { clear, syncList } from "../dom";
 import { markingChip } from "../chips";
 import { refusalLine } from "../refusal";
@@ -37,6 +36,8 @@ export function pickView(shell: Shell): Screen {
     return needle === "" || [c.title, c.id, c.marking, c.run_status, runWords(c.run_status)].join(" ").toLowerCase().includes(needle);
   };
 
+  /** The configuration's default loop, as the server names it: a case of it says nothing of its loop. */
+  const DEFAULT_LOOP = ui.me.loops.default;
   /** The loops' titles, read once a case of another loop than the default is listed; a loop's id stands in until then. */
   let loopTitles: Map<string, string> | null = null;
   let askedLoops = false;

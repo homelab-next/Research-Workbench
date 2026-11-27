@@ -1,6 +1,7 @@
 import type { ItemView, LoopStageView, LoopView } from "../../core/wire";
 import type { ModelChoice } from "../../core/types";
 import { clear } from "../dom";
+import { loopFileLink } from "../links";
 import { refusalLine } from "../refusal";
 import type { Screen, Shell } from "../app";
 import { hashChip, problemList, versionLine } from "./loops";
@@ -25,6 +26,8 @@ export function loopView(shell: Shell, id: string): Screen {
   let exporting = false;
   let exportWhy: string | undefined;
   let exportSaid = "";
+  /** The file the last export wrote, for its download link. */
+  let exportFile: string | null = null;
 
   const body = h("div", { class: "loop-outline" }, h("p", { class: "muted", role: "status" }, "Loading the loop…"));
 
@@ -81,17 +84,18 @@ export function loopView(shell: Shell, id: string): Screen {
     exportRow.append(
       h("button", { type: "button", data: { action: "export" }, disabled: exporting || !loop.usable, title: "Write this loop's file into the loop store", on: { click: () => void doExport() } }, "Export"),
       h("span", { class: "said", role: "status" }, exportSaid));
+    if (exportFile !== null) exportRow.append(" ", loopFileLink(h, ui.api.loopFilePath(exportFile), "Download"));
     const line = refusalLine(h, exportWhy, `export:${id}`);
     if (line !== null) exportRow.appendChild(line);
   };
   const doExport = async (): Promise<void> => {
     if (exporting) return;
-    exporting = true; exportWhy = undefined; exportSaid = ""; paintExport();
+    exporting = true; exportWhy = undefined; exportSaid = ""; exportFile = null; paintExport();
     const r = await ui.api.exportLoop(id);
     exporting = false;
     if (destroyed) return;
     if ("refused" in r) exportWhy = r.refused.join("; ");
-    else exportSaid = `Exported to ${r.file} in the loop store`;
+    else { exportSaid = `Exported to ${r.file} in the loop store`; exportFile = r.file; }
     paintExport();
     (exportRow.querySelector("[data-action=export]") as HTMLElement | null)?.focus();
   };

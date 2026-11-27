@@ -452,9 +452,18 @@ button.danger:not(:disabled) { border-color: var(--tlp-red); color: var(--tlp-re
 .loop-stages .stage-group li { margin: 2px 0; }
 .loop-stages .mapping { color: var(--muted); }
 .topbar .case-links { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.topbar .pause-child { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.pause-child { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 /* Task 13's forms */
 .loop-form { display: flex; flex-direction: column; gap: 8px; }
 .loop-form .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .loop-form .problems { margin: 4px 0; }
 .stage-edit { border: 1px solid var(--line); border-radius: var(--radius); padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.stage-list { display: flex; flex-direction: column; gap: 8px; padding-left: 0; list-style: none; }
+.stage-edit .stage-name { font-weight: 600; overflow-wrap: anywhere; }
+.stage-edit fieldset { border: 1px solid var(--line); border-radius: var(--radius); display: flex; gap: 8px; flex-wrap: wrap; }
+.stage-edit .components { border-collapse: collapse; font-size: 13px; }
+.stage-edit .components td, .stage-edit .components th, .every-stage .components td, .every-stage .components th { padding: 2px 8px 2px 0; text-align: left; overflow-wrap: anywhere; }
+.loop-form textarea { min-width: 320px; min-height: 3em; }
+.field-problem, .edge-note, .leave-ask { color: var(--amber); margin: 2px 0; }
+.problems.general:empty { display: none; }
+.copy-form { margin-top: 4px; }

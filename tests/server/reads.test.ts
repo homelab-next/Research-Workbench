@@ -222,3 +222,19 @@ test("a case's reads take its own loop: the agent of a triage case has no Assemb
   expect((await s.get(`/api/cases/${triage}/preview`)).status).toBe(200);
   expect(s.app.hub.read(triage).head()).toEqual(head);
 });
+
+test("/api/me names the default loop as the configuration has it, so the page hard-codes no loop's id (Task 13)", async () => {
+  s = await served();
+  const me = (await (await s.get("/api/me")).json()) as Me;
+  expect(me.loops).toEqual({ default: s.config.loops.default });
+});
+
+test("the reference lists the tool names a stage may give and the models the loops' stages name, for the loop forms (Task 13)", async () => {
+  s = await served();
+  const ref = (await (await s.get("/api/reference")).json()) as Reference;
+  expect(ref.stage_tools).toContain("run_query");
+  expect(ref.stage_tools).toContain("ask_person");
+  expect(new Set(ref.stage_tools).size).toBe(ref.stage_tools.length);
+  expect(ref.stage_models).toContainEqual({ provider: "scripted", model: "sample-run", effort: null });
+  expect(new Set(ref.stage_models.map((m) => JSON.stringify(m))).size).toBe(ref.stage_models.length);
+});

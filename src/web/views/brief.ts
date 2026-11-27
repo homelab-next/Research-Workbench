@@ -145,8 +145,13 @@ export function makeBrief(ui: Ui, open: Open): View {
     ]);
 
     const strike = state.skipped;
-    intoNotes([run.status, run.pause_reason, strike, ro], () => [
-      run.status === "paused" ? h("span", { class: "paused tag tag-attention" }, `Paused: ${run.pause_reason ?? ""}`) : null,
+    // a run paused on a child case says so once, here, with the way to the child beside the reason (slice 12)
+    const child = run.status === "paused" && run.hold !== null && run.hold.kind === "child" ? run.hold.child : null;
+    intoNotes([run.status, run.pause_reason, strike, ro, child], () => [
+      run.status !== "paused" ? null
+        : child === null ? h("span", { class: "paused tag tag-attention" }, `Paused: ${run.pause_reason ?? ""}`)
+        : h("span", { class: "pause-child" }, h("span", { class: "paused tag tag-attention" }, `Paused: ${run.pause_reason ?? ""}`), " ",
+          h("button", { type: "button", data: { action: "open-child" }, title: `Open ${child}: its gate is a person's, and passing it carries this case on`, on: { click: () => nav.go({ screen: "case", id: child }) } }, `Open ${child}`)),
       run.status === "interrupted"
         ? h("span", { class: "interrupted tag tag-attention" }, "Interrupted: the server stopped during this run. ",
           h("button", { type: "button", disabled: ro, on: { click: () => void ui.act("resume") } }, "Resume"))

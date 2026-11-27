@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { closeSync, copyFileSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { BlobStore } from "../core/blobs";
+import { canonical } from "../core/canonical";
 import type { Json } from "../core/canonical";
 import { sha256Hex } from "../core/hash";
 import type { Ledger } from "../core/ledger";
@@ -366,10 +367,34 @@ export function draftOf(loop: ResolvedLoop): LoopDraft {
   return copyOf(loop, loop.manifest.id, loop.manifest.title);
 }
 
-/** The loop file's text for a draft, with `version`. */
-export function loopText(draft: LoopDraft, version: number): string {
+/**
+ * A draft's stages as the loop file names them: a stage the loop `current` names by id, whose body in the draft is still the body of that stage
+ * manifest, stays a reference to it; any other stage (an edited one, a new one) is written inline. So a form save writes as a new version only the
+ * stages the person edited, and an unrelated edit leaves the loop's legacy hash, which a run from before slice 12 is held to, as it was.
+ */
+export function keptStages(draft: LoopDraft, current: ResolvedLoop | null): Json[] {
+  if (current === null || current.manifest.id !== draft.id) return draft.stages;
+  const byId = new Map<string, StageManifest>();
+  current.pipeline.stages.forEach((s, i) => {
+    const raw = current.manifest.implicit ? s.id : current.manifest.stages[i];
+    if (typeof raw === "string" && s.inline !== true) byId.set(s.id, s);
+  });
+  return draft.stages.map((body): Json => {
+    const id = body.id;
+    const held = typeof id === "string" ? byId.get(id) : undefined;
+    if (held === undefined) return body;
+    try {
+      return canonical(body as Json) === canonical(stageBody(held)) ? id as string : body;
+    } catch {
+      return body;
+    }
+  });
+}
+
+/** The loop file's text for a draft, with `version`; with `current`, the stages it names by id and the draft leaves unchanged stay references (keptStages). */
+export function loopText(draft: LoopDraft, version: number, current: ResolvedLoop | null = null): string {
   return `${WRITTEN_HEADER}\n${toYaml({
-    kind: "loop", id: draft.id, title: draft.title, about: draft.about, version, profile: draft.profile, entry: draft.entry, stages: draft.stages,
+    kind: "loop", id: draft.id, title: draft.title, about: draft.about, version, profile: draft.profile, entry: draft.entry, stages: keptStages(draft, current),
     inputs: draft.inputs, outputs: draft.outputs, components: draft.components, uses: draft.uses,
   })}`;
 }
@@ -386,7 +411,7 @@ export function saveLoop(deps: SaveDeps & { loops: LoopCatalog }, draft: LoopDra
   if (version !== current) throw new WriteRefused("the loop changed since you opened it");
   const root = writeRoot(deps.config, man);
   const path = man !== null && !man.implicit && man.root !== null && man.path !== null && sameDir(man.root, root) ? man.path : `loops/${draft.id}.yaml`;
-  return saveManifests(deps, root, [{ path, text: loopText(draft, (current ?? 0) + 1) }], { actor: by.actor, why: "save", session: null });
+  return saveManifests(deps, root, [{ path, text: loopText(draft, (current ?? 0) + 1, deps.loops.current(draft.id)) }], { actor: by.actor, why: "save", session: null });
 }
 
 /** Saves a copy of a usable loop under a new id, every stage inline, version 1. Refused when a loop of that id exists. */

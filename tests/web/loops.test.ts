@@ -60,7 +60,7 @@ let open: Stub | null = null;
 afterEach(async () => { await open?.close(); open = null; });
 
 /** startApp over a stub Api: every call is recorded; `over` replaces what a method answers. */
-async function stub(opts: { role?: Me["role"]; hash?: string; over?: Partial<Api> } = {}): Promise<Stub> {
+async function stub(opts: { role?: Me["role"]; hash?: string; over?: Partial<Api>; defaultLoop?: string } = {}): Promise<Stub> {
   const win = new Window({ url: `http://127.0.0.1:1/${opts.hash ?? ""}` });
   const doc = win.document as unknown as Document;
   const calls: unknown[][] = [];
@@ -78,7 +78,7 @@ async function stub(opts: { role?: Me["role"]; hash?: string; over?: Partial<Api
     entries: { open: () => () => {} },
     ...opts.over,
   } as unknown as Api;
-  const ui = testUi(win, { api, me: { user: "analyst", role: opts.role ?? "analyst", origin: "http://127.0.0.1:1", markings: ["TLP:GREEN"], policy: {} as never, problems: [], cases: { store: "<data>/cases", on_complete: "keep" } } });
+  const ui = testUi(win, { api, me: { user: "analyst", role: opts.role ?? "analyst", origin: "http://127.0.0.1:1", markings: ["TLP:GREEN"], policy: {} as never, problems: [], cases: { store: "<data>/cases", on_complete: "keep" }, loops: { default: opts.defaultLoop ?? "investigation" } } });
   const root = doc.createElement("div");
   doc.body.append(root);
   const app = startApp(ui, root);
@@ -337,4 +337,37 @@ test("Escape on a loop screen goes to the Loops list, and on the list goes home"
   s.actions().up!();
   await s.settle();
   expect(s.win.location.hash).toBe("#/loops/triage");
+});
+
+// ---- Task 13's follow-ups to Task 12
+
+test("the case list takes the default loop from the server: with triage the default, a triage case names no loop and an investigation case does", async () => {
+  const at = { title: "t", marking: "TLP:GREEN", created_ts: "2026-11-27T10:00:00.000Z", run_status: "none", phase: null, incoming: 0, kept: 0, unload_failed: null, parent: null, waiting_on: null } as const;
+  const s = await stub({
+    hash: "#/investigate", defaultLoop: "triage",
+    over: { cases: () => Promise.resolve([{ ...at, id: "CASE-1", title: "Of triage", loop: "triage" }, { ...at, id: "CASE-2", title: "Of investigation", loop: "investigation" }]) },
+  });
+  await go(s, "#/");
+  await go(s, "#/investigate");
+  const tile = (id: string): HTMLElement => s.all(".tile-wrap").find((w) => w.querySelector(".tile")!.getAttribute("aria-label")!.includes(` · ${id} · `))!;
+  expect(tile("CASE-1").querySelector(".chip.loop")).toBeNull();
+  expect(text(tile("CASE-2").querySelector(".chip.loop"))).toBe("Investigation");
+});
+
+test("Export names the file with a link that downloads it, and each file of the loop store has a Download link; a name that is not a loop file's gets no link", async () => {
+  const s = await stub({ hash: "#/loops/triage" });
+  s.click("[data-action=export]");
+  await s.settle();
+  const link = s.q(".export-row a");
+  expect(link.getAttribute("href")).toBe("/api/loop-files/triage.v2.bbbbbbbbbbbb.loop.tar.gz");
+  expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  expect(link.textContent).toBe("Download");
+  await go(s, "#/loops");
+  const links = s.all(".loop-file a");
+  expect(links.map((a) => a.getAttribute("href"))).toEqual(files().map((f) => `/api/loop-files/${f.file}`));
+  expect(links.map((a) => a.textContent)).toEqual(["Download", "Download"]);
+  await s.close(); open = null;
+  const odd = await stub({ hash: "#/loops", over: { loopFiles: () => Promise.resolve([{ ...files()[0]!, file: "../evil.v1.bbbbbbbbbbbb.loop.tar.gz" }]) } });
+  expect(odd.all(".loop-file a")).toEqual([]);
+  expect(text(odd.q(".loop-file .download"))).toBe("Download");
 });

@@ -1,7 +1,8 @@
 import { isPlainObject } from "../core/canonical";
-import type { Marking } from "../core/types";
+import type { Marking, ModelChoice } from "../core/types";
 import type { InventoryView, ModelView, PivotView, PlaybookView, Reference, SourceView } from "../core/wire";
 import { termsOf } from "../agents/draft";
+import { TOOL_NAMES } from "../agents/tools";
 import { scrub } from "../agents/tools/kit";
 import { mayGo } from "../agents/pack";
 import { pivotWeight } from "../modules/manifests";
@@ -50,7 +51,23 @@ export function referenceOf(deps: EngineDeps): Reference {
     types: registry.types().map((t) => ({ id: t.id, title: shown(deps, t.title) })), sources, pivots, objectives, phases,
     profile: { id: deps.profile.id, title: shown(deps, deps.profile.title) }, send_back_cap: SEND_BACK_CAP, playbooks, inventories,
     likelihood: likelihoodTerms(deps),
+    stage_tools: [...TOOL_NAMES], stage_models: stageModels(deps),
   };
+}
+
+/** Every model and fast model a stage of a usable loop (or of the default pipeline) names, once each, sorted by provider, model and effort with `<`. */
+function stageModels(deps: EngineDeps): ModelChoice[] {
+  const seen = new Map<string, ModelChoice>();
+  const stages = [...deps.pipeline.stages, ...(deps.loops?.list() ?? []).flatMap((x) => x.loop?.pipeline.stages ?? [])];
+  for (const st of stages) {
+    for (const m of [st.model, st.fast_model ?? null]) {
+      if (m === null) continue;
+      const choice: ModelChoice = { provider: m.provider, model: m.model, effort: m.effort ?? null };
+      seen.set(JSON.stringify([choice.provider, choice.model, choice.effort]), choice);
+    }
+  }
+  const lt = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+  return [...seen.entries()].sort((a, b) => lt(a[0], b[0])).map(([, m]) => m);
 }
 
 /** The profile standard's likelihood terms, in the standard's order (least likely first); [] when it lists none. */

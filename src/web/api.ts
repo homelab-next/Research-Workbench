@@ -43,6 +43,12 @@ export interface Api {
   trustRoot(root: string, typed: string): Promise<{ ok: true } | { refused: string[] }>;
   /** Where a file of the loop store is downloaded from. */
   loopFilePath(file: string): string;
+  /** Copies a usable loop under a new id and title, every stage inline (slice 12's forms). */
+  copyLoop(id: string, to: { id: string; title: string }): Promise<{ id: string } | { refused: string[] }>;
+  /** What a save of the draft would find, from the check a save makes; it writes nothing. A refusal of the request is its problems. */
+  checkLoop(id: string, draft: unknown): Promise<{ ok: boolean; problems: string[] }>;
+  /** Saves the draft as the loop's next version; `version` is the one the screen loaded. */
+  saveLoop(id: string, draft: unknown, version: number): Promise<{ id: string; version: number; hash: string } | { refused: string[] }>;
   entries: EntrySource;
 }
 
@@ -126,6 +132,12 @@ export function makeApi(fetcher: Fetcher, origin: string, entries: EntrySource):
     importLoop: (file) => answered<{ root: string; written: number; same: number }>(`/api/loop-files/${seg(file)}/import`, {}),
     trustRoot: (root, typed) => answered<{ ok: true }>("/api/roots/trust", { root, typed }),
     loopFilePath: (file) => `/api/loop-files/${seg(file)}`,
+    copyLoop: (id, to) => answered<{ id: string }>(`/api/loops/${seg(id)}/copy`, { id: to.id, title: to.title }),
+    async checkLoop(id, draft) {
+      const r = await answered<{ ok: boolean; problems: string[] }>(`/api/loops/${seg(id)}/check`, { draft });
+      return "refused" in r ? { ok: false, problems: r.refused } : r;
+    },
+    saveLoop: (id, draft, version) => answered<{ id: string; version: number; hash: string }>(`/api/loops/${seg(id)}/save`, { draft, version }),
     entries,
   };
 }

@@ -27,7 +27,7 @@ const PIVOTS = [
 ];
 const REF = {
   types: [{ id: "address", title: "Address" }, { id: "domain", title: "Domain" }], sources: [], pivots: PIVOTS, objectives: [], phases: [], profile: { id: "p", title: "p" }, send_back_cap: 3, playbooks: [],
-  inventories: [{ id: "hosts", title: "Hosts", holds: "asset", scope: "internal hosts", complete: true }, { id: "leases", title: "Leases", holds: "asset", scope: "leases", complete: false }], likelihood: [],
+  inventories: [{ id: "hosts", title: "Hosts", holds: "asset", scope: "internal hosts", complete: true }, { id: "leases", title: "Leases", holds: "asset", scope: "leases", complete: false }], likelihood: [], stage_tools: [], stage_models: [],
 };
 
 interface Rig { store: CaseStore; v: View; calls: unknown[][]; b: EntryBuilder; push(): void; ui: ReturnType<typeof testUi> }
