@@ -364,3 +364,44 @@ test("writeRoot is the trusted root that holds the loop, else the first trusted 
   // checkChange refuses a root the configuration does not trust
   expect(checkChange(deps(), root, [{ path: "loops/x.yaml", text: "kind: loop\n" }]).problems).toEqual(["the folder to save into is not a trusted root of the configuration"]);
 });
+
+// ---------- final review I2: a save never changes what kind of manifest a file is, nor its id ----------
+
+test("a save that would replace a file of a kind it may not write, with text of a kind it may, is refused for every such kind, and nothing is written", () => {
+  const skill = (id: string): string => `---\nkind: skill\nid: ${id}\ntitle: A skill\n---\nBe brief.\n`;
+  const pivots = "kind: pivots\npivots: []\n";
+  const cases: [string, string, string][] = [
+    ["checks/11-marking.yaml", "kind: skill\nid: tidy-notes\ntitle: Tidy notes\n", "check"],
+    ["checks/04-citations.yaml", pivots, "check"],
+    ["models/scripted.yaml", pivots, "model"],
+    ["scripts/sample-run.yaml", pivots, "script"],
+    ["context/objective.yaml", pivots, "objective"],
+    ["context/rules.md", skill("zz2"), "rules"],
+    ["context/personas/planner.md", skill("zz3"), "persona"],
+    ["context/profile.yaml", pivots, "profile"],
+    ["context/schemas/frame-output.yaml", pivots, "schema"],
+    ["context/standards/icd203.yaml", pivots, "standard"],
+    ["context/framework.yaml", pivots, "framework"],
+    ["types.yaml", pivots, "types"],
+    ["inventories/assets.yaml", pivots, "inventory"],
+    ["context/skills/ask-the-person.md", "---\nkind: playbook\nid: zz4\ntitle: Z\n---\nSteps.\n", "skill"],
+  ];
+  for (const [path, text, kind] of cases) {
+    const before = readFileSync(join(root, ...path.split("/")), "utf8");
+    const c = checkChange(deps(), root, [{ path, text }]);
+    expect({ path, ok: c.ok }).toEqual({ path, ok: false });
+    expect(c.problems.join(" | ")).toContain(`${path}: the file there is a ${kind}`);
+    const s = saveManifests(deps(), root, [{ path, text }], { actor: human, why: "save", session: null });
+    expect(s.ok).toBe(false);
+    expect(readFileSync(join(root, ...path.split("/")), "utf8")).toBe(before);
+  }
+});
+
+test("a save may replace a skill with a skill of the same id, and is refused one of another id", () => {
+  const path = "context/skills/ask-the-person.md";
+  const same = checkChange(deps(), root, [{ path, text: "---\nkind: skill\nid: ask-the-person\ntitle: Ask the person\n---\nAsk once.\n" }]);
+  expect(same).toMatchObject({ ok: true, problems: [] });
+  const other = checkChange(deps(), root, [{ path, text: "---\nkind: skill\nid: something-else\ntitle: Else\n---\nAsk once.\n" }]);
+  expect(other.ok).toBe(false);
+  expect(other.problems.join(" | ")).toContain(`${path}: the file there is skill "ask-the-person"; a save keeps a file's id`);
+});

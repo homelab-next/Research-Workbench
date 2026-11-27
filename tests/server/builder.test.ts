@@ -419,3 +419,32 @@ test("no route lets the builder agent decide: a tool call named builder_decide i
   expect(folded.skipped.map((x) => x.reason)).toEqual(["a change is decided by a person"]);
   expect(existsSync(join(root(), "context", "skills", "extra-notes.md"))).toBe(false);
 });
+
+// ---------- final review I2: a proposal never replaces a manifest of another kind ----------
+
+/** A builder.proposed written straight into the session, as if the tool had let it through: what the person's accept must still refuse. */
+function proposedByHand(id: string, path: string, text: string, kind: string, fileId: string): void {
+  const session = s.wb.builder(id);
+  const at = join(root(), ...path.split("/"));
+  const before = existsSync(at) ? sha256Hex(new Uint8Array(readFileSync(at))) : null;
+  const bundle = session.blobs.put(JSON.stringify({ files: [{ path, text }] }), "application/json");
+  session.commit((_s, ids) => [{ type: "builder.proposed", actor: { kind: "human", id: s.config.user }, payload: { change: ids.next("change"), title: "Tidy a file", why: "housekeeping", root: "sample", files: [{ path, kind, id: fileId, before, after: sha256Hex(text) }], bundle } }]);
+}
+const checksOf = (): string[] => s.app.hub.deps.loops!.current("investigation")!.lock.items.filter((i) => i.kind === "check").map((i) => i.id);
+
+test("a proposal that replaces a check with a skill is the builder's error; written into the session by hand, its accept is refused, and the loop keeps its eleven checks", async () => {
+  const text = "kind: skill\nid: tidy-notes\ntitle: Tidy notes\n";
+  await start([propose("Tidy a file", [{ path: "checks/11-marking.yaml", text }]), { content: "Proposed." }]);
+  const id = await newBuilder();
+  expect((await ask(id)).status).toBe(200);
+  expect(ofType(id, "builder.proposed")).toEqual([]);
+  const returned = ofType(id, "tool.returned").map((e) => JSON.stringify(e.payload)).join(" ");
+  expect(returned).toContain("the file there is a check");
+  proposedByHand(id, "checks/11-marking.yaml", text, "skill", "tidy-notes");
+  const before = readFileSync(join(root(), "checks", "11-marking.yaml"), "utf8");
+  const res = await decide(id, "chg-1", 0, true);
+  expect(res.status).toBe(409);
+  expect(JSON.stringify(await res.json())).toContain("the file there is a check");
+  expect(readFileSync(join(root(), "checks", "11-marking.yaml"), "utf8")).toBe(before);
+  expect(checksOf()).toHaveLength(11);
+});

@@ -134,6 +134,17 @@ function inspect(path: string, text: string, secrets: readonly string[]): { kind
   return { kind: parsed.kind, id };
 }
 
+/** What the file a save would replace is: its kind and id ("" for a list file), "file that is not a manifest" when it does not parse as one. */
+function replaced(path: string, bytes: Uint8Array): { kind: string; id: string } {
+  let parsed: ReturnType<typeof parseManifestFile>;
+  try {
+    parsed = parseManifestFile(path, bytes);
+  } catch {
+    return { kind: "file that is not a manifest", id: "" };
+  }
+  return { kind: parsed.kind, id: parsed.kind === "pivots" || parsed.kind === "types" ? "" : typeof parsed.body.id === "string" ? parsed.body.id : "" };
+}
+
 /** The text of the explicit loop that names the implicit loop's stages in order, so a save does not change it under the person. */
 function implicitText(loop: ResolvedLoop): string {
   const m = loop.manifest;
@@ -198,7 +209,13 @@ function plan(deps: SaveDeps, root: string, files: ManifestFile[]): { check: Cha
       try {
         const st = lstatSync(at);
         if (!st.isFile()) { problems.push(`${f.path}: there is something there that is not a file`); continue; }
-        before = sha256Hex(new Uint8Array(readFileSync(at)));
+        const bytes = new Uint8Array(readFileSync(at));
+        before = sha256Hex(bytes);
+        // a file keeps what it is: a save writes a manifest of the same kind and id over it, never another, so no check, model, script,
+        // rules or other hand-written manifest can be replaced by a kind a save may write (and drop out of a loop with nothing said)
+        const was = replaced(f.path, bytes);
+        if (was !== null && was.kind !== f.kind) { problems.push(`${f.path}: the file there is a ${was.kind}${was.id === "" ? "" : ` "${was.id}"`}; a save may not replace it with a ${f.kind}`); continue; }
+        if (was !== null && f.kind !== "pivots" && was.id !== f.id) { problems.push(`${f.path}: the file there is ${was.kind} "${was.id}"; a save keeps a file's id`); continue; }
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "ENOENT") { problems.push(`${f.path}: ${(err as Error).message}`); continue; }
       }
