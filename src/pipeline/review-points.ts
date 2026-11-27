@@ -156,6 +156,17 @@ export function reviewPointsPart(session: CaseSession, pipeline: Pipeline, view:
         by.push(r.entry);
       }
     }
+    // why this pass exists: the send-back's reason carries what code adds to the reviewer's point (a ruling the draft does not hold, a card
+    // that cannot be cited); it labelled the draft but never reached the model (dev CASE-3)
+    const asm = pipeline.stages.find((s) => s.role === "assemble");
+    if (asm !== undefined) {
+      const lastFinished = entries.reduce((n, e) => (e.type === "stage.finished" && e.payload.stage === asm.id && e.payload.outcome !== "declined" ? e.seq : n), 0);
+      const back = entries.findLast((e) => e.type === "stage.sent_back" && e.payload.to === asm.id && e.seq > lastFinished);
+      if (back !== undefined && back.type === "stage.sent_back") {
+        const from = state.run.stages.find((s) => s.id === back.payload.from)?.title ?? back.payload.from;
+        sections.push(`Why the work came back to you (from ${from}): ${back.payload.reason}`);
+      }
+    }
     if (open.length > 0) sections.push(["Open (answer each):", ...open].join("\n"));
     if (earlier.length > 0) sections.push(["Answered earlier in this run:", ...earlier].join("\n"));
   } else if (view === "evaluate") {
