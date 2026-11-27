@@ -225,7 +225,25 @@ kbd { font-family: var(--mono); font-size: 12px; background: var(--panel-2); bor
 .lens-narrative .question .why, .lens-narrative .question .asked-by, .lens-narrative .question .about { color: var(--muted); }
 .lens-narrative .answered-since { display: block; margin-top: 6px; }
 .lens-narrative .overrule-form { margin-top: 4px; }
-.lens-narrative .overrule-form summary, .lens-narrative .change-ruling summary { cursor: pointer; color: var(--accent); }
+.lens-narrative .change-ruling summary { cursor: pointer; color: var(--accent); }
+.overrule-toggle { color: var(--accent); border-color: var(--accent); padding: 2px 10px; }
+.overrule-body[hidden] { display: none; }
+.lens-narrative .gate-notes { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.lens-narrative .gate-notes .tag { display: block; border-radius: var(--radius); overflow-wrap: anywhere; }
+/* Questions for you, first under the brief (slice 10): an accent border so an open question is not missed */
+.questions-panel { border: 2px solid var(--accent); padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
+.questions-panel[hidden] { display: none; }
+.questions-panel .questions-box:empty, .questions-panel .gate-findings:empty { display: none; }
+.questions-panel .section-title { font-weight: 600; margin: 0 0 4px; }
+.questions-panel .question { border-top: 1px solid var(--line); padding: 4px 0; overflow-wrap: anywhere; }
+.questions-panel .question.open { border-left: 3px solid var(--accent); padding-left: 6px; }
+.questions-panel .question p { margin: 2px 0; }
+.questions-panel .question .why, .questions-panel .question .asked-by, .questions-panel .question .about { color: var(--muted); }
+.questions-panel .answer-form { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.questions-panel .gate-finding { display: flex; gap: 6px; align-items: center; border-top: 1px solid var(--line); padding: 4px 0; }
+.questions-panel .gate-finding .statement { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.question.answered { display: flex; gap: 6px; align-items: center; white-space: nowrap; }
+.question.answered .text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .lens-narrative .overrule-body { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; }
 .lens-narrative .overrule-now { margin: 4px 0; font-weight: 600; color: var(--accent); }
 .lens-narrative .overrule-earlier, .lens-narrative .ruling-earlier { margin: 2px 0; color: var(--muted); text-decoration: line-through; }

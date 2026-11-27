@@ -797,14 +797,14 @@ test("each finding has Overrule: the likelihood terms of the standard, the three
   await atGate();
   const ref = p.ui.ref;
   expect(ref.likelihood.length).toBe(7);
-  expect(p.q('[data-finding="f1"] details.overrule-form summary').textContent).toBe("Overrule");
+  expect(p.q('[data-finding="f1"] .overrule-form [data-action=open-overrule]').textContent).toBe("Overrule");
   // each finding's form has its own name for a screen reader (final review m5)
-  expect(p.q('[data-finding="f1"] details.overrule-form summary').getAttribute("aria-label")).toBe("Overrule f1");
+  expect(p.q('[data-finding="f1"] .overrule-form [data-action=open-overrule]').getAttribute("aria-label")).toBe("Overrule f1");
   expect([...p.all('[data-finding="f1"] select[aria-label="Likelihood of f1"] option')].map((o) => o.textContent)).toEqual(["leave as it is", ...ref.likelihood]);
   expect(options('[data-finding="f1"] [aria-label="Confidence of f1"]')).toEqual(["leave as it is", "low", "moderate", "high"]);
   expect(options('[data-finding="f1"] [aria-label="Whether f1 stays"]')).toEqual(["leave as it is", "must stay", "drop it"]);
   expect(p.q('[data-finding="f1"] [aria-label="Note on overruling f1"]').tagName).toBe("TEXTAREA");
-  expect(p.all("details.overrule-form").length).toBe(latest().product.key_findings.length);
+  expect(p.all(".overrule-form").length).toBe(latest().product.key_findings.length);
   // choosing "drop it" clears and disables the two values
   choose('[aria-label="Likelihood of f1"]', "likely");
   choose('[aria-label="Whether f1 stays"]', "drop it");
@@ -876,8 +876,8 @@ test("opened with overrule:f1, the lens opens that finding's form and puts focus
   p.fill(bar, "overrule f1");
   p.press("Enter");
   await settled();
-  expect((p.q('[data-finding="f1"] details.overrule-form') as HTMLDetailsElement).open).toBe(true);
-  expect((p.q('[data-finding="f2"] details.overrule-form') as HTMLDetailsElement).open).toBe(false);
+  expect((p.q('[data-finding="f1"] .overrule-body') as HTMLElement).hidden).toBe(false);
+  expect((p.q('[data-finding="f2"] .overrule-body') as HTMLElement).hidden).toBe(true);
   expect(p.doc.activeElement).toBe(p.q('[aria-label="Note on overruling f1"]'));
   expect(p.toasts().concat(p.text()).some((t) => t.includes("Overrule f1 from the Narrative lens"))).toBe(true);
   // once: a later repaint does not take focus back

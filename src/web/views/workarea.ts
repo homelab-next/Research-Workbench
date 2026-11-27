@@ -13,6 +13,7 @@ import { makeCardPool } from "./card";
 import type { CardEnv } from "./card";
 import { makeIncoming } from "./incoming";
 import { makeLanes } from "./lanes";
+import { makeQuestionsPanel } from "./questions";
 import { makeShelf } from "./shelf";
 import type { Dock } from "./shelf";
 
@@ -123,7 +124,9 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
     h("button", { type: "button", name: "Previous entry", on: { click: bannerStep(-1) } }, "◂"),
     h("button", { type: "button", name: "Next entry", on: { click: bannerStep(1) } }, "▸"),
     h("button", { type: "button", name: "Return to live", on: { click: () => store.goTo(null) } }, "Return to live"));
-  const stage = h("div", { class: "stage-col" }, brief.el, lanes.el);
+  // the questions put to the person, and the findings at the publish gate, first under the brief, whatever lens is open (spec slice 10)
+  const forYou = makeQuestionsPanel(ui, open, () => lensId);
+  const stage = h("div", { class: "stage-col" }, brief.el, forYou.el, lanes.el);
   const lensBox = h("div", { class: "lens-dock", tabindex: 0, data: { area: "lens" }, hidden: true });
   const el = h("div", { class: "workarea", data: { screen: "case" }, tabindex: -1 }, incoming.el, stage, lensBox, shelf.el);
 
@@ -142,6 +145,7 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
     const state = store.shown;
     const follow = pendingFocus !== null && store.live.seq > pendingFocus.seq ? pendingFocus : null;   // read before the parts repaint: they may move the focus themselves
     brief.update();
+    forYou.update();
     incoming.update();
     lanes.update();
     shelf.update();

@@ -52,8 +52,8 @@ async function theLens(path: string): Promise<void> {
   expect(await text(".gate-box .answered-since")).toMatch(/^ask-1 was answered after draft \d+ was made \(card c\d+\)\. Send the draft back if the answer changes it\.$/);
 
   // overruled: the form opens, Overrule waits for a value and a note, and is sent once
-  await tab.click('[data-finding="f1"] details.overrule-form summary');
-  await tab.waitFor(`document.querySelector('[data-finding="f1"] details.overrule-form').open`);
+  await tab.click('[data-finding="f1"] [data-action=open-overrule]');
+  await tab.waitFor(`!document.querySelector('[data-finding="f1"] .overrule-body').hidden`);
   expect(await tab.evaluate<boolean>(`document.querySelector('[data-finding="f1"] [data-action=overrule]').disabled`)).toBe(true);
   await choose("[aria-label='Likelihood of f1']", "almost certain");
   await tab.click("[aria-label='Note on overruling f1']");

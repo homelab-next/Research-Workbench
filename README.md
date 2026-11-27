@@ -258,6 +258,8 @@ After a plan has been accepted, each Plan pass gets a part built by code, "What 
 
 You know things no source holds, and you can go and look. The workbench records what you say as yours, keeps it apart from what a source returned, and labels every finding that rests on it.
 
+Where to act: answer a question in **Questions for you**, first under the brief on the case screen (and at the top of the Narrative lens); overrule a finding with the **Overrule** button under it in the Narrative lens, or beside it in the list of findings under Questions for you at the publish gate. The publish gate's box names the questions still open and the overrules in force next to Approve. None of these passes a gate.
+
 ### A statement
 
 "Add what you know" in the Incoming column (or `state <text>` in the command bar) records a statement: your text (at most 4000 characters), how you know it (saw it myself, did it myself, was told, or did not say how; the command bar records "did not say how"), an optional detail (at most 500 characters), up to 20 values it is about, and a marking no lower than the case's. It is a card made by you, with no query, no source and no rows. It is shown as "your statement", never as "nothing found".
@@ -266,7 +268,7 @@ An agent is shown it as "Source: the person (…). A statement by the person run
 
 ### Overruling a finding
 
-In the Narrative lens, each finding has an Overrule form: a likelihood, a confidence, whether it must stay or be dropped, and a note, which is required. Your latest overrule of a finding replaces the earlier one; setting nothing withdraws it. Overrules hold for the whole case, not one run.
+In the Narrative lens, each finding has an Overrule button that opens its form in place: a likelihood, a confidence, whether it must stay or be dropped, and a note, which is required. Your latest overrule of a finding replaces the earlier one; setting nothing withdraws it. Overrules hold for the whole case, not one run.
 
 Code holds every draft to your overrule, not the analyst's prompt: Assemble's builder sets the likelihood (and words the statement again), the confidence, or restores or drops the finding in each draft it makes. Neither reviewer may move it back: a point that would do so is refused or not sent back, and a draft that does not hold an overrule cannot be published. An overrule made while a run is in progress sends the work back to Assemble, with your overrule as the reason, so the analyst rewrites the finding's confidence basis and reasoning to rest on your note: at once at the publish gate, otherwise when the current stage ends. A reviewer's point about the overruled finding's reasoning or wording still goes back to the analyst; only a point that asks for another value is held. The published product says under the finding which value you set, with your note, and the provenance lists your overrules.
 
@@ -276,7 +278,7 @@ When Evaluate and Challenge disagree on a finding, the run waits for your ruling
 
 ### Questions
 
-Plan, Research and Assemble may put a question to you with `ask_person` (the sample gives those three stages the skill `ask-the-person`; the reviewers may not ask). A question says why it matters and which cards and values it is about. It appears in the Narrative lens's question box, and the brief counts the questions waiting for you. Answer it there, or with `answer ask-1 <text>` in the command bar. The answer is a card, a statement that answers the question, marked at least as strictly as the case and as the model request that wrote the question. A question takes one answer; to correct one, add a statement.
+Plan, Research and Assemble may put a question to you with `ask_person` (the sample gives those three stages the skill `ask-the-person`; the reviewers may not ask). A question says why it matters and which cards and values it is about. It appears in Questions for you, under the brief and at the top of the Narrative lens, and the brief counts the questions waiting for you; once answered it folds to one line with its answer card. Answer it there, or with `answer ask-1 <text>` in the command bar. The answer is a card, a statement that answers the question, marked at least as strictly as the case and as the model request that wrote the question. A question takes one answer; to correct one, add a statement.
 
 At most `questions.max_open` questions (default 3) may be unanswered in a run; `0` turns asking off:
 

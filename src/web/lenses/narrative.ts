@@ -1,7 +1,7 @@
-import { activeOverrules, BASIS_TEXT, blockers, CARD_REF, keepText, latestDraft, notedExceptions, overruleSays, proposalMarking, publishable, rulingText, runConflicts, runQuestions } from "../../core/state";
-import type { CaseState, ConflictState, Overrule, QuestionState } from "../../core/state";
-import { CONFIDENCES, PERSON_BASES } from "../../core/types";
-import type { Actor, Draft, Finding, PersonBasis, Product } from "../../core/types";
+import { activeOverrules, blockers, CARD_REF, keepText, latestDraft, notedExceptions, overruleSays, proposalMarking, publishable, rulingText, runConflicts } from "../../core/state";
+import type { CaseState, ConflictState, Overrule } from "../../core/state";
+import { CONFIDENCES } from "../../core/types";
+import type { Actor, Draft, Finding, Product } from "../../core/types";
 import type { Preview } from "../../core/wire";
 import type { Open } from "../app";
 import { cardChip, markingChip, tag } from "../chips";
@@ -11,6 +11,7 @@ import { narrativeMarkdown, SECTION_TITLES, TEXT_SECTIONS } from "../markdown";
 import type { TextSection } from "../markdown";
 import { AT_GATE, REPLAY_REFUSAL, typingIn } from "../ui";
 import type { Ui, View } from "../ui";
+import { makeQuestions, shownQuestions } from "../views/questions";
 
 export interface NarrativeView extends View {
   /** Opens the edit form and puts `[<card>]` at the caret of `section` (the one last focused, Summary at first). */
@@ -99,7 +100,8 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
   const gateBox = h("div", { class: "gate-box" });
   const copyBox = h("div", { class: "copy-box" });
   const proposalsBox = h("div", { class: "proposals-box" });
-  const questionsBox = h("div", { class: "questions-box" });
+  const questions = makeQuestions(ui, open);
+  const questionsBox = questions.el;
   draftBox.append(headBox, bodyBox);
   el.append(questionsBox, draftBox, toolsBox, gateBox, reviewBox, previewBox, copyBox, proposalsBox);
 
@@ -172,6 +174,8 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
   interface OverruleFields { likelihood: string; confidence: string; stays: string; note: string }
   const overruleVals = new Map<string, OverruleFields>();
   const overruleOpen = new Set<string>(focusOverrule === null ? [] : [focusOverrule]);
+  /** Bumped when a finding's Overrule form is opened or closed, so the findings are drawn again. */
+  let overruleVersion = 0;
   const fieldsOf = (id: string): OverruleFields => {
     let v = overruleVals.get(id);
     if (v === undefined) { v = { likelihood: "", confidence: "", stays: "", note: "" }; overruleVals.set(id, v); }
@@ -206,7 +210,7 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
       name: `Note on overruling ${id}`, value: v.note, disabled: ro(), placeholder: "Why (needed): what you know that the draft does not",
       on: { input: (e) => { v.note = (e.target as HTMLTextAreaElement).value; sync(); } },
     }) as HTMLTextAreaElement;
-    const go = h("button", { type: "button", class: "primary", data: { action: "overrule" }, on: { click: () => { send(false); } } }, "Overrule") as HTMLButtonElement;
+    const go = h("button", { type: "button", class: "primary", name: `Send the overrule of ${id}`, data: { action: "overrule" }, on: { click: () => { send(false); } } }, "Send the overrule") as HTMLButtonElement;
     const withdraw = active ? h("button", { type: "button", data: { action: "withdraw-overrule" }, on: { click: () => { send(true); } } }, "Withdraw the overrule") as HTMLButtonElement : null;
     function sync(): void {
       const dropped = v.stays === "drop";
@@ -220,13 +224,21 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
       }
     }
     sync();
-    const form = h("details", { class: "overrule-form", on: { toggle: () => { if (form.open) overruleOpen.add(id); else overruleOpen.delete(id); } } },
-      h("summary", { name: `Overrule ${id}` }, "Overrule"),
-      h("div", { class: "overrule-body" },
-        h("label", null, "Likelihood ", likelihood), h("label", null, "Confidence ", confidence), h("label", null, "Stays ", stays),
-        note, h("div", { class: "actions" }, go, withdraw),
-        h("p", { class: "note" }, "Code holds every draft to your overrule, and neither reviewer may move it back. While a run is in progress the draft goes back to the analyst to rewrite the finding's basis and reasoning: at once at the publish gate, otherwise when the current stage ends."))) as HTMLDetailsElement;
-    form.open = overruleOpen.has(id);
+    // Overrule is a button on the finding, always in view; it opens the form in place (it was a fold before slice 10, and people did not find it)
+    const body = h("div", { class: "overrule-body", hidden: !overruleOpen.has(id) },
+      h("label", null, "Likelihood ", likelihood), h("label", null, "Confidence ", confidence), h("label", null, "Stays ", stays),
+      note, h("div", { class: "actions" }, go, withdraw),
+      h("p", { class: "note" }, "Code holds every draft to your overrule, and neither reviewer may move it back. While a run is in progress the draft goes back to the analyst to rewrite the finding's basis and reasoning: at once at the publish gate, otherwise when the current stage ends. An overrule passes no gate."));
+    const toggle = h("button", {
+      type: "button", class: "overrule-toggle", name: `Overrule ${id}`, data: { action: "open-overrule" }, aria: { expanded: String(overruleOpen.has(id)) },
+      title: overruleOpen.has(id) ? `Close the Overrule form of ${id}` : `Set ${id}'s likelihood, confidence or place yourself, with a note`,
+      on: { click: () => {
+        if (overruleOpen.has(id)) overruleOpen.delete(id); else overruleOpen.add(id);
+        overruleVersion++;
+        render();
+      } },
+    }, "Overrule") as HTMLButtonElement;
+    const form = h("div", { class: "overrule-form" }, toggle, body);
     return [
       active && o !== null ? h("p", { class: "overrule-now" }, `You overruled: ${overruleLine(o)}`) : null,
       past.map((x) => h("p", { class: "overrule-earlier" }, `Earlier: ${overruleLine(x)}`)),
@@ -574,6 +586,16 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
       on: { click: () => { rejecting = true; sigs.delete(gateBox); render(); (gateBox.querySelector("[aria-label='Reason for rejecting the draft']") as HTMLElement | null)?.focus(); } },
     }, "Reject");
     const out: Node[] = [h("div", { class: "gate-buttons" }, approve, reject)];
+    // what the person may still want to settle before passing the gate, beside its button; neither line passes or holds the gate
+    const asking = shownQuestions(s).filter((q) => q.answer === null);
+    const holding = activeOverrules(s);
+    if (asking.length > 0 || holding.length > 0) {
+      out.push(h("div", { class: "gate-notes" },
+        asking.length === 0 ? null : h("p", { class: "gate-open-questions tag tag-attention", title: "Answer it in Questions for you; an answer passes no gate" },
+          `${asking.length} ${asking.length === 1 ? "question is" : "questions are"} still open: ${asking.map((q) => `${q.id} (${q.text})`).join("; ")}`),
+        holding.length === 0 ? null : h("p", { class: "gate-overrules tag tag-human", title: "Code holds every draft to these; withdraw one under its finding" },
+          `${holding.length} ${holding.length === 1 ? "overrule is" : "overrules are"} active: ${holding.map((o) => `${o.finding} (${overruleSays(o)})`).join("; ")}`)));
+    }
     // an answer passes no gate: it is noted here, and the person decides whether the draft goes back
     const made = draftSeq(d);
     for (const q of Object.values(s.questions).sort((a, b) => a.seq - b.seq)) {
@@ -601,62 +623,6 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
     return out;
   };
 
-  // ---------- questions put to the person ----------
-  const qAnswers = new Map<string, { text: string; basis: PersonBasis; detail: string }>();
-  const qFields = (id: string): { text: string; basis: PersonBasis; detail: string } => {
-    let v = qAnswers.get(id);
-    if (v === undefined) { v = { text: "", basis: "unstated", detail: "" }; qAnswers.set(id, v); }
-    return v;
-  };
-  /** The questions of this run, and any earlier one still unanswered (it can still be answered), in the order asked. */
-  const shownQuestions = (s: CaseState): QuestionState[] => {
-    const now = new Set(runQuestions(s).map((q) => q.id));
-    return Object.values(s.questions).filter((q) => now.has(q.id) || q.answer === null).sort((a, b) => a.seq - b.seq);
-  };
-  const questionTag = (s: CaseState, q: QuestionState): HTMLElement =>
-    q.answer !== null ? tag(ui, "done", "answered")
-      : q.waived !== null ? tag(ui, "human", "went on without your answer", "The run went on without the answer; you can still give it")
-        : q.blocking && q.run === s.run.id && runGoing(s) ? tag(ui, "attention", "the run waits on this", "The run does not go past this stage until you answer, or resume without the answer")
-          : tag(ui, "human", "question");
-  const questionForm = (q: QuestionState): HTMLElement => {
-    const v = qFields(q.id);
-    const busy = inflight.has(`question:${q.id}`);
-    const off = (): boolean => ro() || busy || v.text.trim() === "";
-    const send = h("button", {
-      type: "button", class: "primary", data: { action: "answer-question" }, disabled: off(), title: ro() ? REPLAY_REFUSAL : `Answer ${q.id}; the answer is a card of yours`,
-      on: { click: () => {
-        if (off()) return;
-        guarded(`question:${q.id}`, "answer_question", { question: q.id, answer: v.text.trim(), basis: v.basis, detail: v.detail.trim() }, () => { qAnswers.delete(q.id); });
-      } },
-      name: `Answer ${q.id}`,
-    }, "Answer") as HTMLButtonElement;
-    const basis = h("select", {
-      name: `How you know the answer to ${q.id}`, disabled: ro(),
-      on: { change: (e) => { v.basis = (e.target as HTMLSelectElement).value as PersonBasis; } },
-    }, PERSON_BASES.map((b) => h("option", { value: b }, BASIS_TEXT[b]))) as HTMLSelectElement;
-    basis.value = v.basis;
-    return h("div", { class: "answer-form" },
-      h("textarea", {
-        name: `Answer to ${q.id}`, value: v.text, disabled: ro(), placeholder: "Your answer",
-        on: { input: (e) => { v.text = (e.target as HTMLTextAreaElement).value; send.disabled = off(); } },
-      }),
-      h("label", null, "How you know ", basis),
-      h("input", { type: "text", name: `How you know the answer to ${q.id}, in detail`, value: v.detail, disabled: ro(), placeholder: "How you know (optional)", on: { input: (e) => { v.detail = (e.target as HTMLInputElement).value; } } }),
-      send);
-  };
-  const questionsView = (s: CaseState): Node[] => {
-    const qs = shownQuestions(s);
-    if (qs.length === 0) return [];
-    const title = (id: string | null): string => (id === null ? "an agent" : s.run.stages.find((x) => x.id === id)?.title ?? id);
-    return [h("h3", { class: "section-title" }, "Questions for you"), ...qs.map((q) => h("div", { class: `question${q.answer === null ? " open" : ""}`, data: { question: q.id } },
-      questionTag(s, q), ` ${q.id}`,
-      h("p", { class: "text" }, q.text),
-      h("p", { class: "why" }, `Why it matters: ${q.why}`),
-      q.cards.length === 0 ? null : h("p", { class: "cards" }, h("span", { class: "label" }, "Cards "), q.cards.map((c) => [chipFor(c), " "])),
-      q.about.length === 0 ? null : h("p", { class: "about" }, `About: ${q.about.map((o) => `${o.type} ${o.value}`).join(", ")}`),
-      h("p", { class: "asked-by" }, `asked by ${title(q.stage)}`),
-      q.answer !== null ? h("p", { class: "answer" }, "Your answer: ", chipFor(q.answer.card)) : questionForm(q)))];
-  };
   /** The entry that recorded a draft, for when it was made. */
   const draftSeq = (d: Draft): number => {
     const e = store.entries.findLast((x) => x.type === "draft.revised" && (x.payload as { draft?: { hash?: unknown } }).draft?.hash === d.hash);
@@ -715,13 +681,13 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
     const published = d !== null && s.published.length > 0 && s.published[s.published.length - 1]!.draft_hash === d.hash;
     draftBox.classList.toggle("proposed", !published);
     draftBox.hidden = d === null;
-    paint(questionsBox, [s.questions, s.run, s.cards, ro(), inflightVersion], () => questionsView(s));
+    questions.update();
     paint(headBox, [d, s.published, store.id, bundlesVersion], () => (d === null ? [] : headView(s, d)));
-    paint(bodyBox, edit !== null ? [edit] : [d, s.cards, s.overrules, s.conflicts, ro(), inflightVersion, ui.ref.likelihood], () => (d === null ? [h("p", { class: "empty" }, "No draft yet.")] : edit !== null ? [edit.el] : readBody(s, d)));
+    paint(bodyBox, edit !== null ? [edit] : [d, s.cards, s.overrules, s.conflicts, ro(), inflightVersion, ui.ref.likelihood, overruleVersion], () => (d === null ? [h("p", { class: "empty" }, "No draft yet.")] : edit !== null ? [edit.el] : readBody(s, d)));
     if (focusOverrule !== null && d !== null && edit === null) {
       const at = focusOverrule;
       const box = [...bodyBox.querySelectorAll("[data-finding]")].find((n) => n.getAttribute("data-finding") === at);
-      const noteBox = box?.querySelector("details.overrule-form textarea") as HTMLTextAreaElement | null | undefined;
+      const noteBox = box?.querySelector(".overrule-form textarea") as HTMLTextAreaElement | null | undefined;
       if (noteBox !== null && noteBox !== undefined && el.isConnected) { focusOverrule = null; noteBox.focus(); }
       else if (box === undefined) { focusOverrule = null; ui.toast(`There is no finding ${at} in draft ${d.n}`); }
     }
@@ -731,7 +697,7 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
     } else {
       el.querySelector(".no-draft")?.remove();
       paint(toolsBox, [d.hash, edit, ro(), s.run.status, s.cards === s.cards], () => toolsView(s, d));
-      paint(gateBox, [d.hash, s.run, s.reviews, s.challenges, s.published, s.questions, preview, store.live.seq, rejecting, ro(), inflightVersion], () => gateView(s, d));
+      paint(gateBox, [d.hash, s.run, s.reviews, s.challenges, s.published, s.questions, s.overrules, preview, store.live.seq, rejecting, ro(), inflightVersion], () => gateView(s, d));
       paint(reviewBox, [d.hash, s.reviews, s.challenges, s.conflicts, s.run, s.published, s.cards, ro(), inflightVersion], () => reviewView(s, d));
       paint(previewBox, [wantsPreview(s), preview, store.live.seq, tab], () => (wantsPreview(s) ? previewView() : []));
     }
