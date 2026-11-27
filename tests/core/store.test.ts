@@ -160,7 +160,8 @@ test("seenNumbers reads the names and deleted.log and unpacks nothing", () => {
   writeFileSync(join(store, "deleted.log"), '{"file":"CASE-9.TLP-AMBER.tar.gz","head":"x","id":"CASE-9","title":"t","when":"w","who":"analyst"}\nnot json\n{"id":"case-11"}\n');
   const errors: unknown[] = [];
   expect(new CaseStoreFolder(store).seenNumbers((e) => errors.push(e)).sort((a, b) => a - b)).toEqual([2, 7, 9]);
-  expect(errors).toEqual([]);
+  // a line that is not JSON is passed over; an id that is not CASE- and one to nine digits is reported and not counted
+  expect(errors.map(String)).toEqual(["CaseFileError: the case store's deleted.log names case-11, which is not a case id; it is not counted"]);
 });
 
 test("seenNumbers reports a store that cannot be read and returns []", () => {

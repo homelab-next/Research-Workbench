@@ -42,9 +42,14 @@ export interface CaseManifest {
 export type ManifestHeader = Omit<CaseManifest, "format" | "workbench" | "files">;
 
 const MANIFEST_NAME = "case.json";
-const CASE_ID = /^CASE-[1-9][0-9]*$/;
+/** A case id: CASE- and one to nine digits, so its number is always an exact integer. The one pattern for an id, everywhere. */
+export const CASE_ID = /^CASE-[1-9][0-9]{0,8}$/;
+/** The highest case number there can be. */
+export const MAX_CASE_NUMBER = 999999999;
+/** How a case file's name is made, for a sentence that refuses one. */
+export const CASE_FILE_NAME_FORM = "CASE-<1 to 9 digits>.<marking>.tar.gz";
 const HASH = /^[0-9a-f]{64}$/;
-const FILE_NAME = /^(CASE-[1-9][0-9]*)\.([A-Za-z0-9+_-]+)\.tar\.gz$/;
+const FILE_NAME = /^(CASE-[1-9][0-9]{0,8})\.([A-Za-z0-9+_-]+)\.tar\.gz$/;
 
 const isCount = (x: unknown, min: number): x is number => isNum(x) && Number.isSafeInteger(x) && x >= min;
 const isHash = (x: unknown): x is string => isStr(x) && HASH.test(x);

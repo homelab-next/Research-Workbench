@@ -29,7 +29,7 @@ export function parseRoute(hash: string): Route {
     return home;
   }
   if (parts[0] === "soon" && parts.length === 2 && /^[a-z0-9-]+$/.test(parts[1]!)) return { screen: "soon", mode: parts[1]! };
-  if (parts[0] === "case" && parts.length === 2 && /^CASE-[0-9]{1,9}$/.test(parts[1]!)) return { screen: "case", id: parts[1]! };
+  if (parts[0] === "case" && parts.length === 2 && /^CASE-[1-9][0-9]{0,8}$/.test(parts[1]!)) return { screen: "case", id: parts[1]! };
   return home;
 }
 

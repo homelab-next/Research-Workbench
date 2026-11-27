@@ -5,6 +5,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readManifest } from "../../src/core/casefile";
+import { rawCaseFile } from "../helpers/tar";
 import type { CaseSession } from "../../src/core/session";
 import type { Actor } from "../../src/core/types";
 import { CaseRefused, Workbench } from "../../src/core/workbench";
@@ -171,3 +172,54 @@ test("a case store configured inside cases/, or reached there through a link, is
   expect(r.ok).toBe(true);
 });
 
+// ---------- I2: an id is CASE- and one to nine digits, everywhere ----------
+
+const mark = (): string => readFileSync(join(cases(), ".high-water"), "utf8").trim();
+
+test("a store name with the largest number leaves no id to give: a new case is refused and nothing is made", () => {
+  wb.createCase(sample, person);
+  mkdirSync(join(dir, "store"));
+  writeFileSync(join(dir, "store", "CASE-999999999.TLP-CLEAR.tar.gz"), "junk");
+  const err = (() => { try { wb.createCase(sample, person); return null; } catch (e) { return e; } })();
+  expect(err).toBeInstanceOf(CaseRefused);
+  expect((err as CaseRefused).message).toBe("every case id up to CASE-999999999 has been given out here; no new case can be made");
+  expect(ls(cases())).toEqual([".high-water", "CASE-1"]);
+  expect(mark()).toBe("1");
+  expect(wb.listCases().map((c) => c.id)).toEqual(["CASE-1"]);
+});
+
+test("a store name or a deleted.log id of ten or more digits is not an id: the counter ignores it, the listing shows it as unreadable, and it is reported", async () => {
+  mkdirSync(join(dir, "store"));
+  for (const n of ["CASE-1000000000.TLP-CLEAR.tar.gz", "CASE-99999999999999999999999.TLP-CLEAR.tar.gz", "CASE-0012.TLP-CLEAR.tar.gz"]) writeFileSync(join(dir, "store", n), "junk");
+  writeFileSync(join(dir, "store", "deleted.log"), `${JSON.stringify({ id: "CASE-5000000000" })}\n${JSON.stringify({ id: "CASE-1e+23" })}\n${JSON.stringify({ id: "CASE-3" })}\n`);
+  const s = wb.createCase(sample, person);
+  expect(s.id).toBe("CASE-4");
+  expect(wb.session("CASE-4").state.meta?.title).toBe("Sample");
+  expect(wb.listCases().map((c) => c.id)).toEqual(["CASE-4"]);
+  expect(wb.createCase(sample, person).id).toBe("CASE-5");
+  expect(mark()).toBe("5");
+  expect(ls(cases())).toEqual([".high-water", "CASE-4", "CASE-5"]);
+  expect(errors.map(String).sort()).toEqual([
+    "CaseFileError: the case store holds CASE-0012.TLP-CLEAR.tar.gz, which is not a case file's name (CASE-<1 to 9 digits>.<marking>.tar.gz); its number is not counted",
+    "CaseFileError: the case store holds CASE-1000000000.TLP-CLEAR.tar.gz, which is not a case file's name (CASE-<1 to 9 digits>.<marking>.tar.gz); its number is not counted",
+    "CaseFileError: the case store holds CASE-99999999999999999999999.TLP-CLEAR.tar.gz, which is not a case file's name (CASE-<1 to 9 digits>.<marking>.tar.gz); its number is not counted",
+    "CaseFileError: the case store's deleted.log names CASE-1e+23, which is not a case id; it is not counted",
+    "CaseFileError: the case store's deleted.log names CASE-5000000000, which is not a case id; it is not counted",
+  ].flatMap((e) => [e, e]).sort());
+  const listing = await wb.store.list();
+  expect(listing.unreadable.map((u) => u.file).sort()).toEqual(["CASE-0012.TLP-CLEAR.tar.gz", "CASE-1000000000.TLP-CLEAR.tar.gz", "CASE-99999999999999999999999.TLP-CLEAR.tar.gz"]);
+  expect(listing.unreadable[0]!.reason).toBe("its name is not a case file's name (CASE-<1 to 9 digits>.<marking>.tar.gz)");
+});
+
+test("a case file whose case.json names a ten-digit id is refused as not a case manifest", async () => {
+  const s = wb.createCase(sample, person);
+  void s;
+  const r = await wb.unloadCase("CASE-1", { actor: person });
+  if (!r.ok) throw new Error(r.reason);
+  const m = await readManifest(r.path);
+  const ten = join(dir, "ten.tar.gz");
+  rawCaseFile(ten, [{ name: "case.json", body: JSON.stringify({ ...m, id: "CASE-1000000000", chain: "CASE-1000000000" }) }]);
+  const err = await refusalOf(wb.loadCase(ten, { actor: person }));
+  expect((err as Error).message).toBe("case.json is not a case manifest");
+  expect(ls(cases())).toEqual([".high-water"]);
+});

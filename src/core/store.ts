@@ -4,7 +4,7 @@ import { closeSync, fsyncSync, lstatSync, openSync, readdirSync, readFileSync, r
 import type { Dirent } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { canonical } from "./canonical";
-import { CaseFileError, caseFileName, parseCaseFileName, readManifest } from "./casefile";
+import { CASE_FILE_NAME_FORM, CASE_ID, CaseFileError, caseFileName, parseCaseFileName, readManifest } from "./casefile";
 import type { CaseManifest } from "./casefile";
 import { isObj, isStr } from "./state/guards";
 
@@ -19,7 +19,9 @@ export interface StoreListing {
 
 /** A case file's plain name: no separator, no leading dot. */
 export const STORE_FILE = /^[A-Za-z0-9][A-Za-z0-9+._-]*\.tar\.gz$/;
-const CASE_ID = /^CASE-([1-9][0-9]*)$/;
+/** A name that is meant as a case file's (CASE-…tar.gz) but is not one: listed as unreadable, and its number never counted. */
+const CASE_LIKE = /^CASE-.*\.tar\.gz$/;
+const BAD_NAME = `its name is not a case file's name (${CASE_FILE_NAME_FORM})`;
 const LEFTOVER = /^\.tmp-.*\.part$/;
 const DELETED_LOG = "deleted.log";
 
@@ -116,7 +118,11 @@ export class CaseStoreFolder {
     const names = entries.filter((e) => !e.isDirectory()).map((e) => e.name).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
     for (const name of names) {
       if (LEFTOVER.test(name)) { listing.leftovers.push(name); continue; }
-      if (!STORE_FILE.test(name) || parseCaseFileName(name) === null) continue;
+      if (!STORE_FILE.test(name)) continue;
+      if (parseCaseFileName(name) === null) {
+        if (CASE_LIKE.test(name)) listing.unreadable.push({ file: name, reason: BAD_NAME });
+        continue;
+      }
       let got: StoredCase | { file: string; reason: string };
       try {
         got = await this.read(name);
@@ -149,7 +155,10 @@ export class CaseStoreFolder {
     return got;
   }
 
-  /** The numbers in the names of the store's case files and in deleted.log. Reads names only; [] when the store cannot be read (the error goes to `onError`). */
+  /**
+   * The numbers in the names of the store's case files and in deleted.log. Reads names only; [] when the store cannot be read (the error goes
+   * to `onError`). A name or an id that is not CASE- and one to nine digits is not counted, and is reported to `onError` as a CaseFileError.
+   */
   seenNumbers(onError?: (error: unknown) => void): number[] {
     let entries: Dirent[] | null;
     try {
@@ -162,7 +171,8 @@ export class CaseStoreFolder {
     const seen = new Set<number>();
     for (const e of entries) {
       const parsed = parseCaseFileName(e.name);
-      if (parsed !== null) seen.add(Number(CASE_ID.exec(parsed.id)![1]));
+      if (parsed !== null) seen.add(Number(parsed.id.slice(5)));
+      else if (CASE_LIKE.test(e.name)) onError?.(new CaseFileError(`the case store holds ${shown(e.name)}, which is not a case file's name (${CASE_FILE_NAME_FORM}); its number is not counted`));
     }
     let log: string | null = null;
     try {
@@ -177,8 +187,9 @@ export class CaseStoreFolder {
       } catch {
         continue;
       }
-      const m = isObj(rec) && isStr(rec.id) ? CASE_ID.exec(rec.id) : null;
-      if (m !== null) seen.add(Number(m[1]));
+      if (!isObj(rec) || !isStr(rec.id)) continue;
+      if (CASE_ID.test(rec.id)) seen.add(Number(rec.id.slice(5)));
+      else onError?.(new CaseFileError(`the case store's ${DELETED_LOG} names ${shown(rec.id.slice(0, 40))}, which is not a case id; it is not counted`));
     }
     return [...seen];
   }

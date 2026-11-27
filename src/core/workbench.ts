@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { BlobStore } from "./blobs";
 import { canonical } from "./canonical";
 import type { Json } from "./canonical";
-import { CaseFileError, caseFileName, checkCaseFile, DEFAULT_MAX_CASE_BYTES, extractCaseFile, readManifest, writeCaseFile } from "./casefile";
+import { CASE_ID, CaseFileError, caseFileName, MAX_CASE_NUMBER, checkCaseFile, DEFAULT_MAX_CASE_BYTES, extractCaseFile, readManifest, writeCaseFile } from "./casefile";
 import type { CaseManifest, ManifestHeader } from "./casefile";
 import { ignoreThrow, logToStderr } from "./deliver";
 import { Ledger } from "./ledger";
@@ -58,9 +58,6 @@ export interface CaseSummary { id: string; title: string; marking: Marking; crea
   /** archive.failed's reason; "an unload did not finish" while archive.pending is set; null otherwise. */
   unload_failed: string | null }
 export type ErrorHandler = (error: unknown, entry?: Entry) => void;
-
-/** At most 9 digits, so the number is always an exact integer. */
-const CASE_ID = /^CASE-[1-9][0-9]{0,8}$/;
 
 export type UnloadResult = { ok: true; file: string; path: string; head: { seq: number; hash: string } } | { ok: false; reason: string };
 /** The steps of an unload, in order. Up to and including "leave" a failure leaves the case loaded; "leave" is the commit point. */
@@ -494,10 +491,16 @@ export class Workbench {
     return readdirSync(dir).filter((n) => CASE_ID.test(n)).map((n) => Number(n.slice(5)));
   }
 
-  /** 1 + the highest number among the folders in cases/, the store's file names and deleted.log, and the mark. A store that cannot be read is reported and left out. */
+  /**
+   * 1 + the highest number among the folders in cases/, the store's file names and deleted.log, and the mark. A store that cannot be read, and a
+   * name in it that is not an id, are reported and left out. Throws CaseRefused, rather than give out a number over nine digits.
+   */
   private nextNumber(): number {
-    const seen = this.store.seenNumbers((err) => this.reportError(new Error(`the case store ${this.store.dir} could not be read, so its ids were not counted: ${firstLine(err)}`, { cause: err })));
-    return Math.max(0, ...this.caseNumbers(), ...seen, this.readMark()) + 1;
+    const seen = this.store.seenNumbers((err) => this.reportError(err instanceof CaseFileError ? err
+      : new Error(`the case store ${this.store.dir} could not be read, so its ids were not counted: ${firstLine(err)}`, { cause: err })));
+    const n = Math.max(0, ...this.caseNumbers(), ...seen, this.readMark()) + 1;
+    if (n > MAX_CASE_NUMBER) throw new CaseRefused(`every case id up to CASE-${MAX_CASE_NUMBER} has been given out here; no new case can be made`);
+    return n;
   }
 
   /** The number in cases/.high-water; 0 when there is none or it is not a number. */
