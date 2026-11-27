@@ -11,7 +11,7 @@ import { ToolError } from "../../agents/tools/kit";
 import type { StageEnd, StageEnv } from "../engine";
 import { overruledFindings } from "../overrule";
 import { questionMarking, withOpenQuestions } from "../questions";
-import { reviewPointsPart } from "../review-points";
+import { pendingSendBack, reviewPointsPart } from "../review-points";
 import { agentActor, lastPass, noSchema, requestsOfPass, stageAgent, stageOfRole, titleOf } from "./agent";
 
 /**
@@ -65,11 +65,10 @@ export function firstJudgmentOnly(schema: Schema, first: string): Schema {
 /** The reason for the draft: why this revision exists. */
 function reasonFor(env: StageEnv): string {
   const { session, stage } = env;
-  const entries = session.entries();
   if (session.state.drafts.length === 0) return "first draft";
-  const lastFinished = entries.reduce((n, e) => (e.type === "stage.finished" && e.payload.stage === stage.id && e.payload.outcome !== "declined" ? e.seq : n), 0);
-  const back = [...entries].reverse().find((e) => e.type === "stage.sent_back" && e.payload.to === stage.id && e.seq > lastFinished);
-  if (back !== undefined && back.type === "stage.sent_back") {
+  // the current run's send-back that this pass answers (a failed pass before it did not answer it)
+  const back = pendingSendBack(session.state, session.entries(), stage.id);
+  if (back !== null) {
     const from = session.state.run.stages.find((s) => s.id === back.payload.from)?.title ?? back.payload.from;
     return `revised after ${from}: ${back.payload.reason}`;
   }

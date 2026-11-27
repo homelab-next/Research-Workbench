@@ -111,6 +111,39 @@ const challengeEntries = (entries: readonly Entry[], ids: string[]): Entry[] => 
   return entries.filter((e) => (e.type === "challenge.raised" && set.has(e.payload.challenge.id)) || (e.type === "challenge.answered" && set.has(e.payload.challenge)));
 };
 
+type SentBack = Extract<Entry, { type: "stage.sent_back" }>;
+
+/**
+ * The send-back that is why the stage's current pass exists: the latest one of the current run to that stage made after its last pass that
+ * wrote a draft (outcome pass). A failed or declined pass (more research is needed, a challenge still open) does not answer it, so the pass
+ * after Research still reads it; a send-back of a run that is over is never given to another run. Null for none.
+ */
+export function pendingSendBack(state: Readonly<CaseState>, entries: readonly Entry[], stage: string): SentBack | null {
+  const run = state.run.id;
+  if (run === null) return null;
+  let answered = 0;
+  let back: SentBack | null = null;
+  for (const e of entries) {
+    if (e.run !== run) continue;
+    if (e.type === "stage.finished" && e.payload.stage === stage && e.payload.outcome === "pass") { answered = e.seq; back = null; }
+    else if (e.type === "stage.sent_back" && e.payload.to === stage && e.seq > answered) back = e;
+  }
+  return back;
+}
+
+/**
+ * The entries that wrote a send-back's reason, which is the sending stage's text (Evaluate's point, the challenge's text): the model requests of
+ * that stage's pass that sent it, and its latest evaluation or challenge before it. A person's send-back (a rejection, an overrule) has none.
+ */
+export function sendBackWriters(entries: readonly Entry[], back: SentBack): Entry[] {
+  const from = back.payload.from;
+  const start = entries.reduce((n, e) => (e.type === "stage.started" && e.payload.stage === from && e.seq < back.seq ? e.seq : n), 0);
+  const out: Entry[] = entries.filter((e) => e.type === "model.request" && e.stage === from && e.seq > start && e.seq < back.seq);
+  const said = entries.findLast((e) => (e.type === "evaluation.made" || e.type === "challenge.raised") && e.stage === from && e.seq < back.seq);
+  if (said !== undefined && said.actor.kind === "agent") out.push(said);
+  return out;
+}
+
 export type PointsView = "assemble" | "evaluate" | "challenge";
 
 /**
@@ -157,15 +190,13 @@ export function reviewPointsPart(session: CaseSession, pipeline: Pipeline, view:
       }
     }
     // why this pass exists: the send-back's reason carries what code adds to the reviewer's point (a ruling the draft does not hold, a card
-    // that cannot be cited); it labelled the draft but never reached the model (dev CASE-3)
+    // that cannot be cited); it labelled the draft but never reached the model (dev CASE-3). It is model text too: as strict as what wrote it
     const asm = pipeline.stages.find((s) => s.role === "assemble");
-    if (asm !== undefined) {
-      const lastFinished = entries.reduce((n, e) => (e.type === "stage.finished" && e.payload.stage === asm.id && e.payload.outcome !== "declined" ? e.seq : n), 0);
-      const back = entries.findLast((e) => e.type === "stage.sent_back" && e.payload.to === asm.id && e.seq > lastFinished);
-      if (back !== undefined && back.type === "stage.sent_back") {
-        const from = state.run.stages.find((s) => s.id === back.payload.from)?.title ?? back.payload.from;
-        sections.push(`Why the work came back to you (from ${from}): ${back.payload.reason}`);
-      }
+    const back = asm === undefined ? null : pendingSendBack(state, entries, asm.id);
+    if (back !== null) {
+      const from = state.run.stages.find((s) => s.id === back.payload.from)?.title ?? back.payload.from;
+      sections.push(`Why the work came back to you (from ${from}): ${back.payload.reason}`);
+      by.push(...sendBackWriters(entries, back));
     }
     if (open.length > 0) sections.push(["Open (answer each):", ...open].join("\n"));
     if (earlier.length > 0) sections.push(["Answered earlier in this run:", ...earlier].join("\n"));
