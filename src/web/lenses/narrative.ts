@@ -232,7 +232,7 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
     const body = h("div", { class: "overrule-body", hidden: !overruleOpen.has(id) },
       h("p", { class: "overrule-heading" }, `Overrule ${id}`),
       h("label", null, "Likelihood ", likelihood), h("label", null, "Confidence ", confidence), h("label", null, "Stays ", stays),
-      note, h("div", { class: "actions" }, go, withdraw), refusalLine(h, refusals.get(key)),
+      note, h("div", { class: "actions" }, go, withdraw), refusalLine(h, refusals.get(key), `n:${key}`),
       h("p", { class: "note" }, "Code holds every draft to your overrule, and neither reviewer may move it back. While a run is in progress the draft goes back to the analyst to rewrite the finding's basis and reasoning when the current stage ends; at the publish gate it waits under Your changes until you send it back. An overrule passes no gate."));
     const toggle = h("button", {
       type: "button", class: "overrule-toggle", name: `Overrule ${id}`, data: { action: "open-overrule" }, aria: { expanded: String(overruleOpen.has(id)) },
@@ -460,7 +460,7 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
       name: `Answer challenge ${id}`,
     }, "Answer") as HTMLButtonElement;
     void s;
-    return h("div", { class: "answer-form" }, box, kind, button, refusalLine(h, refusals.get(`challenge:${id}`)));
+    return h("div", { class: "answer-form" }, box, kind, button, refusalLine(h, refusals.get(`challenge:${id}`), `n:challenge:${id}`));
   };
   /**
    * Reviewers who disagree: both positions and the points behind them, and the person's three ways to rule (follow one reviewer, follow the other, or a
@@ -493,7 +493,7 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
           name: `Ruling note on ${c.id}`, value: ruleNotes.get(c.id) ?? "", disabled: ro(), placeholder: "Your note (optional with a reviewer, enough on its own)",
           on: { input: (e) => { ruleNotes.set(c.id, (e.target as HTMLTextAreaElement).value); byNote.disabled = ro() || busy || !noted(); } },
         }),
-        byNote, refusalLine(h, refusals.get(`rule:${c.id}`)));
+        byNote, refusalLine(h, refusals.get(`rule:${c.id}`), `n:rule:${c.id}`));
     };
     if (c.ruling !== null) {
       kids.push(h("p", { class: "ruling" }, `Ruled: ${rulingText(s, c)}`));
@@ -596,7 +596,8 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
       on: { click: () => { rejecting = true; sigs.delete(gateBox); render(); (gateBox.querySelector("[aria-label='Reason for rejecting the draft']") as HTMLElement | null)?.focus(); } },
     }, "Reject");
     const out: Node[] = [h("div", { class: "gate-buttons" }, approve, reject)];
-    if (refusals.has("approve")) out.push(refusalLine(h, refusals.get("approve"))!);
+    const approveRefused = refusalLine(h, refusals.get("approve"), "n:approve");
+    if (approveRefused !== null) out.push(approveRefused);
     // what the person may still want to settle before passing the gate, beside its button; neither line passes or holds the gate
     const asking = shownQuestions(s).filter((q) => q.answer === null);
     const holding = activeOverrules(s);
@@ -618,13 +619,8 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
           title: ro() ? REPLAY_REFUSAL : `Send draft ${d.n} back to Assemble with ${n === 1 ? "this change" : `these ${n} changes`} as the reason; it passes no gate`,
           on: { click: () => { guarded("send-back", "send_back_changes", { draft_hash: d.hash }); } },
         }, `Send back to Assemble with my changes (${n})`),
-        refusalLine(h, refusals.get("send-back")),
+        refusalLine(h, refusals.get("send-back"), "n:send-back"),
         h("p", { class: "unsent-warning tag tag-attention" }, `Your ${n} ${n === 1 ? "change is" : "changes are"} not in draft ${d.n}. Approve publishes draft ${d.n} without ${n === 1 ? "it" : "them"}; send ${n === 1 ? "it" : "them"} back to Assemble first to have ${n === 1 ? "it" : "them"} taken in.`)));
-    }
-    // an answer passes no gate: it is noted here, and the person decides whether the draft goes back
-    const made = draftSeq(d);
-    for (const q of Object.values(s.questions).sort((a, b) => a.seq - b.seq)) {
-      if (q.answer !== null && q.answer.seq > made) out.push(h("p", { class: "answered-since tag tag-human" }, `${q.id} was answered after draft ${d.n} was made (card ${q.answer.card}). Send the draft back if the answer changes it.`));
     }
     if (rejecting) {
       const stop = h("input", { type: "checkbox", name: "and stop the run", disabled: ro(), checked: rejectStop, on: { change: (e) => { rejectStop = (e.target as HTMLInputElement).checked; } } }) as HTMLInputElement;
@@ -645,15 +641,9 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
           keydown: (e) => { if ((e as KeyboardEvent).key === "Escape") { e.stopPropagation(); rejecting = false; render(); } },
         },
       });
-      out.push(h("div", { class: "ask" }, box, h("label", null, stop, " and stop the run"), confirm, h("button", { type: "button", data: { action: "cancel-reject" }, on: { click: () => { rejecting = false; render(); } } }, "Cancel"), refusalLine(h, refusals.get("reject"))));
+      out.push(h("div", { class: "ask" }, box, h("label", null, stop, " and stop the run"), confirm, h("button", { type: "button", data: { action: "cancel-reject" }, on: { click: () => { rejecting = false; render(); } } }, "Cancel"), refusalLine(h, refusals.get("reject"), "n:reject")));
     }
     return out;
-  };
-
-  /** The entry that recorded a draft, for when it was made. */
-  const draftSeq = (d: Draft): number => {
-    const e = store.entries.findLast((x) => x.type === "draft.revised" && (x.payload as { draft?: { hash?: unknown } }).draft?.hash === d.hash);
-    return e === undefined ? Number.MAX_SAFE_INTEGER : e.seq;
   };
 
   // ---------- proposals ----------
@@ -677,6 +667,7 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
           }, "Accept"),
           h("button", { type: "button", data: { action: "edit-proposal" }, disabled: ro(), on: { click: () => { proposalEdit.add(p.id); proposalText.set(p.id, p.text); sigs.delete(proposalsBox); render(); } } }, "Edit"),
           h("button", { type: "button", data: { action: "discard-proposal" }, disabled: ro(), on: { click: () => { void ui.act("reject_proposal", { proposal: p.id, reason: "discarded" }); } } }, "Discard")));
+        kids.push(refusalLine(h, refusals.get(`accept:${p.id}`), `n:accept:${p.id}`));
       } else {
         const accept = h("button", {
           type: "button", class: "primary", data: { action: "accept-edited" }, disabled: ro() || !canEdit(s) || inflight.has(`accept:${p.id}`) || marked === null || (proposalText.get(p.id) ?? "").trim() === "",
@@ -687,7 +678,8 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
           name: `Text proposed in ${p.id}`, value: proposalText.get(p.id) ?? p.text, disabled: ro(),
           on: { input: (e) => { proposalText.set(p.id, (e.target as HTMLTextAreaElement).value); accept.disabled = ro() || marked === null || (proposalText.get(p.id) ?? "").trim() === ""; } },
         }), h("div", { class: "actions" }, accept,
-          h("button", { type: "button", data: { action: "cancel-proposal-edit" }, on: { click: () => { proposalEdit.delete(p.id); proposalText.delete(p.id); sigs.delete(proposalsBox); render(); } } }, "Cancel")));
+          h("button", { type: "button", data: { action: "cancel-proposal-edit" }, on: { click: () => { proposalEdit.delete(p.id); proposalText.delete(p.id); sigs.delete(proposalsBox); render(); } } }, "Cancel")),
+          refusalLine(h, refusals.get(`accept:${p.id}`), `n:accept:${p.id}`));
       }
       return h("div", { class: "proposal proposed", data: { proposal: p.id } }, kids);
     });

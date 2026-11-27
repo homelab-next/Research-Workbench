@@ -60,10 +60,10 @@ export function makeStatementForm(ui: Ui, store: CaseStore): View {
     if (readOnly() || text.value.trim() === "") return;
     const about: Observable[] = rows.flatMap((r) => (r.value.value.trim() === "" ? [] : [{ type: r.type.value, value: r.value.value.trim() }]));
     add.disabled = true;
-    clear(refused);
+    clear(refused); refusalLine(h, undefined, "statement");
     const sent = await ui.send("add_statement", {
       statement: text.value.trim(), basis: basis.value as PersonBasis, detail: detail.value.trim(), about, marking: marking.value === "" ? null : (marking.value as Marking),
-    }, undefined, undefined, (why) => { clear(refused); refused.append(refusalLine(h, why)!); });
+    }, undefined, undefined, (why) => { clear(refused); refused.append(refusalLine(h, why, "statement")!); });
     if (sent === null) { paint(); return; }                // a refusal leaves the form as typed
     text.value = ""; basis.value = "unstated"; detail.value = "";
     while (rows.length > 1) rows.pop()!.el.remove();

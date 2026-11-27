@@ -216,7 +216,7 @@ export class Engine {
       if (d === null || d.hash !== draft_hash) throw new RunRefused("a newer draft arrived; look at it before sending it back");
       const changes = gateChanges(s, entries);
       if (changes.length === 0) throw new RunRefused(`there is no change of yours since draft ${d.n} was made: nothing to send back`);
-      const back = gateSendBack(s, this.deps.pipeline, changes.map((c) => c.reason).join(" "), actor);
+      const back = gateSendBack(s, this.deps.pipeline, changes.map((c) => c.reason).join("\n"), actor);
       if (back.length === 0) throw new RunRefused("the publish gate sends work back nowhere");
       return back;
     });

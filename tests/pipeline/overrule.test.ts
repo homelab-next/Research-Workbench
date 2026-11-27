@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { Json } from "../../src/core/canonical";
 import { canonical } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
-import { blockers, latestDraft } from "../../src/core/state";
+import { blockers, gateChanges, latestDraft } from "../../src/core/state";
 import type { Overrule } from "../../src/core/state";
 import type { Actor, Draft, Entry, Finding, Product } from "../../src/core/types";
 import { loadProfile } from "../../src/agents/context";
@@ -201,17 +201,21 @@ test("an overrule at the publish gate writes only finding.overruled and the run 
   expect(f.s.state.run).toMatchObject({ waiting: "publish" });
   const mid = f.s.head().seq;
   r.engine.sendBackChanges(person, latest().hash);
-  expect(since(mid)).toEqual(["stage.sent_back", "case.phase_changed", "stage.started"]);
+  expect(since(mid)).toEqual(["stage.finished", "stage.sent_back", "case.phase_changed", "stage.started"]);
   const reason1 = `the person overruled f1: likelihood almost certain. Note: ${NOTE} Code holds f1 to it; rewrite f1's confidence_basis and reasoning to rest on the person's note.`;
   const reason2 = "the person overruled f2: confidence high. Note: I saw the proxy log. Code holds f2 to it; rewrite f2's confidence_basis and reasoning to rest on the person's note.";
-  const reason = `${reason1} ${reason2}`;
+  const reason = `${reason1}\n${reason2}`;
   const sentBack = ofType("stage.sent_back").at(-1)!;
   expect(sentBack.actor).toEqual(person);
   expect(sentBack.payload).toEqual({ from: "publish", to: "assemble", reason, count: 1 });
   expect(f.s.state.run).toMatchObject({ current: "assemble", waiting: null });
+  // the gate's own stage no longer waits while Assemble works
+  expect(f.s.state.run.stages.find((x) => x.id === "publish")!.status).not.toBe("waiting");
   expect(await r.engine.advance()).toMatchObject({ status: "waiting", waiting: "publish" });
   const d = latest();
   expect(d.n).toBe(2);
+  // the new draft took both overrules in: neither is a change of the person's since it was made
+  expect(gateChanges(f.s.state, f.s.entries())).toEqual([]);
   expect(d.reason).toBe(`revised after Publish: ${reason}`);
   expect(d.product.key_findings[0]).toMatchObject({ id: "f1", likelihood: "almost certain", statement: "We assess it is almost certain that the device is idle." });
   expect(blockers(f.s.state, d.hash)).toEqual([]);
@@ -388,4 +392,20 @@ test("an overrule made at the gate is not sent back by the engine on its own, ev
   expect(await r.engine.resume(person)).toMatchObject({ waiting: "publish" });
   expect(ofType("stage.sent_back")).toEqual([]);
   expect(f.s.state.drafts).toHaveLength(1);
+});
+
+test("withdrawing at the gate an overrule that was never sent is not a change; withdrawing one the draft holds is", async () => {
+  const r = rig([...FIRST, ...AGAIN]);
+  await toGate(r);
+  r.engine.overrule(input());
+  expect(gateChanges(f.s.state, f.s.entries()).map((c) => c.id)).toEqual(["f1"]);
+  r.engine.overrule(input({ likelihood: null, confidence: null, stays: null, note: "I was wrong." }));
+  expect(gateChanges(f.s.state, f.s.entries())).toEqual([]);
+  // sent, taken in by draft 2, then withdrawn: that is a change
+  r.engine.overrule(input({ note: "Again." }));
+  r.engine.sendBackChanges(person, latest().hash);
+  await r.engine.advance();
+  expect(gateChanges(f.s.state, f.s.entries())).toEqual([]);
+  r.engine.overrule(input({ likelihood: null, confidence: null, stays: null, note: "No, withdrawn." }));
+  expect(gateChanges(f.s.state, f.s.entries()).map((c) => [c.kind, c.id])).toEqual([["overrule", "f1"]]);
 });

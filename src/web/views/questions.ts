@@ -81,7 +81,7 @@ export function makeQuestions(ui: Ui, open: Open, opts: { class?: string } = {})
       }),
       h("label", null, "How you know ", basis),
       h("input", { type: "text", name: `How you know the answer to ${q.id}, in detail`, value: v.detail, disabled: ro(), placeholder: "How you know (optional)", on: { input: (e) => { v.detail = (e.target as HTMLInputElement).value; } } }),
-      send, refusalLine(h, refusals.get(q.id)));
+      send, refusalLine(h, refusals.get(q.id), `q:${q.id}`));
   };
   const build = (s: CaseState): Node[] => {
     const qs = shownQuestions(s);

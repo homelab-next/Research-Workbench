@@ -48,8 +48,8 @@ async function theLens(path: string): Promise<void> {
   await tab.click('[data-question="ask-1"] [data-action=answer-question]');
   await tab.waitFor(`document.querySelector('[data-question="ask-1"] .answer .card-chip') !== null`);
   expect(types().filter((t) => t === "question.answered").length).toBe(1);
-  await tab.waitFor(`document.querySelector(".gate-box .answered-since") !== null`);
-  expect(await text(".gate-box .answered-since")).toMatch(/^ask-1 was answered after draft \d+ was made \(card c\d+\)\. Send the draft back if the answer changes it\.$/);
+  await tab.waitFor(`document.querySelector(".gate-box .your-changes") !== null`);
+  expect(await tab.evaluate<number>(`document.querySelectorAll(".gate-box .answered-since").length`)).toBe(0);
 
   // overruled: the form opens, Overrule waits for a value and a note, and is sent once
   await tab.click('[data-finding="f1"] [data-action=open-overrule]');

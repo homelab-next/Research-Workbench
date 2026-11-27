@@ -771,10 +771,10 @@ test("a ruling revised at the publish gate sends nothing back by itself; Send ba
   expect(gateChanges(r.s.state, r.s.entries()).map((c) => [c.kind, c.id, c.finding])).toEqual([["ruling", "k1", "f1"], ["answer", "ask-1", null]]);
   const mid = r.s.head().seq;
   r.engine.sendBackChanges(person, d.hash);
-  expect(r.s.entries().filter((e) => e.seq > mid).map((e) => e.type)).toEqual(["stage.sent_back", "case.phase_changed", "stage.started"]);
+  expect(r.s.entries().filter((e) => e.seq > mid).map((e) => e.type)).toEqual(["stage.finished", "stage.sent_back", "case.phase_changed", "stage.started"]);
   const back = r.s.entries().find((e): e is Extract<Entry, { type: "stage.sent_back" }> => e.type === "stage.sent_back")!;
   expect(back.payload).toEqual({ from: "publish", to: "assemble", count: 1, reason:
-    `the person revised the ruling on f1 (${K1_REASON}): follow Evaluate: almost certain. Note: the card shows it ` +
+    `the person revised the ruling on f1 (${K1_REASON}): follow Evaluate: almost certain. Note: the card shows it\n` +
     `the person answered ask-1: their answer is card ${card}, a statement of theirs; read it and say whether it changes any finding.` });
   expect(r.s.entries().some((e) => e.type === "gate.passed" && e.payload.gate === "publish")).toBe(false);
   expect(await r.engine.advance()).toMatchObject({ status: "waiting", waiting: "publish" });

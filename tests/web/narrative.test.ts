@@ -561,6 +561,17 @@ test("Approve is disabled and says Checking while the preview has not come, and 
   expect(approve().disabled).toBe(false);
 });
 
+test("a refused Accept shows the refusal beside the proposal's controls", async () => {
+  await atGate();
+  const a = propose("summary", "Proposed summary.");
+  await settled();
+  const real = p.ui.api.command.bind(p.ui.api);
+  p.ui.api.command = (id, name, args) => (name === "accept_proposal" ? Promise.resolve({ ok: false as const, refused: ["a draft can be edited while a run is in progress"] }) : real(id, name, args));
+  p.click(`[data-proposal=${a}] [data-action=accept-proposal]`);
+  await settled();
+  expect(p.q(`[data-proposal=${a}] .refusal`).textContent).toBe("Refused: a draft can be edited while a run is in progress");
+});
+
 test("a proposal's Accept is sent once while the answer is awaited, and is disabled with no draft to put it in", async () => {
   await atGate();
   const log = sent();
@@ -764,7 +775,7 @@ test("a question written as markup is drawn as text; replay to before it shows n
   expect(controls.filter((c) => !c.classList.contains("card-chip")).every((c) => c.disabled)).toBe(true);
 });
 
-test("an answer given after the latest draft was made is noted at the gate", async () => {
+test("an answer given after the latest draft was made is one of Your changes at the gate, and is not said a second time", async () => {
   await atGate();
   ask(AP7);
   await settled();
@@ -772,7 +783,8 @@ test("an answer given after the latest draft was made is noted at the gate", asy
   expect((await p.s.command("CASE-1", "answer_question", { question: "ask-1", answer: "In the gym." })).status).toBe(200);
   await settled();
   const card = state().questions["ask-1"]!.answer!.card;
-  expect(p.q(".gate-box .answered-since").textContent).toBe(`ask-1 was answered after draft ${latest().n} was made (card ${card}). Send the draft back if the answer changes it.`);
+  expect(p.all(".gate-box .answered-since").length).toBe(0);
+  expect(p.q(".gate-box .your-changes li").textContent).toBe(`ask-1 answered: card ${card}`);
   // the answer passes no gate
   expect(state().run.waiting).toBe("publish");
   expect(state().published.length).toBe(0);

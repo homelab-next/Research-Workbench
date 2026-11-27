@@ -202,6 +202,9 @@ test("the gate box lists Your changes since the draft, each with its finding id,
   expect(log.filter((c) => c.command === "send_back_changes").map((c) => c.args)).toEqual([{ draft_hash: hash }]);
   expect(p.s.entries("CASE-1").filter((e) => e.type === "stage.sent_back").at(-1)!.actor.kind).toBe("human");
   expect(state().published.length).toBe(0);
+  // the run is off the gate while Assemble works (the sample's script has no further turn, so no newer draft arrives here; the pipeline tests cover the new draft)
+  await settled();
+  expect(p.all(".gate-box .your-changes").length).toBe(0);
 });
 
 test("with changes not sent, Approve says plainly that it publishes the draft without them", async () => {
@@ -228,6 +231,11 @@ test("a refused overrule shows the refusal at its form, which stays open as type
   await settled();
   expect(p.q('[data-finding="f1"] .overrule-body .refusal').textContent).toBe("Refused: a newer draft arrived; look at it before overruling");
   expect(p.q('[data-finding="f1"] .overrule-body .refusal').getAttribute("role")).toBe("alert");
+  // a repaint of the same refusal is not announced again
+  overruled("f2", "likely", "Another.");
+  await settled();
+  expect(p.q('[data-finding="f1"] .overrule-body .refusal').textContent).toBe("Refused: a newer draft arrived; look at it before overruling");
+  expect(p.q('[data-finding="f1"] .overrule-body .refusal').getAttribute("role")).toBe("status");
   expect((p.q('[aria-label="Note on overruling f1"]') as HTMLTextAreaElement).value).toBe("It is the TV I installed.");
   expect((p.q('[data-finding="f1"] .overrule-body') as HTMLElement).hidden).toBe(false);
 });

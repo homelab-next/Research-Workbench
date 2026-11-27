@@ -74,7 +74,11 @@ export function gateSendBack(state: Readonly<CaseState>, pipeline: Pipeline, rea
   const link = { run: run.id, stage: target.id };
   const edge = `${gate.id}>${target.id}`;
   const count = (Object.hasOwn(run.sendbacks, edge) ? run.sendbacks[edge]! : 0) + 1;
-  const out: EntryInput[] = [{ type: "stage.sent_back", actor: by, ...link, payload: { from: gate.id, to: target.id, reason, count } }];
+  // as publish.ts's reject does, the gate's own stage ends as failed on the draft it was sent back with, so it is not shown waiting while the target works
+  const draft = latestDraft(state);
+  const out: EntryInput[] = [];
+  if (draft !== null) out.push({ type: "stage.finished", actor: ENGINE, run: run.id, stage: gate.id, payload: { stage: gate.id, attempt: run.stages.find((x) => x.id === gate.id)?.attempts ?? 1, outcome: "fail", draft_hash: draft.hash, output: null, reason } });
+  out.push({ type: "stage.sent_back", actor: by, ...link, payload: { from: gate.id, to: target.id, reason, count } });
   if (target.phase !== null && target.phase !== state.phase) out.push({ type: "case.phase_changed", actor: ENGINE, ...link, payload: { phase: target.phase } });
   out.push({ type: "stage.started", actor: ENGINE, ...link, payload: { stage: target.id, attempt: (run.stages.find((x) => x.id === target.id)?.attempts ?? 0) + 1 } });
   return out;
@@ -97,21 +101,18 @@ export function overruleSendBack(state: Readonly<CaseState>, entries: readonly E
   let runStart = 0;
   let asmStart = 0;
   let drafted: Entry | null = null;
-  /** Where the run last came to wait at the publish gate, with no stage started since. */
-  let atGate = Number.POSITIVE_INFINITY;
   for (const e of entries) {
-    if (e.type === "run.started") { runStart = e.seq; asmStart = 0; drafted = null; atGate = Number.POSITIVE_INFINITY; }
-    else if (e.type === "stage.started") { atGate = Number.POSITIVE_INFINITY; if (e.payload.stage === to) asmStart = e.seq; }
-    else if (e.type === "gate.waiting" && e.payload.gate === "publish") atGate = e.seq;
+    if (e.type === "run.started") { runStart = e.seq; asmStart = 0; drafted = null; }
+    else if (e.type === "stage.started") { if (e.payload.stage === to) asmStart = e.seq; }
     else if (e.type === "draft.revised") drafted = e;
   }
   const since = Math.max(runStart, asmStart);
-  const due = activeOverrules(state).filter((o) => o.seq > since && o.seq < atGate
+  const due = activeOverrules(state).filter((o) => o.seq > since
     && (holdsOverrule(latest.product, o) === false || (drafted !== null && drafted.seq > o.seq && drafted.stage === to)));
   if (due.length === 0) return null;
   const edge = `${gate.id}>${to}`;
   const count = (Object.hasOwn(run.sendbacks, edge) ? run.sendbacks[edge]! : 0) + 1;
-  return { stage: to, attempt: (run.stages.find((x) => x.id === to)?.attempts ?? 0) + 1, sent_back: { from: gate.id, to, reason: due.map(overruleReason).join(" "), count } };
+  return { stage: to, attempt: (run.stages.find((x) => x.id === to)?.attempts ?? 0) + 1, sent_back: { from: gate.id, to, reason: due.map(overruleReason).join("\n"), count } };
 }
 
 const same = (a: Overrule, b: Overrule): boolean => a.likelihood === b.likelihood && a.confidence === b.confidence && a.stays === b.stays && a.note.trim() === b.note.trim();

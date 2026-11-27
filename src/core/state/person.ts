@@ -200,6 +200,8 @@ export function gateChanges(state: Readonly<CaseState>, entries: readonly Entry[
   const out: GateChange[] = [];
   for (const o of Object.values(state.overrules)) {
     if (o.seq <= made || !(active.has(o.finding) || withdrawn(o))) continue;
+    // withdrawing an overrule that was itself made after the draft (never sent) changes nothing for the draft
+    if (withdrawn(o) && (o.earlier.length === 0 || o.earlier[o.earlier.length - 1]!.seq > made)) continue;
     out.push({ kind: "overrule", id: o.finding, finding: o.finding, text: `overruled: ${overruleSays(o)}. Note: ${o.note.trim()}`, reason: overruleReason(o), seq: o.seq });
   }
   for (const c of Object.values(state.conflicts)) {
