@@ -227,3 +227,74 @@ test("status writes to neither ledger, even after a manifest changed; only a com
   expect(marks.map((m) => m.why)).toEqual(["closed"]);
   expect(marks[0]!.seq).toBe(head(e));
 });
+
+// ---------- unload after publishing, and a case that is in the store ----------
+
+/** A fresh environment (config lines appended to the file) whose case waits at the publish gate. */
+function atPublishGate(extra: string[] = []): Env {
+  const e = setup();
+  if (extra.length > 0) writeFileSync(e.config, readFileSync(e.config, "utf8") + extra.join("\n") + "\n");
+  expect(cli(e, START).code).toBe(0);
+  const r = cli(e, ["accept-plan", "CASE-1", "--budget", "s3=1"]);
+  expect(r.code).toBe(0);
+  expect(lines(r.out)[0]).toBe("CASE-1 waiting waiting=publish stage=publish draft=2");
+  return e;
+}
+const storeOf = (e: Env): string => join(e.data, "store");
+const ledgerHead = (e: Env): string => join(e.data, "cases", "CASE-1");
+
+test("approve --unload publishes, then unloads the case to the store and prints unloaded=<file>", () => {
+  const e = atPublishGate();
+  const r = cli(e, ["approve", "CASE-1", "--unload"]);
+  expect(r.err).toBe("");
+  expect(r.code).toBe(0);
+  expect(lines(r.out)).toEqual(["CASE-1 finished published=published/1 unloaded=CASE-1.TLP-GREEN.tar.gz"]);
+  expect(existsSync(join(storeOf(e), "CASE-1.TLP-GREEN.tar.gz"))).toBe(true);
+  expect(existsSync(ledgerHead(e))).toBe(false);
+});
+
+test("approve with neither flag follows cases.on_complete; --keep overrides unload", () => {
+  const kept = atPublishGate();
+  const k = cli(kept, ["approve", "CASE-1"]);
+  expect(k.code).toBe(0);
+  expect(lines(k.out)).toEqual(["CASE-1 finished published=published/1"]);
+  expect(existsSync(ledgerHead(kept))).toBe(true);
+
+  const follows = atPublishGate(["cases:", "  on_complete: unload"]);
+  const f = cli(follows, ["approve", "CASE-1"]);
+  expect(f.err).toBe("");
+  expect(lines(f.out)).toEqual(["CASE-1 finished published=published/1 unloaded=CASE-1.TLP-GREEN.tar.gz"]);
+  expect(existsSync(ledgerHead(follows))).toBe(false);
+
+  const override = atPublishGate(["cases:", "  on_complete: unload"]);
+  const o = cli(override, ["approve", "CASE-1", "--keep"]);
+  expect(lines(o.out)).toEqual(["CASE-1 finished published=published/1"]);
+  expect(existsSync(ledgerHead(override))).toBe(true);
+});
+
+test("approve --unload and --keep together is a usage error", () => {
+  const r = cli(env, ["approve", "CASE-1", "--unload", "--keep"], false);
+  expect(r.code).toBe(2);
+  expect(r.err).toContain("--unload and --keep");
+  expect(r.err).toContain("usage:");
+});
+
+test("when that unload fails the command still reports the published product, prints the failure on stderr and the case stays", () => {
+  const e = atPublishGate();
+  // the store is a file, so nothing can be written in it
+  writeFileSync(storeOf(e), "not a folder");
+  const r = cli(e, ["approve", "CASE-1", "--unload"]);
+  expect(lines(r.out)).toEqual(["CASE-1 finished published=published/1"]);
+  expect(r.err).toContain("published, but the case could not be unloaded");
+  expect(r.code).toBe(1);
+  expect(existsSync(join(ledgerHead(e), "published", "1", "product.json"))).toBe(true);
+});
+
+test("status of an unloaded case says it is in the store", () => {
+  const e = atPublishGate();
+  expect(cli(e, ["approve", "CASE-1", "--unload"]).code).toBe(0);
+  const r = cli(e, ["status", "CASE-1"], false);
+  expect(r.code).toBe(1);
+  expect(r.out).toBe("");
+  expect(r.err.trim()).toBe("CASE-1 is not loaded; the store holds CASE-1.TLP-GREEN.tar.gz");
+});

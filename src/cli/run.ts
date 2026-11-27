@@ -2,7 +2,7 @@
 // Drives one investigation from the command line. Only the models the stage manifests name are used; the sample's is the scripted one,
 // which contacts nothing. The command accepts a plan or approves publishing only when it is told to by its own command.
 import { join } from "node:path";
-import { latestDraft, blockers } from "../core/state";
+import { latestDraft, blockers, unloadDue } from "../core/state";
 import type { CaseSession } from "../core/session";
 import { MARKINGS, isMarking } from "../core/types";
 import type { Actor, Marking, Observable } from "../core/types";
@@ -22,7 +22,7 @@ const USAGE = [
   "  bun run src/cli/run.ts start  --title T --asked Q --why W --start type=value [--start ...] --from TS --to TS [--objective ID] [--marking M]",
   "  bun run src/cli/run.ts accept-plan <case> [--steps s1,s2] [--budget step=amount ...]",
   "  bun run src/cli/run.ts replan      <case> --note N",
-  "  bun run src/cli/run.ts approve     <case>",
+  "  bun run src/cli/run.ts approve     <case> [--unload | --keep]",
   "  bun run src/cli/run.ts reject      <case> --reason R [--stop]",
   "  bun run src/cli/run.ts resume      <case>",
   "  bun run src/cli/run.ts stop        <case> --reason R",
@@ -43,7 +43,7 @@ const SPECS: Record<Command, Spec> = {
   start: { values: ["title", "asked", "why", "from", "to", "objective", "marking"], repeated: ["start"], flags: [], required: ["title", "asked", "why", "start", "from", "to"], case: false },
   "accept-plan": { values: ["steps"], repeated: ["budget"], flags: [], required: [], case: true },
   replan: { values: ["note"], repeated: [], flags: [], required: ["note"], case: true },
-  approve: { values: [], repeated: [], flags: [], required: [], case: true },
+  approve: { values: [], repeated: [], flags: ["unload", "keep"], required: [], case: true },
   reject: { values: ["reason"], repeated: [], flags: ["stop"], required: ["reason"], case: true },
   resume: { values: [], repeated: [], flags: [], required: [], case: true },
   stop: { values: ["reason"], repeated: [], flags: [], required: ["reason"], case: true },
@@ -102,6 +102,7 @@ function parseArgs(argv: string[]): Parsed {
       out.one[flag] = value;
     }
   }
+  if (out.flags.has("unload") && out.flags.has("keep")) throw new UsageError("--unload and --keep cannot be given together");
   if (spec.case && out.case === null) throw new UsageError(`${command} needs a case id`);
   for (const r of spec.required) {
     if (!Object.hasOwn(out.one, r) && !Object.hasOwn(out.many, r)) throw new UsageError(`${command} needs --${r}`);
@@ -200,7 +201,7 @@ async function main(argv: string[]): Promise<number> {
       ensureSampleData(root.path);
       fixture = startReputationFixture(join(root.path, "data"), p.fixture);
     }
-    wb = Workbench.open(config.data_dir, { onError: (e) => console.error(`workbench: ${e instanceof Error ? e.message : String(e)}`) });
+    wb = Workbench.open(config.data_dir, { store: config.cases.store, max_case_bytes: config.cases.max_bytes, onError: (e) => console.error(`workbench: ${e instanceof Error ? e.message : String(e)}`) });
     // status only reads: no registry is loaded (that records on the workbench chain), no engine, no recovery, no anchor
     if (p.command === "status") {
       const r = report(wb.session(p.case!), true);
@@ -254,7 +255,8 @@ async function main(argv: string[]): Promise<number> {
         await engine.advance();
         break;
       case "approve":
-        engine.approve({ actor: human });
+        // the box's value travels with the approval; neither flag follows cases.on_complete
+        engine.approve({ actor: human, unload_after: p.flags.has("unload") || (!p.flags.has("keep") && config.cases.on_complete === "unload") });
         await engine.advance();
         break;
       case "reject":
@@ -275,9 +277,29 @@ async function main(argv: string[]): Promise<number> {
     }
     finishedHere();
     const r = report(session, false);
+    let failed = false;
+    // the host unloads once the drive has settled; what the report says was read before the case left
+    if (unloadDue(session.state)) {
+      try {
+        const u = await wb.unloadCase(session.id, { actor: { kind: "system", id: "workbench" } });
+        if (u.ok) r.lines[0] += ` unloaded=${u.file}`;
+        else { failed = true; console.error(`published, but the case could not be unloaded: ${u.reason}`); }
+      } catch (err) {
+        failed = true;
+        console.error(`published, but the case could not be unloaded: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     console.log(r.lines.join("\n"));
-    return r.code;
+    return failed ? 1 : r.code;
   } catch (err) {
+    if (err instanceof CaseNotFoundError && p.case !== null && wb !== null) {
+      // a case in the store is not an unknown case
+      try {
+        const held = await wb.store.find(p.case);
+        console.error(`${p.case} is not loaded; the store holds ${held.file}`);
+        return 1;
+      } catch { /* the store holds nothing for it: the plain message follows */ }
+    }
     if (err instanceof UsageError) {
       console.error(`${err.message}\n${USAGE}`);
       return 2;

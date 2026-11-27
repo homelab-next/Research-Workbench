@@ -8,6 +8,7 @@
     "typecheck": "tsc --noEmit",
     "verify": "bun run src/cli/verify.ts",
     "investigate": "bun run src/cli/run.ts",
+    "cases": "bun run src/cli/cases.ts",
     "serve": "bun run src/cli/serve.ts",
     "preflight": "bun run src/cli/preflight.ts",
     "new-root": "bun run scripts/new-root.ts",
