@@ -266,14 +266,14 @@ test("the whole sample run folds with nothing skipped after two round trips", as
   expect(verifyCase(caseDir(s, id)).ok).toBe(true);
 });
 
-/** The stopper child: unloads CASE-1 of `data` and exits at `step`, as a crash would. */
-function stopAt(data: string, store: string, step: string, home: string): number {
+/** The stopper child: unloads CASE-1 of `data` and kills itself with SIGKILL at `step`, as a crash would. The signal it ended with. */
+function stopAt(data: string, store: string, step: string, home: string): string {
   const r = Bun.spawnSync(["bun", STOPPER, data, store, "CASE-1", step], { cwd: REPO, timeout: 60_000, stdout: "pipe", stderr: "pipe", env: cleanEnv(home) });
-  return r.exitCode ?? -1;
+  return r.signalCode === null || r.signalCode === undefined ? `exit ${r.exitCode}` : String(r.signalCode);
 }
 
-test("a stop in the middle of an unload leaves the case loaded, recorded as a failed unload, and the next unload replaces the file", async () => {
-  for (const step of ["write", "leave"] as const) {
+test("a SIGKILL at any step of an unload before the commit point leaves the case loaded, recorded as a failed unload, and the next unload replaces the file", async () => {
+  for (const step of ["close", "write", "check", "store", "mark", "leave"] as const) {
     const d = fresh();
     const data = join(d, "wb");
     let s = await serve({ config: { data_dir: data } });
@@ -282,12 +282,13 @@ test("a stop in the middle of an unload leaves the case loaded, recorded as a fa
     const product = filesOf(join(caseDir(s, id), "published", "1"));
     await shut(s);
 
-    expect(stopAt(data, join(data, "store"), step, d)).toBe(9);
+    expect([step, stopAt(data, join(data, "store"), step, d)]).toEqual([step, "SIGKILL"]);
     // the stop came before the commit point: the folder is whole, so the case is loaded
     expect(existsSync(join(data, "cases", id))).toBe(true);
-    // at "leave" the store already holds a file one entry behind; at "write" it holds only the unfinished temporary file
+    // from "mark" on, the store already holds a file one entry behind; at "check" and "store" only the unfinished temporary file
     const files = existsSync(join(data, "store")) ? readdirSync(join(data, "store")) : [];
-    expect(files.includes(FILE)).toBe(step === "leave");
+    expect([step, files.includes(FILE)]).toEqual([step, step === "mark" || step === "leave"]);
+    expect([step, files.some((f) => f.endsWith(".part"))]).toEqual([step, step === "check" || step === "store"]);
 
     s = await serve({ config: { data_dir: data } });
     expect(await listed(s)).toEqual([id]);
@@ -301,7 +302,7 @@ test("a stop in the middle of an unload leaves the case loaded, recorded as a fa
     expect(filesOf(join(caseDir(s, id), "published", "1"))).toEqual(product);
     expect(state(s, id).archive).toMatchObject({ pending: null, failed: { reason: "the workbench stopped before the case was unloaded" } });
     expect(state(s, id).skipped).toEqual([]);
-    if (step === "leave") {
+    if (step === "mark" || step === "leave") {
       const r = await load(s, FILE);
       expect(r.status).toBe(409);
       expect(await refusal(r)).toContain(`${id} is already loaded`);
@@ -311,8 +312,37 @@ test("a stop in the middle of an unload leaves the case loaded, recorded as a fa
     expect((await unload(s, id)).status).toBe(200);
     expect((await readManifest(join(data, "store", FILE))).entries).toBe(before.length + 3);
     expect(await listed(s)).toEqual([]);
+    // and no id is given twice
+    expect(await s.newCase()).toBe("CASE-2");
     await shut(s);
   }
+}, 300_000);
+
+test("a SIGKILL after the commit point leaves the case unloaded: the leftover folder goes at the next open, and the store's file loads and verifies", async () => {
+  const d = fresh();
+  const data = join(d, "wb");
+  let s = await serve({ config: { data_dir: data } });
+  const { id } = await published(s);
+  const before = s.entries(id);
+  await shut(s);
+
+  expect(stopAt(data, join(data, "store"), "remove", d)).toBe("SIGKILL");
+  expect(existsSync(join(data, "cases", id))).toBe(false);
+  expect(readdirSync(join(data, "cases")).filter((n) => n.startsWith(`.unloading-${id}-`)).length).toBe(1);
+  expect(readdirSync(join(data, "store"))).toEqual([FILE]);
+
+  s = await serve({ config: { data_dir: data } });
+  expect(readdirSync(join(data, "cases")).filter((n) => n.startsWith("."))).toEqual([".high-water"]);
+  expect(await listed(s)).toEqual([]);
+  const m = await readManifest(join(data, "store", FILE));
+  expect(m.entries).toBe(before.length + 1);
+  expect((await load(s, FILE)).status).toBe(200);
+  const entries = s.entries(id);
+  expect(entries.slice(0, before.length)).toEqual(before);
+  expect(entries.slice(before.length).map((e) => e.type)).toEqual(["case.unloaded", "case.loaded"]);
+  expect(verifyCase(caseDir(s, id)).ok).toBe(true);
+  expect(state(s, id).skipped).toEqual([]);
+  expect(await s.newCase()).toBe("CASE-2");
 }, 120_000);
 
 test("an id is never given twice: not after its case was unloaded, nor deleted from the store, nor while the store is unplugged", async () => {
