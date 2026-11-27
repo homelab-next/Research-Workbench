@@ -15,7 +15,8 @@ export type Intent =
   | { kind: "answer"; question: string; text: string }
   | { kind: "overrule"; finding: string }
   | { kind: "say"; text: string }
-  | { kind: "playbook"; id: string; value: string };
+  | { kind: "playbook"; id: string; value: string }
+  | { kind: "store" } | { kind: "unload" } | { kind: "load"; id: string };
 
 const LENSES: readonly LensId[] = ["agent", "steps", "timeline", "graph", "narrative", "worklog", "discarded", "jobs", "pipeline", "replay"];
 const NEEDS_CASE = "Open a case first: investigate CASE-1";
@@ -41,6 +42,11 @@ export function parseCommand(text: string, ctx: CommandContext): Intent {
   if (direct) return direct;
   if (l === "home" || l === "go to home" || l === "open home") return { kind: "go", to: "home" };
   if (l === "investigate" || l === "go to investigate" || l === "open investigate") return { kind: "go", to: "investigate" };
+  if (/^(?:(?:open|go to) )?(?:the )?(?:case )?store$/.test(l)) return { kind: "store" };
+  if (l === "unload") return inCase({ kind: "unload" });
+  if (l === "load") return say("Name the case to load, for example: load CASE-3");
+  const load = /^load case-([0-9]{1,9})$/.exec(l);
+  if (load) return { kind: "load", id: `CASE-${load[1]}` };
 
   const prefixed = /^(open|investigate|go to) (.+)$/.exec(l);
   if (prefixed) {
@@ -81,6 +87,7 @@ export function parseCommand(text: string, ctx: CommandContext): Intent {
 }
 
 export interface PerformEnv { ui: Ui; nav: Nav; store: CaseStore | null }
+const refusedSay = (refused: string[]): { cleared: false; say: string } => ({ cleared: false, say: `Refused: ${refused.join("; ")}` });
 
 /** Does what the intent says. `cleared` is whether the bar should empty itself; `say` is a line to show. */
 export async function perform(intent: Intent, env: PerformEnv): Promise<{ cleared: boolean; say?: string }> {
@@ -114,6 +121,29 @@ export async function perform(intent: Intent, env: PerformEnv): Promise<{ cleare
       return { cleared: ok };
     }
     case "pause": return { cleared: await ui.act("pause") };
+    case "store": nav.go({ screen: "store" }); return done;
+    case "unload": {
+      if (store === null) return { cleared: false, say: NEEDS_CASE };
+      const r = await ui.api.unload(store.id);
+      if (!r.ok) return refusedSay(r.refused);
+      // the case on screen is not loaded any more: its store says so, and the app goes to the list and tells the person (once, however it heard)
+      store.setConnection("gone");
+      return done;
+    }
+    case "load": {
+      let found;
+      try {
+        found = (await ui.api.store(intent.id)).cases.find((c) => c.id === intent.id);
+      } catch {
+        return { cleared: false, say: "The case store could not be read" };
+      }
+      if (found === undefined) return { cleared: false, say: `There is no ${intent.id} in the case store` };
+      if (found.loaded) return { cleared: false, say: `${intent.id} is loaded already` };
+      const r = await ui.api.load(found.file);
+      if (!r.ok) return refusedSay(r.refused);
+      nav.go({ screen: "case", id: r.id });
+      return done;
+    }
     // A gate is passed only by its own button: the bar takes the person to the gate and says so.
     case "approve": nav.openLens("narrative", store?.live.run.waiting === "publish" ? AT_GATE : undefined); return { cleared: false, say: "Approve the draft from the Narrative lens" };
     case "accept_plan": nav.openLens("steps", store?.live.run.waiting === "plan" ? AT_GATE : undefined); return { cleared: false, say: "Accept the plan from the Steps lens" };

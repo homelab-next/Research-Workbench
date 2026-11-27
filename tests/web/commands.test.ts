@@ -123,3 +123,35 @@ test("perform: answer sends answer_question with basis unstated; overrule opens 
   expect(out).toEqual({ cleared: false, say: "Overrule f1 from the Narrative lens" });
   expect(opened).toEqual([["narrative", "overrule:f1"]]);
 });
+
+test("store, unload and load CASE-3 parse to their intents; unload outside a case says to open one", () => {
+  expect(parseCommand("store", ctx)).toEqual({ kind: "store" });
+  expect(parseCommand("open store", { ...ctx, in_case: false })).toEqual({ kind: "store" });
+  expect(parseCommand("case store", { ...ctx, in_case: false })).toEqual({ kind: "store" });
+  expect(parseCommand("unload", ctx)).toEqual({ kind: "unload" });
+  expect(parseCommand("Unload", { ...ctx, in_case: false })).toEqual({ kind: "say", text: "Open a case first: investigate CASE-1" });
+  // a case that is not loaded is in the store: load names it whether or not the list has it
+  expect(parseCommand("load CASE-3", { ...ctx, in_case: false })).toEqual({ kind: "load", id: "CASE-3" });
+  expect(parseCommand("load case-3", ctx)).toEqual({ kind: "load", id: "CASE-3" });
+  expect(parseCommand("load", ctx)).toEqual({ kind: "say", text: "Name the case to load, for example: load CASE-3" });
+});
+
+test("perform: store opens the view, unload unloads the case on screen and goes to the list, load CASE-1 loads the store's file and opens it", async () => {
+  const q = await page(); p = q;
+  const id = await q.s.newCase();
+  q.win.location.hash = `#/case/${id}`; await q.settle();
+  const env = (): Parameters<typeof perform>[1] => ({ ui: q.ui, nav: { go: (r: { screen: string }) => { q.win.location.hash = r.screen === "store" ? "#/investigate/store" : r.screen === "pick" ? "#/investigate" : `#/case/${(r as unknown as { id: string }).id}`; } } as never, store: q.store() });
+  expect(await perform({ kind: "unload" }, env())).toEqual({ cleared: true });
+  await q.settle();
+  expect(q.win.location.hash).toBe("#/investigate");
+  expect(q.toasts()).toContain("CASE-1 was unloaded to the case store");
+  expect(await (await q.s.get("/api/cases")).json()).toEqual([]);
+  expect(await perform({ kind: "load", id: "CASE-9" }, env())).toEqual({ cleared: false, say: "There is no CASE-9 in the case store" });
+  expect(await perform({ kind: "load", id: "CASE-1" }, env())).toEqual({ cleared: true });
+  await q.settle();
+  expect(q.win.location.hash).toBe("#/case/CASE-1");
+  expect(await perform({ kind: "load", id: "CASE-1" }, env())).toEqual({ cleared: false, say: "CASE-1 is loaded already" });
+  expect(await perform({ kind: "store" }, env())).toEqual({ cleared: true });
+  expect(q.win.location.hash).toBe("#/investigate/store");
+});
+

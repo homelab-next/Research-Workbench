@@ -1,8 +1,12 @@
 import type { CaseSummaryView } from "../../core/wire";
-import { syncList } from "../dom";
+import { clear, syncList } from "../dom";
 import { markingChip } from "../chips";
+import { refusalLine } from "../refusal";
 import type { Screen, Shell } from "../app";
 import { MODES } from "./home";
+
+/** Why Unload is off while the run is running: the server's own words for it. */
+const RUNNING = "a run is running; pause or stop it first";
 
 /** Run status in words. */
 export function runWords(status: CaseSummaryView["run_status"]): string {
@@ -37,17 +41,49 @@ export function pickView(shell: Shell): Screen {
   const filter = h("input", { type: "text", name: "Filter", placeholder: "Filter by title, id, marking or status" }) as HTMLInputElement;
 
   const shown = (): CaseSummaryView[] => newestFirst(shell.cases()).filter((c) => matches(c, filter.value));
+  /** Why the last Unload from a tile's menu was refused, by case id: shown in that menu until the next try. */
+  const unloadWhy = new Map<string, string>();
+  const unloading = new Set<string>();
+  const unload = (c: CaseSummaryView, button: HTMLButtonElement, slot: HTMLElement): void => {
+    if (unloading.has(c.id)) return;
+    unloading.add(c.id); button.disabled = true;
+    unloadWhy.delete(c.id); clear(slot);
+    void ui.api.unload(c.id).then((r) => {
+      unloading.delete(c.id); button.disabled = false;
+      if (r.ok) { ui.toast(`${c.id} was unloaded to the case store`); shell.refreshCases(); return; }
+      const why = r.refused.join("; ");
+      unloadWhy.set(c.id, why);
+      clear(slot);
+      const line = refusalLine(h, why, `unload:${c.id}`);
+      if (line !== null) slot.appendChild(line);
+    });
+  };
+  /** A loaded case's menu: Unload, off (with the reason as its title) while the run is running. */
+  const makeMenu = (c: CaseSummaryView): HTMLElement => {
+    const running = c.run_status === "running";
+    const slot = h("div", { class: "menu-why" });
+    const why = unloadWhy.get(c.id);
+    if (why !== undefined) { const line = refusalLine(h, why, `unload:${c.id}`); if (line !== null) slot.appendChild(line); }
+    const button = h("button", {
+      type: "button", data: { action: "unload" }, name: `Unload ${c.id}`, disabled: running,
+      title: running ? RUNNING : `Pack ${c.id} into the case store and take it off this list`,
+    }, "Unload") as HTMLButtonElement;
+    button.addEventListener("click", () => unload(c, button, slot));
+    return h("details", { class: "tile-menu", data: { case: c.id } }, h("summary", { name: `More for ${c.id}`, title: `More for ${c.id}` }, "⋯"), h("div", { class: "menu-body" }, button, slot));
+  };
   const makeTile = (c: CaseSummaryView): HTMLElement => {
     const name = fullName(c);
-    return h("button", { type: "button", class: "tile", name, title: name, on: { click: () => nav.go({ screen: "case", id: c.id }) } },
+    const tile = h("button", { type: "button", class: "tile", name, title: name, on: { click: () => nav.go({ screen: "case", id: c.id }) } },
       h("span", { class: "head" }, c.title), h("span", { class: "desc" }, descriptor(c)),
-      h("span", { class: "chips" }, markingChip(ui, c.marking), h("span", { class: "chip" }, `${c.incoming} incoming`), h("span", { class: "chip" }, `${c.kept} kept`)));
+      h("span", { class: "chips" }, markingChip(ui, c.marking), h("span", { class: "chip" }, `${c.incoming} incoming`), h("span", { class: "chip" }, `${c.kept} kept`),
+        c.unload_failed === null ? null : h("span", { class: "chip unload-failed", title: c.unload_failed }, "unload failed")));
+    return h("div", { class: "tile-wrap" }, tile, makeMenu(c));
   };
   const render = (): void => {
     loadError.textContent = shell.casesStatus() === "failed" ? "The cases could not be loaded" : "";
     const list = shown();
     const items: Item[] = [{ k: "new" }, ...list.map((c): Item => ({ k: "case", c })), ...(list.length === 0 && shell.cases().length > 0 ? [{ k: "none" } as Item] : [])];
-    syncList(grid, items, (i) => (i.k === "case" ? `${i.c.id}|${fullName(i.c)}` : i.k),
+    syncList(grid, items, (i) => (i.k === "case" ? `${i.c.id}|${fullName(i.c)}|${i.c.unload_failed ?? ""}` : i.k),
       (i) => {
         if (i.k === "new") return h("button", { type: "button", class: "tile proposed", name: "New investigation", title: "New investigation", on: { click: () => nav.go({ screen: "new" }) } }, "+ New investigation");
         if (i.k === "none") return h("p", { class: "nomatch", role: "status" }, "Nothing matches");
@@ -67,7 +103,8 @@ export function pickView(shell: Shell): Screen {
     }
   });
 
-  const el = h("main", { class: "top", data: { screen: "pick" }, tabindex: -1 }, h("h1", null, "Investigate: which one?"), h("div", { class: "filter" }, filter), loadError, grid);
+  const storeButton = h("button", { type: "button", class: "store-button", data: { action: "case-store" }, title: "The cases unloaded to the case store: search them and load one", on: { click: () => nav.go({ screen: "store" }) } }, "Case store");
+  const el = h("main", { class: "top", data: { screen: "pick" }, tabindex: -1 }, h("h1", null, "Investigate: which one?"), h("div", { class: "filter" }, filter, storeButton), loadError, grid);
   render();
   return { el, update: render, focus() { filter.focus(); } };
 }

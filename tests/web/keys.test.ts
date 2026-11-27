@@ -480,5 +480,8 @@ test("the ? card says the bar's answer and overrule words", async () => {
     "state <what you know> in the command bar adds a statement of yours as a card in Incoming",
     "answer ask-1 <your answer> answers the question an agent put to you",
     "overrule f1 opens the Narrative lens on that finding's Overrule form",
+    "store opens the Case store: the cases unloaded to it, to search and load",
+    "unload in a case packs it into the case store and takes it off the list",
+    "load CASE-3 loads that case's file from the case store and opens it",
   ]);
 });

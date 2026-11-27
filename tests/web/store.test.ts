@@ -283,3 +283,45 @@ test("the browser's source says the position is ahead when the server answers 40
   }
   expect(drops).toEqual(["ahead", undefined, undefined]);
 });
+
+test("a dropped stream that the server answers 404 makes the store gone, and following stops", async () => {
+  // follow: a drop saying "gone" sets the connection and opens nothing more, whether it comes while opening or later
+  for (const early of [false, true]) {
+    let feed: { onEntry(e: Entry): void; onDrop(why?: "ahead" | "gone"): void } | null = null;
+    const opened: number[] = [];
+    let closed = 0;
+    const source: EntrySource = {
+      open(_id, after, onEntry, onDrop) { opened.push(after); feed = { onEntry, onDrop }; if (early && opened.length === 2) onDrop("gone"); return () => { closed++; }; },
+    };
+    const { win, run: tick, delays } = fakeWin();
+    const store = new CaseStore(run.session.id);
+    const changes: string[] = [];
+    store.subscribe(() => changes.push(store.connection));
+    follow(store, source, win);
+    for (const e of run.entries.slice(0, 3)) feed!.onEntry(e);
+    feed!.onDrop();                                   // an ordinary drop: reconnecting, then a reopen
+    tick();
+    if (!early) feed!.onDrop("gone");
+    expect(store.connection).toBe("gone");
+    expect(store.live.seq).toBe(3);                   // what was read is kept: it was the case's record
+    const before = opened.length;
+    tick(); tick();
+    expect(opened.length).toBe(before);
+    expect(delays.length).toBe(1);
+    expect(changes.at(-1)).toBe("gone");
+    expect(closed).toBeGreaterThanOrEqual(1);
+  }
+  // the browser's source: a 404 to its one follow-up fetch is "gone", and so is the stream's own "unloaded" event
+  const drops: (string | undefined)[] = [];
+  for (const how of ["404", "unloaded"]) {
+    const listeners = new Map<string, (e?: unknown) => void>();
+    class FakeSource { constructor(readonly url: string) {} addEventListener(t: string, fn: () => void) { listeners.set(t, fn); } close() {} }
+    const win = { EventSource: FakeSource, fetch: async () => new Response("case CASE-1 not found", { status: 404 }) } as unknown as Window;
+    let done: () => void = () => {};
+    const dropped = new Promise<void>((r) => { done = r; });
+    eventSourceEntries(win, "http://127.0.0.1:1").open("CASE-1", 7, () => {}, (why) => { drops.push(why); done(); });
+    if (how === "404") listeners.get("error")!(); else listeners.get("unloaded")!({ data: "{\"case\":\"CASE-1\"}" });
+    await dropped;
+  }
+  expect(drops).toEqual(["gone", "gone"]);
+});

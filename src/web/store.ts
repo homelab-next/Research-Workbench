@@ -9,7 +9,8 @@ export const SNAPSHOT_EVERY = 200;
 export class CaseStore {
   readonly id: string;
   readonly entries: Entry[] = [];
-  connection: "live" | "reconnecting" = "live";
+  /** "gone": the server says the case is not loaded (it was unloaded while open), so nothing follows it any more. */
+  connection: "live" | "reconnecting" | "gone" = "live";
   private head: CaseState = initial();
   private pos: number | null = null;
   /** snapshots[i] is the state after entry i * SNAPSHOT_EVERY (snapshots[0] is the empty case). */
@@ -76,7 +77,7 @@ export class CaseStore {
   }
 
   /** Tells watchers the connection changed. */
-  setConnection(c: "live" | "reconnecting"): void {
+  setConnection(c: "live" | "reconnecting" | "gone"): void {
     if (this.connection === c) return;
     this.connection = c;
     this.notify();
@@ -87,7 +88,8 @@ const BACKOFF_MS = [1000, 2000, 5000];
 
 /**
  * Keeps a store fed: opens the source after the store's head; on "gap" or a drop, closes and reopens after the head (after 1 s, 2 s, then every 5 s), setting `connection`.
- * An entry off the store's chain, or a server that says the head is ahead of the case, empties the store first, so it reopens from 0. Returns the stop function.
+ * An entry off the store's chain, or a server that says the head is ahead of the case, empties the store first, so it reopens from 0. A server that says
+ * the case is gone (not loaded) sets the connection to "gone" and opens nothing more; what was read is kept. Returns the stop function.
  */
 export function follow(store: CaseStore, source: EntrySource, win: Window): () => void {
   let stopped = false;
@@ -100,9 +102,15 @@ export function follow(store: CaseStore, source: EntrySource, win: Window): () =
     const mine = ++generation;
     let closer: (() => void) | null = null;
     let lostEarly = false;
-    const lost = (why?: "ahead" | "fork"): void => {
+    const lost = (why?: "ahead" | "fork" | "gone"): void => {
       if (stopped || mine !== generation) return;
       generation++;
+      if (why === "gone") {
+        stopped = true;
+        if (closer === null) lostEarly = true; else { closer(); closeStream = null; }
+        store.setConnection("gone");
+        return;
+      }
       // ahead of the server, or off its chain: what is held is not this case's record, so it is dropped and read again from 0
       if (why !== undefined) store.reset();
       if (closer === null) lostEarly = true; else { closer(); closeStream = null; }

@@ -12,7 +12,7 @@ const two = async (q: Page): Promise<void> => {
 };
 
 test("routes parse and print, and anything else is home", () => {
-  for (const h of ["#/", "#/investigate", "#/investigate/new", "#/soon/hunt", "#/case/CASE-1"]) expect(routeHash(parseRoute(h))).toBe(h);
+  for (const h of ["#/", "#/investigate", "#/investigate/new", "#/investigate/store", "#/soon/hunt", "#/case/CASE-1"]) expect(routeHash(parseRoute(h))).toBe(h);
   expect(parseRoute("#/case/x")).toEqual({ screen: "home" });
   expect(parseRoute("")).toEqual({ screen: "home" });
   expect(parseRoute("#/nonsense/1")).toEqual({ screen: "home" });
@@ -151,7 +151,7 @@ test("the trail offers every level in one activation", async () => {
   const p = await open();
   await two(p);
   p.click("[data-mode=investigate]"); await p.settle();
-  p.click(".tile:nth-child(3)"); await p.settle();            // Odd traffic, CASE-1
+  p.click(".grid > :nth-child(3) .tile"); await p.settle();   // Odd traffic, CASE-1 (a case tile sits in a wrap beside its menu)
   expect(p.win.location.hash).toBe("#/case/CASE-1");
   expect(p.q(".trail .home").getAttribute("aria-label")).toBe("Home");
   expect(p.q(".trail .level-mode .pill").textContent).toBe("Investigate");
@@ -350,4 +350,21 @@ test("the command box is cleared only if it still holds the command that ran, an
   p.fill(input, "something typed meanwhile");
   release(); await p.settle();
   expect(input.value).toBe("something typed meanwhile");
+});
+
+test("a case open in the interface when it is unloaded says it was unloaded and goes to the list", async () => {
+  const p = await open();
+  const id = await p.s.newCase();
+  p.win.location.hash = `#/case/${id}`; await p.settle();
+  const followed = p.store()!;
+  expect(followed.connection).toBe("live");
+  expect((await p.s.post(`/api/cases/${id}/unload`, {})).status).toBe(200);
+  await p.settle();
+  expect(p.win.location.hash).toBe("#/investigate");
+  expect(p.toasts()).toContain("CASE-1 was unloaded to the case store");
+  // the store stopped following: it is gone, not reconnecting, and nothing reopens it
+  expect(followed.connection).toBe("gone");
+  for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 2));
+  expect(followed.connection).toBe("gone");
+  expect(p.root.querySelector(".connection")).toBeNull();
 });

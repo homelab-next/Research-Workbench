@@ -11,6 +11,7 @@ import { caseScreenFor } from "../../src/web/views/workarea";
 import type { CaseStore } from "../../src/web/store";
 import { makePrefs } from "../../src/web/prefs";
 import type { Ui } from "../../src/web/ui";
+import { CaseNotFoundError } from "../../src/core/workbench";
 import { served } from "./served";
 import type { Served } from "./served";
 
@@ -57,11 +58,15 @@ export async function page(opts: { role?: Role; reducedMotion?: boolean; hash?: 
   const host = new URL(s.origin).host;
   const fetcher: Fetcher = (req) => s.app.handle(new Request(req, { headers: new Headers([...req.headers, ["host", host]]) }));
   const source: EntrySource = {
-    open(caseId, after, onEntry) {
-      const session = s.app.hub.read(caseId);
+    open(caseId, after, onEntry, onDrop) {
+      // as the server's stream does: a case that is not loaded is "gone" (404); an unload ends the stream saying so, a failed one ends it plainly
+      let session: ReturnType<typeof s.app.hub.read>;
+      try { session = s.app.hub.read(caseId); } catch (error) { if (error instanceof CaseNotFoundError) { onDrop("gone"); return () => {}; } throw error; }
       for (const e of session.entries(after)) onEntry(JSON.parse(JSON.stringify(e)) as Entry);
       let last = Math.max(after, session.state.seq);
-      return session.subscribe((e) => { if (e.seq > last) { last = e.seq; onEntry(JSON.parse(JSON.stringify(e)) as Entry); } });
+      const unsubscribe = session.subscribe((e) => { if (e.seq > last) { last = e.seq; onEntry(JSON.parse(JSON.stringify(e)) as Entry); } });
+      const forget = s.app.hub.track(caseId, (why) => { unsubscribe(); forget(); onDrop(why === "unloaded" ? "gone" : undefined); });
+      return () => { unsubscribe(); forget(); };
     },
   };
   const api = makeApi(fetcher, s.origin, source);

@@ -6,6 +6,7 @@ import type { Ui, View } from "./ui";
 import { homeView, MODES } from "./views/home";
 import { newView } from "./views/newcase";
 import { pickView, soonView } from "./views/pick";
+import { caseStoreView } from "./views/casestore";
 import { topBar } from "./views/topbar";
 import { caseScreenFor } from "./views/workarea";
 import { AT_GATE, makeSend } from "./ui";
@@ -15,13 +16,18 @@ import { dispatchKey } from "./keys";
 import { nextThing } from "./derive";
 
 export type LensId = "agent" | "steps" | "timeline" | "graph" | "narrative" | "worklog" | "discarded" | "jobs" | "pipeline" | "replay";
-export type Route = { screen: "home" } | { screen: "pick" } | { screen: "new" } | { screen: "soon"; mode: string } | { screen: "case"; id: string };
+export type Route = { screen: "home" } | { screen: "pick" } | { screen: "new" } | { screen: "store" } | { screen: "soon"; mode: string } | { screen: "case"; id: string };
 
-/** "#/" · "#/investigate" · "#/investigate/new" · "#/soon/<mode>" · "#/case/CASE-1". Anything else is home. */
+/** "#/" · "#/investigate" · "#/investigate/new" · "#/investigate/store" · "#/soon/<mode>" · "#/case/CASE-1". Anything else is home. */
 export function parseRoute(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/").filter((p) => p !== "");
   const home: Route = { screen: "home" };
-  if (parts[0] === "investigate") return parts.length === 1 ? { screen: "pick" } : parts.length === 2 && parts[1] === "new" ? { screen: "new" } : home;
+  if (parts[0] === "investigate") {
+    if (parts.length === 1) return { screen: "pick" };
+    if (parts.length === 2 && parts[1] === "new") return { screen: "new" };
+    if (parts.length === 2 && parts[1] === "store") return { screen: "store" };
+    return home;
+  }
   if (parts[0] === "soon" && parts.length === 2 && /^[a-z0-9-]+$/.test(parts[1]!)) return { screen: "soon", mode: parts[1]! };
   if (parts[0] === "case" && parts.length === 2 && /^CASE-[0-9]{1,9}$/.test(parts[1]!)) return { screen: "case", id: parts[1]! };
   return home;
@@ -32,6 +38,7 @@ export function routeHash(route: Route): string {
     case "home": return "#/";
     case "pick": return "#/investigate";
     case "new": return "#/investigate/new";
+    case "store": return "#/investigate/store";
     case "soon": return `#/soon/${route.mode}`;
     case "case": return `#/case/${route.id}`;
   }
@@ -75,6 +82,8 @@ export interface Shell {
   store(): CaseStore | null;
   route(): Route;
   focusLane(lane: string): void;
+  /** Reads the case list again (after an unload or a load from a screen that stays). */
+  refreshCases(): void;
 }
 export type Screen = View & { focus?(): void };
 
@@ -107,11 +116,14 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
     nextThing: () => actions().next_thing?.(),
     up() {
       if (route.screen === "case") { if (!(handlers.closeLens?.() ?? false)) nav.go({ screen: "pick" }); }
-      else if (route.screen === "new") nav.go({ screen: "pick" });
+      else if (route.screen === "new" || route.screen === "store") nav.go({ screen: "pick" });
       else if (route.screen !== "home") nav.go({ screen: "home" });
     },
   };
-  const shell: Shell = { ui, nav, cases: () => cases, casesStatus: () => casesStatus, store: () => store, route: () => route, focusLane: (lane) => handlers.focusLane?.(lane) };
+  const shell: Shell = {
+    ui, nav, cases: () => cases, casesStatus: () => casesStatus, store: () => store, route: () => route, focusLane: (lane) => handlers.focusLane?.(lane),
+    refreshCases: () => refresh(),
+  };
   // The real toasts and command sending. A toast also goes to whatever `ui.toast` was before, so a host can listen.
   const toasts = makeToasts(ui);
   const priorToast = ui.toast; const priorSend = ui.send; const priorAct = ui.act;
@@ -153,13 +165,25 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
         const s = new CaseStore(next.id);
         store = s;
         stopFollow = follow(s, ui.api.entries, win);
-        stopWatch = s.subscribe(() => top.update());
+        const watch = (): void => {
+          // the server says the case is not loaded (it was unloaded, here or elsewhere): say so and go to the list, instead of reconnecting
+          if (s.connection === "gone") {
+            if (store !== s || destroyed) return;
+            nav.go({ screen: "pick" });
+            ui.toast(s.live.seq > 0 ? `${s.id} was unloaded to the case store` : `${s.id} is not loaded`);
+            return;
+          }
+          top.update();
+        };
+        stopWatch = s.subscribe(watch);
+        if (s.connection === "gone") void Promise.resolve().then(watch);   // said while opening: acted on once this render is done
       }
     } else dropStore();
     switch (next.screen) {
       case "home": view = homeView(shell); break;
       case "pick": view = pickView(shell); break;
       case "new": view = newView(shell); break;
+      case "store": view = caseStoreView(shell); break;
       case "soon": view = soonView(shell, next.mode); break;
       case "case": view = (opts.caseScreen ?? caseScreenFor(ui))({ store: store!, nav }, (hs) => { handlers = hs; }); break;
     }
