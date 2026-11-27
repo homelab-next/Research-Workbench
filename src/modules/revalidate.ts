@@ -29,11 +29,16 @@ export type Revalidation = Verdict | { outcome: "refused"; reasons: string[] };
  * A pivot query is re-run from its pivot's text and the stored values, and only if that renders to the stored text; a query
  * with no pivot is re-run from its stored text (sql and files map it back to its template, trino must render it unchanged).
  */
+/** Why a card that came from another case is not verified here. */
+export const fromElsewhere = (card: string, from: string): string => `${card} came from ${from}; verify it in ${from}`;
+
 export async function revalidateCard(
   session: CaseSession, deps: RunnerDeps, input: { card: string; actor: Actor; why: string; budget?: number | null },
 ): Promise<Revalidation> {
   const card = Object.hasOwn(session.state.cards, input.card) ? session.state.cards[input.card]! : null;
   if (card === null) return { outcome: "refused", reasons: [`unknown card: ${input.card}`] };
+  // a card from another case has no query here: what it was made from is verified where it was made
+  if (card.from != null) return { outcome: "refused", reasons: [fromElsewhere(input.card, card.from.case)] };
   const original = card.query !== null && Object.hasOwn(session.state.queries, card.query) ? session.state.queries[card.query]! : null;
   if (card.query === null || original === null) return { outcome: "could_not_run", detail: "this card did not come from a query", rerun: null, proposal: null };
   const originalId = card.query;

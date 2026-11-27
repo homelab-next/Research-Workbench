@@ -95,6 +95,22 @@ test("cards.kept gives the parent's kept cards as input cards with their own mar
   expect((made.inputs.evidence as unknown as Card[]).map((c) => c.id)).toEqual(["c1", "c2"]);
 });
 
+test("an input card is a new note card in the child: made by the workbench, with no query, source, step or sub-goal of the parent, its text rewritten, and from naming the parent's card", () => {
+  const b = parent();
+  keep(b, card("c1", { kind: "result", made_by: "human", query: "q2", source: "reputation", step: "s3", subgoal: "g1", title: "Seen with [c2]", body: "Rows of q2, see [c2]." }));
+  const made = inputsOf(stateOf(b), spec({ inputs: { ...spec().inputs, evidence: "cards.kept" } }), WITH_CARDS, "parent-head");
+  expect(made.cards).toHaveLength(1);
+  const c = made.cards[0]!;
+  expect(c).toMatchObject({ kind: "note", made_by: "system", query: null, source: null, step: null, subgoal: null, why: "from parent CASE-1 card c1" });
+  expect(c.title).toBe("Seen with (CASE-1 card 2)");
+  expect(c.body).toBe("Rows of q2, see (CASE-1 card 2).");
+  expect(cardRefs(`${c.title} ${c.body}`)).toEqual([]);
+  expect(c.rows).toEqual([["x"]]);
+  expect(c.from).toEqual({ case: "CASE-1", loop: "triage", run: "run-1", card: "c1", head: "parent-head" });
+  // the input the hash is taken over is the parent's card as it is
+  expect((made.inputs.evidence as unknown as Card[])[0]).toMatchObject({ id: "c1", query: "q2", kind: "result" });
+});
+
 test("the input hash is the hash of the canonical inputs and does not change with the order the cards were kept in a lane", () => {
   const one = parent();
   keep(one, card("c1"));

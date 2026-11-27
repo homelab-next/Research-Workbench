@@ -6,6 +6,7 @@ import type { AgentView, LoopView, ModelView, Preview } from "../../src/core/wir
 import { served } from "../helpers/served";
 import type { Served } from "../helpers/served";
 import { writeTriage } from "../helpers/loop-files";
+import { inputsOf } from "../../src/pipeline/subloop";
 
 let s: Served | undefined;
 let errors: unknown[] = [];
@@ -215,4 +216,24 @@ test("a parent loaded without its child, on a workbench whose own case has the c
     await b.close();
   }
   expect(bErrors).toEqual([]);
+});
+
+test("a card given to a child holds no query of the parent, and verify_card on it in the child is refused: verify it in the parent", async () => {
+  s = await open();
+  const a = await s.newCase();
+  await s.toPublishGate(a);
+  let st = s.app.hub.read(a).state;
+  const some = Object.values(st.cards).find((c) => c.query !== null)!;
+  expect((await s.command(a, "keep", { card: some.id })).status).toBe(200);
+  st = s.app.hub.read(a).state;
+  const made = inputsOf(st, { loop: "investigation", inputs: { question: "case.question", notes: "cards.kept" }, returns: {} }, { question: { type: "question", required: true }, notes: { type: "cards", required: true } }, "h");
+  const child = s.wb.createCase(made.case, { kind: "system", id: "engine" }, { loop: "investigation", link: { parent: a, run: st.run.id!, stage: "x", attempt: 1, loop: "investigation", input_hash: made.input_hash, depth: 1, floor: st.meta!.marking }, cards: made.cards });
+  const given = Object.values(child.state.cards)[0]!;
+  expect(given).toMatchObject({ kind: "note", made_by: "system", query: null, source: null, step: null, from: { case: a, card: some.id } });
+  const before = s.entries(child.id).length;
+  const r = await s.command(child.id, "verify_card", { card: given.id });
+  await s.app.hub.idle();
+  expect(r.status).toBe(409);
+  expect(JSON.stringify(r.body)).toContain(`verify it in ${a}`);
+  expect(s.entries(child.id).length).toBe(before);
 });

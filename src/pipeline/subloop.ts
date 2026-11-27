@@ -79,9 +79,14 @@ export function inputsOf(state: Readonly<CaseState>, spec: SubloopSpec, child: R
   for (const name of Object.keys(inputs)) {
     if (typeOf(name) !== "cards") continue;
     for (const c of inputs[name] as unknown as Card[]) {
-      // a person's statement in the parent is not the person's in the child: the child is given it as the workbench's copy
-      const { person: _person, ...rest } = c;
-      cards.push({ ...rest, from: { case: meta.id, loop, run, card: c.id, head } });
+      // a card that crosses a case boundary is a new note card of the workbench's: no query, source, step or sub-goal of the parent, nor a person's
+      // statement, and no text that reads as a citation of a card of the child
+      cards.push({
+        id: c.id, title: foreignText(c.title, meta.id), body: foreignText(c.body, meta.id), kind: "note", made_by: "system", query: null,
+        columns: [...c.columns], column_types: [...c.column_types], rows: c.rows.map((row) => [...row]), row_count: c.row_count,
+        coverage: null, empty: null, marking: c.marking, source: null, step: null, subgoal: null, why: `from parent ${meta.id} card ${c.id}`, event_time: null,
+        quality_notes: [], from: { case: meta.id, loop, run, card: c.id, head },
+      });
     }
   }
   const stageTitle = state.run.stages.find((s) => s.id === state.run.current)?.title ?? state.run.current ?? "a sub-loop stage";

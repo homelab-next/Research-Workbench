@@ -5,7 +5,7 @@ import type { CaseSession } from "../core/session";
 import type { Actor, Observable, TimeWindow } from "../core/types";
 import type { RouteView } from "../core/wire";
 import { runPivot } from "../modules/pivots";
-import { revalidateCard } from "../modules/revalidate";
+import { fromElsewhere, revalidateCard } from "../modules/revalidate";
 import { runRoute } from "../modules/routes";
 import type { RouteInput } from "../modules/routes";
 import type { SeekLimits } from "../modules/seeker";
@@ -155,6 +155,8 @@ defineCommand("verify_card", {
   perform: ({ hub, session, deps, actor }, a) => {
     const card = text(a, "card");
     if (!Object.hasOwn(session.state.cards, card)) throw new Refused(`unknown card: ${card.slice(0, 40)}`);
+    const from = session.state.cards[card]!.from;
+    if (from != null) throw new Refused(fromElsewhere(card, from.case));
     const budget = a.budget === undefined ? null : (a.budget as number);
     if (budget !== null && (!Number.isFinite(budget) || budget <= 0)) throw new Refused("the budget must be a number above zero");
     // the re-run asks the source outside the queue; verify.run is written when it ends, whatever it found
