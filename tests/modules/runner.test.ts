@@ -184,6 +184,29 @@ test("issued is written before the source is contacted", async () => {
   expect(status).toBe("running");
 });
 
+test("runQuery leases the pool its deps name for as long as the source is working, and lets it go when the query ends, failed or not", async () => {
+  const held: string[] = [];
+  let leases = 0;
+  const lease = (): (() => void) => { leases++; held.push("leased"); return () => { held.push("released"); }; };
+  const answered = stubDeps(async () => {
+    held.push("run");
+    return { columns: ["dst"], rows: [["x"]], raw: new TextEncoder().encode("x"), media: "text/plain", coverage: { kind: "full" }, cost: null };
+  });
+  expect(await runQuery(s, { ...answered, lease }, base)).toMatchObject({ status: "done" });
+  expect(held).toEqual(["leased", "run", "released"]);
+  held.length = 0;
+  const failing = stubDeps(async () => { held.push("run"); throw new Error("the source went away"); });
+  expect(await runQuery(s, { ...failing, lease }, base)).toMatchObject({ status: "failed", error: "the source went away" });
+  expect(held).toEqual(["leased", "run", "released"]);
+  // a refusal never reaches a connector and leases nothing
+  held.length = 0;
+  expect(await runQuery(s, { ...answered, lease }, { ...base, source: "nope" })).toMatchObject({ status: "refused" });
+  expect(held).toEqual([]);
+  expect(leases).toBe(2);
+  // deps with no lease (a test's, a probe's) run as before
+  expect(await runQuery(s, answered, base)).toMatchObject({ status: "done" });
+});
+
 test("the card carries provenance: source, why, marking, query, columns and their types", async () => {
   await runQuery(s, deps, base);
   expect(s.state.cards.c1).toMatchObject({ kind: "result", made_by: "human", query: "q1", source: "flows", why: "find peers", marking: "TLP:GREEN",

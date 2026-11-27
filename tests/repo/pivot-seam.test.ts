@@ -103,22 +103,34 @@ function pivotModulesLoaded(): string[] {
   return [...seen].map((f) => relative(join(PIVOT, "src"), f)).sort();
 }
 
-const FORWARD = "const forward = connector.run.bind(connector);";
+/** Each file of `src` (path relative to src/, text) other than the runner that calls a connector's run, estimate or estimateRequest, with the lines. */
+function callsOutsideRunner(src: { file: string; text: string }[]): { file: string; calls: string[] }[] {
+  return src
+    .map(({ file, text }) => ({ file, calls: connectorCalls(text) }))
+    .filter(({ file, calls }) => file !== "modules/runner.ts" && calls.length > 0);
+}
+
 test("a connector's run is still called only by the runner", () => {
   const SRC = join(REPO, "src");
-  const found = files(SRC)
-    .map((f) => ({ file: relative(SRC, f), calls: connectorCalls(readFileSync(f, "utf8")) }))
-    // the one exception (final review I5): compose's view of a pool forwards runQuery's own call, to hold the pool while the query runs; it is the
-    // only such line, and it calls nothing of its own accord
-    .map(({ file, calls }) => ({ file, calls: file === "cli/compose.ts" ? calls.filter((c) => !c.endsWith(FORWARD)) : calls }))
-    .filter(({ file, calls }) => file !== "modules/runner.ts" && calls.length > 0);
-  expect(found).toEqual([]);
-  expect(readFileSync(join(SRC, "cli", "compose.ts"), "utf8").split(FORWARD).length - 1).toBe(1);
+  // no exception: the pool a query holds while it runs is leased by runQuery itself (final review I5), not by a view that forwards its call
+  expect(callsOutsideRunner(files(SRC).map((f) => ({ file: relative(SRC, f), text: readFileSync(f, "utf8") })))).toEqual([]);
   expect(connectorCalls(readFileSync(join(SRC, "modules", "runner.ts"), "utf8")).length).toBeGreaterThanOrEqual(3);
   // and nothing the workbench loads from pivot is its run code or its service
   const loaded = pivotModulesLoaded();
   expect(loaded.length).toBeGreaterThan(0);
   expect(loaded.filter((f) => /^(run|service|cli)\//.test(f) || f === "index.ts")).toEqual([]);
+});
+
+test("the seam test refuses a connector's run called outside the runner, compose's forwarding of it included", () => {
+  const forwarding = [
+    "      const forward = connector.run.bind(connector);",
+    "      seen.run = async (req) => await forward(req);",
+  ].join("\n");
+  expect(callsOutsideRunner([{ file: "cli/compose.ts", text: forwarding }])).toEqual([
+    { file: "cli/compose.ts", calls: ["1: const forward = connector.run.bind(connector);"] },
+  ]);
+  expect(callsOutsideRunner([{ file: "cli/compose.ts", text: "await connector.run(req);" }])).toHaveLength(1);
+  expect(callsOutsideRunner([{ file: "modules/runner.ts", text: "await connector.run(req);" }])).toEqual([]);
 });
 
 test("each moved module is a re-export and nothing else", () => {

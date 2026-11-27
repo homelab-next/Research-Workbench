@@ -33,7 +33,12 @@ export function previewCell(v: Json): Json {
   return text.length > CARD_CELL_CHARS ? `${text.slice(0, CARD_CELL_CHARS - 1)}…` : v;
 }
 
-export type RunnerDeps = PlanDeps;
+/**
+ * `lease`, when set, holds the pool the deps name (compose's reference count): runQuery takes it before a connector runs a request and lets it
+ * go when the request ends, so a reload that replaces the pool closes it only once every query in flight on it has ended. Deps without one
+ * (a test's) run the same, holding nothing.
+ */
+export type RunnerDeps = PlanDeps & { lease?: () => () => void };
 
 export interface RunQueryInput {
   source: string; text: string; bound: Bound; window: TimeWindow; why: string; actor: Actor;
@@ -300,10 +305,14 @@ async function issueAndRun(session: CaseSession, deps: RunnerDeps, q: Issue): Pr
 
   const started = Date.now();
   let out: QueryOutcome;
+  // the pool is held while the source works on the request, whoever asked: a person, a playbook, a bound run or one from before slice 12
+  const release = deps.lease?.() ?? null;
   try {
     out = await connector.run(req);
   } catch (err) {
     return fail(firstLine(err));
+  } finally {
+    release?.();
   }
 
   try {
