@@ -477,3 +477,36 @@ test("onOutputs is called once for a published run and once for a completed one,
   expect(seen[1]).toMatchObject({ case: published.id, loop: "investigation", outcome: "published", head: published.head(), outputs: {} });
   expect(seen[1]!.head.seq).toBe(published.entries().at(-1)!.seq);
 });
+
+test("a query in flight across a reload completes when no bound run holds the pool: a person's query in a case with no run, and a run from before slice 12 in progress", async () => {
+  /** Runs a sql query with `runner`, reloading on the next turn of the event loop once the connector has begun it. */
+  async function across(session: CaseSession, runner: EngineDeps["runner"], why: string): Promise<string> {
+    const connector = runner.pool.for(runner.registry.source("flows")!);
+    const run = connector.run.bind(connector);
+    let reloaded: Promise<void> | null = null;
+    connector.run = (req) => {
+      const out = run(req);
+      reloaded = new Promise<void>((done) => { setTimeout(() => { composed.reload(); done(); }, 0); });
+      return out;
+    };
+    const r = await runQuery(session, runner, { source: "flows", text: "select dst from flows where src = {value}", bound: { value: "192.0.2.17" }, window: { from: null, to: null }, why, actor: human });
+    expect(reloaded).not.toBeNull();
+    await reloaded;
+    return r.status === "failed" ? `failed: ${r.error}` : r.status;
+  }
+  const a = newCase();
+  const ea = Engine.open(a, composed.deps);
+  expect(await across(a, ea.bound.runner, "a person's own query")).toBe("done");
+  const b = newCase();
+  const old = Engine.open(b, { ...oldDepsOf(composed.deps), pipeline: loadPipeline(composed.deps.registry).pipeline! });
+  old.start(human);
+  const eb = Engine.open(b, composed.deps);
+  expect(await across(b, eb.bound.runner, "a run from before slice 12")).toBe("done");
+  // the pools a reload replaced are closed once their queries ended: the one now in use is the only one open
+  const now = composed.deps.runner.pool;
+  let closed = 0;
+  const closeAll = now.closeAll.bind(now);
+  now.closeAll = () => { closed++; closeAll(); };
+  composed.reload();
+  expect(closed).toBe(1);
+});

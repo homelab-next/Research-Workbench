@@ -155,6 +155,35 @@ function build(config: Config, wb: Workbench, opts: { refuse_hosts?: () => reado
 }
 
 /**
+ * A view of `pool` whose connectors hold it (`retain`) while each query they run is in flight, so a reload that replaces the pool closes it only once
+ * every query on it has ended: a person's query, a playbook's and a run's from before slice 12 as well as a bound run's. The view and each
+ * connector's view are objects whose prototype is the real one, so everything else is the real pool's and connector's; one view per connector.
+ */
+function heldWhileRunning(pool: ConnectorPool, retain: () => () => void): ConnectorPool {
+  type Connector = ReturnType<ConnectorPool["for"]>;
+  const views = new WeakMap<Connector, Connector>();
+  const view = Object.create(pool) as ConnectorPool;
+  view.for = (source) => {
+    const connector = pool.for(source);
+    let seen = views.get(connector);
+    if (seen === undefined) {
+      seen = Object.create(connector) as Connector;
+      seen.run = async (req) => {
+        const release = retain();
+        try {
+          return await connector.run(req);
+        } finally {
+          release();
+        }
+      };
+      views.set(connector, seen);
+    }
+    return seen;
+  };
+  return view;
+}
+
+/**
  * Everything the pipeline needs, built from the configuration: the registry over the configured and imported roots (its loading recorded
  * on the workbench chain, every manifest's bytes in the content store), the observable types, the secrets, the connector pool, the seeker
  * the configuration names, the providers, every loop, and the pipeline and profile of the default loop. `opts.refuse_hosts` names the
@@ -165,8 +194,8 @@ function build(config: Config, wb: Workbench, opts: { refuse_hosts?: () => reado
  *
  * `reload()` loads the roots again and replaces, in place on the same deps object, the registry, the runner, the seeker, the providers, the
  * loops, the components, the pipeline and the profile. The old connector pool is closed once nothing holds it: each run bound to the deps it
- * replaced holds that pool (`deps.retain`, a count) until the run ends, so a query in flight across a reload completes; with no holder it is
- * closed at once. `close()` closes every pool still open.
+ * replaced holds that pool (`deps.retain`, a count) until the run ends, and each query in flight on it holds it until the query ends (whoever
+ * asked: a person, a playbook, a run from before slice 12), so a query in flight across a reload completes; with no holder it is closed at once. `close()` closes every pool still open.
  * It returns the new problems; a default loop that is not usable after it is one. Copy on write:
  * nothing a reload replaces is changed, so whoever holds the old objects (a run's own copy of the deps it bound) goes on with them as they were.
  */
@@ -181,26 +210,28 @@ export function compose(config: Config, wb: Workbench, opts: { refuse_hosts?: ()
     h.pool.closeAll();
   };
   const open = new Set<Held>();
+  /** Holds a pool: the view of it the runner uses (each query in flight holds it), and `retain` for a bound run. */
   const hold = (pool: ConnectorPool): { held: Held; retain: () => () => void } => {
     const held: Held = { pool, holders: 0, replaced: false, closed: false };
     open.add(held);
-    return {
-      held,
-      retain: () => {
-        held.holders++;
-        let done = false;
-        return () => {
-          if (done) return;
-          done = true;
-          held.holders--;
-          if (held.replaced && held.holders === 0) shut(held);
-        };
-      },
+    const retain = (): (() => void) => {
+      held.holders++;
+      let done = false;
+      return () => {
+        if (done) return;
+        done = true;
+        held.holders--;
+        if (held.replaced && held.holders === 0) shut(held);
+      };
     };
+    held.pool = heldWhileRunning(pool, retain);
+    return { held, retain };
   };
+  /** The built deps with a runner whose pool is the held view of it. */
+  const holdingRunner = (built: Built, held: Held): Built => ({ ...built, runner: { ...built.runner, pool: held.pool } });
   let current = hold(first.pool);
   const deps: EngineDeps = {
-    config, ...first.built, content: wb.chainBlobs, retain: current.retain,
+    config, ...holdingRunner(first.built, current.held), content: wb.chainBlobs, retain: current.retain,
     anchor: (a) => {
       wb.chain.append({ type: "case.anchored", actor: { kind: "system", id: "engine" }, payload: { case: a.case, seq: a.seq, hash: a.hash, why: a.why } });
     },
@@ -213,7 +244,7 @@ export function compose(config: Config, wb: Workbench, opts: { refuse_hosts?: ()
       const next = build(config, wb, opts);
       const old = current;
       current = hold(next.pool);
-      Object.assign(deps, next.built, { retain: current.retain });
+      Object.assign(deps, holdingRunner(next.built, current.held), { retain: current.retain });
       old.held.replaced = true;
       if (old.held.holders === 0) shut(old.held);
       return next.problems;
