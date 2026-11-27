@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { Actor, Marking, Question, StageDef } from "../../src/core/types";
 import { PersonRefused } from "../../src/pipeline/person";
-import { answerQuestion, questionMarking, questionsPart } from "../../src/pipeline/questions";
+import { answerQuestion, questionMarking, questionsPart, waitingReason } from "../../src/pipeline/questions";
 import { fixture, person } from "../helpers/tools-fixture";
 import type { Fixture } from "../helpers/tools-fixture";
 
@@ -137,3 +137,12 @@ function startRunAfter(): void {
   f.s.commit(() => [{ type: "run.finished", actor: engine, payload: { outcome: "stopped", reason: "done" } }]);
   startRun();
 }
+
+test("waitingReason names the question, or the questions, the run waits for", () => {
+  startRun();
+  ask(Q1, { blocking: true });
+  ask("Who owns the laptop?", { blocking: true });
+  const [a, b] = [f.s.state.questions["ask-1"]!, f.s.state.questions["ask-2"]!];
+  expect(waitingReason([a])).toBe("waiting for the person's answer to ask-1. Answer it in the Narrative lens, or resume to go on without it.");
+  expect(waitingReason([a, b])).toBe("waiting for the person's answer to ask-1 and ask-2. Answer them in the Narrative lens, or resume to go on without them.");
+});

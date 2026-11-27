@@ -3,7 +3,7 @@ import type { Json } from "../core/canonical";
 import { canonical } from "../core/canonical";
 import type { CaseSession } from "../core/session";
 import type { CaseState, RunState } from "../core/state";
-import { latestDraft, revisedRulingReason } from "../core/state";
+import { latestDraft, revisedRulingReason, waitingOn } from "../core/state";
 import type { Actor, Draft, EntryInput, Marking, ModelChoice, Product, RunHold } from "../core/types";
 import { termsOf } from "../agents/draft";
 import { mayGo, tooStrict } from "../agents/pack";
@@ -18,6 +18,7 @@ import { firstUnpassedReview, nextStep } from "./next";
 import { acceptPlan, denyPlan, requestReplan, spendPlanBudget } from "./plans";
 import { answerChallenge, reviseDraft } from "./revise";
 import { gateSendBack, overrule } from "./overrule";
+import { waitingReason } from "./questions";
 import { assembleRunner } from "./stages/assemble";
 import { challengeRunner } from "./stages/challenge";
 import { checksRunner } from "./stages/checks";
@@ -340,16 +341,22 @@ export class Engine {
     // a stage that ends after a person stopped the run (or after another run began) writes nothing
     const gone = (s: Readonly<CaseState>): boolean => s.run.id !== state.run.id || s.run.status === "finished";
     switch (end.kind) {
-      case "finished":
-        return this.session.commit((s) => {
+      case "finished": {
+        const written = this.session.commit((s) => {
           if (gone(s)) return [];
           const out = [finish(end.outcome, end.draft_hash, end.output, end.reason)];
           if (supersededBy !== null) {
             const first = firstUnpassedReview(s, this.deps.pipeline);
             if (first !== null) out.push({ type: "stage.started", actor: ENGINE, ...link, stage: first, payload: { stage: first, attempt: (s.run.stages.find((x) => x.id === first)?.attempts ?? 0) + 1 } });
           }
+          // a pass with a blocking question of this stage unanswered stands, and the run waits for the answer before the next stage (controller
+          // ruling 4): an answer or a person's resume takes it on, and a resume without the answer waives the question; the stage does not run again
+          const waiting = end.outcome === "pass" ? waitingOn(s, stageId) : [];
+          if (waiting.length > 0) out.push(this.paused(ENGINE, waitingReason(waiting), { kind: "question", stage: stageId }));
           return out;
-        }).length > 0;
+        });
+        return written.length > 0 && written.at(-1)!.type !== "run.paused";
+      }
       case "declined":
         return this.session.commit((s) => (gone(s) ? [] : [
           finish("declined", null, null, end.reason),

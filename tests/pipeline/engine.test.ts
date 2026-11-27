@@ -17,6 +17,7 @@ import type { ToolContext } from "../../src/agents/tools";
 import { loadConfig } from "../../src/modules/config";
 import { DEFAULT_LIMITS } from "../../src/modules/seeker";
 import { Engine, RunRefused } from "../../src/pipeline/engine";
+import { answerQuestion } from "../../src/pipeline/questions";
 import type { EngineDeps, StageEnd, StageRunner } from "../../src/pipeline/engine";
 import { loadPipeline } from "../../src/pipeline/manifests";
 import type { Role } from "../../src/pipeline/manifests";
@@ -767,4 +768,199 @@ test("a ruling revised at the publish gate sends the work back to Assemble with 
   expect(r.s.entries().some((e) => e.type === "gate.passed" && e.payload.gate === "publish")).toBe(false);
   expect(await r.engine.advance()).toMatchObject({ status: "waiting", waiting: "publish" });
   expect(latestDraft(r.s.state)!.product.key_findings[0]!.likelihood).toBe("almost certain");
+});
+
+// ---------- slice 8: a blocking question holds the run after its stage's pass (controller ruling 4) ----------
+
+const agentOf = (stage: string): Actor => ({ kind: "agent", id: stage === "plan" ? "planner" : `${stage}er`, stage, profile: "investigation", model: "m", effort: null, where: "machine" });
+/** A stage's agent asks the person, as ask_person would. */
+const ask = (s: CaseSession, stage: string, blocking = true, text = "Who owns the laptop?"): void => {
+  s.commit((st, ids) => [{
+    type: "question.asked", actor: agentOf(stage), run: st.run.id, stage,
+    payload: { question: { id: ids.next("question"), text, why: "it decides the finding", cards: [], about: [], blocking } },
+  }]);
+};
+const answerIt = (s: CaseSession, question: string): void => {
+  answerQuestion(s, f.sample.deps, { actor: person, question, answer: "Pat in the gym.", basis: "saw", detail: "", about: null, marking: null });
+};
+const stageOf = (s: CaseSession, id: string) => s.state.run.stages.find((x) => x.id === id)!;
+const WAITING_ASK1 = "waiting for the person's answer to ask-1. Answer it in the Narrative lens, or resume to go on without it.";
+
+/** A rig whose Research stage asks the person (blocking unless told otherwise) the first time it runs. */
+function asking(over: { blocking?: boolean; stage?: string; outcome?: "pass" | "fail" } = {}, s: CaseSession = f.s, deps?: EngineDeps): Rig & { runs: Record<string, number> } {
+  const runs: Record<string, number> = {};
+  const stage = over.stage ?? "research";
+  const r = rig({
+    research: async () => {
+      runs.research = (runs.research ?? 0) + 1;
+      r.log.push("research");
+      if (runs.research === 1) ask(s, stage, over.blocking ?? true);
+      return { ...PASS, outcome: over.outcome ?? "pass", reason: over.outcome === "fail" ? "research failed" : null };
+    },
+  }, s, deps);
+  return { ...r, runs };
+}
+async function toResearch(r: Rig): Promise<void> {
+  r.engine.start(person);
+  await r.engine.advance();
+  acceptPlan(r.s);
+}
+
+test("a stage that passes with a blocking question unanswered records its pass, and the run pauses before the next stage, waiting for the answer", async () => {
+  const r = asking();
+  await toResearch(r);
+  const sum = await r.engine.advance();
+  const finished = r.s.entries().filter((e) => e.type === "stage.finished" && e.payload.stage === "research");
+  expect(finished).toHaveLength(1);
+  expect(finished[0]!.type === "stage.finished" && finished[0]!.payload.outcome).toBe("pass");
+  expect(sum).toMatchObject({ status: "paused", pause_reason: WAITING_ASK1, current: "research" });
+  expect(r.s.state.run.hold).toEqual({ kind: "question", stage: "research" });
+  expect(stageOf(r.s, "research").status).toBe("passed");
+  expect(r.log).toEqual(["frame", "plan", "research"]);
+  expect(types(r.s).slice(-2)).toEqual(["stage.finished", "run.paused"]);
+});
+
+test("resumed without an answer, the run goes on to the next stage without running the stage again; the question is waived and still open", async () => {
+  const r = asking();
+  await toResearch(r);
+  await r.engine.advance();
+  const sum = await r.engine.resume(person);
+  expect(r.runs.research).toBe(1);
+  expect(r.s.state.questions["ask-1"]).toMatchObject({ answer: null, waived: { by: "analyst" } });
+  expect(r.log).toEqual(["frame", "plan", "research", "assemble", "checks", "evaluate", "challenge", "publish"]);
+  expect(sum.waiting).toBe("publish");
+  expect(r.s.entries().filter((e) => e.type === "run.paused")).toHaveLength(1);
+});
+
+test("answered and resumed, the run goes on, with nothing waived and the stage run once", async () => {
+  const r = asking();
+  await toResearch(r);
+  await r.engine.advance();
+  answerIt(r.s, "ask-1");
+  const sum = await r.engine.resume(person);
+  expect(r.runs.research).toBe(1);
+  expect(r.s.state.questions["ask-1"]!.waived).toBeNull();
+  expect(r.s.state.questions["ask-1"]!.answer).not.toBeNull();
+  expect(sum.waiting).toBe("publish");
+});
+
+test("a question that is not blocking, one another stage asked, one of an earlier run, and a waived one do not hold a pass", async () => {
+  // not blocking
+  const a = asking({ blocking: false });
+  await toResearch(a);
+  expect((await a.engine.advance()).waiting).toBe("publish");
+  // asked as another stage
+  const wb = Workbench.open(join(dir, "wb-other"), { onError: () => {} });
+  extra.push(() => wb.close());
+  const mk = () => wb.createCase({ title: "t", asked: "a", why: "w", starting: [{ type: "address", value: START }], window: WINDOW, objective: null, marking: "TLP:GREEN" }, person);
+  const s2 = mk();
+  const b = asking({ stage: "frame" }, s2);
+  await toResearch(b);
+  expect((await b.engine.advance()).waiting).toBe("publish");
+  expect(s2.state.skipped).toEqual([]);
+  // of an earlier run: the first run asks at Research and is stopped; the second run's Research pass is not held
+  const s3 = mk();
+  const c = rig({}, s3);
+  c.engine.start(person);
+  await c.engine.advance();
+  ask(s3, "research");
+  c.engine.stop(person, "start over");
+  c.engine.start(person);
+  await c.engine.advance();
+  acceptPlan(s3);
+  expect((await c.engine.advance()).waiting).toBe("publish");
+  expect(s3.state.skipped).toEqual([]);
+  // waived: Research's question was held and the person went on without it before Research's pass
+  const s4 = mk();
+  const d = rig({}, s4);
+  d.engine.start(person);
+  await d.engine.advance();
+  ask(s4, "research");
+  s4.commit((st) => [{ type: "run.paused", actor: { kind: "system", id: "engine" }, run: st.run.id, payload: { reason: "held", hold: { kind: "question", stage: "research" } } }]);
+  await d.engine.resume(person);
+  expect(s4.state.questions["ask-1"]!.waived).not.toBeNull();
+  acceptPlan(s4);
+  expect((await d.engine.advance()).waiting).toBe("publish");
+  expect(s4.entries().filter((e) => e.type === "run.paused")).toHaveLength(1);
+  expect(s4.state.skipped).toEqual([]);
+});
+
+test("a stage that fails is not held: it goes where a failure goes", async () => {
+  const r = asking({ outcome: "fail" });
+  await toResearch(r);
+  const sum = await r.engine.advance();
+  expect(r.s.entries().filter((e) => e.type === "run.paused" && e.payload.hold?.kind === "question")).toEqual([]);
+  expect(stageOf(r.s, "research").status).toBe("failed");
+  expect(sum.pause_reason).not.toBe(WAITING_ASK1);
+});
+
+test("a blocking question answered while its stage was still working holds nothing: the stage runs once and the run goes on", async () => {
+  const runs = { assemble: 0 };
+  const r = rig({
+    assemble: async () => {
+      runs.assemble++;
+      if (runs.assemble === 1) { ask(f.s, "assemble"); answerIt(f.s, "ask-1"); }
+      f.s.commit(() => [{ type: "draft.revised", actor: planner, payload: { draft: makeDraft(f.s.state.drafts.length + 1) } }]);
+      return PASS;
+    },
+  });
+  await toResearch(r);
+  const sum = await r.engine.advance();
+  expect(runs.assemble).toBe(1);
+  expect(types(f.s)).not.toContain("run.paused");
+  expect(sum.waiting).toBe("publish");
+});
+
+test("a held Plan does not run again on resume, and the plan gate waits on the plan it proposed", async () => {
+  let plans = 0;
+  const r = rig({
+    plan: async () => {
+      plans++;
+      f.s.commit((_st, ids) => [{ type: "plan.proposed", actor: planner, payload: { plan: PLAN(ids.next("plan")) } }]);
+      if (plans === 1) ask(f.s, "plan");
+      return PASS;
+    },
+  });
+  r.engine.start(person);
+  const held = await r.engine.advance();
+  expect(held).toMatchObject({ status: "paused", pause_reason: WAITING_ASK1, current: "plan" });
+  expect(types(f.s)).not.toContain("gate.waiting");
+  const sum = await r.engine.resume(person);
+  expect(plans).toBe(1);
+  expect(sum).toMatchObject({ status: "waiting", waiting: "plan" });
+  expect(f.s.state.plan.current!.id).toBe("plan-1");
+  expect(f.s.entries().filter((e) => e.type === "plan.proposed")).toHaveLength(1);
+});
+
+test("stopping a run that waits for an answer finishes it", async () => {
+  const r = asking();
+  await toResearch(r);
+  await r.engine.advance();
+  r.engine.stop(person, "no answer coming");
+  expect(r.s.state.run.status).toBe("finished");
+  expect(r.s.state.run.outcome).toBe("stopped");
+});
+
+test("a restart finds the held run paused, and a resume goes on to the next stage", async () => {
+  const wbDir = join(dir, "wb-held");
+  const sample = sampleRoot(join(dir, "s-held"));
+  extra.push(() => sample.close());
+  const deps = depsOf(sample);
+  const wb1 = Workbench.open(wbDir, { onError: () => {} });
+  const s1 = wb1.createCase({ title: "t", asked: "a", why: "w", starting: [{ type: "address", value: START }], window: WINDOW, objective: null, marking: "TLP:GREEN" }, person);
+  const r1 = asking({}, s1, deps);
+  await toResearch(r1);
+  await r1.engine.advance();
+  expect(s1.state.run.status).toBe("paused");
+  wb1.close();
+  const wb2 = Workbench.open(wbDir, { onError: () => {} });
+  extra.push(() => wb2.close());
+  const s2 = wb2.session(s1.id);
+  const r2 = asking({}, s2, deps);
+  expect(r2.engine.summary()).toMatchObject({ status: "paused", pause_reason: WAITING_ASK1 });
+  expect(s2.state.run.hold).toEqual({ kind: "question", stage: "research" });
+  const sum = await r2.engine.resume(person);
+  expect(r2.runs.research).toBeUndefined();
+  expect(sum.waiting).toBe("publish");
+  expect(s2.state.skipped).toEqual([]);
 });

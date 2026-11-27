@@ -63,6 +63,15 @@ export function answerQuestion(session: CaseSession, deps: RunnerDeps, input: { 
   return id;
 }
 
+/** Names joined for a sentence: "ask-1", "ask-1 and ask-2", "ask-1, ask-2 and ask-3". */
+const andList = (ids: readonly string[]): string => (ids.length < 2 ? ids.join("") : `${ids.slice(0, -1).join(", ")} and ${ids.at(-1)!}`);
+
+/** Why a run paused after a pass: "waiting for the person's answer to ask-1. Answer it in the Narrative lens, or resume to go on without it." */
+export function waitingReason(waiting: readonly QuestionState[]): string {
+  const it = waiting.length === 1 ? "it" : "them";
+  return `waiting for the person's answer to ${andList(waiting.map((q) => q.id))}. Answer ${it} in the Narrative lens, or resume to go on without ${it}.`;
+}
+
 const LEAD = "Questions put to the person in this run. An answer is a card: cite it like any card, and say the finding rests on the person's word.";
 
 /** The run's questions as one pack part: who asked, the text, and the answer or that there is none. Null when the run has none. Throws ContextError as packPart does. */
