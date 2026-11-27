@@ -213,6 +213,42 @@ test("a stream larger than the byte limit is refused", async () => {
   expect(asError(await provider(s.url, { max_bytes: 4096 }).turn(req())).message).toBe("the reply was larger than 4096 bytes; refused");
 });
 
+// --- every reply that reaches the ledger passed the credential echo check, whichever way the stream ended
+
+const KEY = "sk-stream-secret-0123456789abcdef";
+const keyed = (url: string) => new LocalProvider({ id: "lm", base_url: url, where: "machine", credential: "LM_KEY", secrets: new Secrets({ LM_KEY: KEY }, null), context: null, efforts: [], timeout_ms: 20000 });
+/** A stream standin that sends the given raw SSE events, as written. */
+function rawStandin(events: string[]): string {
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+    let i = 0;
+    return new Response(new ReadableStream<Uint8Array>({ async pull(c) { await Bun.sleep(0); const n = events[i++]; if (n === undefined) { c.close(); return; } c.enqueue(enc.encode(n)); } }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } });
+  } });
+  stops.push(() => { void server.stop(true); });
+  return `http://127.0.0.1:${server.port}/v1`;
+}
+const ev = (o: unknown): string => `data: ${typeof o === "string" ? o : JSON.stringify(o)}\n\n`;
+
+test("a stream that echoed the credential and then sent a chunk that is not JSON is refused, with nothing recorded", async () => {
+  const r = asError(await keyed(rawStandin([ev(delta({ content: `the key is ${KEY} ` })), ev("{not json")])).turn(req()));
+  expect(r.message).toBe("the endpoint echoed the credential; response refused");
+  expect(r.raw).toBeNull();
+});
+
+test("an error event that echoes the credential is refused, with nothing recorded", async () => {
+  const r = asError(await keyed(rawStandin([ev(delta({ content: "abc" })), ev({ error: { message: `bad auth ${KEY}` } })])).turn(req()));
+  expect(r.message).toBe("the endpoint echoed the credential; response refused");
+  expect(r.raw).toBeNull();
+});
+
+test("an error event or a broken chunk with no echo is still recorded as received", async () => {
+  const a = asError(await keyed(rawStandin([ev(delta({ content: "abc" })), ev({ error: { message: "Model unloaded" } })])).turn(req()));
+  expect(a.message).toBe("the endpoint broke off the reply: Model unloaded");
+  expect(dec.decode(a.raw!)).toContain("Model unloaded");
+  const b = asError(await keyed(rawStandin([ev(delta({ content: "abc" })), ev("{not json")])).turn(req()));
+  expect(b.message).toBe("a streamed chunk of the reply is not JSON");
+  expect(dec.decode(b.raw!)).toContain("abc");
+});
+
 // --- the detector itself
 
 const feedAll = (g: LoopGuard, text: string, step = 13): string | null => {

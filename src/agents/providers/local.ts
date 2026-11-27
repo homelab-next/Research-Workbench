@@ -214,10 +214,17 @@ export class LocalProvider implements Provider {
     const take = (data: string): void => {
       if (data.trim() === "[DONE]") { done = true; return; }
       let chunk: unknown;
-      try { chunk = JSON.parse(data); } catch { throw new Failure("a streamed chunk of the reply is not JSON", enc.encode(JSON.stringify(asm.result()))); }
+      try { chunk = JSON.parse(data); } catch {
+        // what was received is recorded only once it passed the echo check, as every other reply is
+        const parsed = asm.result();
+        const raw = enc.encode(JSON.stringify(parsed));
+        echoCheck(raw, parsed);
+        throw new Failure("a streamed chunk of the reply is not JSON", raw);
+      }
       if (isPlainObject(chunk) && chunk.error !== undefined && chunk.choices === undefined) {
-        const said = this.#endpointSaid(chunk);
         const raw = enc.encode(JSON.stringify(chunk));
+        echoCheck(raw, chunk);
+        const said = this.#endpointSaid(chunk);
         if (said !== "" && CONTEXT_RE.test(said)) throw new Failure(`the request did not fit the model's context (the endpoint said: ${said})`, raw, null, "context");
         throw new Failure(said === "" ? "the endpoint broke off the reply with an error" : `the endpoint broke off the reply: ${said}`, raw);
       }
