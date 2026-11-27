@@ -3,7 +3,7 @@ import type { Json } from "../core/canonical";
 import { canonical } from "../core/canonical";
 import type { CaseSession } from "../core/session";
 import type { CaseState, RunState } from "../core/state";
-import { latestDraft } from "../core/state";
+import { latestDraft, revisedRulingReason } from "../core/state";
 import type { Actor, Draft, EntryInput, Marking, ModelChoice, Product, RunHold } from "../core/types";
 import { termsOf } from "../agents/draft";
 import { mayGo, tooStrict } from "../agents/pack";
@@ -17,7 +17,7 @@ import type { Pipeline, Role, StageManifest } from "./manifests";
 import { firstUnpassedReview, nextStep } from "./next";
 import { acceptPlan, denyPlan, requestReplan, spendPlanBudget } from "./plans";
 import { answerChallenge, reviseDraft } from "./revise";
-import { overrule } from "./overrule";
+import { gateSendBack, overrule } from "./overrule";
 import { assembleRunner } from "./stages/assemble";
 import { challengeRunner } from "./stages/challenge";
 import { checksRunner } from "./stages/checks";
@@ -181,22 +181,31 @@ export class Engine {
   }
 
   /**
-   * A person rules on reviewers who disagree: follow one of the two (its stage id), or neither, with a note. The ruling is fixed for the rest of the run:
-   * it goes to the analyst, and both reviewers see it. It passes no gate and advances nothing. Throws RunRefused.
+   * A person rules on reviewers who disagree: follow one of the two (its stage id), or neither, with a note. A ruling holds until it is replaced:
+   * it goes to the analyst, and both reviewers see it. The person may rule again while the run is in progress; at the publish gate the work then
+   * goes back to Assemble with the new ruling as the reason (controller ruling 6), and true is returned so the server drives it. It passes no gate.
+   * Throws RunRefused.
    */
-  rule(actor: Actor, conflict: string, follow: string | null, note: string): void {
+  rule(actor: Actor, conflict: string, follow: string | null, note: string): boolean {
     if (actor.kind !== "human") throw new RunRefused("only a person may rule on a conflict");
+    let sent = false;
     this.session.commit((s) => {
       const c = Object.hasOwn(s.conflicts, conflict) ? s.conflicts[conflict]! : null;
       if (c === null) throw new RunRefused(`there is no conflict ${conflict}`);
-      if (c.ruling !== null) throw new RunRefused(`conflict ${conflict} has already been ruled on`);
       if (c.run !== s.run.id || s.run.status === "finished" || s.run.status === "none") throw new RunRefused(`conflict ${conflict} is from a run that is over`);
       const title = (id: string): string => s.run.stages.find((x) => x.id === id)?.title ?? id;
       if ((follow !== null && follow !== c.raised_by && follow !== c.changed_for) || (follow === null && note.trim() === "")) {
         throw new RunRefused(`a ruling follows ${title(c.raised_by)} or ${title(c.changed_for)}, or gives a note`);
       }
-      return [{ type: "review.ruled", actor, run: s.run.id, payload: { conflict, follow, note } }];
+      if (c.ruling !== null && c.ruling.follow === follow && c.ruling.note.trim() === note.trim()) throw new RunRefused(`that is already the ruling on ${conflict}`);
+      const out: EntryInput[] = [{ type: "review.ruled", actor, run: s.run.id, payload: { conflict, follow, note } }];
+      if (c.ruling === null) return out;
+      const revised = { ...c, ruling: { follow, note, by: actor.id, seq: s.seq + 1, ts: s.head_ts ?? "" }, earlier_rulings: [...(c.earlier_rulings ?? []), c.ruling] };
+      const back = gateSendBack(s, this.deps.pipeline, revisedRulingReason(s, revised) ?? "");
+      sent = back.length > 0;
+      return [...out, ...back];
     });
+    return sent;
   }
 
   /** A person approves the draft at the publish gate. Throws PublishRefused and writes nothing when it may not be published. Advances nothing; the anchor is made here. */

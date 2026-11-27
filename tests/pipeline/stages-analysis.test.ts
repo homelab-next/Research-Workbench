@@ -834,7 +834,7 @@ test("the person's ruling is recorded in their name, goes to Assemble as a fixed
   expect(() => r.engine.rule(person, "k1", "checks", "")).toThrow("a ruling follows Evaluate or Challenge, or gives a note");
   expect(() => r.engine.rule(person, "k1", null, " ")).toThrow("a ruling follows Evaluate or Challenge, or gives a note");
   r.engine.rule(person, "k1", "challenge", "one event is not enough for almost certain");
-  expect(() => r.engine.rule(person, "k1", "evaluate", "")).toThrow("conflict k1 has already been ruled on");
+  expect(() => r.engine.rule(person, "k1", "challenge", "one event is not enough for almost certain")).toThrow("that is already the ruling on k1");
   const ruled = ofType("review.ruled");
   expect(ruled.map((e) => [e.actor, e.payload])).toEqual([[person, { conflict: "k1", follow: "challenge", note: "one event is not enough for almost certain" }]]);
   // a ruling is not a gate pass: nothing moves until the run is resumed

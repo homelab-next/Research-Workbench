@@ -361,6 +361,38 @@ test("rule_conflict records the person's ruling in the server's name and resumes
   expect(s.app.hub.read(id).state.skipped).toEqual([]);
 });
 
+test("rule_conflict on a ruled conflict records the new ruling in the server's name", async () => {
+  s = await served();
+  const id = await s.newCase();
+  await s.toPublishGate(id);
+  const session = s.app.hub.read(id);
+  const d = session.state.drafts.at(-1)!;
+  const engine = { kind: "system", id: "engine" } as const;
+  session.commit((st, ids) => [{ type: "review.conflict", actor: engine, run: st.run.id, payload: { conflict: {
+    id: ids.next("conflict"), draft_hash: d.hash, finding: "f1", change: "likelihood", earlier: "almost certain", now: "likely", raised_by: "evaluate", changed_for: "challenge",
+    asks: "almost certain", asked: "lower", points: ["f1: x"], reason: "Evaluate and Challenge disagree on f1",
+  } } }]);
+  expect((await s.command(id, "rule_conflict", { conflict: "k1", follow: "challenge", note: "" })).status).toBe(200);
+  await s.app.hub.idle();
+  expect(await s.command(id, "rule_conflict", { conflict: "k1", follow: "challenge", note: "" })).toEqual({ status: 409, body: { ok: false, refused: ["that is already the ruling on k1"] } });
+  expect((await s.command(id, "rule_conflict", { conflict: "k1", follow: "evaluate", note: "the card shows it" })).status).toBe(200);
+  await s.app.hub.idle();
+  const after = s.entries(id);
+  const ruled = after.filter((e) => e.type === "review.ruled");
+  expect(ruled.map((e) => [e.actor, e.payload])).toEqual([
+    [{ kind: "human", id: s.config.user }, { conflict: "k1", follow: "challenge", note: "" }],
+    [{ kind: "human", id: s.config.user }, { conflict: "k1", follow: "evaluate", note: "the card shows it" }],
+  ]);
+  const state = s.app.hub.read(id).state;
+  expect(state.conflicts.k1!.earlier_rulings).toHaveLength(1);
+  // revised at the publish gate: the work went back to Assemble, and the server drove the run on from there
+  const back = after.filter((e) => e.type === "stage.sent_back");
+  expect(back.at(-1)!.payload).toMatchObject({ from: "publish", to: "assemble", reason: "the person revised the ruling on f1 (Evaluate and Challenge disagree on f1): follow Evaluate: almost certain. Note: the card shows it" });
+  // (the sample's script has no more Assemble turns, so the analyst's call is answered with an error and the run pauses there)
+  expect(after.slice(after.indexOf(back.at(-1)!)).some((e) => e.type === "model.request" && e.actor.kind === "agent" && e.actor.id === "analyst")).toBe(true);
+  expect(state.skipped).toEqual([]);
+});
+
 test("a requester may not rule on a conflict", async () => {
   s = await served({ role: "requester" });
   const id = s.app.hub.create({ title: "T", asked: "A", why: "W", starting: [], window: { from: "2026-11-17T00:00:00.000Z", to: "2026-11-24T00:00:00.000Z" }, objective: null, marking: "TLP:GREEN" }, { kind: "human", id: "x" }).id;

@@ -11,7 +11,8 @@ export type EngineCommand = "start" | "pause" | "resume" | "stop" | "acceptPlan"
 
 /**
  * Whether the server calls `advance()` after the command. `overrule` advances as `revise` does. `resume` drives by itself; `denyPlan` and `stop` end the run; `answerChallenge`
- * leaves a paused run paused; `rule` resumes by itself when it was the last open conflict.
+ * leaves a paused run paused; `rule` resumes by itself when it was the last open conflict, and drives the run when a revised ruling sent the work back from the
+ * publish gate (a ruling holds until it is replaced).
  */
 export const THEN_ADVANCE: Readonly<Record<EngineCommand, boolean>> = {
   start: true, acceptPlan: true, replan: true, revise: true, overrule: true, approve: true, reject: true,

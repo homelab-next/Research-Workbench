@@ -676,3 +676,95 @@ test("a case above the stage's pack limit says the case is the problem too", asy
   await r.engine.advance();
   expect(f.s.state.run.pause_reason).toBe("Frame: this case is marked TLP:GREEN, which this stage's model may not receive. Choose a model that may receive TLP:GREEN and resume.");
 });
+
+// ---- a ruling can be revised while its run is in progress (slice 8) ----
+
+const engineActor = { kind: "system", id: "engine" } as const;
+const f1At = (likelihood: string): Product => ({
+  ...product(0), summary: `f1 ${likelihood}`,
+  key_findings: [{ id: "f1", statement: `We assess it is ${likelihood} that the device is idle.`, likelihood, confidence: "moderate", confidence_basis: "b", cites: [], assumptions: [], reasoning: "r" }],
+});
+/** An assemble stub that writes f1 at each likelihood in turn (the last one again once they are used up). */
+const assembling = (s: CaseSession, likelihoods: string[]): StageRunner => async () => {
+  const p = f1At(likelihoods.length > 1 ? likelihoods.shift()! : likelihoods[0]!);
+  const hash = sha256Hex(canonical(p as unknown as Json));
+  s.commit((st) => [{ type: "draft.revised", actor: planner, payload: { draft: { n: st.drafts.length + 1, hash, author: planner, product: p, reason: "r" } } }]);
+  return { ...PASS, draft_hash: hash };
+};
+const K1_REASON = "Evaluate and Challenge disagree on f1: Evaluate asks almost certain, Challenge asked lower";
+/** The disagreement on f1 the person rules on, recorded against the latest draft. */
+const conflictOnF1 = (s: CaseSession, on?: string) => s.commit((st, ids) => [{ type: "review.conflict", actor: engineActor, run: st.run.id, payload: { conflict: {
+  id: ids.next("conflict"), draft_hash: on ?? latestDraft(st)?.hash ?? "h", finding: "f1", change: "likelihood", earlier: "almost certain", now: "likely", raised_by: "evaluate", changed_for: "challenge",
+  asks: "almost certain", asked: "lower", points: ["f1: understates it"], reason: K1_REASON,
+} } }]);
+
+test("a conflict may be ruled again while its run is in progress; the same ruling again is refused", async () => {
+  const r = rig();
+  r.engine.start(person);
+  await r.engine.advance();
+  conflictOnF1(r.s);
+  r.engine.rule(person, "k1", "challenge", "");
+  expect(() => r.engine.rule(person, "k1", "challenge", " ")).toThrow("that is already the ruling on k1");
+  r.engine.rule(person, "k1", "evaluate", "the card shows it");
+  const ruled = r.s.entries().filter((e) => e.type === "review.ruled");
+  expect(ruled.map((e) => e.payload)).toEqual([{ conflict: "k1", follow: "challenge", note: "" }, { conflict: "k1", follow: "evaluate", note: "the card shows it" }]);
+  expect(r.s.state.conflicts.k1!.ruling).toMatchObject({ follow: "evaluate", note: "the card shows it" });
+  expect(r.s.state.conflicts.k1!.earlier_rulings).toHaveLength(1);
+  // a revision away from the publish gate writes the ruling alone
+  expect(r.s.entries().filter((e) => e.type === "stage.sent_back")).toEqual([]);
+  r.engine.stop(person, "enough");
+  expect(() => r.engine.rule(person, "k1", "challenge", "")).toThrow(RunRefused);
+  expect(() => r.engine.rule(person, "k1", "challenge", "")).toThrow("conflict k1 is from a run that is over");
+});
+
+test("a ruling revised after the draft was made to the earlier one sends the work back at the next review with the new ruling", async () => {
+  // draft 1 says likely, as the first ruling (follow Challenge) keeps it; the person revises the ruling while Checks works on it
+  let first = true;
+  const r = rig({
+    assemble: assembling(f.s, ["likely", "almost certain"]),
+    checks: async () => {
+      if (first) {
+        first = false;
+        // the disagreement was on an earlier draft of this run
+        conflictOnF1(f.s, "0".repeat(64));
+        r.engine.rule(person, "k1", "challenge", "");
+        r.engine.rule(person, "k1", "evaluate", "the card shows it");
+      }
+      return { ...PASS, draft_hash: latestDraft(f.s.state)!.hash };
+    },
+    evaluate: async () => {
+      const d = latestDraft(f.s.state)!;
+      if (d.product.key_findings[0]!.likelihood === "almost certain") return { ...PASS, draft_hash: d.hash };
+      f.s.commit(() => [{ type: "evaluation.made", actor: engineActor, payload: { draft_hash: d.hash, pass: false, findings: [{ check: "support", where: "f2", message: "f2 is missing" }] } }]);
+      return { kind: "finished", outcome: "fail", draft_hash: d.hash, output: null, reason: "f2 is missing" };
+    },
+  });
+  r.engine.start(person);
+  await r.engine.advance();
+  acceptPlan(r.s);
+  expect(await r.engine.advance()).toMatchObject({ status: "waiting", waiting: "publish" });
+  const back = r.s.entries().filter((e): e is Extract<Entry, { type: "stage.sent_back" }> => e.type === "stage.sent_back");
+  expect(back.map((e) => e.payload.from)).toEqual(["evaluate"]);
+  expect(back[0]!.payload.reason).toStartWith(`the draft does not hold the person's ruling on f1 (${K1_REASON}): follow Evaluate: almost certain. Note: the card shows it`);
+  expect(back[0]!.payload.reason).toEndWith("Also: f2: f2 is missing");
+  expect(latestDraft(r.s.state)!.product.key_findings[0]!.likelihood).toBe("almost certain");
+});
+
+test("a ruling revised at the publish gate sends the work back to Assemble with the new ruling as the reason", async () => {
+  // controller ruling 6: the person's revision at the gate is their instruction; the gate is not passed
+  const r = rig({ assemble: assembling(f.s, ["likely", "almost certain"]) });
+  r.engine.start(person);
+  await r.engine.advance();
+  acceptPlan(r.s);
+  expect(await r.engine.advance()).toMatchObject({ status: "waiting", waiting: "publish" });
+  conflictOnF1(r.s);
+  expect(r.engine.rule(person, "k1", "challenge", "")).toBe(false);
+  const head = r.s.head().seq;
+  expect(r.engine.rule(person, "k1", "evaluate", "the card shows it")).toBe(true);
+  expect(r.s.entries().filter((e) => e.seq > head).map((e) => e.type)).toEqual(["review.ruled", "stage.sent_back", "case.phase_changed", "stage.started"]);
+  const back = r.s.entries().find((e): e is Extract<Entry, { type: "stage.sent_back" }> => e.type === "stage.sent_back")!;
+  expect(back.payload).toEqual({ from: "publish", to: "assemble", reason: `the person revised the ruling on f1 (${K1_REASON}): follow Evaluate: almost certain. Note: the card shows it`, count: 1 });
+  expect(r.s.entries().some((e) => e.type === "gate.passed" && e.payload.gate === "publish")).toBe(false);
+  expect(await r.engine.advance()).toMatchObject({ status: "waiting", waiting: "publish" });
+  expect(latestDraft(r.s.state)!.product.key_findings[0]!.likelihood).toBe("almost certain");
+});
