@@ -106,6 +106,15 @@ test("after the person went on without answering a stage's blocking question, th
   expect(view(await ask("Who owns the laptop?", { blocking: true }))).toMatchObject({ question: "ask-3", blocking: true });
 });
 
+test("a waived question still counts toward the cap: going on without an answer does not free a place (final review m3, M9b)", async () => {
+  f.ctx.max_open_questions = 1;
+  await ask("Where is AP-7?", { blocking: true });
+  f.s.commit(() => [{ type: "run.paused", actor: engine, payload: { reason: "waiting for the person's answer to ask-1", hold: { kind: "question", stage: "research" } } }]);
+  f.s.commit(() => [{ type: "run.resumed", actor: person, payload: {} }]);
+  expect(f.s.state.questions["ask-1"]!.waived).not.toBeNull();
+  expect(view(await ask("Is the printer new?")).error).toBe("1 question to the person is already open (ask-1); go on without asking another");
+});
+
 test("a statement by the person may be named among the cards a question is about", async () => {
   const c = addStatement(f.s, f.sample.deps, { actor: person, statement: "AP-7 is in the gym.", basis: "saw", detail: "", about: [], marking: null });
   expect((await ask("Is a TV expected in the gym?", { cards: [c] })).ok).toBe(true);

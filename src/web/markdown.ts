@@ -46,6 +46,12 @@ export function narrativeMarkdown(state: CaseState, ref: Reference): string {
     p.key_findings.forEach((f, i) => {
       out.push(`${i + 1}. ${f.statement}`, `   - Likelihood: ${f.likelihood}`, `   - Confidence: ${f.confidence} — ${f.confidence_basis}`);
       out.push(`   - Cites: ${f.cites.length === 0 ? "none" : f.cites.map((c) => `[${c}]`).join(", ")}`);
+      // the person's word is labelled as product.md labels it
+      const said = f.cites.filter((c) => Object.hasOwn(state.cards, c) && state.cards[c]!.person !== undefined);
+      if (said.length > 0) {
+        const list = said.map((c) => `[${c}] (${BASIS_TEXT[state.cards[c]!.person!.basis]})`).join(", ");
+        out.push(said.length === 1 ? `   - Rests on the person's statement: ${list}. A statement, not data from a source.` : `   - Rests on the person's statements: ${list}. Statements, not data from a source.`);
+      }
       out.push(`   - Assumptions: ${f.assumptions.length === 0 ? "none" : ""}`);
       for (const a of f.assumptions) out.push(`     - ${a}`);
       out.push(`   - Reasoning (judgment): ${f.reasoning}`);

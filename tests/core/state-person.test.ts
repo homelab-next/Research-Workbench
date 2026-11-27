@@ -208,6 +208,19 @@ test("an overrule not by a person, without a note, or dropping a finding while s
   ]);
 });
 
+test("an overrule with an empty likelihood, and a question without an ask- id or with blank text, are skipped with their reason (final review m1)", () => {
+  const b = drafted();
+  const blank = b.add("finding.overruled", overrulePayload({ likelihood: "  " }), { actor: person });
+  const notAsk = ask(b, question("f1"));
+  const noText = ask(b, question("ask-1", { text: "   " }));
+  const s = fold(b.entries);
+  expect(s.overrules).toEqual({});
+  expect(s.questions).toEqual({});
+  expect(s.skipped.map((x) => [x.seq, x.reason])).toEqual([
+    [blank.seq, "a likelihood needs a term"], [notAsk.seq, "a question's id is ask-<n>"], [noText.seq, "a question needs text"],
+  ]);
+});
+
 test("an overrule of a finding no draft has ever held changes nothing", () => {
   const b = drafted();
   const before = fold(b.entries);

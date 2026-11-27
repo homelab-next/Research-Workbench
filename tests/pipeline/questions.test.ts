@@ -127,6 +127,22 @@ test("questionsPart lists the run's questions with who asked and what came of ea
   expect(questionsPart(f.s, f.sample.registry)!.marking).toBe("TLP:RED");
 });
 
+test("questionsPart is as strict as the request that wrote an unanswered question, with no answer to raise it (final review m3, M17)", () => {
+  startRun();
+  ask("Where is the access point AP-7?", { marking: "TLP:AMBER" });
+  ask("Who owns the laptop?");
+  expect(questionsPart(f.s, f.sample.registry)!.marking).toBe("TLP:AMBER");
+});
+
+test("an answer to a question whose request cannot be found is TLP:RED: it fails closed (final review m3, M10b)", () => {
+  startRun();
+  // a question with no model request before it: its marking is not known
+  f.s.commit((st, ids) => [{ type: "question.asked", actor: researcher, run: st.run.id, stage: "research", payload: { question: { id: ids.next("question"), text: Q1, why: "w", cards: [], about: [], blocking: false } } }]);
+  expect(questionMarking(f.s, f.s.state.questions["ask-1"]!)).toBeNull();
+  const id = answer("ask-1");
+  expect(f.s.state.cards[id]!.marking).toBe("TLP:RED");
+});
+
 test("questionsPart is null for a run with no question", () => {
   expect(questionsPart(f.s, f.sample.registry)).toBeNull();
   startRun();

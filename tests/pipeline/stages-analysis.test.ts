@@ -9,7 +9,7 @@ import type { CaseSession } from "../../src/core/session";
 import { blockers, latestDraft, publishable } from "../../src/core/state";
 import { buildBundle } from "../../src/pipeline/publish";
 import { ReviseRefused } from "../../src/pipeline/revise";
-import type { Entry } from "../../src/core/types";
+import type { Entry, EntryInput } from "../../src/core/types";
 import { loadProfile } from "../../src/agents/context";
 import { Providers } from "../../src/agents/providers";
 import { ScriptedProvider } from "../../src/agents/providers/scripted";
@@ -981,6 +981,30 @@ test("the draft is at least as strict as the request that wrote a question it na
   const d = f.s.state.drafts[0]!;
   expect(d.product.gaps_and_limits).toContain("- ask-1: ");
   expect(d.product.marking).toBe("TLP:AMBER");
+});
+
+test("a question asked while Assemble works, after its request, still makes the draft as strict as the question's request; an unfindable one, TLP:RED (final review m3 M17b, m4)", async () => {
+  for (const [request, want] of [[true, "TLP:AMBER"], [false, "TLP:RED"]] as const) {
+    const r = rig({ analyst: GREEN_ONLY, evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
+    let asked = false;
+    afterTurn = (_n, actor) => {
+      if (actor !== "analyst" || asked) return;
+      asked = true;
+      f.s.commit((st, ids) => {
+        const out: EntryInput[] = [];
+        if (request) out.push({ type: "model.request", actor: researcher, run: st.run.id, stage: "research", payload: { request: ids.next("request"), provider: "scripted", model: "m", effort: null, where: "machine", marking: "TLP:AMBER", pack: [], left_out: [], messages: f.s.blobs.put("[]"), tools: [] } });
+        out.push({ type: "question.asked", actor: researcher, run: st.run.id, stage: "research", payload: { question: { id: ids.next("question"), text: "Is it the TV?", why: "it decides f1", cards: [], about: [], blocking: false } } });
+        return out;
+      });
+    };
+    await goGreen(r);
+    const d = f.s.state.drafts[0]!;
+    expect(d.product.gaps_and_limits).toContain("- ask-1: Is it the TV?");
+    // the analyst's own requests were green: the marking is the question's
+    expect(ofType("model.request").filter((e) => e.actor.id === "analyst").every((e) => e.payload.marking === "TLP:GREEN")).toBe(true);
+    expect(d.product.marking).toBe(want);
+    if (request) { f.close(); f = fixture(false); }
+  }
 });
 
 test("a draft assembled with no question open is as it was", async () => {

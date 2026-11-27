@@ -339,5 +339,6 @@ It prints the address and any `problem:` lines. Fix those first.
 - The fast model (`fast_model` in a stage manifest) has no dropdown; it is set in the manifest only.
 - Run one researcher at a time against a real lake (`research.parallel: 1`, which `new-root` sets).
 - A statement by the person is not drawn in the Timeline or the Graph: it observed nothing in a source. Its values show on its card.
+- A reviewer that keeps failing a draft only over a value you overruled pauses the run each time (it cannot move the value back, but "Evaluation failed on this revision" stays a publish blocker): edit the draft, or choose another model for that reviewer.
 - An overrule sets a finding's likelihood, confidence or place in code; the confidence basis and reasoning are the analyst's until its next Assemble pass rewrites them. An overrule made with no run in progress reaches the next run's drafts but is not sent to the analyst as a reason.
 - A blocking question holds the run after its stage's pass, not inside it: that stage does not run again on resume, so it finished its work without the answer. The stages after it read the answer.

@@ -542,6 +542,20 @@ test("a card with person that an agent made, or that has rows, a query or a sour
   expect(s.skipped).toEqual(tries.map((e) => ({ seq: e.seq, type: "card.created", reason: "a person's statement is a person's" })));
 });
 
+test("a person's statement drawn as an observation is skipped: no columns, coverage, empty, event_time or observed (final review m1)", () => {
+  const b = new EntryBuilder();
+  const tries = [
+    b.add("card.created", { card: statement("c1", { columns: ["host"], column_types: [null] }) }, { actor: PERSON }),
+    b.add("card.created", { card: statement("c2", { coverage: { kind: "full" } }) }, { actor: PERSON }),
+    b.add("card.created", { card: statement("c3", { empty: "proven-negative" }) }, { actor: PERSON }),
+    b.add("card.created", { card: statement("c4", { event_time: "2026-11-20T10:00:00.000Z" }) }, { actor: PERSON }),
+    b.add("card.created", { card: statement("c5", { observed: OBSERVED }) }, { actor: PERSON }),
+  ];
+  const s = fold(b.entries);
+  expect(s.cards).toEqual({});
+  expect(s.skipped).toEqual(tries.map((e) => ({ seq: e.seq, type: "card.created", reason: "a person's statement is a person's" })));
+});
+
 test("a malformed person field is a malformed card; a card without person folds as before", () => {
   const b = new EntryBuilder();
   const bad1 = b.add("card.created", { card: statement("c1", { person: { basis: "guess", detail: "", about: [], answers: null } as never }) }, { actor: PERSON });

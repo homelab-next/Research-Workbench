@@ -709,6 +709,7 @@ test("the question box is there before any draft exists", async () => {
   expect(lens.querySelector('[data-question="ask-1"] .text')!.textContent).toBe(AP7);
   expect(lens.querySelector(".no-draft")!.textContent).toBe("No draft yet.");
   expect(lens.querySelector('[data-question="ask-1"] [data-action=answer-question]')).not.toBeNull();
+  expect(lens.querySelector('[data-question="ask-1"] [data-action=answer-question]')!.getAttribute("aria-label")).toBe("Answer ask-1");
 });
 
 test("Answer sends answer_question with the text and how you know, once, and the answer's card replaces the form", async () => {
@@ -797,6 +798,8 @@ test("each finding has Overrule: the likelihood terms of the standard, the three
   const ref = p.ui.ref;
   expect(ref.likelihood.length).toBe(7);
   expect(p.q('[data-finding="f1"] details.overrule-form summary').textContent).toBe("Overrule");
+  // each finding's form has its own name for a screen reader (final review m5)
+  expect(p.q('[data-finding="f1"] details.overrule-form summary').getAttribute("aria-label")).toBe("Overrule f1");
   expect([...p.all('[data-finding="f1"] select[aria-label="Likelihood of f1"] option')].map((o) => o.textContent)).toEqual(["leave as it is", ...ref.likelihood]);
   expect(options('[data-finding="f1"] [aria-label="Confidence of f1"]')).toEqual(["leave as it is", "low", "moderate", "high"]);
   expect(options('[data-finding="f1"] [aria-label="Whether f1 stays"]')).toEqual(["leave as it is", "must stay", "drop it"]);

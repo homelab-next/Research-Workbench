@@ -47,8 +47,8 @@ test("the form sends add_statement with the statement, the basis, the detail, ea
   q.fill(field(q, "What you know"), "The device at 192.0.2.17 is the meeting-room TV.");
   choose(q, "How you know", "did");
   q.fill(field(q, "How you know, in detail"), "I installed it");
-  choose(q, "About type", "address");
-  q.fill(field(q, "About value"), "192.0.2.17");
+  choose(q, "About type 1", "address");
+  q.fill(field(q, "About value 1"), "192.0.2.17");
   q.click(add(q));
   await q.settle();
   expect(sent.map((s) => [s[0], s[1]]).flat()).toEqual(["add_statement", { statement: "The device at 192.0.2.17 is the meeting-room TV.", basis: "did", detail: "I installed it", about: [{ type: "address", value: "192.0.2.17" }], marking: null }]);
@@ -69,7 +69,9 @@ test("more values can be added, at most 20, and an empty one is not sent", async
   for (let i = 0; i < 25; i++) { const b = q.all(".statement-form [data-action=add-value]")[0]; if (b !== undefined && !(b as HTMLButtonElement).disabled) q.click(b); }
   expect(q.all(".statement-form .about-row").length).toBe(20);
   expect((q.q(".statement-form [data-action=add-value]") as HTMLButtonElement).disabled).toBe(true);
-  q.fill(q.all(".statement-form [aria-label='About value']")[1]!, "192.0.2.18");
+  // each row has its own name for a screen reader (final review m5)
+  expect(q.all(".statement-form .about-row select").map((e) => e.getAttribute("aria-label"))).toEqual(Array.from({ length: 20 }, (_, i) => `About type ${i + 1}`));
+  q.fill(field(q, "About value 2"), "192.0.2.18");
   q.click(add(q));
   await q.settle();
   expect((sent[0]![1] as { about: unknown[] }).about).toEqual([{ type: "address", value: "192.0.2.18" }]);
@@ -81,7 +83,7 @@ test("the marking list offers the case's marking and stricter ones only; the typ
   const { MARKINGS } = await import("../../src/core/types");
   const offered = [...(field(q, "Marking") as unknown as HTMLSelectElement).options].map((o) => o.textContent);
   expect(offered).toEqual(["the case's marking", ...MARKINGS.slice(MARKINGS.indexOf(caseMarking) + 1)]);
-  expect([...(field(q, "About type") as unknown as HTMLSelectElement).options].map((o) => o.value)).toEqual(q.ui.ref.types.map((t) => t.id));
+  expect([...(field(q, "About type 1") as unknown as HTMLSelectElement).options].map((o) => o.value)).toEqual(q.ui.ref.types.map((t) => t.id));
   form(q).open = true;
   q.fill(field(q, "What you know"), "x");
   const stricter = MARKINGS.at(-1)!;

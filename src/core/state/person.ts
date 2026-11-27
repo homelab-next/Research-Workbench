@@ -35,6 +35,8 @@ export function applyPerson(s: CaseState, entry: Entry): CaseState {
       const q = entry.payload.question;
       if (!isQuestion(q)) return malformed(s, entry);
       if (entry.actor.kind !== "agent") return recordSkip(s, entry, "a question to the person is an agent's");
+      if (!/^ask-[1-9]\d*$/.test(q.id)) return recordSkip(s, entry, "a question's id is ask-<n>");
+      if (q.text.trim() === "") return recordSkip(s, entry, "a question needs text");
       if (has(s.questions, q.id)) return s;
       const stage = isStr(entry.stage) ? entry.stage : entry.actor.stage;
       const state: QuestionState = {
@@ -58,6 +60,7 @@ export function applyPerson(s: CaseState, entry: Entry): CaseState {
       if (!isOverrulePayload(p)) return malformed(s, entry);
       if (entry.actor.kind !== "human") return recordSkip(s, entry, "an overrule is a person's");
       if (p.note.trim() === "") return recordSkip(s, entry, "an overrule gives a note");
+      if (p.likelihood !== null && p.likelihood.trim() === "") return recordSkip(s, entry, "a likelihood needs a term");
       if (p.stays === false && (p.likelihood !== null || p.confidence !== null)) return recordSkip(s, entry, "a dropped finding has no likelihood or confidence to set");
       if (!s.drafts.some((d) => d.product.key_findings.some((f) => f.id === p.finding))) return s;
       const o: Overrule = {

@@ -105,4 +105,6 @@ test("the copied provenance of a statement says it is the person's word and how 
   expect(section).not.toContain("- Query:");
   expect(section).not.toContain("- Coverage:");
   expect(md.split("\n").filter((l) => l.startsWith("#"))).not.toContain("## Injected");
+  // the finding that cites it says it rests on the person's word, as product.md does (final review m4)
+  expect(md).toContain(`   - Rests on the person's statement: [${id}] (did it myself). A statement, not data from a source.`);
 });

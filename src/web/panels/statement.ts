@@ -25,8 +25,9 @@ export function makeStatementForm(ui: Ui, store: CaseStore): View {
       h("label", null, "Marking ", marking), add)) as HTMLDetailsElement;
 
   function newRow(): void {
-    const type = h("select", { name: "About type" }, ui.ref.types.map((t) => h("option", { value: t.id }, t.title))) as HTMLSelectElement;
-    const value = h("input", { type: "text", name: "About value", placeholder: "a value this is about (optional)", on: { input: () => paint() } }) as HTMLInputElement;
+    const n = rows.length + 1;
+    const type = h("select", { name: `About type ${n}` }, ui.ref.types.map((t) => h("option", { value: t.id }, t.title))) as HTMLSelectElement;
+    const value = h("input", { type: "text", name: `About value ${n}`, placeholder: "a value this is about (optional)", on: { input: () => paint() } }) as HTMLInputElement;
     const row = { el: h("div", { class: "about-row" }, type, value), type, value };
     rows.push(row);
     rowsBox.append(row.el);

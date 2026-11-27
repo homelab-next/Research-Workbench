@@ -221,11 +221,11 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
     }
     sync();
     const form = h("details", { class: "overrule-form", on: { toggle: () => { if (form.open) overruleOpen.add(id); else overruleOpen.delete(id); } } },
-      h("summary", null, "Overrule"),
+      h("summary", { name: `Overrule ${id}` }, "Overrule"),
       h("div", { class: "overrule-body" },
         h("label", null, "Likelihood ", likelihood), h("label", null, "Confidence ", confidence), h("label", null, "Stays ", stays),
         note, h("div", { class: "actions" }, go, withdraw),
-        h("p", { class: "note" }, "Code holds every draft to your overrule, and neither reviewer may move it back."))) as HTMLDetailsElement;
+        h("p", { class: "note" }, "Code holds every draft to your overrule, and neither reviewer may move it back. While a run is in progress the draft goes back to the analyst to rewrite the finding's basis and reasoning: at once at the publish gate, otherwise when the current stage ends."))) as HTMLDetailsElement;
     form.open = overruleOpen.has(id);
     return [
       active && o !== null ? h("p", { class: "overrule-now" }, `You overruled: ${overruleLine(o)}`) : null,
@@ -437,6 +437,7 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
         if (text === "") return;
         void ui.act("answer_challenge", { challenge: id, answer: text, action: kind.value }).then((ok) => { if (ok) { answers.delete(id); kinds.delete(id); } });
       } },
+      name: `Answer challenge ${id}`,
     }, "Answer") as HTMLButtonElement;
     void s;
     return h("div", { class: "answer-form" }, box, kind, button);
@@ -627,6 +628,7 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
         if (off()) return;
         guarded(`question:${q.id}`, "answer_question", { question: q.id, answer: v.text.trim(), basis: v.basis, detail: v.detail.trim() }, () => { qAnswers.delete(q.id); });
       } },
+      name: `Answer ${q.id}`,
     }, "Answer") as HTMLButtonElement;
     const basis = h("select", {
       name: `How you know the answer to ${q.id}`, disabled: ro(),

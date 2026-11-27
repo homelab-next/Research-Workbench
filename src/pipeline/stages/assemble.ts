@@ -170,10 +170,8 @@ export async function assembleRunner(env: StageEnv): Promise<StageEnd> {
   // a question the person has not answered is a gap, named by code; its text is a model's, so the draft is as strict as the request that wrote it
   const unanswered = openQuestions(now);
   work.setSection("gaps_and_limits", withOpenQuestions(work.sections.gaps_and_limits, unanswered), work.narrativeCites.gaps_and_limits);
-  for (const q of unanswered) {
-    const marking = questionMarking(session, q);
-    if (marking !== null) written_at.push(marking);
-  }
+  // a question whose request cannot be found fails closed, as its answer does
+  for (const q of unanswered) written_at.push(questionMarking(session, q) ?? "TLP:RED");
   let product;
   try {
     product = buildProduct(work, {
