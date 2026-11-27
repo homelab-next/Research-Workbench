@@ -16,7 +16,7 @@ import type { Seeker } from "../modules/seeker";
 import type { Pipeline, Role, StageManifest } from "./manifests";
 import type { Components } from "./components";
 import { IMPLICIT_NOTE } from "./loops";
-import type { LoopCatalog, ResolvedLoop } from "./loops";
+import type { LoopCatalog, LoopOutput, ResolvedLoop } from "./loops";
 import type { BlobStore } from "../core/blobs";
 import { firstUnpassedReview, nextStep } from "./next";
 import type { Step } from "./next";
@@ -37,6 +37,9 @@ import { approve, reject, removeTempBundles } from "./publish";
 import { recordFeedback } from "./feedback";
 import { feedbackRunner } from "./stages/feedback";
 import { publishRunner } from "./stages/publish";
+import { subloopRunner } from "./stages/subloop";
+import { childWaitReason, outputsOf } from "./subloop";
+import type { ChildCases } from "./subloop";
 
 export interface EngineDeps {
   config: Config; registry: Registry; runner: RunnerDeps; seeker: Seeker; providers: Providers; pipeline: Pipeline; profile: Profile;
@@ -45,13 +48,15 @@ export interface EngineDeps {
   /** Where problems that do not stop the work are reported (a failed anchor, a leftover folder, a missing objective); stderr when absent. */
   onError?: (error: unknown) => void;
   anchor?: (a: { case: string; seq: number; hash: string; why: "published" | "closed" }) => void;
-  /** Called once when a run ends published or completed, with the outputs its loop declares (Task 7 supplies them; until then `{}`). */
+  /** Called once when a run ends published or completed, with the outputs its loop declares (outputsOf the case's state at its end). */
   onOutputs?: (o: { case: string; loop: string; run: string; head: { seq: number; hash: string }; outcome: "published" | "completed"; marking: Marking; outputs: Record<string, Json> }) => void;
   /**
    * Keeps what this deps' runner uses (its connector pool) open until the returned release is called, even after a reload has replaced it.
    * Set by compose. A bound run holds it from the time it binds until it ends, so a query in flight across a reload completes.
    */
   retain?: () => () => void;
+  /** How a stage that runs a loop reaches its child cases: the host's (the hub's, run.ts's). Without it such a stage stalls. */
+  children?: ChildCases;
 }
 export interface StageEnv {
   session: CaseSession; deps: EngineDeps; stage: StageManifest; attempt: number;
@@ -66,6 +71,8 @@ export type StageEnd =
   | { kind: "declined"; reason: string }
   | { kind: "blocked"; marking: Marking }
   | { kind: "stalled"; reason: string }
+  /** A sub-loop stage's child has not finished and waits on something the engine cannot do (a person, most often): the run waits on it. */
+  | { kind: "waiting_child"; child: string; reason: string }
   | { kind: "stopped" };
 export type StageRunner = (env: StageEnv) => Promise<StageEnd>;
 export interface RunSummary { status: RunState["status"]; waiting: "plan" | "publish" | null; current: string | null; pause_reason: string | null; outcome: RunState["outcome"] }
@@ -106,7 +113,7 @@ export class Engine {
 
   /** Builds an engine and writes nothing: a read (a status, a replay) can use one. A command that acts opens it with Engine.open. */
   constructor(private readonly session: CaseSession, private readonly deps: EngineDeps, opts: { runners?: Partial<Record<Role, StageRunner>> } = {}) {
-    this.runners = { frame: frameRunner, plan: planRunner, research: researchRunner, assemble: assembleRunner, checks: checksRunner, evaluate: evaluateRunner, challenge: challengeRunner, publish: publishRunner, feedback: feedbackRunner, ...opts.runners };
+    this.runners = { frame: frameRunner, plan: planRunner, research: researchRunner, assemble: assembleRunner, checks: checksRunner, evaluate: evaluateRunner, challenge: challengeRunner, publish: publishRunner, feedback: feedbackRunner, subloop: subloopRunner, ...opts.runners };
     this.bind();
   }
 
@@ -253,6 +260,24 @@ export class Engine {
     // a drive still in flight ends on the stop it saw; the run is driven again once it has
     const running = this.inflight;
     return running === null ? this.advance({ allow_capped }) : running.then(() => this.advance({ allow_capped }));
+  }
+
+  /**
+   * Code's resume of a pause that waits on this child. Writes run.resumed by the engine only when the run is paused with hold { kind: "child", child };
+   * then advances. Passes no gate. A child that is still where the pause says it was (the same reason) changes nothing, and nothing is written.
+   */
+  async childSettled(child: string): Promise<RunSummary> {
+    const children = this.deps.children;
+    const view = children === undefined ? null : (() => { try { return children.read(child); } catch { return null; } })();
+    const written = this.session.commit((s) => {
+      const hold = s.run.status === "paused" ? s.run.hold : null;
+      if (hold?.kind !== "child" || hold.child !== child) return [];
+      if (view !== null && view.state.run.status !== "finished" && s.run.pause_reason === clipReason(`waiting on child ${child}: ${childWaitReason(view.state)}`)) return [];
+      return [{ type: "run.resumed", actor: ENGINE, payload: {}, run: s.run.id }];
+    });
+    if (written.length === 0) return this.summary();
+    const running = this.inflight;
+    return running === null ? this.advance() : running.then(() => this.advance());
   }
 
   /**
@@ -476,7 +501,8 @@ export class Engine {
     const state = this.session.state;
     const title = state.run.stages.find((s) => s.id === stageId)?.title ?? manifest.title;
     const attempt = state.run.stages.find((s) => s.id === stageId)?.attempts ?? 1;
-    const runner = this.runners[manifest.role];
+    // a stage that runs a loop is a sub-loop stage, whatever its role
+    const runner = manifest.runs === "loop" ? this.runners.subloop : this.runners[manifest.role];
     let end: StageEnd;
     try {
       if (runner === undefined) end = { kind: "stalled", reason: `${title} has no runner for the role ${manifest.role}.` };
@@ -532,6 +558,14 @@ export class Engine {
         return this.session.commit((s) => (gone(s) ? [] : [this.paused(ENGINE, this.blockedReason(s, stageId, title, end.marking))])).length > 0;
       case "stalled":
         return this.session.commit((s) => (gone(s) ? [] : [this.paused(ENGINE, end.reason)])).length > 0;
+      case "waiting_child": {
+        const hold: RunHold = { kind: "child", stage: stageId, child: end.child };
+        const reason = clipReason(`waiting on child ${end.child}: ${end.reason}`);
+        // written only over a running run: a run already paused (with this same hold and reason, or by a person while the child was driven) keeps its pause,
+        // so childSettled never lifts a person's own pause
+        this.session.commit((s) => (gone(s) || s.run.status !== "running" ? [] : [this.paused(ENGINE, reason, hold)]));
+        return false;
+      }
       case "stopped":
         return false;
     }
@@ -553,20 +587,22 @@ export class Engine {
 
   private finish(outcome: "published" | "completed" | "stopped", d: EngineDeps): void {
     const before = this.session.state;
+    // the outputs the run's loop declares: its bound version's, else the current version's
+    const declared = this.deps.loops === undefined ? {} : (this.held?.loop ?? this.current())?.manifest.outputs ?? {};
     const loop = this.deps.loops === undefined ? d.pipeline.id : loopOf(before, this.deps.config.loops.default);
     const written = this.session.commit((s) => [{ type: "run.finished", actor: ENGINE, payload: { outcome }, run: s.run.id }]);
     // a published run was anchored when the person approved the product; only a run that ends without one is anchored here
     if (outcome === "stopped") this.anchorCase("closed");
-    else if (written.length > 0) this.outputs(d, loop, written[0]!.run ?? before.run.id ?? "", outcome);
+    else if (written.length > 0) this.outputs(d, loop, written[0]!.run ?? before.run.id ?? "", outcome, declared);
     this.bind();
   }
 
   /** Tells the host what a run that ended published or completed gives, once. A failure of the host's is reported and changes nothing here. */
-  private outputs(d: EngineDeps, loop: string, run: string, outcome: "published" | "completed"): void {
+  private outputs(d: EngineDeps, loop: string, run: string, outcome: "published" | "completed", declared: Record<string, LoopOutput>): void {
     const marking = this.session.state.meta?.marking;
     if (d.onOutputs === undefined || marking === undefined) return;
     try {
-      d.onOutputs({ case: this.session.id, loop, run, head: this.session.head(), outcome, marking, outputs: {} });
+      d.onOutputs({ case: this.session.id, loop, run, head: this.session.head(), outcome, marking, outputs: outputsOf(this.session.state, declared) });
     } catch (err) {
       (d.onError ?? logToStderr("outputs"))(err);
     }

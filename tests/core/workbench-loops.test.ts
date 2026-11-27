@@ -170,6 +170,16 @@ test("a link without a loop is a TypeError", () => {
   expect(readdirSync(join(dir, "wb", "cases")).filter((n) => n.startsWith("CASE-"))).toEqual(["CASE-1"]);
 });
 
+test("a child whose loop is not the loop its link names is refused, and nothing is written", () => {
+  wb.createCase(sample, person, { loop: "triage" });
+  expect(() => wb.createCase(sample, engine, { loop: "triage", link: linkTo("CASE-1", { loop: "investigation" }) })).toThrow(TypeError);
+  expect(() => wb.createCase(sample, engine, { loop: "triage", link: linkTo("CASE-1", { loop: "investigation" }) })).toThrow(/the loop its link names/);
+  expect(readdirSync(join(dir, "wb", "cases")).filter((n) => n.startsWith("CASE-"))).toEqual(["CASE-1"]);
+  const child = wb.createCase(sample, engine, { loop: "investigation", link: linkTo("CASE-1") });
+  expect(child.id).toBe("CASE-2");
+  expect([child.state.loop.id, child.state.loop.parent!.loop]).toEqual(["investigation", "investigation"]);
+});
+
 test("a parent is not unloaded while a child it started is running; once the child is not running it may be", async () => {
   const parent = parentAt("CASE-2", true);
   const child = wb.createCase(sample, engine, { loop: "investigation", link: linkTo("CASE-1") });

@@ -358,7 +358,7 @@ export class Workbench {
    * Makes a case, in one commit. `loop`: the loop the case is for (case.loop_set; omitted, none is recorded and the case is read as the default
    * loop's). `link` and `cards`: a child case, with subloop.child and one card.created per card its inputs name, both by the engine. Throws
    * TypeError, having written nothing, for what the fold would not read: a link without a loop, a malformed link or card, cards without a link,
-   * a child less strictly marked than its link's floor or than a card it is given.
+   * a child less strictly marked than its link's floor or than a card it is given, a child whose loop is not its link's.
    */
   createCase(input: NewCase, actor: Actor, opts: { loop?: string; link?: ChildLink; cards?: Card[] } = {}): CaseSession {
     this.open();
@@ -371,6 +371,7 @@ export class Workbench {
     if (link !== undefined) {
       if (loop === undefined) throw new TypeError("a child case names the loop it is for");
       if (!isChildLink(link)) throw new TypeError("a child's link names its parent, run, stage, attempt (1 or more), loop, input hash, depth and floor marking");
+      if (link.loop !== loop) throw new TypeError(`a child case is for the loop its link names ("${link.loop}"), not "${loop}"`);
       if (strictest(input.marking, link.floor) !== input.marking) throw new TypeError(`a child case is marked at least ${link.floor}, its floor; this one is ${input.marking}`);
     } else if (cards.length > 0) {
       throw new TypeError("only a child case is made with cards");

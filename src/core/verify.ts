@@ -262,6 +262,72 @@ export function verifyPublished(caseDir: string): PublishedReport {
   return { ok: bundles.every((b) => b.state === "ok") && unrecorded.length === 0, bundles, unrecorded };
 }
 
+export interface LinkReport { ok: boolean; links: { key: string; child: string; status: "matches" | "not_loaded" | "head_differs" | "not_its_child" }[] }
+
+const CHILD_ID = /^CASE-[1-9][0-9]*$/;
+/** Each row's seq, type, hash, run and parsed payload, in order, read-only. */
+function rowsOf(ledgerPath: string): { case: string; rows: { seq: number; type: string; hash: string; run: string | null; payload: unknown }[] } {
+  const db = new Database(ledgerPath, { readonly: true });
+  try {
+    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    const meta = db.query("SELECT value FROM meta WHERE key = 'case_id'").get() as { value: string } | null;
+    const rows = (db.query("SELECT seq, type, hash, run, payload FROM entries ORDER BY seq ASC").all() as { seq: number; type: string; hash: string; run: string | null; payload: string }[])
+      .map((r) => ({ seq: r.seq, type: r.type, hash: r.hash, run: r.run, payload: parseJson(r.payload)?.value ?? null }));
+    return { case: meta?.value ?? "", rows };
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * For each subloop.finished of the case: the child's ledger holds an entry of that seq and hash, and its subloop.child names this case, run, stage, attempt
+ * and input hash. A child that is not in `casesDir` is not_loaded and does not fail the report. Reads only; it does not recompute what came back.
+ */
+export function verifyLinks(caseDir: string, casesDir: string): LinkReport {
+  const parent = rowsOf(join(caseDir, "ledger.sqlite"));
+  const started = new Map<string, { child: string; input_hash: string }>();
+  const links: LinkReport["links"] = [];
+  for (const r of parent.rows) {
+    const p = r.payload;
+    if ((r.type !== "subloop.started" && r.type !== "subloop.finished") || !isObj(p) || typeof p.stage !== "string" || typeof p.attempt !== "number" || typeof p.child !== "string") continue;
+    const key = `${r.run ?? ""}/${p.stage}/${p.attempt}`;
+    if (r.type === "subloop.started") {
+      if (typeof p.input_hash === "string" && !started.has(key)) started.set(key, { child: p.child, input_hash: p.input_hash });
+      continue;
+    }
+    const out = (status: LinkReport["links"][number]["status"]): void => void links.push({ key, child: p.child as string, status });
+    const opened = started.get(key);
+    // a child id that is not a case id names no folder of casesDir, and a finish that names another child than the start is no link
+    if (!CHILD_ID.test(p.child) || opened === undefined || opened.child !== p.child) { out("not_its_child"); continue; }
+    const ledgerPath = join(casesDir, p.child, "ledger.sqlite");
+    if (!existsSync(ledgerPath)) { out("not_loaded"); continue; }
+    let child: ReturnType<typeof rowsOf>;
+    try {
+      child = rowsOf(ledgerPath);
+    } catch {
+      out("head_differs");
+      continue;
+    }
+    const link = child.rows.find((x) => x.type === "subloop.child" && x.seq <= 3)?.payload;
+    if (child.case !== p.child || !isObj(link) || link.parent !== parent.case || link.run !== r.run || link.stage !== p.stage || link.attempt !== p.attempt || link.input_hash !== opened.input_hash) {
+      out("not_its_child");
+      continue;
+    }
+    const head = isHead(p.head) ? p.head : null;
+    const at = head === null ? undefined : child.rows.find((x) => x.seq === head.seq);
+    out(at !== undefined && at.hash === head!.hash ? "matches" : "head_differs");
+  }
+  return { ok: links.every((l) => l.status === "matches" || l.status === "not_loaded"), links };
+}
+
+/** One line per link: `link <key>: <child> <status>`. */
+export function linkLines(r: LinkReport): string[] {
+  const said: Record<LinkReport["links"][number]["status"], string> = {
+    matches: "matches", not_loaded: "not loaded here, not checked", head_differs: "BROKEN: its ledger does not hold the recorded head", not_its_child: "BROKEN: it does not name this case's stage as its parent",
+  };
+  return r.links.map((l) => `link ${l.key}: ${l.child} ${said[l.status]}`);
+}
+
 export function hasLedger(caseDir: string): boolean {
   return existsSync(join(caseDir, "ledger.sqlite"));
 }

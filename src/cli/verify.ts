@@ -1,8 +1,8 @@
 // bun run src/cli/verify.ts <case-dir>
 // bun run src/cli/verify.ts --ledger <ledger.sqlite> --blobs <blob-dir>   (for example the workbench chain)
 import { existsSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { formatReport, UnreadableLedgerError, verifyLedger, verifyPublished } from "../core/verify";
+import { dirname, join, resolve } from "node:path";
+import { formatReport, linkLines, UnreadableLedgerError, verifyLedger, verifyLinks, verifyPublished } from "../core/verify";
 
 const USAGE = [
   "usage: bun run src/cli/verify.ts <case-dir>                          (the directory must contain ledger.sqlite)",
@@ -32,8 +32,10 @@ try {
   const chain = verifyLedger(target.ledger, target.blobs);
   // a case folder has published bundles to check too; the workbench chain, given by file, has none
   const report = target.caseDir === null ? chain : (() => { const published = verifyPublished(target.caseDir); return { ...chain, ok: chain.ok && published.ok, published }; })();
-  console.log(formatReport(report));
-  process.exit(report.ok ? 0 : 1);
+  // a case's links to its children: each child is looked for beside the case, in the same cases folder
+  const links = target.caseDir === null ? null : verifyLinks(target.caseDir, dirname(resolve(target.caseDir)));
+  console.log([formatReport(report), ...(links === null ? [] : linkLines(links))].join("\n"));
+  process.exit(report.ok && (links?.ok ?? true) ? 0 : 1);
 } catch (err) {
   if (!(err instanceof UnreadableLedgerError)) throw err;
   console.log(`ledger ${target.ledger}: UNREADABLE (${err.message})`);

@@ -8,7 +8,9 @@ import { GENESIS } from "../../src/core/hash";
 import { canonical } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
 import { entryHash, InvalidEntryError, Ledger } from "../../src/core/ledger";
-import { formatReport, UnreadableLedgerError, verifyCase, verifyLedger, verifyPublished } from "../../src/core/verify";
+import { formatReport, UnreadableLedgerError, verifyCase, verifyLedger, verifyLinks, verifyPublished } from "../../src/core/verify";
+import { Workbench } from "../../src/core/workbench";
+import type { CaseSession } from "../../src/core/session";
 import type { BlobRef, Product } from "../../src/core/types";
 import { cleanEnv } from "../helpers/clean-env";
 import { card } from "../helpers/entries";
@@ -547,4 +549,79 @@ test("a manifest whose files list holds something that is not a file entry is ba
   }
   const r = verifyPublished(dir);
   expect(r.bundles.map((b) => b.state)).toEqual(["bad_blob", "bad_blob", "bad_blob", "bad_blob", "bad_blob"]);
+});
+
+// ---- links between a parent and its children (slice 12)
+
+const LINK_HASH = "e".repeat(64);
+const linkCase = { title: "T", asked: "Who?", why: "test", starting: [{ type: "address", value: "198.51.100.77" }], window: { from: null, to: null }, objective: null, marking: "TLP:GREEN" as const };
+const engineActor = { kind: "system", id: "engine" } as const;
+const linkStages = [{ id: "investigate", title: "Investigate", phase: null, runs: "loop" as const, gate: null, reviews: false, model: null }];
+/** A parent whose run started a child at "investigate" and recorded it finished at `head` (the child's own head when not given). */
+function linkedParent(wb: Workbench, child: (parent: string) => CaseSession, head?: (c: CaseSession) => { seq: number; hash: string }): { parent: CaseSession; child: CaseSession } {
+  const parent = wb.createCase(linkCase, human, { loop: "triage" });
+  parent.commit((_s, ids) => [{ type: "run.started", actor: human, payload: { run: ids.next("run"), pipeline: "triage", pipeline_hash: "a".repeat(64), stages: linkStages } }]);
+  parent.commit((st) => [{ type: "stage.started", actor: engineActor, run: st.run.id, stage: "investigate", payload: { stage: "investigate", attempt: 1 } }]);
+  const c = child(parent.id);
+  c.commit(() => [{ type: "case.phase_changed", actor: human, payload: { phase: "direction" } }]);
+  const at = head === undefined ? c.head() : head(c);
+  parent.commit((st) => [
+    { type: "subloop.started", actor: engineActor, run: st.run.id, stage: "investigate", payload: { stage: "investigate", attempt: 1, child: c.id, loop: "investigation", loop_hash: "b".repeat(64), input_hash: LINK_HASH, inputs: parent.blobs.put("{}"), depth: 1 } },
+  ]);
+  parent.commit((st) => [
+    { type: "subloop.finished", actor: engineActor, run: st.run.id, stage: "investigate", payload: { stage: "investigate", attempt: 1, child: c.id, child_run: "run-1", head: at, outcome: "completed", output_hash: "f".repeat(64), output: parent.blobs.put("{}"), cards: [] } },
+  ]);
+  expect(parent.state.skipped).toEqual([]);
+  return { parent, child: c };
+}
+const childOf = (wb: Workbench, over: Record<string, unknown> = {}) => (parent: string): CaseSession =>
+  wb.createCase(linkCase, engineActor, { loop: "investigation", link: { parent, run: "run-1", stage: "investigate", attempt: 1, loop: "investigation", input_hash: LINK_HASH, depth: 1, floor: "TLP:GREEN", ...over } });
+
+test("verifyLinks: a finished child whose ledger holds the recorded head matches; a child folder removed is not_loaded and the report is ok; a child whose entry at that seq has another hash is head_differs and the report is not ok", () => {
+  const wb = Workbench.open(join(root, "wb"), { onError: () => {} });
+  try {
+    const cases = join(root, "wb", "cases");
+    const good = linkedParent(wb, childOf(wb));
+    expect(verifyLinks(good.parent.dir, cases)).toEqual({ ok: true, links: [{ key: "run-1/investigate/1", child: good.child.id, status: "matches" }] });
+
+    const differs = linkedParent(wb, childOf(wb), (c) => ({ seq: c.head().seq, hash: "0".repeat(64) }));
+    expect(verifyLinks(differs.parent.dir, cases)).toEqual({ ok: false, links: [{ key: "run-1/investigate/1", child: differs.child.id, status: "head_differs" }] });
+    // a head past the child's last entry differs too
+    const past = linkedParent(wb, childOf(wb), (c) => ({ seq: c.head().seq + 5, hash: c.head().hash }));
+    expect(verifyLinks(past.parent.dir, cases).links[0]!.status).toBe("head_differs");
+
+    // a child whose subloop.child names another input hash is not this parent's child
+    const stranger = linkedParent(wb, childOf(wb, { input_hash: "9".repeat(64) }));
+    expect(verifyLinks(stranger.parent.dir, cases)).toEqual({ ok: false, links: [{ key: "run-1/investigate/1", child: stranger.child.id, status: "not_its_child" }] });
+
+    good.child.close();
+    rmSync(good.child.dir, { recursive: true, force: true });
+    expect(verifyLinks(good.parent.dir, cases)).toEqual({ ok: true, links: [{ key: "run-1/investigate/1", child: good.child.id, status: "not_loaded" }] });
+    // a case with no sub-loops has nothing to report
+    expect(verifyLinks(dir, cases)).toEqual({ ok: true, links: [] });
+  } finally {
+    wb.close();
+  }
+});
+
+test("the verify command prints one line per link after the case's own report", async () => {
+  const wb = Workbench.open(join(root, "wb"), { onError: () => {} });
+  let parentDir: string;
+  let childDir: string;
+  try {
+    const { parent, child } = linkedParent(wb, childOf(wb));
+    parentDir = parent.dir;
+    childDir = child.dir;
+  } finally {
+    wb.close();
+  }
+  const out = run(parentDir).stdout.toString().split("\n").filter((l) => l !== "");
+  expect(out.at(-1)).toBe("link run-1/investigate/1: CASE-2 matches");
+  expect(out[0]).toMatch(/^case CASE-1: chain intact/);
+  expect(run(parentDir).exitCode).toBe(0);
+  rmSync(childDir, { recursive: true, force: true });
+  expect(run(parentDir).stdout.toString()).toContain("link run-1/investigate/1: CASE-2 not loaded here, not checked");
+  expect(run(parentDir).exitCode).toBe(0);
+  // the plain case of this file has no links, and prints no link line
+  expect(run(dir).stdout.toString()).not.toContain("link ");
 });
