@@ -4,11 +4,11 @@ import { sha256Hex } from "../core/hash";
 import { isCard, isCoverage } from "../core/state/shapes";
 import type { CaseSession } from "../core/session";
 import type { ProposalState } from "../core/state";
-import type { Actor, Card, Coverage, Cost, EmptyMeans, EntryInput, QueryPurpose, TimeWindow } from "../core/types";
+import type { Actor, Card, Coverage, Cost, EmptyMeans, EntryInput, ExtractedValue, QueryPurpose, TimeWindow } from "../core/types";
 import type { Bound, Connector, ConnectorPool, QueryOutcome, QueryRequest } from "./connectors";
 import { pivotWeight } from "./manifests";
-import { observe } from "./observe";
-import type { PivotManifest, Registry, SourceManifest } from "./registry";
+import { extractObservables, observe } from "./observe";
+import type { ColumnNotes, PivotManifest, Registry, SourceManifest } from "./registry";
 import { GuardError } from "./sqlguard";
 // What a pivot's answer proves, and the checks on a request, are pivot's pure planning code; sending the query stays here.
 import type { PlanDeps } from "pivot/connectors/deps";
@@ -60,6 +60,29 @@ export type RunQueryResult =
   | { status: "refused"; reasons: string[] };
 
 const RUNNER: Actor = { kind: "system", id: "runner" };
+
+/**
+ * The extract rules that apply to a result's columns: a pivot's noted columns (its own, and what it inherits from the source column it
+ * selects by name, as the registry filled them in); for a query with no pivot, the source's own columns and endpoint fields by name.
+ */
+export function extractNotes(source: SourceManifest, pivot: PivotManifest | null): Record<string, Pick<ColumnNotes, "extract">> {
+  const out: Record<string, Pick<ColumnNotes, "extract">> = {};
+  if (pivot !== null) {
+    for (const [column, n] of Object.entries(pivot.columns ?? {})) if (n.extract.length > 0) out[column] = { extract: n.extract };
+    return out;
+  }
+  for (const f of [...source.tables.flatMap((t) => t.columns), ...source.endpoints.flatMap((e) => e.fields)]) {
+    if ((f.extract ?? []).length > 0 && !Object.hasOwn(out, f.name)) out[f.name] = { extract: f.extract! };
+  }
+  return out;
+}
+
+/** The values the field notes extract from a result, from every row (not the preview), each marked as code-derived. */
+export function extractedOf(deps: RunnerDeps, source: SourceManifest, pivot: PivotManifest | null, columns: string[], rows: Json[][]): ExtractedValue[] {
+  const notes = extractNotes(source, pivot);
+  if (Object.keys(notes).length === 0) return [];
+  return extractObservables(columns, rows, notes, deps.observables).map((x) => ({ type: x.type, value: x.value, column: x.column, rule: x.rule, row: x.row, by: "code" }));
+}
 
 const firstLine = (err: unknown): string => (err instanceof Error ? err.message : String(err)).split("\n")[0]!;
 
@@ -307,6 +330,8 @@ async function issueAndRun(session: CaseSession, deps: RunnerDeps, q: Issue): Pr
         cardId = ids.next("card");
         // what the pivot's result observed, read once from every row (not the preview)
         const observed = pivot === null ? null : observe(pivot, String(req.bound.value), out.columns, out.rows, deps.observables);
+        // what the field notes' extract rules pull out of the cells, by code, from every row; recorded on the card so replay is exact
+        const extracted = extractedOf(deps, source, pivot, out.columns, out.rows);
         const card: Card = {
           id: cardId, title: q.title, body: readingOf(rows, out.coverage, empty, inv), kind: "result",
           made_by: q.actor.kind, query, columns: out.columns, column_types: deps.observables.columnTypes(out.columns, hints, out.rows),
@@ -314,6 +339,7 @@ async function issueAndRun(session: CaseSession, deps: RunnerDeps, q: Issue): Pr
           source: source.id, step: q.step, subgoal: q.subgoal, why: q.why, event_time: observed?.span.first ?? null,
           quality_notes: source.quality_notes.filter((n) => overlaps(n, req.window)).map((n) => n.id),
           ...(observed === null ? {} : { observed }),
+          ...(extracted.length === 0 ? {} : { extracted }),
         };
         // a card the fold would refuse must not leave a done query with no card: refuse the whole commit instead
         if (!isCard(card)) throw new Error("the card built from the result is malformed");

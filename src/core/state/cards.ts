@@ -73,7 +73,7 @@ export function applyCards(s: CaseState, entry: Entry): CaseState {
       // it as an observation (columns, coverage, what empty means, an event time, what a pivot observed)
       if (c.person !== undefined && !(entry.actor.kind === "human" && c.made_by === "human" && c.kind === "note" && c.query === null && c.source === null
         && c.row_count === 0 && c.rows.length === 0 && c.columns.length === 0 && c.coverage === null && c.empty === null && c.event_time === null
-        && c.observed === undefined)) return recordSkip(s, entry, "a person's statement is a person's");
+        && c.observed === undefined && c.extracted === undefined)) return recordSkip(s, entry, "a person's statement is a person's");
       if (Object.hasOwn(s.cards, c.id)) return s;
       const state: CardState = {
         ...cardFields(c), place: "incoming", lane: null, pinned: false,

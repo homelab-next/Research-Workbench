@@ -145,6 +145,15 @@ function statementPart(card: CardState, p: PersonStatement, registry: Registry):
   return { kind: "card", id: card.id, title: `Card ${card.id}: ${title}`, text, marking: card.marking, fixed: false };
 }
 
+/** What the workbench extracted from a card's cells, as the pack lists it: code-derived values a model may pivot from; none when there are none. */
+export function extractedLines(card: CardState): string[] {
+  if (card.extracted === undefined || card.extracted.length === 0) return [];
+  return [
+    "Extracted by the workbench (code-derived, from the field notes):",
+    ...card.extracted.map((x) => `- ${x.type} ${x.value} (rule ${x.rule} on column ${x.column}, row ${x.row + 1})`),
+  ];
+}
+
 /**
  * The only way a card or text a model wrote becomes a pack part. A card's title, body and coverage detail are scrubbed as the tools scrub them
  * (a location, user or credential never reaches a model) and it carries the card's marking. Text a model wrote carries the marking of the model
@@ -167,6 +176,7 @@ export function packPart(from: PartFrom): PackPart {
       `Columns: ${card.columns.join(", ")}`,
       `Rows (${Math.min(PREVIEW_ROWS, card.rows.length)} of ${card.row_count}):`,
       ...rows,
+      ...extractedLines(card),
     ].join("\n");
     return { kind: "card", id: card.id, title: `Card ${card.id}: ${title}`, text, marking: card.marking, fixed: false };
   }

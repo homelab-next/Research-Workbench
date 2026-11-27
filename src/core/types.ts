@@ -42,7 +42,14 @@ export interface Card {
   observed?: Observed;
   /** Only on a statement by the person (slice 8): such a card is a note a person made, with no query, no source and no rows. */
   person?: PersonStatement;
+  /**
+   * The typed values the result's field notes extract (slice 9), read by code from every row when the card was made; absent when no
+   * column of the result has an extract rule or none matched. Each carries the card's marking.
+   */
+  extracted?: ExtractedValue[];
 }
+/** A value an extract rule pulled out of a result cell: by code, never by a model; its rule, its column and the first row (from 0) it was in. */
+export interface ExtractedValue { type: string; value: string; column: string; rule: string; row: number; by: "code" }
 /** How the person knows what they state: they saw it, did it, were told it, or did not say. */
 export type PersonBasis = "saw" | "did" | "told" | "unstated";
 /** What makes a card a person's statement: how they know it, what it is about, and the question it answers (null when they volunteered it). */

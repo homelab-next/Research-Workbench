@@ -14,7 +14,7 @@ export {
   activeOverrules, applyPerson, BASIS_TEXT, holdsOverrule, isPersonCard, openQuestions, overruleReason, overruleSays, overruleText, PERSON_SOURCE,
   reopensOverrule, runQuestions, unheld, waitingOn,
 } from "./person";
-export { cardFields, caseFields, isCard, isCaseCreated, isCoverage, isObservable, isObserved, isPersonStatement, isTimeWindow } from "./shapes";
+export { cardFields, caseFields, isCard, isCaseCreated, isCoverage, isExtractedValue, isObservable, isObserved, isPersonStatement, isTimeWindow } from "./shapes";
 export * from "./observed";
 export * from "./types";
 

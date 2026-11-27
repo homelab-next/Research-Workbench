@@ -1,6 +1,6 @@
 // Shape checks for the records the fold and the workbench share. Browser-safe: no runtime imports.
 import { CARD_KINDS, CARD_MAKERS, EMPTY_MEANS, isMarking, PERSON_BASES, STAGE_OUTCOMES } from "../types";
-import type { BlobRef, Card, Observable, Observed, Payloads, PersonStatement, Span, TimeWindow } from "../types";
+import type { BlobRef, Card, ExtractedValue, Observable, Observed, Payloads, PersonStatement, Span, TimeWindow } from "../types";
 import { isNum, isObj, isOneOf, isStr, isStrList, isStrOrNull } from "./guards";
 import { isCoverage, isObserved } from "pivot/types";
 
@@ -21,13 +21,20 @@ export const isCard = (x: unknown): x is Card =>
   && (x.coverage === null || isCoverage(x.coverage)) && (x.empty === null || isOneOf(x.empty, EMPTY_MEANS))
   && isMarking(x.marking) && isStrOrNull(x.source) && isStrOrNull(x.step) && isStrOrNull(x.subgoal)
   && isStr(x.why) && isStrOrNull(x.event_time) && isStrList(x.quality_notes) && (x.observed === undefined || isObserved(x.observed))
-  && (x.person === undefined || isPersonStatement(x.person));
+  && (x.person === undefined || isPersonStatement(x.person))
+  && (x.extracted === undefined || (Array.isArray(x.extracted) && x.extracted.every(isExtractedValue)));
+
+/** The shape of one value an extract rule gave: code-derived, with its type, value, column, rule and a row count from 0. */
+export const isExtractedValue = (x: unknown): x is ExtractedValue =>
+  isObj(x) && isStr(x.type) && isStr(x.value) && isStr(x.column) && isStr(x.rule) && isCount(x.row) && x.by === "code";
 
 /** The fields of a card and nothing else. */
 export function cardFields(c: Card): Card {
   const { id, title, body, kind, made_by, query, columns, column_types, rows, row_count, coverage, empty, marking, source, step, subgoal, why, event_time, quality_notes } = c;
   const fields: Card = { id, title, body, kind, made_by, query, columns, column_types, rows, row_count, coverage, empty, marking, source, step, subgoal, why, event_time, quality_notes };
-  const observed = c.observed === undefined ? fields : { ...fields, observed: observedFields(c.observed) };
+  const seen = c.observed === undefined ? fields : { ...fields, observed: observedFields(c.observed) };
+  const observed = c.extracted === undefined ? seen
+    : { ...seen, extracted: c.extracted.map((x): ExtractedValue => ({ type: x.type, value: x.value, column: x.column, rule: x.rule, row: x.row, by: "code" })) };
   if (c.person === undefined) return observed;
   const { basis, detail, about, answers } = c.person;
   return { ...observed, person: { basis, detail, about: about.map((o) => ({ type: o.type, value: o.value })), answers } };
