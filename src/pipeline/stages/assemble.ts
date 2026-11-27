@@ -91,7 +91,9 @@ export async function assembleRunner(env: StageEnv): Promise<StageEnd> {
   // a finding's wording is composed from the profile standard's terms, read from the standard: one place
   const standard = deps.profile.standard === null ? null : deps.registry.get("standard", deps.profile.standard);
   const terms = termsOf(standard?.body ?? null);
-  const work = new DraftWork(latest?.product ?? null, terms);
+  // a new finding takes an id no draft of the case has held and no overrule names: a dropped finding's id is never a new claim's (final review I1)
+  const reserved = [...new Set([...state.drafts.flatMap((d) => d.product.key_findings.map((f) => f.id)), ...Object.keys(state.overrules)])];
+  const work = new DraftWork(latest?.product ?? null, terms, reserved);
 
   const extras: PackPart[] = [];
   let fixes: PackPart | null;

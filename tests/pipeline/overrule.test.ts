@@ -306,3 +306,22 @@ test("withdrawing an overrule writes finding.overruled with nothing set and no r
   expect(ofType("finding.overruled").at(-1)!.payload).toMatchObject({ likelihood: null, confidence: null, stays: null });
   expect(f.s.state.drafts).toHaveLength(1);
 });
+
+test("a new finding after the person dropped the highest-numbered one takes a fresh id, so the drop is not applied to it (final review I1)", async () => {
+  const NEW: ScriptReply[] = [calls(proposal("the device is idle", ["c1"], { replaces: "f1" }), proposal("it was moved to the lab", ["c2"], { likelihood: "likely" })), out("again")];
+  const r = rig([...FIRST, ...AGAIN, ...NEW]);
+  await toGate(r);
+  // at the gate the drop sends the work back; draft 2 holds f1 only
+  r.engine.overrule(input({ finding: "f2", likelihood: null, stays: false, note: "That flow was my own test." }));
+  expect(await r.engine.advance()).toMatchObject({ status: "waiting", waiting: "publish" });
+  expect(latest().product.key_findings.map((x) => x.id)).toEqual(["f1"]);
+  r.engine.reject({ actor: person, reason: "say where it went", stop: false });
+  expect(await r.engine.advance()).toMatchObject({ status: "waiting", waiting: "publish" });
+  const d = latest();
+  expect(d.n).toBe(3);
+  // f2 stays dropped; the new claim is f3, not a second f2 that code would drop with it
+  expect(d.product.key_findings.map((x) => [x.id, x.statement])).toEqual([
+    ["f1", "We assess it is roughly even chance that the device is idle."],
+    ["f3", "We assess it is likely that it was moved to the lab."],
+  ]);
+});

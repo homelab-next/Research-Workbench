@@ -343,3 +343,10 @@ test("a product citing no statement has the sources it had before this change", 
   const cards = { c1: card("c1", "dns", "TLP:GREEN", ["n1"]), c3: card("c3", "assets", "TLP:GREEN"), c5: said("c5", "did") };
   expect(buildProduct(w, facts(cards)).sources).toEqual([{ source: "assets", quality: "fair" }, { source: "dns", quality: "good duplicated" }]);
 });
+
+test("a new finding is numbered after the reserved ids too: every id a draft of the case held and every id an overrule names (final review I1)", () => {
+  const w = new DraftWork(null, null, ["f1", "f2", "f7", "q3"]);
+  expect(w.setFinding(f("a"), null)).toBe("f8");
+  // a reserved id is not one this revision may replace: only the previous revision's and its own are
+  expect(() => w.setFinding(f("b"), "f2")).toThrow(ToolError);
+});

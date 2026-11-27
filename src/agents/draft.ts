@@ -141,10 +141,16 @@ export class DraftWork {
   readonly previous: Product | null;
   /** The profile standard's terms, which a finding's wording is composed from; null when the profile names none. */
   readonly terms: StandardTerms | null;
+  /**
+   * Ids a new finding may not take, though this revision may not replace them: every id a draft of the case has held and every id an overrule
+   * names. A dropped finding's id is never given to a new claim, which the person's overrule would then be applied to.
+   */
+  readonly reserved: readonly string[];
 
-  constructor(previous: Product | null, terms: StandardTerms | null = null) {
+  constructor(previous: Product | null, terms: StandardTerms | null = null, reserved: readonly string[] = []) {
     this.previous = previous;
     this.terms = terms;
+    this.reserved = [...reserved];
     this.findings = [];
     this.sections = previous === null
       ? { summary: "", gaps_and_limits: "", alternatives: "", assessment: "" }
@@ -152,7 +158,7 @@ export class DraftWork {
   }
 
   /**
-   * Adds a finding as f<n>, numbered after every id of this revision and the previous one, or replaces the one named: one proposed for this
+   * Adds a finding as f<n>, numbered after every id of this revision, the previous one and the reserved ids, or replaces the one named: one proposed for this
    * revision, or one of the previous revision's, which is then proposed again under its id (the latest proposal wins). Throws ToolError when
    * `replaces` names neither.
    */
@@ -165,7 +171,7 @@ export class DraftWork {
       else throw new ToolError(`no such finding to replace: ${replaces}`);
       return replaces;
     }
-    const used = [...earlier, ...this.findings].map((x) => Number(/^f(\d+)$/.exec(x.id)?.[1] ?? 0));
+    const used = [...earlier.map((x) => x.id), ...this.findings.map((x) => x.id), ...this.reserved].map((id) => Number(/^f(\d+)$/.exec(id)?.[1] ?? 0));
     const id = `f${Math.max(0, ...used) + 1}`;
     this.findings.push({ id, ...f });
     return id;
