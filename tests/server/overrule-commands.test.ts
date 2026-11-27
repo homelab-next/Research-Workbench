@@ -25,11 +25,16 @@ test("overrule_finding overrules in the server's name and the run reviews the ne
   const o = written.find((e) => e.type === "finding.overruled")!;
   expect(o.actor).toEqual({ kind: "human", id: s.config.user });
   expect(o.payload).toEqual({ finding: f1.id, draft_hash: d.hash, likelihood: other, confidence: null, stays: null, note: NOTE });
-  // at the publish gate the work goes back to Assemble (controller ruling 6), and the server drives the run on from there
-  expect(written.find((e) => e.type === "stage.sent_back")!.payload).toMatchObject({ from: "publish", to: "assemble" });
-  expect(written.some((e) => e.type === "stage.started" && e.payload.stage === "assemble")).toBe(true);
+  // at the publish gate nothing goes back by itself (slice 10): the run waits there for the person's Send back with my changes
+  expect(written.map((e) => e.type)).toEqual(["finding.overruled"]);
+  expect(s.app.hub.read(id).state.run.waiting).toBe("publish");
+  expect((await s.command(id, "send_back_changes", { draft_hash: d.hash })).status).toBe(200);
+  await s.app.hub.idle();
+  const then = s.entries(id).slice(before);
+  expect(then.find((e) => e.type === "stage.sent_back")!.payload).toMatchObject({ from: "publish", to: "assemble" });
+  expect(then.some((e) => e.type === "stage.started" && e.payload.stage === "assemble")).toBe(true);
   // (the sample's script has no more Assemble turns, so the analyst's call is answered with an error and the run pauses there)
-  expect(written.some((e) => e.type === "model.request" && e.actor.kind === "agent" && e.actor.id === "analyst")).toBe(true);
+  expect(then.some((e) => e.type === "model.request" && e.actor.kind === "agent" && e.actor.id === "analyst")).toBe(true);
   const state = s.app.hub.read(id).state;
   expect(state.overrules[f1.id]).toMatchObject({ likelihood: other, note: NOTE });
   expect(state.skipped).toEqual([]);

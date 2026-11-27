@@ -5,6 +5,7 @@ import type { PersonBasis } from "../../core/types";
 import type { Open } from "../app";
 import { cardChip, tag } from "../chips";
 import { clear } from "../dom";
+import { refusalLine } from "../refusal";
 import { REPLAY_REFUSAL } from "../ui";
 import type { Ui, View } from "../ui";
 
@@ -42,6 +43,8 @@ export function makeQuestions(ui: Ui, open: Open, opts: { class?: string } = {})
   /** Answers sent and not yet seen: the entry's seq once the server has answered, null while it is awaited. */
   const inflight = new Map<string, number | null>();
   let version = 0;
+  /** The server's words when it refused an answer, beside that answer's form until it is sent again (slice 10). */
+  const refusals = new Map<string, string>();
   const chipFor = (s: CaseState, id: string): Node =>
     (owns(s.cards, id) ? cardChip(ui, id, (c) => nav.focusCard(c), s.cards[id]!.place !== "lane") : ui.doc.createTextNode(id));
 
@@ -58,8 +61,8 @@ export function makeQuestions(ui: Ui, open: Open, opts: { class?: string } = {})
       type: "button", class: "primary", data: { action: "answer-question" }, disabled: off(), title: ro() ? REPLAY_REFUSAL : `Answer ${q.id}; the answer is a card of yours`,
       on: { click: () => {
         if (off() || inflight.has(q.id)) return;
-        inflight.set(q.id, null); version++; render();
-        void ui.send("answer_question", { question: q.id, answer: v.text.trim(), basis: v.basis, detail: v.detail.trim() }).then((r) => {
+        inflight.set(q.id, null); refusals.delete(q.id); version++; render();
+        void ui.send("answer_question", { question: q.id, answer: v.text.trim(), basis: v.basis, detail: v.detail.trim() }, undefined, undefined, (why) => { refusals.set(q.id, why); }).then((r) => {
           if (r === null) inflight.delete(q.id); else { inflight.set(q.id, r.seq); values.delete(q.id); }
           version++; render();
         });
@@ -78,7 +81,7 @@ export function makeQuestions(ui: Ui, open: Open, opts: { class?: string } = {})
       }),
       h("label", null, "How you know ", basis),
       h("input", { type: "text", name: `How you know the answer to ${q.id}, in detail`, value: v.detail, disabled: ro(), placeholder: "How you know (optional)", on: { input: (e) => { v.detail = (e.target as HTMLInputElement).value; } } }),
-      send);
+      send, refusalLine(h, refusals.get(q.id)));
   };
   const build = (s: CaseState): Node[] => {
     const qs = shownQuestions(s);
@@ -145,7 +148,7 @@ export function makeQuestionsPanel(ui: Ui, open: Open, lens: () => string | null
       ...d.product.key_findings.map((f) => {
         const o = active.get(f.id);
         return h("div", { class: "gate-finding", data: { finding: f.id } },
-          h("span", { class: "id" }, f.id), " ",
+          h("span", { class: "finding-id" }, f.id), " ",
           h("span", { class: "statement", title: f.statement }, f.statement), " ",
           o === undefined ? null : h("span", { class: "overrule-now tag tag-human" }, `You overruled: ${overruleSays(o)}`), " ",
           h("button", {

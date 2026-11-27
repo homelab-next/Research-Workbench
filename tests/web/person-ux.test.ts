@@ -164,3 +164,127 @@ test("the ? card says where to answer and where to overrule", async () => {
   await settled();
   expect(p.q(".help .where-to").textContent).toBe("Answer a question in Questions for you, under the brief. Overrule a finding with the Overrule button under it, in the Narrative lens or under Questions for you at the publish gate.");
 });
+
+// ---------- slice 10, second part: the person's changes at the gate wait for one send-back; refusals at the control; finding ids in view ----------
+async function narrativeAtGate(): Promise<void> {
+  await atGate();
+  p.press("r");
+  await settled();
+}
+/** Makes the server refuse `command` with `why`, once per call, for the rest of the test. */
+function refuse(command: string, why: string): void {
+  const real = p.ui.api.command.bind(p.ui.api);
+  p.ui.api.command = (id, name, args) => (name === command ? Promise.resolve({ ok: false as const, refused: [why] }) : real(id, name, args));
+}
+
+test("the gate box lists Your changes since the draft, each with its finding id, and Send back to Assemble with my changes sends send_back_changes once", async () => {
+  await narrativeAtGate();
+  expect(p.all(".gate-box [data-action=send-back-changes]").length).toBe(0);
+  overruled("f1", "almost certain", "It is the TV I installed.");
+  ask(AP7);
+  await settled();
+  expect((await p.s.command("CASE-1", "answer_question", { question: "ask-1", answer: "In the gym." })).status).toBe(200);
+  await settled();
+  const card = state().questions["ask-1"]!.answer!.card;
+  const items = p.all(".gate-box .your-changes li");
+  expect(p.q(".gate-box .your-changes .label").textContent).toBe(`Your changes since draft ${latest().n} was made (not sent yet)`);
+  expect(items.map((li) => li.querySelector(".finding-id")!.textContent)).toEqual(["f1", "ask-1"]);
+  expect(items.map((li) => li.textContent)).toEqual(["f1 overruled: likelihood almost certain. Note: It is the TV I installed.", `ask-1 answered: card ${card}`]);
+  // the overrule changed the run nothing: it is still at the gate
+  expect(state().run.waiting).toBe("publish");
+  const log = sent();
+  const button = p.q(".gate-box [data-action=send-back-changes]") as HTMLButtonElement;
+  expect(button.textContent).toBe("Send back to Assemble with my changes (2)");
+  const hash = latest().hash;
+  p.click(button);
+  p.click(button);
+  await settled();
+  expect(log.filter((c) => c.command === "send_back_changes").map((c) => c.args)).toEqual([{ draft_hash: hash }]);
+  expect(p.s.entries("CASE-1").filter((e) => e.type === "stage.sent_back").at(-1)!.actor.kind).toBe("human");
+  expect(state().published.length).toBe(0);
+});
+
+test("with changes not sent, Approve says plainly that it publishes the draft without them", async () => {
+  await narrativeAtGate();
+  ask(AP7);
+  await settled();
+  expect((await p.s.command("CASE-1", "answer_question", { question: "ask-1", answer: "In the gym." })).status).toBe(200);
+  await settled();
+  const d = latest();
+  expect(p.q("[data-action=approve]").textContent).toBe(`Approve without my changes: publish draft ${d.n}`);
+  expect(p.q(".gate-box .unsent-warning").textContent).toBe(`Your 1 change is not in draft ${d.n}. Approve publishes draft ${d.n} without it; send it back to Assemble first to have it taken in.`);
+});
+
+test("a refused overrule shows the refusal at its form, which stays open as typed", async () => {
+  await narrativeAtGate();
+  refuse("overrule_finding", "a newer draft arrived; look at it before overruling");
+  p.click('[data-finding="f1"] [data-action=open-overrule]');
+  await settled();
+  const lik = p.q('[aria-label="Likelihood of f1"]') as HTMLSelectElement;
+  lik.value = "almost certain";
+  lik.dispatchEvent(new p.win.Event("change", { bubbles: true }) as unknown as Event);
+  p.fill('[aria-label="Note on overruling f1"]', "It is the TV I installed.");
+  p.click('[data-finding="f1"] [data-action=overrule]');
+  await settled();
+  expect(p.q('[data-finding="f1"] .overrule-body .refusal').textContent).toBe("Refused: a newer draft arrived; look at it before overruling");
+  expect(p.q('[data-finding="f1"] .overrule-body .refusal').getAttribute("role")).toBe("alert");
+  expect((p.q('[aria-label="Note on overruling f1"]') as HTMLTextAreaElement).value).toBe("It is the TV I installed.");
+  expect((p.q('[data-finding="f1"] .overrule-body') as HTMLElement).hidden).toBe(false);
+});
+
+test("refused answers, rulings, statements and send-backs each show the refusal at their control, in the panel, the lens and Incoming", async () => {
+  await atGate();
+  ask(AP7);
+  await settled();
+  // the panel under the brief
+  refuse("answer_question", "question ask-1 is already answered");
+  p.fill(".questions-panel [aria-label='Answer to ask-1']", "In the gym.");
+  p.click('.questions-panel [data-question="ask-1"] [data-action=answer-question]');
+  await settled();
+  expect(p.q('.questions-panel [data-question="ask-1"] .refusal').textContent).toBe("Refused: question ask-1 is already answered");
+  expect((p.q(".questions-panel [aria-label='Answer to ask-1']") as HTMLTextAreaElement).value).toBe("In the gym.");
+  // the statement form in Incoming
+  refuse("add_statement", "a statement is at most 4000 characters");
+  p.click(".statement-form summary");
+  p.fill("[aria-label='What you know']", "The TV is in the gym.");
+  p.click("[data-action=add-statement]");
+  await settled();
+  expect(p.q(".statement-form .refusal").textContent).toBe("Refused: a statement is at most 4000 characters");
+  // the lens: a ruling and the send-back
+  p.press("r");
+  await settled();
+  const d = latest();
+  p.s.app.hub.read("CASE-1").commit((st, ids) => [{ type: "review.conflict", actor: { kind: "system", id: "engine" }, run: st.run.id, payload: { conflict: {
+    id: ids.next("conflict"), draft_hash: d.hash, finding: "f2", change: "confidence", earlier: "high", now: "moderate", raised_by: "evaluate", changed_for: "challenge",
+    asks: "high confidence", asked: "lower", points: ["f2: c1 shows it"], reason: "Evaluate and Challenge disagree on f2",
+  } } }]);
+  await settled();
+  refuse("rule_conflict", "conflict k1 is from a run that is over");
+  p.click("[data-conflict=k1] [data-action=follow-evaluate]");
+  await settled();
+  expect(p.q("[data-conflict=k1] .refusal").textContent).toBe("Refused: conflict k1 is from a run that is over");
+  overruled("f1", "almost certain", "It is the TV I installed.");
+  await settled();
+  refuse("send_back_changes", "the run is not waiting at the publish gate");
+  p.click(".gate-box [data-action=send-back-changes]");
+  await settled();
+  expect(p.q(".gate-box .your-changes .refusal").textContent).toBe("Refused: the run is not waiting at the publish gate");
+});
+
+test("each finding shows its id as a visible label: in the draft, in its Overrule form's heading, on a conflict, in the panel", async () => {
+  await narrativeAtGate();
+  const ids = latest().product.key_findings.map((f) => f.id);
+  expect(p.all(".lens-narrative [data-section=key_findings] > .finding").map((e) => (e.firstElementChild as HTMLElement).textContent)).toEqual(ids);
+  expect(p.all(".lens-narrative [data-section=key_findings] > .finding > .finding-id").length).toBe(ids.length);
+  expect(p.q('[data-finding="f1"] .overrule-body .overrule-heading').textContent).toBe("Overrule f1");
+  const d = latest();
+  p.s.app.hub.read("CASE-1").commit((st, ids2) => [{ type: "review.conflict", actor: { kind: "system", id: "engine" }, run: st.run.id, payload: { conflict: {
+    id: ids2.next("conflict"), draft_hash: d.hash, finding: "f2", change: "confidence", earlier: "high", now: "moderate", raised_by: "evaluate", changed_for: "challenge",
+    asks: "high confidence", asked: "lower", points: ["f2: c1 shows it"], reason: "Evaluate and Challenge disagree on f2",
+  } } }]);
+  await settled();
+  expect(p.q("[data-conflict=k1] .finding-id").textContent).toBe("f2");
+  p.press("Escape");
+  await settled();
+  expect(p.all(".questions-panel .gate-finding .finding-id").map((e) => e.textContent)).toEqual(ids);
+});

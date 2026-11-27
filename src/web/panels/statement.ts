@@ -2,6 +2,7 @@ import { BASIS_TEXT } from "../../core/state";
 import { MARKINGS, PERSON_BASES } from "../../core/types";
 import type { Marking, Observable, PersonBasis } from "../../core/types";
 import { clear } from "../dom";
+import { refusalLine } from "../refusal";
 import type { CaseStore } from "../store";
 import type { Ui, View } from "../ui";
 
@@ -20,9 +21,11 @@ export function makeStatementForm(ui: Ui, store: CaseStore): View {
   const addValue = h("button", { type: "button", class: "action", data: { action: "add-value" }, on: { click: () => { newRow(); paint(); } } }, "Add another value") as HTMLButtonElement;
   const add = h("button", { type: "button", class: "action", data: { action: "add-statement" }, on: { click: () => { void send(); } } }, "Add") as HTMLButtonElement;
   const summary = h("summary", null, "Add what you know");
+  /** Where a refusal of the statement is shown, beside Add (slice 10). */
+  const refused = h("div", { class: "refused-box" });
   const el = h("details", { class: "statement-form" }, summary,
     h("div", { class: "form-body" }, text, h("label", null, "How you know ", basis), detail, h("p", { class: "muted" }, "What it is about"), rowsBox, addValue,
-      h("label", null, "Marking ", marking), add)) as HTMLDetailsElement;
+      h("label", null, "Marking ", marking), add, refused)) as HTMLDetailsElement;
 
   function newRow(): void {
     const n = rows.length + 1;
@@ -57,9 +60,10 @@ export function makeStatementForm(ui: Ui, store: CaseStore): View {
     if (readOnly() || text.value.trim() === "") return;
     const about: Observable[] = rows.flatMap((r) => (r.value.value.trim() === "" ? [] : [{ type: r.type.value, value: r.value.value.trim() }]));
     add.disabled = true;
+    clear(refused);
     const sent = await ui.send("add_statement", {
       statement: text.value.trim(), basis: basis.value as PersonBasis, detail: detail.value.trim(), about, marking: marking.value === "" ? null : (marking.value as Marking),
-    });
+    }, undefined, undefined, (why) => { clear(refused); refused.append(refusalLine(h, why)!); });
     if (sent === null) { paint(); return; }                // a refusal leaves the form as typed
     text.value = ""; basis.value = "unstated"; detail.value = "";
     while (rows.length > 1) rows.pop()!.el.remove();

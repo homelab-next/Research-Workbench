@@ -11,9 +11,10 @@ export { applyPlaybooks } from "./playbooks";
 export { applyConflicts, holds, keepText, namesFinding, revisedRulingReason, ruledFindings, rulingText, runConflicts } from "./conflicts";
 export { CARD_REF, cardRefs } from "./cites";
 export {
-  activeOverrules, applyPerson, BASIS_TEXT, holdsOverrule, isPersonCard, openQuestions, overruleReason, overruleSays, overruleText, PERSON_SOURCE,
+  activeOverrules, applyPerson, BASIS_TEXT, gateChanges, holdsOverrule, isPersonCard, openQuestions, overruleReason, overruleSays, overruleText, PERSON_SOURCE,
   reopensOverrule, runQuestions, unheld, waitingOn,
 } from "./person";
+export type { GateChange } from "./person";
 export { cardFields, caseFields, isCard, isCaseCreated, isCoverage, isExtractedValue, isObservable, isObserved, isPersonStatement, isTimeWindow } from "./shapes";
 export * from "./observed";
 export * from "./types";

@@ -98,8 +98,8 @@ defineCommand("rule_conflict", {
   args: obj({ conflict: str, follow: { type: ["string", "null"] }, note: str }), then: then("rule"),
   perform: ({ hub, engine, session, actor }, a) => {
     const id = text(a, "conflict");
-    // a ruling revised at the publish gate sent the work back to Assemble: the server drives it, as after a rejection
-    if (engine.rule(actor, id, a.follow as string | null, text(a, "note"))) { hub.background(engine.advance()); return; }
+    // a ruling revised at the publish gate waits there for the person's send_back_changes (slice 10)
+    engine.rule(actor, id, a.follow as string | null, text(a, "note"));
     // the run paused on this disagreement goes on once every disagreement it paused on is ruled: the person's resume, by their ruling
     const s = session.state;
     const c = s.conflicts[id]!;
@@ -115,6 +115,11 @@ defineCommand("approve", {
     if (latestDraft(session.state) !== null && latestDraft(session.state)!.hash !== a.draft_hash) throw new SettingRefused("a newer draft arrived; review it before approving");
     engine.approve({ actor });
   },
+});
+// "Send back to Assemble with my changes" (slice 10): the person's changes at the publish gate, sent back at once; it passes no gate
+defineCommand("send_back_changes", {
+  args: obj({ draft_hash: str }), then: then("sendBack"),
+  perform: ({ engine, actor }, a) => { engine.sendBackChanges(actor, text(a, "draft_hash")); },
 });
 defineCommand("reject", {
   args: obj({ reason: str, stop: { type: "boolean" } }), then: then("reject"),

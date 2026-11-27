@@ -6,7 +6,7 @@ import type { Json } from "../../src/core/canonical";
 import { canonical } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
 import type { CaseSession } from "../../src/core/session";
-import { fold, latestDraft } from "../../src/core/state";
+import { fold, gateChanges, latestDraft } from "../../src/core/state";
 import type { CaseState } from "../../src/core/state";
 import type { Actor, Draft, Entry, Product } from "../../src/core/types";
 import { Workbench } from "../../src/core/workbench";
@@ -751,23 +751,36 @@ test("a ruling revised after the draft was made to the earlier one sends the wor
   expect(latestDraft(r.s.state)!.product.key_findings[0]!.likelihood).toBe("almost certain");
 });
 
-test("a ruling revised at the publish gate sends the work back to Assemble with the new ruling as the reason", async () => {
-  // controller ruling 6: the person's revision at the gate is their instruction; the gate is not passed
+test("a ruling revised at the publish gate sends nothing back by itself; Send back with my changes takes it, and an answer given there, to Assemble", async () => {
+  // slice 10 (reverses controller ruling 6): the person's changes at the gate wait for their one send-back; the gate is not passed
   const r = rig({ assemble: assembling(f.s, ["likely", "almost certain"]) });
   r.engine.start(person);
   await r.engine.advance();
   acceptPlan(r.s);
   expect(await r.engine.advance()).toMatchObject({ status: "waiting", waiting: "publish" });
   conflictOnF1(r.s);
-  expect(r.engine.rule(person, "k1", "challenge", "")).toBe(false);
+  r.engine.rule(person, "k1", "challenge", "");
   const head = r.s.head().seq;
-  expect(r.engine.rule(person, "k1", "evaluate", "the card shows it")).toBe(true);
-  expect(r.s.entries().filter((e) => e.seq > head).map((e) => e.type)).toEqual(["review.ruled", "stage.sent_back", "case.phase_changed", "stage.started"]);
+  r.engine.rule(person, "k1", "evaluate", "the card shows it");
+  expect(r.s.entries().filter((e) => e.seq > head).map((e) => e.type)).toEqual(["review.ruled"]);
+  expect(await r.engine.advance()).toMatchObject({ status: "waiting", waiting: "publish" });
+  ask(r.s, "research", false);
+  answerIt(r.s, "ask-1");
+  const card = r.s.state.questions["ask-1"]!.answer!.card;
+  const d = latestDraft(r.s.state)!;
+  expect(gateChanges(r.s.state, r.s.entries()).map((c) => [c.kind, c.id, c.finding])).toEqual([["ruling", "k1", "f1"], ["answer", "ask-1", null]]);
+  const mid = r.s.head().seq;
+  r.engine.sendBackChanges(person, d.hash);
+  expect(r.s.entries().filter((e) => e.seq > mid).map((e) => e.type)).toEqual(["stage.sent_back", "case.phase_changed", "stage.started"]);
   const back = r.s.entries().find((e): e is Extract<Entry, { type: "stage.sent_back" }> => e.type === "stage.sent_back")!;
-  expect(back.payload).toEqual({ from: "publish", to: "assemble", reason: `the person revised the ruling on f1 (${K1_REASON}): follow Evaluate: almost certain. Note: the card shows it`, count: 1 });
+  expect(back.payload).toEqual({ from: "publish", to: "assemble", count: 1, reason:
+    `the person revised the ruling on f1 (${K1_REASON}): follow Evaluate: almost certain. Note: the card shows it ` +
+    `the person answered ask-1: their answer is card ${card}, a statement of theirs; read it and say whether it changes any finding.` });
   expect(r.s.entries().some((e) => e.type === "gate.passed" && e.payload.gate === "publish")).toBe(false);
   expect(await r.engine.advance()).toMatchObject({ status: "waiting", waiting: "publish" });
   expect(latestDraft(r.s.state)!.product.key_findings[0]!.likelihood).toBe("almost certain");
+  // the new draft was made after the changes: none is listed for it
+  expect(gateChanges(r.s.state, r.s.entries())).toEqual([]);
 });
 
 // ---------- slice 8: a blocking question holds the run after its stage's pass (controller ruling 4) ----------

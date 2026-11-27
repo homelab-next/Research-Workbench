@@ -3,7 +3,7 @@ import type { Json } from "../core/canonical";
 import { canonical } from "../core/canonical";
 import type { CaseSession } from "../core/session";
 import type { CaseState, RunState } from "../core/state";
-import { latestDraft, revisedRulingReason, waitingOn } from "../core/state";
+import { gateChanges, latestDraft, waitingOn } from "../core/state";
 import type { Actor, Draft, EntryInput, Marking, ModelChoice, Product, RunHold } from "../core/types";
 import { termsOf } from "../agents/draft";
 import { mayGo, tooStrict } from "../agents/pack";
@@ -170,7 +170,7 @@ export class Engine {
 
   /**
    * A person overrules a finding: its likelihood, its confidence, or whether it stays, with a note. Code holds every later draft to it. At the
-   * publish gate the work goes back to Assemble with the overrule as the reason; elsewhere in a run it goes back when the current stage ends.
+   * publish gate it waits for sendBackChanges; elsewhere in a run the work goes back when the current stage ends.
    * Throws OverruleRefused; advances nothing.
    */
   overrule(input: Parameters<typeof overrule>[2]): void {
@@ -184,13 +184,11 @@ export class Engine {
 
   /**
    * A person rules on reviewers who disagree: follow one of the two (its stage id), or neither, with a note. A ruling holds until it is replaced:
-   * it goes to the analyst, and both reviewers see it. The person may rule again while the run is in progress; at the publish gate the work then
-   * goes back to Assemble with the new ruling as the reason (controller ruling 6), and true is returned so the server drives it. It passes no gate.
-   * Throws RunRefused.
+   * it goes to the analyst, and both reviewers see it. The person may rule again while the run is in progress; at the publish gate a revised
+   * ruling waits for sendBackChanges (slice 10, reversing controller ruling 6). It passes no gate. Throws RunRefused.
    */
-  rule(actor: Actor, conflict: string, follow: string | null, note: string): boolean {
+  rule(actor: Actor, conflict: string, follow: string | null, note: string): void {
     if (actor.kind !== "human") throw new RunRefused("only a person may rule on a conflict");
-    let sent = false;
     this.session.commit((s) => {
       const c = Object.hasOwn(s.conflicts, conflict) ? s.conflicts[conflict]! : null;
       if (c === null) throw new RunRefused(`there is no conflict ${conflict}`);
@@ -200,14 +198,28 @@ export class Engine {
         throw new RunRefused(`a ruling follows ${title(c.raised_by)} or ${title(c.changed_for)}, or gives a note`);
       }
       if (c.ruling !== null && c.ruling.follow === follow && c.ruling.note.trim() === note.trim()) throw new RunRefused(`that is already the ruling on ${conflict}`);
-      const out: EntryInput[] = [{ type: "review.ruled", actor, run: s.run.id, payload: { conflict, follow, note } }];
-      if (c.ruling === null) return out;
-      const revised = { ...c, ruling: { follow, note, by: actor.id, seq: s.seq + 1, ts: s.head_ts ?? "" }, earlier_rulings: [...(c.earlier_rulings ?? []), c.ruling] };
-      const back = gateSendBack(s, this.deps.pipeline, revisedRulingReason(s, revised) ?? "");
-      sent = back.length > 0;
-      return [...out, ...back];
+      return [{ type: "review.ruled", actor, run: s.run.id, payload: { conflict, follow, note } }];
     });
-    return sent;
+  }
+
+  /**
+   * "Send back to Assemble with my changes": at the publish gate, the person sends the draft on screen back to the stage the gate sends work back to,
+   * with every change of theirs since it was made (gateChanges: overrules, revised rulings, answers) as the reason, in their name. It passes no gate;
+   * the server advances after it. Throws RunRefused.
+   */
+  sendBackChanges(actor: Actor, draft_hash: string): void {
+    if (actor.kind !== "human") throw new RunRefused("only a person may send the draft back with their changes");
+    const entries = this.session.entries();
+    this.session.commit((s) => {
+      if (s.run.status === "none" || s.run.status === "finished" || s.run.waiting !== "publish") throw new RunRefused("the run is not waiting at the publish gate");
+      const d = latestDraft(s);
+      if (d === null || d.hash !== draft_hash) throw new RunRefused("a newer draft arrived; look at it before sending it back");
+      const changes = gateChanges(s, entries);
+      if (changes.length === 0) throw new RunRefused(`there is no change of yours since draft ${d.n} was made: nothing to send back`);
+      const back = gateSendBack(s, this.deps.pipeline, changes.map((c) => c.reason).join(" "), actor);
+      if (back.length === 0) throw new RunRefused("the publish gate sends work back nowhere");
+      return back;
+    });
   }
 
   /** A person approves the draft at the publish gate. Throws PublishRefused and writes nothing when it may not be published. Advances nothing; the anchor is made here. */

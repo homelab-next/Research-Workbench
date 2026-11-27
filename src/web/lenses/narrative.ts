@@ -1,4 +1,4 @@
-import { activeOverrules, blockers, CARD_REF, keepText, latestDraft, notedExceptions, overruleSays, proposalMarking, publishable, rulingText, runConflicts } from "../../core/state";
+import { activeOverrules, blockers, CARD_REF, gateChanges, keepText, latestDraft, notedExceptions, overruleSays, proposalMarking, publishable, rulingText, runConflicts } from "../../core/state";
 import type { CaseState, ConflictState, Overrule } from "../../core/state";
 import { CONFIDENCES } from "../../core/types";
 import type { Actor, Draft, Finding, Product } from "../../core/types";
@@ -11,6 +11,7 @@ import { narrativeMarkdown, SECTION_TITLES, TEXT_SECTIONS } from "../markdown";
 import type { TextSection } from "../markdown";
 import { AT_GATE, REPLAY_REFUSAL, typingIn } from "../ui";
 import type { Ui, View } from "../ui";
+import { refusalLine } from "../refusal";
 import { makeQuestions, shownQuestions } from "../views/questions";
 
 export interface NarrativeView extends View {
@@ -87,6 +88,8 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
   /** Commands sent and not yet seen: the answer's seq once it has come (the press stays off until that entry is here), null while the answer is awaited. */
   const inflight = new Map<string, number | null>();
   let inflightVersion = 0;
+  /** What the server said when it refused a command, by the same key, shown beside the control that sent it until it is sent again (slice 10). */
+  const refusals = new Map<string, string>();
   /** The files each published bundle's recorded manifest lists, by product number. */
   const bundles = new Map<number, string[] | "loading" | "failed">();
   let bundlesVersion = 0;
@@ -134,8 +137,9 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
   const guarded = (key: string, command: string, args: Record<string, unknown>, then?: () => void): void => {
     if (inflight.has(key)) return;
     inflight.set(key, null); inflightVersion++;
+    refusals.delete(key);
     render();
-    void ui.send(command, args).then((r) => {
+    void ui.send(command, args, undefined, undefined, (why) => { refusals.set(key, why); }).then((r) => {
       if (r === null) inflight.delete(key); else { inflight.set(key, r.seq); then?.(); }
       inflightVersion++;
       render();
@@ -226,9 +230,10 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
     sync();
     // Overrule is a button on the finding, always in view; it opens the form in place (it was a fold before slice 10, and people did not find it)
     const body = h("div", { class: "overrule-body", hidden: !overruleOpen.has(id) },
+      h("p", { class: "overrule-heading" }, `Overrule ${id}`),
       h("label", null, "Likelihood ", likelihood), h("label", null, "Confidence ", confidence), h("label", null, "Stays ", stays),
-      note, h("div", { class: "actions" }, go, withdraw),
-      h("p", { class: "note" }, "Code holds every draft to your overrule, and neither reviewer may move it back. While a run is in progress the draft goes back to the analyst to rewrite the finding's basis and reasoning: at once at the publish gate, otherwise when the current stage ends. An overrule passes no gate."));
+      note, h("div", { class: "actions" }, go, withdraw), refusalLine(h, refusals.get(key)),
+      h("p", { class: "note" }, "Code holds every draft to your overrule, and neither reviewer may move it back. While a run is in progress the draft goes back to the analyst to rewrite the finding's basis and reasoning when the current stage ends; at the publish gate it waits under Your changes until you send it back. An overrule passes no gate."));
     const toggle = h("button", {
       type: "button", class: "overrule-toggle", name: `Overrule ${id}`, data: { action: "open-overrule" }, aria: { expanded: String(overruleOpen.has(id)) },
       title: overruleOpen.has(id) ? `Close the Overrule form of ${id}` : `Set ${id}'s likelihood, confidence or place yourself, with a note`,
@@ -249,12 +254,13 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
   const droppedView = (s: CaseState, d: Draft): HTMLElement | null => {
     const gone = activeOverrules(s).filter((o) => o.stays === false && !d.product.key_findings.some((f) => f.id === o.finding));
     return gone.length === 0 ? null : h("div", { class: "dropped-findings" }, h("p", { class: "label" }, "Findings you dropped"),
-      gone.map((o) => h("div", { class: "finding dropped", data: { finding: o.finding } }, h("p", { class: "statement" }, o.finding), overruleView(s, d, o.finding))));
+      gone.map((o) => h("div", { class: "finding dropped", data: { finding: o.finding } }, h("span", { class: "finding-id" }, o.finding), h("p", { class: "statement" }, "dropped from the draft by your overrule"), overruleView(s, d, o.finding))));
   };
 
   // ---------- the draft, read ----------
   const finding = (s: CaseState, d: Draft, f: Finding): HTMLElement =>
     h("div", { class: "finding", data: { finding: f.id } },
+      h("span", { class: "finding-id", title: `Finding ${f.id}: reviewers, checks and the controller name it so` }, f.id),
       h("p", { class: "statement" }, f.statement),
       h("p", { class: "likelihood" }, `Likelihood: ${f.likelihood}`),
       h("p", { class: "confidence" }, `Confidence: ${f.confidence} — ${f.confidence_basis}`),
@@ -447,12 +453,14 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
       on: { click: () => {
         const text = (answers.get(id) ?? "").trim();
         if (text === "") return;
-        void ui.act("answer_challenge", { challenge: id, answer: text, action: kind.value }).then((ok) => { if (ok) { answers.delete(id); kinds.delete(id); } });
+        refusals.delete(`challenge:${id}`);
+        void ui.send("answer_challenge", { challenge: id, answer: text, action: kind.value }, undefined, undefined, (why) => { refusals.set(`challenge:${id}`, why); inflightVersion++; render(); })
+          .then((r) => { if (r !== null) { answers.delete(id); kinds.delete(id); } });
       } },
       name: `Answer challenge ${id}`,
     }, "Answer") as HTMLButtonElement;
     void s;
-    return h("div", { class: "answer-form" }, box, kind, button);
+    return h("div", { class: "answer-form" }, box, kind, button, refusalLine(h, refusals.get(`challenge:${id}`)));
   };
   /**
    * Reviewers who disagree: both positions and the points behind them, and the person's three ways to rule (follow one reviewer, follow the other, or a
@@ -461,7 +469,7 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
   const conflictView = (s: CaseState, c: ConflictState): HTMLElement => {
     const title = (id: string): string => s.run.stages.find((x) => x.id === id)?.title ?? id;
     const kids: Child[] = [
-      tag(ui, c.ruling === null ? "attention" : "done", c.ruling === null ? "reviewers disagree" : "ruled"), ` ${c.finding}`,
+      tag(ui, c.ruling === null ? "attention" : "done", c.ruling === null ? "reviewers disagree" : "ruled"), " ", h("span", { class: "finding-id" }, c.finding),
       h("p", { class: "text" }, c.reason),
       c.points.length === 0 ? null : h("ul", { class: "points" }, c.points.map((x) => h("li", null, x))),
     ];
@@ -485,7 +493,7 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
           name: `Ruling note on ${c.id}`, value: ruleNotes.get(c.id) ?? "", disabled: ro(), placeholder: "Your note (optional with a reviewer, enough on its own)",
           on: { input: (e) => { ruleNotes.set(c.id, (e.target as HTMLTextAreaElement).value); byNote.disabled = ro() || busy || !noted(); } },
         }),
-        byNote);
+        byNote, refusalLine(h, refusals.get(`rule:${c.id}`)));
     };
     if (c.ruling !== null) {
       kids.push(h("p", { class: "ruling" }, `Ruled: ${rulingText(s, c)}`));
@@ -493,7 +501,7 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
       if (c.run !== null && c.run === s.run.id && runGoing(s)) {
         const more = h("details", { class: "change-ruling", on: { toggle: () => { if (more.open) changing.add(c.id); else changing.delete(c.id); } } },
           h("summary", null, "Change the ruling"),
-          s.run.waiting === "publish" ? h("p", { class: "note" }, "A changed ruling sends the draft back to the analyst with it as the reason.") : null,
+          s.run.waiting === "publish" ? h("p", { class: "note" }, "A changed ruling waits under Your changes, by Approve, until you send the draft back with it.") : null,
           ruleForm()) as HTMLDetailsElement;
         more.open = changing.has(c.id);
         kids.push(more);
@@ -576,16 +584,19 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
     const can = why.length === 0 && checked && reasons.length === 0 && !inflight.has("approve");
     const why2 = why.length > 0 ? [...why, ...reasons.filter((r) => !why.includes(r))].join("; ")
       : pv === null ? "Checking…" : pv === "failed" ? "The draft could not be checked" : reasons.length > 0 ? reasons.join("; ") : inflight.has("approve") ? "Publishing…" : `Publish draft ${d.n} as it is`;
+    // the person's changes since this draft was made wait for their one send-back (slice 10): Approve says plainly that it publishes without them
+    const changes = gateChanges(s, store.entries);
     const approve = h("button", {
       type: "button", class: "primary", data: { action: "approve" }, disabled: ro() || !can,
       title: ro() ? REPLAY_REFUSAL : why2,
       on: { click: () => { guarded("approve", "approve", { draft_hash: d.hash }); } },
-    }, `Approve: publish draft ${d.n}`);
+    }, changes.length === 0 ? `Approve: publish draft ${d.n}` : `Approve without my changes: publish draft ${d.n}`);
     const reject = h("button", {
       type: "button", data: { action: "reject" }, disabled: ro(), title: ro() ? REPLAY_REFUSAL : "Reject this draft and say why",
       on: { click: () => { rejecting = true; sigs.delete(gateBox); render(); (gateBox.querySelector("[aria-label='Reason for rejecting the draft']") as HTMLElement | null)?.focus(); } },
     }, "Reject");
     const out: Node[] = [h("div", { class: "gate-buttons" }, approve, reject)];
+    if (refusals.has("approve")) out.push(refusalLine(h, refusals.get("approve"))!);
     // what the person may still want to settle before passing the gate, beside its button; neither line passes or holds the gate
     const asking = shownQuestions(s).filter((q) => q.answer === null);
     const holding = activeOverrules(s);
@@ -595,6 +606,20 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
           `${asking.length} ${asking.length === 1 ? "question is" : "questions are"} still open: ${asking.map((q) => `${q.id} (${q.text})`).join("; ")}`),
         holding.length === 0 ? null : h("p", { class: "gate-overrules tag tag-human", title: "Code holds every draft to these; withdraw one under its finding" },
           `${holding.length} ${holding.length === 1 ? "overrule is" : "overrules are"} active: ${holding.map((o) => `${o.finding} (${overruleSays(o)})`).join("; ")}`)));
+    }
+    if (changes.length > 0) {
+      const n = changes.length;
+      const busy = inflight.has("send-back");
+      out.push(h("div", { class: "your-changes" },
+        h("p", { class: "label" }, `Your changes since draft ${d.n} was made (not sent yet)`),
+        h("ul", null, changes.map((c) => h("li", { data: { change: c.kind } }, h("span", { class: "finding-id" }, c.finding ?? c.id), ` ${c.text}`))),
+        h("button", {
+          type: "button", class: "primary", data: { action: "send-back-changes" }, disabled: ro() || busy,
+          title: ro() ? REPLAY_REFUSAL : `Send draft ${d.n} back to Assemble with ${n === 1 ? "this change" : `these ${n} changes`} as the reason; it passes no gate`,
+          on: { click: () => { guarded("send-back", "send_back_changes", { draft_hash: d.hash }); } },
+        }, `Send back to Assemble with my changes (${n})`),
+        refusalLine(h, refusals.get("send-back")),
+        h("p", { class: "unsent-warning tag tag-attention" }, `Your ${n} ${n === 1 ? "change is" : "changes are"} not in draft ${d.n}. Approve publishes draft ${d.n} without ${n === 1 ? "it" : "them"}; send ${n === 1 ? "it" : "them"} back to Assemble first to have ${n === 1 ? "it" : "them"} taken in.`)));
     }
     // an answer passes no gate: it is noted here, and the person decides whether the draft goes back
     const made = draftSeq(d);
@@ -608,7 +633,9 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
         on: { click: () => {
           const reason = rejectReason.trim();
           if (reason === "") return;
-          void ui.act("reject", { reason, stop: stop.checked }).then((ok) => { if (ok) { rejecting = false; rejectReason = ""; rejectStop = false; render(); } });
+          refusals.delete("reject");
+          void ui.send("reject", { reason, stop: stop.checked }, undefined, undefined, (why) => { refusals.set("reject", why); sigs.delete(gateBox); render(); })
+            .then((r) => { if (r !== null) { rejecting = false; rejectReason = ""; rejectStop = false; render(); } });
         } },
       }, "Reject the draft") as HTMLButtonElement;
       const box = h("input", {
@@ -618,7 +645,7 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
           keydown: (e) => { if ((e as KeyboardEvent).key === "Escape") { e.stopPropagation(); rejecting = false; render(); } },
         },
       });
-      out.push(h("div", { class: "ask" }, box, h("label", null, stop, " and stop the run"), confirm, h("button", { type: "button", data: { action: "cancel-reject" }, on: { click: () => { rejecting = false; render(); } } }, "Cancel")));
+      out.push(h("div", { class: "ask" }, box, h("label", null, stop, " and stop the run"), confirm, h("button", { type: "button", data: { action: "cancel-reject" }, on: { click: () => { rejecting = false; render(); } } }, "Cancel"), refusalLine(h, refusals.get("reject"))));
     }
     return out;
   };

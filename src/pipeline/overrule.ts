@@ -60,10 +60,11 @@ export function overruledFindings(findings: readonly Finding[], overrules: reado
 const ENGINE: Actor = { kind: "system", id: "engine" };
 
 /**
- * The work sent back from the publish gate to the stage the gate sends work back to (Assemble), with the person's change as the reason, and that
- * stage started (controller ruling 6). Empty when the run is not waiting at the publish gate, or the gate sends work back nowhere.
+ * The work sent back from the publish gate to the stage the gate sends work back to (Assemble), with the person's changes as the reason, and that
+ * stage started: what the person's "Send back to Assemble with my changes" writes, the send-back in their name (slice 10). Empty when the run is not
+ * waiting at the publish gate, or the gate sends work back nowhere.
  */
-export function gateSendBack(state: Readonly<CaseState>, pipeline: Pipeline, reason: string): EntryInput[] {
+export function gateSendBack(state: Readonly<CaseState>, pipeline: Pipeline, reason: string, by: Actor = ENGINE): EntryInput[] {
   const { run } = state;
   if (run.status === "none" || run.status === "finished" || run.waiting !== "publish") return [];
   const gate = pipeline.stages.find((s) => s.gate === "publish");
@@ -73,7 +74,7 @@ export function gateSendBack(state: Readonly<CaseState>, pipeline: Pipeline, rea
   const link = { run: run.id, stage: target.id };
   const edge = `${gate.id}>${target.id}`;
   const count = (Object.hasOwn(run.sendbacks, edge) ? run.sendbacks[edge]! : 0) + 1;
-  const out: EntryInput[] = [{ type: "stage.sent_back", actor: ENGINE, ...link, payload: { from: gate.id, to: target.id, reason, count } }];
+  const out: EntryInput[] = [{ type: "stage.sent_back", actor: by, ...link, payload: { from: gate.id, to: target.id, reason, count } }];
   if (target.phase !== null && target.phase !== state.phase) out.push({ type: "case.phase_changed", actor: ENGINE, ...link, payload: { phase: target.phase } });
   out.push({ type: "stage.started", actor: ENGINE, ...link, payload: { stage: target.id, attempt: (run.stages.find((x) => x.id === target.id)?.attempts ?? 0) + 1 } });
   return out;
@@ -83,7 +84,8 @@ export function gateSendBack(state: Readonly<CaseState>, pipeline: Pipeline, rea
  * The send-back an overrule made while a run is active calls for once the current stage has ended (controller ruling on I4): to the stage the
  * publish gate sends work back to (Assemble), from the gate, with the overrules' reasons. An overrule calls for it when it was made in this run
  * after Assemble last started, a draft exists, and the latest draft does not hold it or Assemble built that draft while the overrule was new to it
- * (code put the values in place, but the basis and reasoning are the analyst's for its own values). Null when none does.
+ * (code put the values in place, but the basis and reasoning are the analyst's for its own values). An overrule made while the run waits at the
+ * publish gate is the person's to send back with their other changes (slice 10): it is left out here. Null when none does.
  */
 export function overruleSendBack(state: Readonly<CaseState>, entries: readonly Entry[], pipeline: Pipeline): { stage: string; attempt: number; sent_back: { from: string; to: string; reason: string; count: number } } | null {
   const { run } = state;
@@ -95,13 +97,16 @@ export function overruleSendBack(state: Readonly<CaseState>, entries: readonly E
   let runStart = 0;
   let asmStart = 0;
   let drafted: Entry | null = null;
+  /** Where the run last came to wait at the publish gate, with no stage started since. */
+  let atGate = Number.POSITIVE_INFINITY;
   for (const e of entries) {
-    if (e.type === "run.started") { runStart = e.seq; asmStart = 0; drafted = null; }
-    else if (e.type === "stage.started" && e.payload.stage === to) asmStart = e.seq;
+    if (e.type === "run.started") { runStart = e.seq; asmStart = 0; drafted = null; atGate = Number.POSITIVE_INFINITY; }
+    else if (e.type === "stage.started") { atGate = Number.POSITIVE_INFINITY; if (e.payload.stage === to) asmStart = e.seq; }
+    else if (e.type === "gate.waiting" && e.payload.gate === "publish") atGate = e.seq;
     else if (e.type === "draft.revised") drafted = e;
   }
   const since = Math.max(runStart, asmStart);
-  const due = activeOverrules(state).filter((o) => o.seq > since
+  const due = activeOverrules(state).filter((o) => o.seq > since && o.seq < atGate
     && (holdsOverrule(latest.product, o) === false || (drafted !== null && drafted.seq > o.seq && drafted.stage === to)));
   if (due.length === 0) return null;
   const edge = `${gate.id}>${to}`;
@@ -112,8 +117,8 @@ export function overruleSendBack(state: Readonly<CaseState>, entries: readonly E
 const same = (a: Overrule, b: Overrule): boolean => a.likelihood === b.likelihood && a.confidence === b.confidence && a.stays === b.stays && a.note.trim() === b.note.trim();
 
 /**
- * Records the overrule. At the publish gate the same commit sends the work back to Assemble with it as the reason; elsewhere in a run the engine
- * does so when the current stage ends (overruleSendBack). Throws OverruleRefused.
+ * Records the overrule. At the publish gate nothing more: the person sends it back with their other changes (slice 10, reversing controller ruling 6);
+ * elsewhere in a run the engine sends the work back when the current stage ends (overruleSendBack). Throws OverruleRefused.
  */
 export function overrule(session: CaseSession, deps: Pick<EngineDeps, "pipeline" | "profile" | "registry">, input: { actor: Actor; finding: string; draft_hash: string; likelihood: string | null; confidence: Finding["confidence"] | null; stays: boolean | null; note: string }): void {
   const { actor, finding, draft_hash, likelihood, confidence, stays, note } = input;
@@ -138,11 +143,8 @@ export function overrule(session: CaseSession, deps: Pick<EngineDeps, "pipeline"
     const wasActive = was !== null && activeOverrules(state).some((x) => x.finding === finding);
     if (withdrawing && !wasActive) throw new OverruleRefused(`there is no overrule of ${finding} to withdraw`);
     if (wasActive && same(was, o)) throw new OverruleRefused(`that is already the overrule of ${finding}`);
-    const { run } = state;
-    const out: EntryInput[] = [{ type: "finding.overruled", actor, run: run.id, payload: { finding, draft_hash, likelihood, confidence, stays, note } }];
-    if (run.status === "none" || run.status === "finished" || latest === null) return out;
-    // at the publish gate the work goes back to the analyst with the overrule as the reason (controller ruling 6); anywhere else in a run the
-    // engine sends it back when the current stage ends (overruleSendBack; controller ruling on I4)
-    return [...out, ...gateSendBack(state, deps.pipeline, overruleReason(o))];
+    // at the publish gate it waits for the person's send-back with their changes (slice 10); anywhere else in a run the engine sends it back when
+    // the current stage ends (overruleSendBack; controller ruling on I4)
+    return [{ type: "finding.overruled", actor, run: state.run.id, payload: { finding, draft_hash, likelihood, confidence, stays, note } }];
   });
 }

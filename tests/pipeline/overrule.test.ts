@@ -183,18 +183,31 @@ const input = (over: Partial<In> = {}): In => ({ actor: person, finding: "f1", d
 /** The types of the entries written from `from` on. */
 const since = (from: number): string[] => f.s.entries().filter((e) => e.seq > from).map((e) => e.type);
 
-test("an overrule at the publish gate writes finding.overruled and the person's revision in one commit, and review starts again", async () => {
-  // controller ruling 6: at the publish gate the work goes back to Assemble with the overrule as the reason, and Assemble's draft holds it
+test("an overrule at the publish gate writes only finding.overruled and the run stays at the gate; a second overrule of the same draft is taken; Send back with my changes takes both to Assemble", async () => {
+  // slice 10 (reverses controller ruling 6): a change at the gate sends nothing back by itself; the person sends the draft back with all their changes at once
   const r = rig([...FIRST, ...AGAIN]);
   await toGate(r);
   const head = f.s.head().seq;
   r.engine.overrule(input());
-  expect(since(head)).toEqual(["finding.overruled", "stage.sent_back", "case.phase_changed", "stage.started"]);
+  expect(since(head)).toEqual(["finding.overruled"]);
+  expect(await r.engine.advance()).toMatchObject({ status: "waiting", waiting: "publish" });
+  expect(f.s.state.drafts).toHaveLength(1);
   const [o] = ofType("finding.overruled");
   expect(o!.actor).toEqual(person);
   expect(o!.payload).toEqual({ finding: "f1", draft_hash: f.s.state.drafts[0]!.hash, likelihood: "almost certain", confidence: null, stays: null, note: NOTE });
-  const reason = `the person overruled f1: likelihood almost certain. Note: ${NOTE} Code holds f1 to it; rewrite f1's confidence_basis and reasoning to rest on the person's note.`;
-  expect(ofType("stage.sent_back").at(-1)!.payload).toEqual({ from: "publish", to: "assemble", reason, count: 1 });
+  // the owner's second overrule, on the draft still on screen
+  r.engine.overrule(input({ finding: "f2", likelihood: null, confidence: "high", note: "I saw the proxy log." }));
+  expect(since(head)).toEqual(["finding.overruled", "finding.overruled"]);
+  expect(f.s.state.run).toMatchObject({ waiting: "publish" });
+  const mid = f.s.head().seq;
+  r.engine.sendBackChanges(person, latest().hash);
+  expect(since(mid)).toEqual(["stage.sent_back", "case.phase_changed", "stage.started"]);
+  const reason1 = `the person overruled f1: likelihood almost certain. Note: ${NOTE} Code holds f1 to it; rewrite f1's confidence_basis and reasoning to rest on the person's note.`;
+  const reason2 = "the person overruled f2: confidence high. Note: I saw the proxy log. Code holds f2 to it; rewrite f2's confidence_basis and reasoning to rest on the person's note.";
+  const reason = `${reason1} ${reason2}`;
+  const sentBack = ofType("stage.sent_back").at(-1)!;
+  expect(sentBack.actor).toEqual(person);
+  expect(sentBack.payload).toEqual({ from: "publish", to: "assemble", reason, count: 1 });
   expect(f.s.state.run).toMatchObject({ current: "assemble", waiting: null });
   expect(await r.engine.advance()).toMatchObject({ status: "waiting", waiting: "publish" });
   const d = latest();
@@ -338,8 +351,9 @@ test("a new finding after the person dropped the highest-numbered one takes a fr
   const NEW: ScriptReply[] = [calls(proposal("the device is idle", ["c1"], { replaces: "f1" }), proposal("it was moved to the lab", ["c2"], { likelihood: "likely" })), out("again")];
   const r = rig([...FIRST, ...AGAIN, ...NEW]);
   await toGate(r);
-  // at the gate the drop sends the work back; draft 2 holds f1 only
+  // at the gate the drop is sent back with the person's changes; draft 2 holds f1 only
   r.engine.overrule(input({ finding: "f2", likelihood: null, stays: false, note: "That flow was my own test." }));
+  r.engine.sendBackChanges(person, latest().hash);
   expect(await r.engine.advance()).toMatchObject({ status: "waiting", waiting: "publish" });
   expect(latest().product.key_findings.map((x) => x.id)).toEqual(["f1"]);
   r.engine.reject({ actor: person, reason: "say where it went", stop: false });
@@ -351,4 +365,27 @@ test("a new finding after the person dropped the highest-numbered one takes a fr
     ["f1", "We assess it is roughly even chance that the device is idle."],
     ["f3", "We assess it is likely that it was moved to the lab."],
   ]);
+});
+
+test("Send back with my changes is refused: not by a person; off the publish gate; a draft that is not the latest; no change since the draft was made", async () => {
+  const r = rig([...FIRST, ...AGAIN]);
+  await toGate(r);
+  const head = f.s.head().seq;
+  expect(() => r.engine.sendBackChanges(person, latest().hash)).toThrow("there is no change of yours since draft 1 was made: nothing to send back");
+  r.engine.overrule(input());
+  expect(() => r.engine.sendBackChanges(planner, latest().hash)).toThrow("only a person may send the draft back with their changes");
+  expect(() => r.engine.sendBackChanges(person, "0".repeat(64))).toThrow("a newer draft arrived; look at it before sending it back");
+  expect(since(head)).toEqual(["finding.overruled"]);
+  r.engine.stop(person, "enough");
+  expect(() => r.engine.sendBackChanges(person, latest().hash)).toThrow("the run is not waiting at the publish gate");
+});
+
+test("an overrule made at the gate is not sent back by the engine on its own, even when the run is paused and resumed there", async () => {
+  const r = rig([...FIRST, ...AGAIN]);
+  await toGate(r);
+  r.engine.overrule(input());
+  r.engine.pause(person);
+  expect(await r.engine.resume(person)).toMatchObject({ waiting: "publish" });
+  expect(ofType("stage.sent_back")).toEqual([]);
+  expect(f.s.state.drafts).toHaveLength(1);
 });

@@ -81,6 +81,71 @@ async function atTheGate(path: string): Promise<void> {
   expect(s.app.hub.read(id).state.skipped).toEqual([]);
 }
 
+/** Slice 10, second part: at the gate an overrule waits for the person's send-back; a refused overrule shows its reason at its form; finding ids are in view. */
+async function refusedAtTheGate(path: string): Promise<void> {
+  const s = await served({ listen: true });
+  closers.push(() => s.close());
+  const id = await s.newCase();
+  await s.toPublishGate(id);
+  const types = (): string[] => s.entries(id).map((e) => e.type);
+  const gates = (): string[] => types().filter((t) => t === "gate.passed" || t === "product.published");
+  const passedBefore = gates();
+  const browser = await launch(path);
+  closers.push(() => browser.close());
+  const tab = await browser.tab(`${s.origin}/#/case/${id}`);
+  const text = (selector: string): Promise<string> => tab.evaluate<string>(`(document.querySelector(${JSON.stringify(selector)})?.textContent ?? "")`);
+  const overrule = async (note: string): Promise<void> => {
+    await tab.evaluate(`(() => { const s = document.querySelector("[aria-label='Likelihood of f1']"); s.value = "almost certain"; s.dispatchEvent(new Event("change", { bubbles: true })); })()`);
+    await tab.evaluate(`(() => { const t = document.querySelector("[aria-label='Note on overruling f1']"); t.value = ""; t.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+    await tab.click("[aria-label='Note on overruling f1']");
+    await tab.type(note);
+    await tab.waitFor(`!document.querySelector("[aria-label='Send the overrule of f1']").disabled`);
+    await tab.click("[aria-label='Send the overrule of f1']");
+  };
+  await tab.waitFor(`document.querySelector(".questions-panel [data-finding='f1']") !== null`);
+  await tab.click(".questions-panel [data-finding='f1'] [data-action=open-overrule]");
+  await tab.waitFor(`document.activeElement?.getAttribute("aria-label") === "Note on overruling f1"`);
+  // each finding's id is a visible label at its start, and the form says which finding it overrules
+  expect(await tab.evaluate<boolean>(`(() => { const e = document.querySelector('.lens-narrative [data-finding="f1"] > .finding-id'); return e !== null && e.checkVisibility() && e.textContent === "f1" && e.parentElement.firstElementChild === e; })()`)).toBe(true);
+  expect(await text('.lens-narrative [data-finding="f1"] .overrule-heading')).toBe("Overrule f1");
+
+  // accepted: the run stays at the gate, and the change is listed there with its finding id
+  await overrule("It is the TV I installed.");
+  await tab.waitFor(`document.querySelector(".gate-box .your-changes li") !== null`);
+  expect(await text(".gate-box .your-changes li")).toBe("f1 overruled: likelihood almost certain. Note: It is the TV I installed.");
+  expect(s.app.hub.read(id).state.run.waiting).toBe("publish");
+  const sentBefore = types().filter((t) => t === "stage.sent_back").length;
+
+  // refused: the same overrule again; the server's words are shown at the form that sent it, which keeps what was typed
+  await tab.click('.lens-narrative [data-finding="f1"] [data-action=open-overrule]');
+  await tab.waitFor(`!document.querySelector('.lens-narrative [data-finding="f1"] .overrule-body').hidden`);
+  await overrule("It is the TV I installed.");
+  await tab.waitFor(`document.querySelector('.lens-narrative [data-finding="f1"] .overrule-body .refusal') !== null`);
+  expect(await text('.lens-narrative [data-finding="f1"] .overrule-body .refusal')).toBe("Refused: that is already the overrule of f1");
+  expect(await tab.evaluate<boolean>(`document.querySelector('.lens-narrative [data-finding="f1"] .overrule-body .refusal').checkVisibility()`)).toBe(true);
+  expect(await tab.evaluate<string>(`document.querySelector("[aria-label='Note on overruling f1']").value`)).toBe("It is the TV I installed.");
+  expect(types().filter((t) => t === "finding.overruled").length).toBe(1);
+
+  // the one send-back, in the person's name; it passes no gate
+  await tab.click(".gate-box [data-action=send-back-changes]");
+  await tab.waitFor(`document.querySelector(".gate-box .your-changes") === null`);
+  await s.app.hub.idle();
+  const back = s.entries(id).filter((e) => e.type === "stage.sent_back");
+  expect(back.length).toBe(sentBefore + 1);
+  expect(back.at(-1)!.actor.kind).toBe("human");
+  // the one problem the browser logs is the refusal the test asked for (a 409 from the command)
+  expect(tab.problems().filter((x) => !/status of 409 \(Conflict\).*\/api\/cases\/CASE-1\/commands$/.test(x))).toEqual([]);
+  expect(gates()).toEqual(passedBefore);
+  expect(s.app.hub.read(id).state.skipped).toEqual([]);
+}
+
+if (chrome === null) {
+  if (process.env.WORKBENCH_REQUIRE_BROWSER === "1") test("a refused overrule shows its reason at its form; the gate waits for Send back with my changes", () => { throw new Error(NONE); });
+  else test.skip("a refused overrule shows its reason at its form; the gate waits for Send back with my changes", () => {});
+} else {
+  test("a refused overrule shows its reason at its form; the gate waits for Send back with my changes", async () => { await refusedAtTheGate(chrome); }, 120_000);
+}
+
 if (chrome === null) {
   if (process.env.WORKBENCH_REQUIRE_BROWSER === "1") test("the questions panel and Overrule are in view at the publish gate", () => { throw new Error(NONE); });
   else test.skip("the questions panel and Overrule are in view at the publish gate", () => {});

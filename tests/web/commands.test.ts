@@ -85,16 +85,17 @@ test("perform: state sends add_statement with basis unstated and clears the bar;
   p.win.location.hash = `#/case/${id}`;
   await p.settle();
   const sent: unknown[][] = [];
-  const real = p.ui.act;
-  p.ui.act = async (...a) => { sent.push(a); return real(...a); };
+  const real = p.ui.send;
+  p.ui.send = async (...a) => { sent.push(a); return real(...a); };
   const { out } = await performOn(p, "state The TV is in the gym");
   expect(out.cleared).toBe(true);
   expect(sent[0]!.slice(0, 2)).toEqual(["add_statement", { statement: "The TV is in the gym", basis: "unstated" }]);
   await p.settle();
   expect(Object.values(p.s.app.hub.read(id).state.cards).filter((c) => c.person !== undefined).length).toBe(1);
   expect(p.s.app.hub.read(id).state.skipped).toEqual([]);
-  p.ui.act = async () => false;
-  expect((await performOn(p, "state again")).out.cleared).toBe(false);
+  // refused: the bar keeps the text and says why, in the server's words (slice 10)
+  p.ui.send = async (_c, _a, _r, _f, refused) => { refused?.("a statement is at most 4000 characters"); return null; };
+  expect((await performOn(p, "state again")).out).toEqual({ cleared: false, say: "Refused: a statement is at most 4000 characters" });
 });
 
 test("answer ask-1 <text> answers that question; overrule f1 opens the Narrative lens on that finding", () => {
@@ -114,7 +115,7 @@ test("perform: answer sends answer_question with basis unstated; overrule opens 
   p.win.location.hash = `#/case/${id}`;
   await p.settle();
   const sent: unknown[][] = [];
-  p.ui.act = async (...a) => { sent.push(a); return true; };
+  p.ui.send = async (...a) => { sent.push(a); return { ok: true, seq: 1 }; };
   expect((await performOn(p, "answer ask-1 In the gym")).out).toEqual({ cleared: true });
   expect(sent[0]!.slice(0, 2)).toEqual(["answer_question", { question: "ask-1", answer: "In the gym", basis: "unstated" }]);
   const opened: unknown[][] = [];

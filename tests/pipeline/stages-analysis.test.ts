@@ -896,8 +896,12 @@ const TV = "It is the TV I installed.";
 /** What the actor's request said, its messages' text joined. */
 const said = (actor: string, ordinal: number): string =>
   (JSON.parse(requestText(actor, ordinal)) as { messages: { content: string }[] }).messages.map((m) => m.content).join("\n");
-const overruleAtGate = (r: Rig, over: Partial<Parameters<Rig["engine"]["overrule"]>[0]>) =>
-  r.engine.overrule({ actor: person, finding: "f1", draft_hash: latestDraft(f.s.state)!.hash, likelihood: null, confidence: null, stays: null, note: TV, ...over });
+/** An overrule at the publish gate, and the person's send-back with it (slice 10: at the gate nothing goes back by itself). */
+const overruleAtGate = (r: Rig, over: Partial<Parameters<Rig["engine"]["overrule"]>[0]>): void => {
+  const hash = latestDraft(f.s.state)!.hash;
+  r.engine.overrule({ actor: person, finding: "f1", draft_hash: hash, likelihood: null, confidence: null, stays: null, note: TV, ...over });
+  r.engine.sendBackChanges(person, hash);
+};
 
 test("Assemble proposes an overruled finding at another likelihood: the draft it records holds the overrule", async () => {
   const r = rig({ analyst: [...FIRST, ...SECOND], evaluator: [EVAL_PASS, EVAL_PASS], adversary: [CHALLENGE_PASS, CHALLENGE_PASS] });

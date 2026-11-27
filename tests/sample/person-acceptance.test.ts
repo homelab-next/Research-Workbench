@@ -142,8 +142,13 @@ test("a whole case with the person: a statement, a question and its answer, a ru
   expect(st.run.waiting).toBe("publish");
   expect(st.drafts.at(-1)!.product.key_findings.find((f) => f.id === "f1")!.likelihood).toBe("likely");
 
-  // at the gate the person revises the ruling, for Challenge: the work goes back, and the gate is reached again holding the new ruling
+  // at the gate the person revises the ruling, for Challenge, and sends the draft back with it (slice 10: nothing goes back by itself); the gate is
+  // reached again holding the new ruling
+  const ruledOn = st.drafts.at(-1)!.hash;
   expect((await s.command(id, "rule_conflict", { conflict: "k1", follow: "challenge", note: "the sign-ins settle it" })).status).toBe(200);
+  await s.app.hub.idle();
+  expect(state(id).drafts.at(-1)!.hash).toBe(ruledOn);
+  expect((await s.command(id, "send_back_changes", { draft_hash: ruledOn })).status).toBe(200);
   await s.app.hub.idle();
   st = state(id);
   expect(st.conflicts.k1!.earlier_rulings).toHaveLength(1);
@@ -155,6 +160,9 @@ test("a whole case with the person: a statement, a question and its answer, a ru
   expect((await s.command(id, "overrule_finding", {
     finding: "f1", draft_hash: st.drafts.at(-1)!.hash, likelihood: "almost certain", confidence: null, stays: null, note: "I set up ws-17 for j.doe myself.",
   })).status).toBe(200);
+  await s.app.hub.idle();
+  expect(state(id).drafts.length).toBe(drafts);
+  expect((await s.command(id, "send_back_changes", { draft_hash: st.drafts.at(-1)!.hash })).status).toBe(200);
   await s.app.hub.idle();
   st = state(id);
   expect(st.overrules.f1).toMatchObject({ likelihood: "almost certain", by: s.config.user });

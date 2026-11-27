@@ -93,8 +93,14 @@ export async function perform(intent: Intent, env: PerformEnv): Promise<{ cleare
     case "lens": nav.openLens(intent.id); return done;
     case "verify": nav.focusCard(intent.card); return { cleared: await ui.act("verify_card", { card: intent.card }) };
     case "replay": nav.openLens("replay", intent.seq === null ? undefined : String(intent.seq)); return done;
-    case "state": return { cleared: await ui.act("add_statement", { statement: intent.text, basis: "unstated" }) };
-    case "answer": return { cleared: await ui.act("answer_question", { question: intent.question, answer: intent.text, basis: "unstated" }) };
+    // a refusal is said under the bar that sent it, in the server's words (slice 10)
+    case "state": case "answer": {
+      let why: string | undefined;
+      const r = intent.kind === "state"
+        ? await ui.send("add_statement", { statement: intent.text, basis: "unstated" }, undefined, undefined, (w) => { why = w; })
+        : await ui.send("answer_question", { question: intent.question, answer: intent.text, basis: "unstated" }, undefined, undefined, (w) => { why = w; });
+      return r !== null ? done : { cleared: false, say: `Refused: ${why ?? "nothing was sent"}` };
+    }
     // the values are chosen in the finding's form, where the draft they overrule is on screen
     case "overrule": nav.openLens("narrative", `overrule:${intent.finding}`); return { cleared: false, say: `Overrule ${intent.finding} from the Narrative lens` };
     case "ask": nav.ask(intent.text); return done;

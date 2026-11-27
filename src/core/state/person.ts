@@ -1,7 +1,7 @@
 // The person (slice 8): questions an agent puts to them, their answers, their statements, and their overrules. Browser-safe: imports only src/core.
 import { CONFIDENCES } from "../types";
 import type { Card, Entry, PersonBasis, Product, Question } from "../types";
-import { holds, keepsValue, namesFinding, ruledFindings, rulingText } from "./conflicts";
+import { holds, keepsValue, namesFinding, revisedRulingReason, ruledFindings, rulingText } from "./conflicts";
 import { has, isBool, isObj, isOneOf, isStr, isStrList, isStrOrNull, malformed, recordSkip } from "./guards";
 import { isObservable } from "./shapes";
 import type { CaseState, Overrule, OverruleState, QuestionState } from "./types";
@@ -181,4 +181,34 @@ export function unheld(state: Readonly<CaseState>, product: Product): string[] {
     if (holdsOverrule(product, o) === false) out.push(`The draft does not hold your overrule of ${o.finding} (${overruleSays(o)})`);
   }
   return out;
+}
+
+/** A change of the person's since the latest draft was made: what "Send back to Assemble with my changes" sends, each with its reason (slice 10). `text` is
+ * what the screen shows after the change's label (its finding's id, else its own id). */
+export interface GateChange { kind: "overrule" | "ruling" | "answer"; id: string; finding: string | null; text: string; reason: string; seq: number }
+
+/**
+ * The person's changes since the latest draft was made, in the order made: each overrule (the latest of its finding, active or withdrawn), each
+ * revised ruling, and each answer to a question. A question's text is a model's, so it is named by id only; the answer is a card the pack carries.
+ * At the publish gate none of these sends work back by itself; the person sends them at once (slice 10, which reverses controller ruling 6).
+ */
+export function gateChanges(state: Readonly<CaseState>, entries: readonly Entry[]): GateChange[] {
+  const d = state.drafts.length === 0 ? null : state.drafts[state.drafts.length - 1]!;
+  if (d === null) return [];
+  const made = entries.findLast((e) => e.type === "draft.revised" && (e.payload as { draft?: { hash?: unknown } }).draft?.hash === d.hash)?.seq ?? 0;
+  const active = new Set(activeOverrules(state).map((o) => o.finding));
+  const out: GateChange[] = [];
+  for (const o of Object.values(state.overrules)) {
+    if (o.seq <= made || !(active.has(o.finding) || withdrawn(o))) continue;
+    out.push({ kind: "overrule", id: o.finding, finding: o.finding, text: `overruled: ${overruleSays(o)}. Note: ${o.note.trim()}`, reason: overruleReason(o), seq: o.seq });
+  }
+  for (const c of Object.values(state.conflicts)) {
+    if (c.ruling === null || c.ruling.seq <= made || c.earlier_rulings === undefined || c.earlier_rulings.length === 0) continue;
+    out.push({ kind: "ruling", id: c.id, finding: c.finding, text: `revised the ruling on ${c.id}: ${rulingText(state, c)}`, reason: revisedRulingReason(state, c) ?? "", seq: c.ruling.seq });
+  }
+  for (const q of Object.values(state.questions)) {
+    if (q.answer === null || q.answer.seq <= made) continue;
+    out.push({ kind: "answer", id: q.id, finding: null, text: `answered: card ${q.answer.card}`, reason: `the person answered ${q.id}: their answer is card ${q.answer.card}, a statement of theirs; read it and say whether it changes any finding.`, seq: q.answer.seq });
+  }
+  return out.sort((a, b) => a.seq - b.seq);
 }

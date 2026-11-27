@@ -385,12 +385,20 @@ test("rule_conflict on a ruled conflict records the new ruling in the server's n
   ]);
   const state = s.app.hub.read(id).state;
   expect(state.conflicts.k1!.earlier_rulings).toHaveLength(1);
-  // revised at the publish gate: the work went back to Assemble, and the server drove the run on from there
-  const back = after.filter((e) => e.type === "stage.sent_back");
+  // revised at the publish gate: nothing went back by itself (slice 10); send_back_changes sends it, in the server's name, and the server drives the run on
+  expect(after.slice(after.indexOf(ruled[0]!)).filter((e) => e.type === "stage.sent_back").length).toBe(0);
+  expect(state.run.waiting).toBe("publish");
+  expect((await s.command(id, "send_back_changes", { draft_hash: d.hash })).status).toBe(200);
+  await s.app.hub.idle();
+  const all = s.entries(id);
+  const back = all.filter((e) => e.type === "stage.sent_back");
+  expect(back.at(-1)!.actor).toEqual({ kind: "human", id: s.config.user });
   expect(back.at(-1)!.payload).toMatchObject({ from: "publish", to: "assemble", reason: "the person revised the ruling on f1 (Evaluate and Challenge disagree on f1): follow Evaluate: almost certain. Note: the card shows it" });
   // (the sample's script has no more Assemble turns, so the analyst's call is answered with an error and the run pauses there)
-  expect(after.slice(after.indexOf(back.at(-1)!)).some((e) => e.type === "model.request" && e.actor.kind === "agent" && e.actor.id === "analyst")).toBe(true);
-  expect(state.skipped).toEqual([]);
+  expect(all.slice(all.indexOf(back.at(-1)!)).some((e) => e.type === "model.request" && e.actor.kind === "agent" && e.actor.id === "analyst")).toBe(true);
+  // a second press finds the run off the gate
+  expect(await s.command(id, "send_back_changes", { draft_hash: d.hash })).toEqual({ status: 409, body: { ok: false, refused: ["the run is not waiting at the publish gate"] } });
+  expect(s.app.hub.read(id).state.skipped).toEqual([]);
 });
 
 test("a requester may not rule on a conflict", async () => {
