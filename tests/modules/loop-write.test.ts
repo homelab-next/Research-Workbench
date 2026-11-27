@@ -29,6 +29,8 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "loop-write-"));
   root = join(dir, "sample");
   copySample(root);
+  // these tests make a loop called triage of their own: the sample's (slice 12, Task 14) is taken out of this copy
+  rmSync(join(root, "loops", "triage.yaml"));
   const base = loadConfig({ env: {}, home: dir, repoRoot: dir });
   config = { ...base, data_dir: join(dir, "wb"), roots: [{ path: root, trusted: true, credentials: [] }], loops: { ...base.loops, store: join(dir, "wb", "loops"), imports: join(dir, "wb", "imported") } };
   wb = Workbench.open(config.data_dir, { onError: () => {} });

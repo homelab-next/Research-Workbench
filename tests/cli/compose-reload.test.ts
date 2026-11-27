@@ -68,7 +68,7 @@ test("reload after a save: deps.registry, deps.loops and deps.pipeline are the n
   expect(deps.pipeline.hash).not.toBe(was.pipeline.hash);
   expect(deps.components).toBe(deps.loops!.current("investigation")!.components);
   // the new version is recorded on the workbench chain
-  const recorded = wb.chain.read().filter((e) => e.type === "loop.recorded").map((e) => e.type === "loop.recorded" && [e.payload.version, e.payload.hash]);
+  const recorded = wb.chain.read().flatMap((e) => (e.type === "loop.recorded" && e.payload.loop === "investigation" ? [[e.payload.version, e.payload.hash]] : []));
   expect(recorded).toEqual([[1, was.pipeline.hash], [2, deps.pipeline.hash]]);
   // copy on write: what the old deps held is as it was
   expect(was.loops!.current("investigation")!.manifest.version).toBe(1);
@@ -112,7 +112,7 @@ test("reload that would leave the default loop unusable marks it so, and a run t
   expect(was.pipeline.stages.length).toBe(9);
   expect(was.loops!.current("investigation")).not.toBeNull();
   // nothing new is recorded for a loop that is not usable
-  expect(wb.chain.read().filter((e) => e.type === "loop.recorded").length).toBe(1);
+  expect(wb.chain.read().filter((e) => e.type === "loop.recorded" && e.payload.loop === "investigation").length).toBe(1);
 });
 
 test("reload closes the old connector pool", () => {

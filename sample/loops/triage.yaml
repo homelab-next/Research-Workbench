@@ -1,0 +1,36 @@
+kind: loop
+id: triage
+title: Triage
+about: Sort a report into a question worth an investigation, then run the investigation loop on it and bring its findings back.
+version: 1
+profile: triage
+entry: sort
+stages:
+  - id: sort
+    title: Sort
+    order: 1
+    phase: direction
+    runs: agent
+    role: frame
+    tools: [list_sources]
+    schema: frame-output
+    model: { provider: scripted, model: sample-triage, effort: null }
+    on_pass: investigate
+    on_fail: null
+  - id: investigate
+    title: Investigate
+    order: 2
+    phase: collection
+    runs: loop
+    role: subloop
+    loop: investigation
+    inputs: { question: case.question, observables: case.observables, window: case.window }
+    returns: { findings: { as: cards } }
+    on_pass: null
+    on_fail: null
+inputs:
+  question: { type: question, required: true }
+  observables: { type: observables, required: true }
+  window: { type: window, required: true }
+outputs:
+  cards: { from: cards.kept }

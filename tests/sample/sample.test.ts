@@ -298,6 +298,40 @@ test("the sample's pipeline is the loop manifest loops/investigation.yaml: the n
   expect(loadPipeline(registry).pipeline!.hash).toBe(SAMPLE_LEGACY_HASH);
 });
 
+test("the sample's second loop is loops/triage.yaml: Sort on its own script, then the investigation loop as a sub-loop, with the triage profile", () => {
+  const loop = registry.get("loop", "triage")!;
+  expect(loop.body).toEqual({
+    kind: "loop", id: "triage", title: "Triage",
+    about: "Sort a report into a question worth an investigation, then run the investigation loop on it and bring its findings back.",
+    version: 1, profile: "triage", entry: "sort",
+    stages: [
+      {
+        id: "sort", title: "Sort", order: 1, phase: "direction", runs: "agent", role: "frame", tools: ["list_sources"], schema: "frame-output",
+        model: { provider: "scripted", model: "sample-triage", effort: null }, on_pass: "investigate", on_fail: null,
+      },
+      {
+        id: "investigate", title: "Investigate", order: 2, phase: "collection", runs: "loop", role: "subloop", loop: "investigation",
+        inputs: { question: "case.question", observables: "case.observables", window: "case.window" }, returns: { findings: { as: "cards" } }, on_pass: null, on_fail: null,
+      },
+    ],
+    inputs: { question: { type: "question", required: true }, observables: { type: "observables", required: true }, window: { type: "window", required: true } },
+    outputs: { cards: { from: "cards.kept" } },
+  });
+  const triage = registry.get("profile", "triage")!.body as { rules: string; framework: string; standard: string; stages: Record<string, Record<string, unknown>> };
+  const investigation = yamlOf("context", "profile.yaml") as { rules: string; framework: string; standard: string };
+  expect([triage.rules, triage.framework, triage.standard]).toEqual([investigation.rules, investigation.framework, investigation.standard]);
+  expect(Object.keys(triage.stages)).toEqual(["sort"]);
+  expect(triage.stages.sort).toMatchObject({ agent: "orchestrator", persona: "orchestrator" });
+  expect(String(triage.stages.sort!.goal).split(/[.!?](\s|$)/).filter((x) => x.trim() !== "").length).toBe(1);
+  // two turns: one list_sources call, then a frame answer with one goal, about the sample's own address
+  const script = registry.get("script", "sample-triage")!.body as { turns: { actor: string; reply: { tool_calls?: { tool: string }[]; content?: string } }[] };
+  expect(script.turns.map((t) => t.actor)).toEqual(["orchestrator", "orchestrator"]);
+  expect(script.turns[0]!.reply.tool_calls!.map((c) => c.tool)).toEqual(["list_sources"]);
+  const answer = JSON.parse(script.turns[1]!.reply.content!) as { goals: { question: string }[] };
+  expect(answer.goals).toHaveLength(1);
+  expect(answer.goals[0]!.question).toContain(SAMPLE_START.value);
+});
+
 test("a case started before slice 12 and stopped at its plan gate goes on to the publish gate under the loops: the hash it recorded, no pause, nothing skipped, replay unchanged", async () => {
   const d = mkdtempSync(join(tmpdir(), "sample-old-"));
   const sample = sampleRoot(d);

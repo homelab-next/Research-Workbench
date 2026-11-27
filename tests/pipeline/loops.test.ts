@@ -466,7 +466,7 @@ test("compose gives the default loop's pipeline and profile, sets loops, compone
   const wb = Workbench.open(config.data_dir, { onError: () => {} });
   try {
     const recorded = (): { loop: string; hash: string; version: number; legacy_hash: string | null; lock: { blob: string } }[] =>
-      wb.chain.read().flatMap((e) => (e.type === "loop.recorded" ? [e.payload] : []));
+      wb.chain.read().flatMap((e) => (e.type === "loop.recorded" && e.payload.loop === "investigation" ? [e.payload] : []));
     const a = compose(config, wb);
     try {
       const loop = a.deps.loops!.current("investigation")!;

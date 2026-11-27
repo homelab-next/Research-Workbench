@@ -81,3 +81,36 @@ case off the list; the second finds it by its starting value; the third checks t
 publishes and unloads in one step. The sample's script covers one run; `tests/sample/cases-acceptance.test.ts` adds a second run's
 turns to a copy of it, drives all of this on the scripted model, and has the follow-up run in the loaded case publish `published/2`,
 whose change is stated against product 1.
+
+## A triage loop
+
+The sample has a second loop, `loops/triage.yaml` (not to be confused with the playbook "Triage an address"). It has two stages. **Sort**
+(profile `context/triage-profile.yaml`, the orchestrator persona, scripted by `scripts/sample-triage.yaml`) looks at what may be asked and
+turns the report into one goal. **Investigate** runs the investigation loop as a child case, with the triage case's question, starting
+values and window as its inputs; the child runs the sample's own `scripts/sample-run.yaml`, as any investigation case does. Triage has no
+gate of its own: the child's gates are the person's.
+
+```
+bun run investigate start --loop triage --sample-fixture --title "Triage" --asked "Who is behind the traffic to 198.51.100.77?" --why "demo" \
+  --start address=198.51.100.77 --from 2026-11-17T00:00:00.000Z --to 2026-11-24T00:00:00.000Z --objective sample-objective --marking TLP:GREEN
+bun run investigate accept-plan CASE-2 --budget s3=1 --sample-fixture
+bun run investigate approve CASE-2
+bun run investigate status CASE-1
+```
+
+The first runs Sort, makes CASE-2 on the investigation loop and stops: `CASE-1 paused ... waiting on child CASE-2: it waits for a person at
+its plan gate`, with the command for the child's gate. The second passes the child's plan gate; the child stops at its publish gate and
+CASE-1 is still paused on it. The third publishes the child's product, and CASE-1 goes on by itself: the child's findings come back to it as
+note cards that name the child, its run and its head, carry the marking of the child's product and cite nothing of CASE-1, and CASE-1's
+run finishes as `completed`. Nothing was sent to CASE-1 after `start`. `bun run verify <data_dir>/cases/CASE-1` checks the triage case and
+says the link to CASE-2 matches.
+
+In the interface: Home, Loops, Triage; open Investigate to see that it runs the investigation loop; New case from this loop; the case says
+"waiting on child CASE-2" with **Open CASE-2**; pass the child's plan and publish gates there; back in CASE-1 the run is finished and the
+returned cards are in Incoming.
+
+To carry the loop to another workbench: `bun run loops export triage` writes `triage.v1.<12 hex>.loop.tar.gz` (the two loops, their stages,
+profiles, personas, rules, schemas, checks and the checks' programs; never a model, a script manifest, a source's location or anything under `data/`);
+`bun run loops import <file> --config <other>` puts it in a root that is not trusted there, and `bun run loops trust triage-<12 hex> --config
+<other>` trusts it. `tests/sample/loops-acceptance.test.ts` drives all of this on the scripted model, and `tests/web/browser-loops.test.ts` in a
+browser.

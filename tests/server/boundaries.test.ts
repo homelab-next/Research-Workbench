@@ -53,11 +53,51 @@ const listensOnlyOnLoopback: Rule = (path, text) => {
   return found;
 };
 
+// ---------- slice 12: only a person writes a manifest, through the three writers; no agent and no stage reaches them; the server names the actor ----------
+
+/** The three files that may write into a module root or the configuration file. */
+const WRITERS = ["src/modules/loop-write.ts", "src/modules/loop-import.ts", "src/modules/config-write.ts"];
+/** A call that makes or changes a file or a folder (removing a temporary folder, and making one under the system's temporary folder, are not). */
+const WRITES = /\b(?:writeFileSync|appendFileSync|writeSync|renameSync|copyFileSync|cpSync|linkSync|symlinkSync|mkdirSync|createWriteStream|writeFile|appendFile)\s*\(|\bBun\.write\s*\(/;
+/** What names a module root or the configuration file: the configuration's roots, rootsOf, the root a save writes into, the imports folder, the file a configuration edit writes. */
+const NAMES_A_ROOT = /\.roots\b|\brootsOf\b|\bwriteRoot\b|\bloops\.imports\b|\bimportsDir\b|\bwrite_path\b/;
+const writesOnlyThere: Rule = (path, text) =>
+  /^src\//.test(path) && !WRITERS.includes(path) && WRITES.test(text) && NAMES_A_ROOT.test(text)
+    ? [`${path} writes files and names ${text.match(NAMES_A_ROOT)![0]}`]
+    : [];
+
+/** The modules that write manifests, loop files and the configuration. */
+const MANIFEST_WRITERS = ["src/modules/loop-write", "src/modules/loop-import", "src/modules/config-write"];
+/** Each import, export-from and dynamic import of a file, with whether it is type-only (`import type …`, `export type … from`). */
+const importStatements = (text: string): { spec: string; typeOnly: boolean }[] => [
+  ...[...text.matchAll(/^\s*(import|export)\s+(type\s+)?[^;]*?\bfrom\s*["']([^"']+)["']/gm)].map((m) => ({ spec: m[3]!, typeOnly: m[2] !== undefined })),
+  ...[...text.matchAll(/^\s*import\s*["']([^"']+)["']/gm)].map((m) => ({ spec: m[1]!, typeOnly: false })),
+  ...[...text.matchAll(/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g)].map((m) => ({ spec: m[1]!, typeOnly: false })),
+];
+const agentsDoNotWriteManifests: Rule = (path, text) =>
+  /^src\/(agents|pipeline)\//.test(path)
+    ? importStatements(text)
+        .filter((i) => !i.typeOnly && (MANIFEST_WRITERS.some((d) => reaches(path, i.spec, d) || reaches(path, i.spec, `${d}.ts`)) || reachesLoopFile(path, i.spec)))
+        .map((i) => `${path} imports ${i.spec}`)
+    : [];
+
+/**
+ * Reading `actor` from what a request carries: its body, its parsed JSON, its arguments, its query or its headers. (`request` is not in the list: in
+ * the server it names a recorded model.request entry, whose actor is the agent that made it.)
+ */
+const ACTOR_FROM_REQUEST =
+  /\b(?:body|json|parsed|asked|args|input|req|params|query|searchParams|headers)\s*(?:\?\.|\.|!\.)\s*actor\b|\b(?:body|json|parsed|asked|args|input|req|params|query)\s*\[\s*["']actor["']\s*\]|\.get\(\s*["'](?:x-)?actor["']\s*\)|\{\s*[^}]*\bactor\b[^}]*\}\s*=\s*(?:body|json|parsed|asked|args|input|await\s+req)/;
+const serverNamesTheActor: Rule = (path, text) =>
+  /^src\/server\//.test(path) && ACTOR_FROM_REQUEST.test(text) ? [`${path} reads ${text.match(ACTOR_FROM_REQUEST)![0]}`] : [];
+
 const RULES: [string, Rule][] = [
   ["no file under src/server or src/web imports from src/modules/connectors", noConnectorImports],
   ["no file under src/web except build.ts imports from src/server, src/modules, src/agents, src/pipeline or src/cli", webIsIsolated],
   ["only src/cli constructs a ConnectorPool", onlyCliBuildsAPool],
   ["Bun.serve appears only in src/server/app.ts, always with hostname 127.0.0.1", listensOnlyOnLoopback],
+  ["only src/modules/loop-write.ts, src/modules/loop-import.ts and src/modules/config-write.ts write under a module root or the configuration", writesOnlyThere],
+  ["nothing under src/agents or src/pipeline imports loop-write, loop-import, loopfile or config-write, type-only imports aside", agentsDoNotWriteManifests],
+  ["no route handler takes an actor from a request: every new route names the person itself", serverNamesTheActor],
 ];
 
 const sources = files(SRC).map((f) => ({ path: rel(f), text: readFileSync(f, "utf8") }));
@@ -93,6 +133,40 @@ test("each rule catches a planted violation", () => {
   expect(listensOnlyOnLoopback("src/server/app.ts", `Bun.serve({ hostname: "0.0.0.0", port: 0 })`)).toHaveLength(1);
   expect(listensOnlyOnLoopback("src/server/app.ts", `Bun.serve({ hostname: "127.0.0.1", port: 0 })`)).toEqual([]);
   expect(listensOnlyOnLoopback("src/server/x.ts", `import { createServer } from "node:http";`).length).toBeGreaterThan(0);
+  // slice 12: the three writers
+  expect(writesOnlyThere("src/server/x.ts", `writeFileSync(join(config.roots[0].path, "loops", "x.yaml"), text);`)).toHaveLength(1);
+  expect(writesOnlyThere("src/cli/x.ts", `for (const r of rootsOf(config)) mkdirSync(join(r.path, "stages"));`)).toHaveLength(1);
+  expect(writesOnlyThere("src/agents/tools/x.ts", `await Bun.write(config.write_path, "roots: []");`)).toHaveLength(1);
+  expect(writesOnlyThere("src/modules/x.ts", `renameSync(tmp, join(config.loops.imports, name));`)).toHaveLength(1);
+  expect(writesOnlyThere("src/modules/loop-write.ts", `writeSync(fd, bytes); const root = writeRoot(config, loop);`)).toEqual([]);
+  expect(writesOnlyThere("src/modules/config-write.ts", `renameSync(tmp, config.write_path);`)).toEqual([]);
+  expect(writesOnlyThere("src/core/blobs.ts", `writeSync(fd, bytes, at);`)).toEqual([]);
+  expect(writesOnlyThere("src/cli/preflight.ts", `const store = mkdtempSync(dir); rmSync(store); rootsOf(config);`)).toEqual([]);
+  expect(agentsDoNotWriteManifests("src/agents/tools/x.ts", `import { saveManifests } from "../../modules/loop-write";`)).toHaveLength(1);
+  expect(agentsDoNotWriteManifests("src/pipeline/x.ts", `import { importLoop } from "../modules/loop-import.ts";`)).toHaveLength(1);
+  expect(agentsDoNotWriteManifests("src/pipeline/stages/x.ts", `const m = await import("../../modules/config-write");`)).toHaveLength(1);
+  expect(agentsDoNotWriteManifests("src/agents/x.ts", `import { writeLoopFile } from "../core/loopfile";`)).toHaveLength(1);
+  expect(agentsDoNotWriteManifests("src/agents/x.ts", `export { saveLoop } from "../modules/loop-write";`)).toHaveLength(1);
+  expect(agentsDoNotWriteManifests("src/agents/x.ts", `import type { LoopDraft } from "../modules/loop-write";`)).toEqual([]);
+  expect(agentsDoNotWriteManifests("src/pipeline/x.ts", `import type { LoopFileManifest } from "../core/loopfile";`)).toEqual([]);
+  expect(agentsDoNotWriteManifests("src/server/x.ts", `import { saveLoop } from "../modules/loop-write";`)).toEqual([]);
+  expect(serverNamesTheActor("src/server/x.ts", `const actor = body.actor as Actor;`)).toHaveLength(1);
+  expect(serverNamesTheActor("src/server/x.ts", `saveLoop(deps, draft, version, { actor: args["actor"] });`)).toHaveLength(1);
+  expect(serverNamesTheActor("src/server/x.ts", `const by = url.searchParams.get("actor");`)).toHaveLength(1);
+  expect(serverNamesTheActor("src/server/x.ts", `const { draft, actor } = body;`)).toHaveLength(1);
+  expect(serverNamesTheActor("src/server/x.ts", `saveLoop(deps, draft, version, { actor: d.human() });`)).toEqual([]);
+  expect(serverNamesTheActor("src/server/x.ts", `if (Object.hasOwn(body, "actor")) return "the server names the actor";`)).toEqual([]);
+  expect(serverNamesTheActor("src/agents/x.ts", `const actor = body.actor;`)).toEqual([]);
+  expect(serverNamesTheActor("src/server/x.ts", `if (request.actor.kind !== "agent") throw new Error("no request");`)).toEqual([]);
+  expect(serverNamesTheActor("src/server/x.ts", `const who = req.actor;`)).toHaveLength(1);
+});
+
+test("the slice 12 rules see what they are about: the three writers write, the agents and stages exist, and the loop routes name the person", () => {
+  for (const w of WRITERS) expect(`${w}: ${sources.some((f) => f.path === w && WRITES.test(f.text))}`).toBe(`${w}: true`);
+  expect(sources.filter((f) => /^src\/(agents|pipeline)\//.test(f.path)).length).toBeGreaterThanOrEqual(20);
+  const routes = sources.find((f) => f.path === "src/server/loop-routes.ts")!.text;
+  for (const call of ["copyLoop(", "saveLoop("]) expect(routes).toContain(call);
+  expect([...routes.matchAll(/\{ actor: d\.human\(\) \}/g)].length).toBeGreaterThanOrEqual(2);
 });
 
 // ---------- slice 11: only a person or code unloads, loads or deletes a case, and the case file stays on the server ----------

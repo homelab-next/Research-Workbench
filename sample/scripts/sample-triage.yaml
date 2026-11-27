@@ -1,0 +1,18 @@
+kind: script
+id: sample-triage
+title: Scripted sort of the sample report
+# Two turns for the triage loop's Sort stage: look at what may be asked, then one goal for the investigation it hands on.
+turns:
+  - actor: orchestrator
+    reply:
+      tool_calls:
+        - { tool: list_sources, args: { why: "See what may be asked before sorting the report." } }
+  - actor: orchestrator
+    reply:
+      content: |
+        {"goals": [
+          {"title": "Who is behind the traffic", "question": "Which account is behind the connections to 198.51.100.77?", "want": "account"}
+         ],
+         "window": {"from": "2026-11-17T00:00:00.000Z", "to": "2026-11-24T00:00:00.000Z"},
+         "limits": {"allow_unconfirmed": false, "max_weight": null},
+         "notes": "One question worth an investigation: hand it to the investigation loop."}

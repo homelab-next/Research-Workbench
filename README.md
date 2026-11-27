@@ -367,6 +367,47 @@ bun run cases store delete CASE-1 --config ~/workbench/config.yaml
 - **One id everywhere.** A case keeps the id it was made with, wherever it is loaded. A file whose id is held here by another case (another entry 1) is refused with "CASE-1 is taken here by another case"; the same case loaded twice is refused as "already loaded". The id counter never gives an id twice: it counts the loaded cases, the store's file names, `deleted.log` and a mark in the data folder (`cases/.high-water`) that only goes up, so an id stays used after its case was unloaded elsewhere, deleted, or while the store is unplugged.
 - **A stop in the middle.** An unload writes the file under a temporary name, reads it back against `case.json`, puts it in place, and only then takes the folder out of the working set. A stop or failure before that last step leaves the case loaded; the ledger records `case.unload_failed` (at the next open, after a stop) and the next unload replaces any file already written. A load extracts to a temporary folder, checks every file and verifies the chain before the case appears, and refuses the whole file otherwise.
 
+## Loops
+
+A **loop** is the order of work a case follows: its stages, their gates, the context each stage is given, the checks that run on a draft, and which stage runs another loop. It is a manifest (`kind: loop`) in a module root's `loops/` folder, like any other. A case is made for one loop, and its run binds the loop's version when it starts: a `loop.bound` entry names the loop, its version and its pipeline hash, and the lock (every stage, persona, rules, skill, schema and check it resolved to, each with its hash) is a blob of the case. A loop edited while a case runs on it does not change that run; the case's next run binds the new version. A case made before loops existed goes on as it did, held to the hash it recorded.
+
+The sample has two loops:
+
+- **Investigation** (`sample/loops/investigation.yaml`): the nine stages, Frame to Feedback, with the plan gate and the publish gate. It is the default loop (`loops.default`), and every case made without `--loop` is one of it.
+- **Triage** (`sample/loops/triage.yaml`): Sort, which turns a report into one question, then Investigate, which runs the investigation loop as a **child case** and brings its findings back. Triage has no gate of its own: the child's plan and publish gates are the person's, passed in the child, and while the child waits the triage case is paused, "waiting on child CASE-2". When the child publishes, its findings come back to the triage case as note cards that say where they came from (the child, its loop, its run, its head), carry the marking of the child's product, and cite nothing of the triage case. The triage run then ends as `completed`. Replaying the triage case reads the child's head and the hash of what came back from its own ledger; it never opens or re-runs the child.
+
+The command line, with `--config <file>` on each and the server stopped:
+
+```bash
+bun run loops list
+bun run loops show triage
+bun run loops export triage --to <dir>
+bun run loops import <dir>/triage.v1.<12 hex>.loop.tar.gz
+bun run loops trust triage-<12 hex>
+```
+
+`list` prints each loop with its version, the first 12 hex of its pipeline hash and its stages, or why it is not usable. `show` prints each stage with its gate, its send-back edges and its three groups (context, middleware, orchestration), each item with its source and hash. `export` writes a **loop file** into `loops.store` (`<data_dir>/loops`) unless `--to` names a folder. `import` checks a loop file and writes what it holds into a new folder of `loops.imports` (`<data_dir>/imported`), a root that is **not trusted**; `trust` adds that folder to the configuration's `roots` as trusted, after printing what it will supply. Neither `import` nor `trust` needs a usable loop, so a first import into an empty root works. What a loop file holds and never holds is in [docs/security-notes.md](docs/security-notes.md).
+
+A case of another loop is started with `--loop`:
+
+```bash
+bun run investigate start --loop triage --sample-fixture --title "Triage" --asked "Who is behind the traffic to 198.51.100.77?" --why "demo" \
+  --start address=198.51.100.77 --from 2026-11-17T00:00:00.000Z --to 2026-11-24T00:00:00.000Z --objective sample-objective --marking TLP:GREEN
+```
+
+It prints that CASE-1 waits on child CASE-2, and the command that passes the child's gate. The child's `accept-plan` and `approve` carry the triage case on by themselves; [sample/README.md](sample/README.md) walks through it. In the interface, the Loops tile on Home lists the loops, opens a plain outline of each, copies and edits one in forms (a save is the loop's next version), exports, imports and trusts loop files, and starts a new case from a loop; see [docs/gui-guide.md](docs/gui-guide.md).
+
+The configuration's `loops` block, with its defaults:
+
+```yaml
+loops:
+  default: investigation          # the loop of a case made without --loop
+  max_depth: 2                    # the most levels of child cases below a case no case started
+  max_children: 8                 # the most child cases one case may start
+  store: <data_dir>/loops         # where export writes and the Loops page lists loop files
+  imports: <data_dir>/imported    # where an import lands; each folder is a root that is not trusted
+```
+
 ## Known limits
 
 - A route that is in flight cannot be ended. Stopping the run stops what comes next, not a query already started.

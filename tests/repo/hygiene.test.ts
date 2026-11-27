@@ -64,6 +64,20 @@ test.skipIf(!process.env.WORKBENCH_PRIVATE_TERMS)("no private term is in the rep
   expect(hits).toEqual([]);
 });
 
+test("no loop file, no imported root and no builder session is in the repository: a loop file is made from the sample, never kept beside it", () => {
+  const paths = [...new Set([...git("ls-files"), ...git("ls-files", "-o", "--exclude-standard")])];
+  expect(paths.filter((p) => /\.loop\.tar\.gz$/.test(p) || /(^|\/)(imported|builders)\//.test(p))).toEqual([]);
+});
+
+test("no file in the repository names a home folder: documents and tests write placeholders such as <repo> and <data>", () => {
+  const hits: string[] = [];
+  for (const f of textFiles()) {
+    if (f.path === "tests/repo/hygiene.test.ts") continue;
+    f.lines.forEach((line, i) => { if (/(?<![\w<])\/home\/[a-z_][\w.-]*\/|(?<![\w<])\/Users\/[A-Za-z][\w.-]*\//.test(line)) hits.push(`${f.path}:${i + 1}`); });
+  }
+  expect(hits).toEqual([]);
+});
+
 test("every test that spawns a command gives it cleanEnv", () => {
   const bad: string[] = [];
   for (const f of textFiles()) {

@@ -99,9 +99,10 @@ test("preflight reports each loop: usable with its version and hash, or its prob
   writeFileSync(config, [`data_dir: ${join(tmp, "data")}`, "roots:", `  - { path: ${JSON.stringify(root)}, trusted: true, credentials: [] }`, ""].join("\n"));
   const r = await preflight(["--config", config, "--no-question"], { env: {}, home: tmp, repoRoot: REPO });
   const loops = by(r, "loops");
-  expect(loops.map((c) => c.level)).toEqual(["fail", "ok"]);
+  expect(loops.map((c) => c.level)).toEqual(["fail", "ok", "ok"]);
   expect(loops[0]!.detail).toBe('broken: stage "nowhere" is no stage manifest and no inline stage');
   expect(loops[1]!.detail).toMatch(/^investigation: usable, version 1, hash [0-9a-f]{12}$/);
+  expect(loops[2]!.detail).toMatch(/^triage: usable, version 1, hash [0-9a-f]{12}$/);
   expect(r.ok).toBe(false);
   // preflight writes nothing: no data folder was made
   expect(existsSync(join(tmp, "data"))).toBe(false);

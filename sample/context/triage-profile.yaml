@@ -1,0 +1,11 @@
+kind: profile
+id: triage
+title: Triage
+rules: base-rules
+framework: intel-cycle
+standard: icd203
+stages:
+  sort:
+    agent: orchestrator
+    persona: orchestrator
+    goal: Sort the report into one question worth an investigation, with the window to look in.

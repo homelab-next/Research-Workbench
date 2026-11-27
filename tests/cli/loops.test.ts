@@ -47,8 +47,10 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 test("list prints investigation with its version, its hash and nine stages", async () => {
   expect(await run(a, "list")).toBe(0);
   expect(err).toEqual([]);
-  expect(out).toHaveLength(1);
+  // the sample's second loop, triage (Task 14), is listed after it
+  expect(out).toHaveLength(2);
   expect(out[0]).toMatch(/^investigation {2}v1 {2}[0-9a-f]{12} {2}9 stages {2}Investigation$/);
+  expect(out[1]).toMatch(/^triage {2}v1 {2}[0-9a-f]{12} {2}2 stages {2}Triage$/);
 });
 
 test("show prints the stages in order with their gates and send-back edges, and each stage's three groups with source and hash", async () => {
