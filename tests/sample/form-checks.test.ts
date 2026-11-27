@@ -291,3 +291,15 @@ test("gaps-and-negatives does not treat a statement as an empty result", async (
 test("the checks and the workbench spell the person's source the same", () => {
   expect(readFileSync(join(SAMPLE, "checks", "05-source-quality.ts"), "utf8")).toContain(JSON.stringify(PERSON_SOURCE));
 });
+
+test("gaps-and-negatives fails a draft whose gaps do not name an unanswered question", async () => {
+  const i: CheckInput = { ...good(), questions: [{ id: "ask-1", text: "Who owns the laptop?" }] };
+  expect(await run("gaps-and-negatives", i)).toMatchObject({
+    pass: false, findings: [{ where: "gaps_and_limits", message: "ask-1 was put to the person and is not answered, and the gaps and limits do not name it" }],
+  });
+  // ask-10 is not ask-1
+  i.draft.product.gaps_and_limits += "\n\nQuestions the person has not answered:\n- ask-10: Who owns the TV?";
+  expect(await run("gaps-and-negatives", i)).toMatchObject({ pass: false });
+  i.draft.product.gaps_and_limits += "\n- ask-1: Who owns the laptop?";
+  expect(await run("gaps-and-negatives", i)).toMatchObject({ pass: true, findings: [] });
+});

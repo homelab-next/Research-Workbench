@@ -21,6 +21,7 @@ import type { EngineDeps, StageEnd, StageRunner } from "../../src/pipeline/engin
 import { loadPipeline } from "../../src/pipeline/manifests";
 import type { Role } from "../../src/pipeline/manifests";
 import { assembleRunner } from "../../src/pipeline/stages/assemble";
+import { answerQuestion } from "../../src/pipeline/questions";
 import { challengeRunner } from "../../src/pipeline/stages/challenge";
 import { evaluateRunner } from "../../src/pipeline/stages/evaluate";
 import { card } from "../helpers/entries";
@@ -934,4 +935,56 @@ test("the analyst's and both reviewers' packs list the overrules as fixed", asyn
   for (const [actor, ordinal] of [["analyst", 2], ["evaluator", 1], ["adversary", 1]] as const) expect(said(actor, ordinal)).toContain(fixed);
   // the analyst is told what to rewrite, as the send-back said
   expect(said("analyst", 2)).toContain("rewrite f1's confidence_basis and reasoning to rest on the person's note");
+});
+
+// ---- questions the person has not answered (slice 8) ----
+
+const researcher = { kind: "agent", id: "researcher", stage: "research", profile: "investigation", model: "m", effort: null, where: "machine" } as const;
+/** Research asks the person (not blocking, so the run is not held) while answering a request marked `marking`. */
+const asksAtResearch = (marking: "TLP:GREEN" | "TLP:AMBER" = "TLP:GREEN", text = "Is c2 the TV in the gym?"): StageRunner => async () => {
+  f.s.commit((st, ids) => [
+    { type: "model.request", actor: researcher, run: st.run.id, stage: "research", payload: { request: ids.next("request"), provider: "scripted", model: "m", effort: null, where: "machine", marking, pack: [], left_out: [], messages: f.s.blobs.put("[]"), tools: [] } },
+    { type: "question.asked", actor: researcher, run: st.run.id, stage: "research", payload: { question: { id: ids.next("question"), text, why: "it decides f1", cards: [], about: [], blocking: false } } },
+  ]);
+  return PASS;
+};
+/** Draft 1 cites c1 only. */
+const GREEN_ONLY: ScriptReply[] = [calls(finding("it is internal", ["c1"]), ...FILL), out("first")];
+/** go, with only the green card c1 in the case: nothing the analyst is sent is stricter than green unless a question's request was. */
+async function goGreen(r: Rig) {
+  f.s.commit((_st, ids) => [{ type: "card.created", actor: person, payload: { card: card(ids.next("card"), { title: "Asset record", body: "ws-17 is a managed laptop", source: "assets", marking: "TLP:GREEN" }) } }]);
+  r.engine.start(person);
+  await r.engine.advance();
+  accept();
+  return r.engine.advance();
+}
+
+test("a draft assembled while a question is open names it in gaps_and_limits, and one assembled after the answer does not", async () => {
+  const bad = say({ pass: false, findings: [{ check: "support", where: "f1", message: "f1 is not supported by c1" }] });
+  const r = rig({ analyst: [...GREEN_ONLY, ...SECOND], evaluator: [bad, EVAL_PASS], adversary: [CHALLENGE_PASS] }, { research: asksAtResearch() });
+  afterTurn = (_n, actor) => {
+    if (actor === "evaluator" && f.s.state.questions["ask-1"]!.answer === null) {
+      answerQuestion(f.s, f.sample.deps, { actor: person, question: "ask-1", answer: "No, c2 is the printer.", basis: "saw", detail: "", about: null, marking: null });
+    }
+  };
+  await go(r);
+  const [d1, d2] = f.s.state.drafts;
+  expect(d1!.product.gaps_and_limits).toBe("stated\n\nQuestions the person has not answered:\n- ask-1: Is card 2 the TV in the gym?");
+  // a card id in the question does not make the draft cite that card
+  expect(d1!.cited).not.toContain("c2");
+  expect(d2!.product.gaps_and_limits).toBe("stated");
+});
+
+test("the draft is at least as strict as the request that wrote a question it names", async () => {
+  const r = rig({ analyst: GREEN_ONLY, evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] }, { research: asksAtResearch("TLP:AMBER") });
+  await goGreen(r);
+  const d = f.s.state.drafts[0]!;
+  expect(d.product.gaps_and_limits).toContain("- ask-1: ");
+  expect(d.product.marking).toBe("TLP:AMBER");
+});
+
+test("a draft assembled with no question open is as it was", async () => {
+  const r = rig({ analyst: GREEN_ONLY, evaluator: [EVAL_PASS], adversary: [CHALLENGE_PASS] });
+  await goGreen(r);
+  expect(f.s.state.drafts[0]!.product).toMatchObject({ gaps_and_limits: "stated", marking: "TLP:GREEN" });
 });

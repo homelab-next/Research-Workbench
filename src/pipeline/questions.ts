@@ -1,6 +1,7 @@
 // Questions put to the person (slice 8): the person's answer as a card of theirs, and the run's questions as one pack part every agent stage sees.
 import { ContextError, packPart } from "../agents/context";
 import type { PackPart } from "../agents/context";
+import { CARD_REF, FORM_EXCEPTIONS } from "../agents/draft";
 import { scrub } from "../agents/tools/kit";
 import type { CaseSession } from "../core/session";
 import { runQuestions } from "../core/state";
@@ -70,6 +71,23 @@ const andList = (ids: readonly string[]): string => (ids.length < 2 ? ids.join("
 export function waitingReason(waiting: readonly QuestionState[]): string {
   const it = waiting.length === 1 ? "it" : "them";
   return `waiting for the person's answer to ${andList(waiting.map((q) => q.id))}. Answer ${it} in the Narrative lens, or resume to go on without ${it}.`;
+}
+
+export const OPEN_QUESTIONS = "Questions the person has not answered:";
+
+/**
+ * gaps_and_limits with the note of open questions: any earlier note (from OPEN_QUESTIONS to FORM_EXCEPTIONS, or to the end) is replaced, it sits
+ * before the form exceptions note, and with no open question none is left. A card id in a question is written "card <n>", so the note cites no card.
+ */
+export function withOpenQuestions(gaps: string, open: readonly { id: string; text: string }[]): string {
+  const at = gaps.indexOf(OPEN_QUESTIONS);
+  const fx = gaps.indexOf(FORM_EXCEPTIONS, at < 0 ? 0 : at);
+  if (at < 0 && open.length === 0) return gaps;
+  const own = gaps.slice(0, at >= 0 ? at : fx >= 0 ? fx : gaps.length).replace(/\s+$/, "");
+  const tail = fx < 0 ? "" : gaps.slice(fx);
+  const plain = (t: string): string => t.replace(CARD_REF, (id) => `card ${id.slice(1)}`).replace(/\s+/g, " ").trim();
+  const note = open.length === 0 ? "" : `${OPEN_QUESTIONS}\n${open.map((q) => `- ${q.id}: ${plain(q.text)}`).join("\n")}`;
+  return [own, note, tail].filter((x) => x !== "").join("\n\n");
 }
 
 const LEAD = "Questions put to the person in this run. An answer is a card: cite it like any card, and say the finding rests on the person's word.";

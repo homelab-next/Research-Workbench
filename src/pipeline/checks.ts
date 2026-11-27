@@ -5,6 +5,7 @@ import type { Json } from "../core/canonical";
 import { canonical } from "../core/canonical";
 import { sha256Hex } from "../core/hash";
 import type { CaseState } from "../core/state";
+import { openQuestions } from "../core/state";
 import { MARKINGS } from "../core/types";
 import type { CheckFinding, Coverage, Draft, EmptyMeans, Marking, PersonBasis } from "../core/types";
 import { citedOf } from "../agents/draft";
@@ -26,6 +27,8 @@ export interface CheckInput {
   earlier: { n: number; hash: string }[];
   /** Every card id the draft cites, in its findings or its narrative. */
   cited?: string[];
+  /** The run's unanswered questions to the person; absent when there is none. */
+  questions?: { id: string; text: string }[];
 }
 export interface CheckOutcome { pass: boolean; findings: CheckFinding[]; script_hash: string; input: Uint8Array; output: Uint8Array }
 export const CHECK_MAX_OUTPUT = 1048576;
@@ -53,6 +56,7 @@ export function checkInput(check: string, state: Readonly<CaseState>, draft: Dra
   if (standard === null) throw new Error(`standard "${profile.standard}" was not found`);
   const objective = state.meta?.objective ?? null;
   const objectiveManifest = objective === null ? null : registry.get("objective", objective);
+  const open = openQuestions(state);
   return {
     check,
     draft: { n: draft.n, hash: draft.hash, product: draft.product },
@@ -64,6 +68,8 @@ export function checkInput(check: string, state: Readonly<CaseState>, draft: Dra
     question: state.meta?.asked ?? "",
     earlier: state.published.map((p) => ({ n: p.n, hash: p.draft_hash })),
     cited,
+    // only when one is open, so an input with none is byte for byte what it was
+    ...(open.length === 0 ? {} : { questions: open.map((q) => ({ id: q.id, text: q.text })) }),
   };
 }
 

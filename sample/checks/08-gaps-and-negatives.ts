@@ -27,4 +27,8 @@ for (const id of cited) {
     if (by.length === 0 && asEvidence.length === 0 && !names(gaps, id)) fail("narrative", `the narrative cites ${id}, which has no rows and is not a proven negative with full coverage`);
   }
 }
+// a question put to the person and not answered is a gap: the gaps and limits name it (Assemble writes the note)
+for (const q of (input.questions ?? []) as { id: string }[]) {
+  if (!names(gaps, q.id)) fail("gaps_and_limits", `${q.id} was put to the person and is not answered, and the gaps and limits do not name it`);
+}
 console.log(JSON.stringify({ pass: findings.length === 0, findings }));

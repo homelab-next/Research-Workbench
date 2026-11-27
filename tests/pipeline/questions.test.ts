@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { Actor, Marking, Question, StageDef } from "../../src/core/types";
 import { PersonRefused } from "../../src/pipeline/person";
-import { answerQuestion, questionMarking, questionsPart, waitingReason } from "../../src/pipeline/questions";
+import { answerQuestion, questionMarking, questionsPart, waitingReason, withOpenQuestions } from "../../src/pipeline/questions";
+import { FORM_EXCEPTIONS, withFormExceptions } from "../../src/agents/draft";
 import { fixture, person } from "../helpers/tools-fixture";
 import type { Fixture } from "../helpers/tools-fixture";
 
@@ -145,4 +146,28 @@ test("waitingReason names the question, or the questions, the run waits for", ()
   const [a, b] = [f.s.state.questions["ask-1"]!, f.s.state.questions["ask-2"]!];
   expect(waitingReason([a])).toBe("waiting for the person's answer to ask-1. Answer it in the Narrative lens, or resume to go on without it.");
   expect(waitingReason([a, b])).toBe("waiting for the person's answer to ask-1 and ask-2. Answer them in the Narrative lens, or resume to go on without them.");
+});
+
+test("withOpenQuestions appends the note, replaces an earlier one, and removes it when nothing is open", () => {
+  const that = withOpenQuestions("No flow logs before the 17th.", [{ id: "ask-2", text: "Who owns\nthe laptop?" }]);
+  expect(that).toBe("No flow logs before the 17th.\n\nQuestions the person has not answered:\n- ask-2: Who owns the laptop?");
+  expect(withOpenQuestions(that, [{ id: "ask-3", text: "Is it the TV?" }])).toBe("No flow logs before the 17th.\n\nQuestions the person has not answered:\n- ask-3: Is it the TV?");
+  expect(withOpenQuestions(that, [])).toBe("No flow logs before the 17th.");
+  expect(withOpenQuestions("No flow logs before the 17th.", [])).toBe("No flow logs before the 17th.");
+});
+
+test("the note sits before the form exceptions note and leaves it whole", () => {
+  const exceptions = withFormExceptions("No flow logs.", [{ check: "alternatives", where: "alternatives", message: "c4 is not weighed" }]);
+  const tail = exceptions.slice(exceptions.indexOf(FORM_EXCEPTIONS));
+  const both = withOpenQuestions(exceptions, [{ id: "ask-1", text: "Who owns the laptop?" }]);
+  expect(both).toBe(`No flow logs.\n\nQuestions the person has not answered:\n- ask-1: Who owns the laptop?\n\n${tail}`);
+  // the Checks stage's note is replaced after it and leaves this one in place
+  expect(withFormExceptions(both, [])).toBe("No flow logs.\n\nQuestions the person has not answered:\n- ask-1: Who owns the laptop?");
+  expect(withOpenQuestions(both, [])).toBe(`No flow logs.\n\n${tail}`);
+  expect(withOpenQuestions(both, [{ id: "ask-2", text: "x" }])).toBe(`No flow logs.\n\nQuestions the person has not answered:\n- ask-2: x\n\n${tail}`);
+  expect(withOpenQuestions(tail, [{ id: "ask-1", text: "y" }])).toBe(`Questions the person has not answered:\n- ask-1: y\n\n${tail}`);
+});
+
+test("a card id in a question is written so that it cites no card", () => {
+  expect(withOpenQuestions("", [{ id: "ask-1", text: "is c3 the TV?" }])).toBe("Questions the person has not answered:\n- ask-1: is card 3 the TV?");
 });

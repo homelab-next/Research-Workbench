@@ -533,3 +533,26 @@ test("a check is told which cited cards are the person's statements; an input wi
     expect(env.session.state.skipped).toEqual([]);
   } finally { close(); }
 });
+
+test("a check is told the run's unanswered questions; with none the input is what it was", () => {
+  const { env, close } = stageRig({});
+  try {
+    const s = env.session;
+    const engine = { kind: "system", id: "engine" } as const;
+    const researcher = { kind: "agent", id: "researcher", stage: "research", profile: "investigation", model: "m", effort: null, where: "machine" } as const;
+    const d = latestDraft(s.state)!;
+    const before = canonical(checkInput("x", s.state, d, env.deps.registry, env.deps.profile) as never);
+    s.commit((_s, ids) => [{ type: "run.started", actor: engine, payload: { run: ids.next("run"), pipeline: "p", pipeline_hash: "h", stages: [] } }]);
+    expect(canonical(checkInput("x", s.state, d, env.deps.registry, env.deps.profile) as never)).toBe(before);
+    const ask = (text: string): void => {
+      s.commit((st, ids) => [{ type: "question.asked", actor: researcher, run: st.run.id, stage: "research", payload: { question: { id: ids.next("question"), text, why: "w", cards: [], about: [], blocking: false } } }]);
+    };
+    ask("Who owns the laptop?");
+    ask("Is the TV in the gym?");
+    s.commit((_s, ids) => [{ type: "card.created", actor: person, payload: { card: personCard(ids.next("card"), { title: "Answer to ask-2", statement: "yes", basis: "saw", detail: "", about: [], answers: "ask-2", marking: "TLP:GREEN" }) } }]);
+    s.commit(() => [{ type: "question.answered", actor: person, payload: { question: "ask-2", card: "c2" } }]);
+    const input = checkInput("x", s.state, d, env.deps.registry, env.deps.profile);
+    expect(input.questions).toEqual([{ id: "ask-1", text: "Who owns the laptop?" }]);
+    expect(s.state.skipped).toEqual([]);
+  } finally { close(); }
+});

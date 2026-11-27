@@ -1,6 +1,6 @@
 import type { Json } from "../../core/canonical";
 import { isPlainObject } from "../../core/canonical";
-import { activeOverrules, latestDraft, openMustAddress } from "../../core/state";
+import { activeOverrules, latestDraft, openMustAddress, openQuestions } from "../../core/state";
 import type { Actor, Draft, Entry, EntryInput } from "../../core/types";
 import type { Schema } from "../../core/schema";
 import type { CaseSession } from "../../core/session";
@@ -10,6 +10,7 @@ import { buildProduct, forcedProposal, lackingOf, carriedCites, composeChange, D
 import { ToolError } from "../../agents/tools/kit";
 import type { StageEnd, StageEnv } from "../engine";
 import { overruledFindings } from "../overrule";
+import { questionMarking, withOpenQuestions } from "../questions";
 import { reviewPointsPart } from "../review-points";
 import { agentActor, lastPass, noSchema, requestsOfPass, stageAgent, stageOfRole, titleOf } from "./agent";
 
@@ -165,6 +166,13 @@ export async function assembleRunner(env: StageEnv): Promise<StageEnd> {
   // the person's overrules hold in every draft, whatever the analyst proposed: code puts them in place
   const held = overruledFindings(work.findings, activeOverrules(now), now.drafts, terms, (id) => Object.hasOwn(now.cards, id) && now.cards[id]!.place !== "discarded");
   work.findings.splice(0, work.findings.length, ...held);
+  // a question the person has not answered is a gap, named by code; its text is a model's, so the draft is as strict as the request that wrote it
+  const unanswered = openQuestions(now);
+  work.setSection("gaps_and_limits", withOpenQuestions(work.sections.gaps_and_limits, unanswered), work.narrativeCites.gaps_and_limits);
+  for (const q of unanswered) {
+    const marking = questionMarking(session, q);
+    if (marking !== null) written_at.push(marking);
+  }
   let product;
   try {
     product = buildProduct(work, {
