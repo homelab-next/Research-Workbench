@@ -1,7 +1,7 @@
-// Writing the one setting a person may change from the interface, cases.on_complete, into the configuration file by a line edit.
+// Writing what a person may change from the interface into the configuration file by a line edit: cases.on_complete, and one more trusted root.
 import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { Json } from "../core/canonical";
 import { canonical, isPlainObject } from "../core/canonical";
 import { Refused } from "../core/refused";
@@ -103,6 +103,12 @@ export function withOnComplete(text: string, value: "keep" | "unload"): string {
 
 /** Writes cases.on_complete to config.write_path (temporary file, fsync, rename; the folder is made when missing) and sets it on `config`. Throws ConfigWriteError and changes nothing. */
 export function saveOnComplete(config: Config, value: "keep" | "unload"): void {
+  writeConfig(config, (text) => withOnComplete(text, value), byHand);
+  config.cases.on_complete = value;
+}
+
+/** The edited configuration file written in place of the old (temporary file, fsync, rename; the folder is made when missing). Throws ConfigWriteError and changes nothing. */
+function writeConfig(config: Config, edit: (text: string) => string, refused: (file: string) => ConfigWriteError): void {
   const named = config.write_path;
   // a link to the configuration file is written through, to the file it names: the link stays a link
   let file = named;
@@ -120,9 +126,9 @@ export function saveOnComplete(config: Config, value: "keep" | "unload"): void {
   }
   let next: string;
   try {
-    next = withOnComplete(text, value);
+    next = edit(text);
   } catch (err) {
-    if (err instanceof ConfigWriteError) throw byHand(named);
+    if (err instanceof ConfigWriteError) throw refused(named);
     throw err;
   }
   let made: string | undefined;
@@ -149,5 +155,65 @@ export function saveOnComplete(config: Config, value: "keep" | "unload"): void {
   } catch {
     // the rename is done; a folder that cannot be synced does not undo it
   }
-  config.cases.on_complete = value;
+}
+
+/** A top-level `roots:` with nothing after it but a comment: the start of a block-style list. */
+const ROOTS_START = /^roots:[ \t]*(#.*)?$/;
+/** Any top-level line that names roots (a flow list, a quoted key). */
+const ROOTS_OTHER = /^(["']?)roots\1[ \t]*:/;
+/** The lines of a trusted root with no credentials, as a person would add them to the roots list. */
+const rootLines = (path: string, indent = 2): string[] => {
+  const pad = " ".repeat(indent);
+  return [`${pad}- path: ${JSON.stringify(path)}`, `${pad}  trusted: true`, `${pad}  credentials: []`];
+};
+const rootByHand = (file: string, path: string): ConfigWriteError =>
+  new ConfigWriteError(`add this root to the roots list of ${file} by hand; it could not be edited safely:\nroots:\n${rootLines(path).join("\n")}`);
+
+/** The configuration's text with one more root, trusted, no credentials. Refused when the edit cannot be shown to add exactly that root (ConfigWriteError names the lines to add by hand). */
+export function withTrustedRoot(text: string, path: string): string {
+  const unsafe = rootByHand("the configuration file", path);
+  if (text.startsWith(BOM)) throw unsafe;
+  let before: Record<string, unknown>;
+  try {
+    before = parse(text);
+  } catch {
+    throw unsafe;
+  }
+  const roots = before.roots;
+  if (!Array.isArray(roots)) throw unsafe;
+  if (roots.some((r) => isPlainObject(r) && r.path === path)) throw unsafe;
+  const nl = text.includes("\r\n") ? "\r\n" : "\n";
+  const lines = text.split("\n").map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l));
+  const endsWithNewline = text.endsWith("\n");
+  if (endsWithNewline) lines.pop();
+  if (lines.filter((l) => ROOTS_OTHER.test(l)).length !== 1) throw unsafe;
+  const start = lines.findIndex((l) => ROOTS_START.test(l));
+  if (start === -1) throw unsafe;
+  // the list runs to the next line at the left margin that is content and not one of its items
+  let end = start + 1;
+  while (end < lines.length && !(isContent(lines[end]!) && indentOf(lines[end]!) === 0 && !lines[end]!.startsWith("-"))) end++;
+  const children: number[] = [];
+  for (let i = start + 1; i < end; i++) if (isContent(lines[i]!)) children.push(i);
+  if (children.length === 0 || !lines[children[0]!]!.trimStart().startsWith("-")) throw unsafe;
+  const out = [...lines];
+  out.splice(children.at(-1)! + 1, 0, ...rootLines(path, indentOf(lines[children[0]!]!)));
+  const next = out.join(nl) + (endsWithNewline ? nl : "");
+  let same: boolean;
+  try {
+    const after = parse(next);
+    const expected = { ...before, roots: [...roots, { path, trusted: true, credentials: [] }] };
+    same = canonical(after as unknown as Json) === canonical(expected as unknown as Json);
+  } catch {
+    same = false;
+  }
+  if (!same) throw unsafe;
+  return next;
+}
+
+/** Writes one more trusted root, with no credentials, into config.write_path and onto `config.roots`. Throws ConfigWriteError and changes nothing. */
+export function saveTrustedRoot(config: Config, path: string): void {
+  const at = resolve(path);
+  if (!isAbsolute(path) || config.roots.some((r) => resolve(r.path) === at)) throw rootByHand(config.write_path, at);
+  writeConfig(config, (text) => withTrustedRoot(text, at), (file) => rootByHand(file, at));
+  config.roots.push({ path: at, trusted: true, credentials: [] });
 }

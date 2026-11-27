@@ -7,7 +7,8 @@ import { rootsOf } from "../modules/config";
 import type { Config } from "../modules/config";
 import { ConnectorPool } from "../modules/connectors";
 import { Observables } from "../modules/observables";
-import { Registry } from "../modules/registry";
+import type { PivotManifest, Registry } from "../modules/registry";
+import { GuardError } from "../modules/sqlguard";
 import { loadRegistry } from "../modules/registry-record";
 import { Secrets } from "../modules/secrets";
 import { SEEKERS } from "../modules/seeker";
@@ -56,14 +57,37 @@ export function recordLoops(loops: LoopCatalog, chain: Ledger, blobs: BlobStore)
 }
 
 /**
- * Everything the pipeline needs, built from the configuration: the registry over the configured and imported roots (its loading recorded
- * on the workbench chain, every manifest's bytes in the content store), the observable types, the secrets, the connector pool, the seeker
- * the configuration names, the providers, every loop, and the pipeline and profile of the default loop. `opts.refuse_hosts` names the
- * hosts (the server's own) no source or model endpoint may point at. `deps.anchor` appends `case.anchored` to the workbench chain. Each
- * usable loop whose version is new to the chain is recorded as loop.recorded. Throws ComposeError when the default loop is not usable or
- * there is no seeker; every manifest problem short of that is returned in `problems`.
+ * Every pivot `which` picks, rendered offline against the guard as preflight renders it, with why it does not render. A pool of its own,
+ * with no secret, closed before it returns: only the command line builds a pool.
  */
-export function compose(config: Config, wb: Workbench, opts: { refuse_hosts?: () => readonly string[] } = {}): { deps: EngineDeps; problems: string[]; close(): void } {
+export function guardProblems(registry: Registry, which: (pv: PivotManifest) => boolean): { id: string; problem: string }[] {
+  const out: { id: string; problem: string }[] = [];
+  const pool = new ConnectorPool({ secrets: new Secrets({}, null), observables: new Observables(registry.types()), client_name: "research-workbench" });
+  try {
+    for (const pv of registry.pivots()) {
+      if (!which(pv)) continue;
+      const source = registry.source(pv.source);
+      if (source === null) { out.push({ id: pv.id, problem: `the source ${pv.source} is not loaded` }); continue; }
+      try {
+        pool.for(source).render({
+          text: pv.query, bound: { value: "probe" },
+          window: pv.needs_window ? { from: "2026-01-01T00:00:00.000Z", to: "2026-01-01T01:00:00.000Z" } : { from: null, to: null },
+          max_rows: source.limits.max_rows, timeout_ms: source.limits.timeout_ms, budget: null,
+        });
+      } catch (err) {
+        out.push({ id: pv.id, problem: err instanceof GuardError ? err.violations.join("; ") : err instanceof Error ? err.message : String(err) });
+      }
+    }
+  } finally {
+    pool.closeAll();
+  }
+  return out;
+}
+
+/** What compose builds from the roots, and reload builds again. */
+type Built = Pick<EngineDeps, "registry" | "runner" | "seeker" | "providers" | "loops" | "components" | "pipeline" | "profile">;
+
+function build(config: Config, wb: Workbench, opts: { refuse_hosts?: () => readonly string[] }): { built: Built; pool: ConnectorPool; problems: string[] } {
   const roots = rootsOf(config);
   const registry = loadRegistry(roots, { chain: wb.chain, content: wb.chainBlobs });
   const problems = registry.problems.map((p) => `${p.path}: ${p.error}`);
@@ -85,16 +109,50 @@ export function compose(config: Config, wb: Workbench, opts: { refuse_hosts?: ()
     if (loop === null) throw new ComposeError(`the default loop "${id}" is not usable: ${loops.problems(id).join("; ")}`);
     for (const x of loops.list()) problems.push(...x.problems.filter((p) => p !== IMPLICIT_NOTE).map((p) => `loop "${x.id}": ${p}`));
     recordLoops(loops, wb.chain, wb.chainBlobs);
-    const deps: EngineDeps = {
-      config, registry, runner: { registry, pool, observables }, seeker: makeSeeker(registry), providers: loaded.providers, pipeline: loop.pipeline, profile: loop.profile,
-      loops, components: loop.components, content: wb.chainBlobs,
-      anchor: (a) => {
-        wb.chain.append({ type: "case.anchored", actor: { kind: "system", id: "engine" }, payload: { case: a.case, seq: a.seq, hash: a.hash, why: a.why } });
-      },
+    const built: Built = {
+      registry, runner: { registry, pool, observables }, seeker: makeSeeker(registry), providers: loaded.providers, pipeline: loop.pipeline, profile: loop.profile,
+      loops, components: loop.components,
     };
-    return { deps, problems, close: () => pool.closeAll() };
+    return { built, pool, problems };
   } catch (err) {
     pool.closeAll();
     throw err;
   }
+}
+
+/**
+ * Everything the pipeline needs, built from the configuration: the registry over the configured and imported roots (its loading recorded
+ * on the workbench chain, every manifest's bytes in the content store), the observable types, the secrets, the connector pool, the seeker
+ * the configuration names, the providers, every loop, and the pipeline and profile of the default loop. `opts.refuse_hosts` names the
+ * hosts (the server's own) no source or model endpoint may point at. `deps.anchor` appends `case.anchored` to the workbench chain. Each
+ * usable loop whose version is new to the chain is recorded as loop.recorded. Throws ComposeError when the default loop is not usable or
+ * there is no seeker; every manifest problem short of that is returned in `problems`.
+ *
+ * `reload()` loads the roots again and replaces, in place on the same deps object, the registry, the runner, the seeker, the providers, the
+ * loops, the components, the pipeline and the profile; the old connector pool is closed
+ * (a pool opens a connector again when it is next asked for one, so a run that holds the old runner can still query).
+ * It returns the new problems. It throws ComposeError and changes nothing on deps when the default loop would not be usable. Copy on write:
+ * nothing a reload replaces is changed, so whoever holds the old objects (a run's own copy of the deps it bound) goes on with them as they were.
+ */
+export function compose(config: Config, wb: Workbench, opts: { refuse_hosts?: () => readonly string[] } = {}): { deps: EngineDeps; problems: string[]; close(): void; reload(): string[] } {
+  const first = build(config, wb, opts);
+  let pool = first.pool;
+  const deps: EngineDeps = {
+    config, ...first.built, content: wb.chainBlobs,
+    anchor: (a) => {
+      wb.chain.append({ type: "case.anchored", actor: { kind: "system", id: "engine" }, payload: { case: a.case, seq: a.seq, hash: a.hash, why: a.why } });
+    },
+  };
+  return {
+    deps, problems: first.problems,
+    close: () => pool.closeAll(),
+    reload: () => {
+      const next = build(config, wb, opts);
+      Object.assign(deps, next.built);
+      const old = pool;
+      pool = next.pool;
+      old.closeAll();
+      return next.problems;
+    },
+  };
 }

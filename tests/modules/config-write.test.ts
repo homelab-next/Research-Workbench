@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Refused } from "../../src/core/refused";
 import { loadConfig } from "../../src/modules/config";
-import { ConfigWriteError, saveOnComplete, withOnComplete } from "../../src/modules/config-write";
+import { ConfigWriteError, saveOnComplete, saveTrustedRoot, withOnComplete, withTrustedRoot } from "../../src/modules/config-write";
 
 const dirs: string[] = [];
 const tmp = (): string => {
@@ -131,4 +131,78 @@ test("saveOnComplete writes through a link to the configuration file: the link s
   expect(lstatSync(link).isSymbolicLink()).toBe(true);
   expect(readFileSync(real, "utf8")).toBe("user: pat\ncases:\n  on_complete: unload\n");
   expect(readdirSync(dir).sort()).toEqual(["config.yaml", "real.yaml"]);
+});
+
+const IMPORTED = "/data/imported/triage-0123456789ab";
+const ADD_BY_HAND = `add this root to the roots list of the configuration file by hand; it could not be edited safely:
+roots:
+  - path: "${IMPORTED}"
+    trusted: true
+    credentials: []`;
+
+test("withTrustedRoot adds one root to a block-style roots list and changes no other line; the result parses to the old configuration plus that root", () => {
+  const entry = { path: IMPORTED, trusted: true, credentials: [] };
+  const texts = [
+    "user: a\nroots:\n  - path: ./sample   # the sample\n    trusted: true\n    credentials: [lake]\n# after\nserver:\n  port: 1\n",
+    "roots:\n- path: /r/one\n- path: /r/two\n  credentials:\n    - a\n",
+    "roots:   # where manifests come from\n    -   path: /r\n        trusted: false\n\nseeker: cheapest\n",
+    "roots:\r\n  - path: /r\r\n",
+    "roots:\n  - { path: /r, trusted: true }\n",
+  ];
+  for (const text of texts) {
+    const next = withTrustedRoot(text, IMPORTED);
+    const before = Bun.YAML.parse(text) as { roots: unknown[] };
+    expect(Bun.YAML.parse(next)).toEqual({ ...before, roots: [...before.roots, entry] });
+    // every old line is there, in order, and only the new root's three lines are added
+    const nl = text.includes("\r\n") ? "\r\n" : "\n";
+    const old = text.split(nl);
+    const now = next.split(nl);
+    expect(now.length).toBe(old.length + 3);
+    const at = now.findIndex((l) => l.trim() === `- path: "${IMPORTED}"`);
+    expect(now.slice(at, at + 3).map((l) => l.trim())).toEqual([`- path: "${IMPORTED}"`, "trusted: true", "credentials: []"]);
+    expect([...now.slice(0, at), ...now.slice(at + 3)]).toEqual(old);
+  }
+  expect(withTrustedRoot("user: a\nroots:\n  - path: /r\nserver:\n  port: 1\n", IMPORTED))
+    .toBe(`user: a\nroots:\n  - path: /r\n  - path: "${IMPORTED}"\n    trusted: true\n    credentials: []\nserver:\n  port: 1\n`);
+});
+
+test("a configuration with no roots key, with roots in flow style, or that already lists the path is refused with the lines to add by hand", () => {
+  for (const text of [
+    "user: a\n",                                       // no roots key
+    "",                                                 // an empty file
+    `roots: [{ path: /r }]\n`,                         // flow style
+    "roots: []\n",                                     // flow style, empty
+    "roots:\n",                                        // no list at all
+    `roots:\n  - path: "${IMPORTED}"\n`,              // already listed
+    `roots:\n  - path: ${IMPORTED}\n    trusted: false\n`, // already listed, not trusted
+    "\"roots\":\n  - path: /r\n",                   // a quoted key the line edit does not see
+    "roots:\n  - path: /r\nroots:\n  - path: /s\n",  // the key twice
+    "roots:\n  path: /r\n",                           // not a list
+    "\uFEFFroots:\n  - path: /r\n",                  // a byte-order mark
+  ]) {
+    const err = refusal(() => withTrustedRoot(text, IMPORTED));
+    expect(err).toBeInstanceOf(ConfigWriteError);
+    expect(err.message).toBe(ADD_BY_HAND);
+  }
+});
+
+test("saveTrustedRoot writes the root into the file and onto the config; refused, it changes neither", () => {
+  const dir = tmp();
+  const opts = { env: {}, home: join(dir, "home"), repoRoot: "/repo" };
+  const named = join(dir, "config.yaml");
+  const root = join(dir, "imported", "triage-0123456789ab");
+  mkdirSync(root, { recursive: true });
+  writeFileSync(named, "roots:\n  - path: ./sample\n    trusted: true\n");
+  const c = loadConfig({ ...opts, path: named });
+  saveTrustedRoot(c, root);
+  expect(c.roots.at(-1)).toEqual({ path: root, trusted: true, credentials: [] });
+  expect(loadConfig({ ...opts, path: named })).toEqual(c);
+  expect(readdirSync(dir).sort()).toEqual(["config.yaml", "imported"]);
+
+  const text = readFileSync(named, "utf8");
+  const err = refusal(() => saveTrustedRoot(c, root));
+  expect(err).toBeInstanceOf(ConfigWriteError);
+  expect(err.message).toStartWith(`add this root to the roots list of ${named} by hand; it could not be edited safely:\nroots:\n  - path: "${root}"`);
+  expect(readFileSync(named, "utf8")).toBe(text);
+  expect(c.roots.length).toBe(2);
 });
