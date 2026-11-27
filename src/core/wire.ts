@@ -23,6 +23,8 @@ export interface Reference {
   send_back_cap: number;
   playbooks: PlaybookView[];
   inventories: InventoryView[];
+  /** The profile standard's likelihood terms, least likely first; [] when it names none. */
+  likelihood: string[];
 }
 export interface PlaybookView {
   id: string; title: string; about: string; inputs: { name: string; type: string }[];

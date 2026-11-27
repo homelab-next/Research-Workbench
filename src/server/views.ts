@@ -1,6 +1,7 @@
 import { isPlainObject } from "../core/canonical";
 import type { Marking } from "../core/types";
 import type { InventoryView, ModelView, PivotView, PlaybookView, Reference, SourceView } from "../core/wire";
+import { termsOf } from "../agents/draft";
 import { scrub } from "../agents/tools/kit";
 import { mayGo } from "../agents/pack";
 import { pivotWeight } from "../modules/manifests";
@@ -48,7 +49,14 @@ export function referenceOf(deps: EngineDeps): Reference {
   return {
     types: registry.types().map((t) => ({ id: t.id, title: shown(deps, t.title) })), sources, pivots, objectives, phases,
     profile: { id: deps.profile.id, title: shown(deps, deps.profile.title) }, send_back_cap: SEND_BACK_CAP, playbooks, inventories,
+    likelihood: likelihoodTerms(deps),
   };
+}
+
+/** The profile standard's likelihood terms, in the standard's order (least likely first); [] when it lists none. */
+function likelihoodTerms(deps: EngineDeps): string[] {
+  const standard = deps.profile.standard === null ? null : deps.registry.get("standard", deps.profile.standard);
+  return (termsOf(standard?.body ?? null)?.likelihood ?? []).map((t) => shown(deps, t));
 }
 
 /** How long a provider may take to list its models before it is given up on. Tests may change it. */

@@ -1,4 +1,4 @@
-import { latestDraft } from "../../core/state";
+import { latestDraft, openQuestions } from "../../core/state";
 import type { CaseState, StageState } from "../../core/state";
 import type { Custody } from "../../core/wire";
 import type { Child } from "../dom";
@@ -106,12 +106,15 @@ export function makeBrief(ui: Ui, open: Open): View {
     const run = state.run;
     // One list, so no state shows two buttons with one label or one command
     const { run: rb, next } = briefButtons(state);
+    // the questions of this run still waiting for the person's answer
+    const asking = openQuestions(state).length;
     const status = (name: string, text: string, id: LensId): HTMLElement => h("button", { type: "button", class: "status", data: { status: name }, on: { click: () => lens(id) } }, text);
-    into2([meta?.asked, g.done, g.of, state.plan.status, draft?.n, run.status, run.waiting, rb?.label, rb?.disabled, next?.label, ro, stopping], () => [
+    into2([meta?.asked, g.done, g.of, state.plan.status, draft?.n, asking, run.status, run.waiting, rb?.label, rb?.disabled, next?.label, ro, stopping], () => [
       h("span", { class: "asked" }, `Asked for: ${meta?.asked ?? ""}`),
       status("goals", `✔ ${g.done}/${g.of} goals`, "steps"),
       status("plan", PLAN_WORDS[state.plan.status], "steps"),
       draft === undefined || draft === null ? null : status("draft", `draft ${draft.n}`, "narrative"),
+      asking === 0 ? null : status("questions", `${asking} ${asking === 1 ? "question" : "questions"} for you`, "narrative"),
       h("span", { class: "right" },
         rb === null ? null : h("button", {
           type: "button", class: "run-button", disabled: ro || rb.disabled,

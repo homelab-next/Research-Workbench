@@ -96,3 +96,29 @@ test("perform: state sends add_statement with basis unstated and clears the bar;
   p.ui.act = async () => false;
   expect((await performOn(p, "state again")).out.cleared).toBe(false);
 });
+
+test("answer ask-1 <text> answers that question; overrule f1 opens the Narrative lens on that finding", () => {
+  const inCase = ctx;
+  expect(parseCommand("answer ask-1 In the gym", inCase)).toEqual({ kind: "answer", question: "ask-1", text: "In the gym" });
+  expect(parseCommand("Answer  ASK-2   A TV is  expected ", inCase)).toEqual({ kind: "answer", question: "ask-2", text: "A TV is  expected" });
+  expect(parseCommand("overrule f1", inCase)).toEqual({ kind: "overrule", finding: "f1" });
+  expect(parseCommand("Overrule F2", inCase)).toEqual({ kind: "overrule", finding: "f2" });
+  expect(parseCommand("answer ask-1 In the gym", { ...ctx, in_case: false })).toEqual({ kind: "say", text: "Open a case first: investigate CASE-1" });
+  expect(parseCommand("overrule f1", { ...ctx, in_case: false })).toEqual({ kind: "say", text: "Open a case first: investigate CASE-1" });
+  expect(parseCommand("answer the question", inCase)).toEqual({ kind: "ask", text: "answer the question" });
+  expect(parseCommand("overrule", inCase)).toEqual({ kind: "ask", text: "overrule" });
+});
+test("perform: answer sends answer_question with basis unstated; overrule opens the lens on the finding and says where to do it", async () => {
+  p = await page();
+  const id = await p.s.newCase();
+  p.win.location.hash = `#/case/${id}`;
+  await p.settle();
+  const sent: unknown[][] = [];
+  p.ui.act = async (...a) => { sent.push(a); return true; };
+  expect((await performOn(p, "answer ask-1 In the gym")).out).toEqual({ cleared: true });
+  expect(sent[0]!.slice(0, 2)).toEqual(["answer_question", { question: "ask-1", answer: "In the gym", basis: "unstated" }]);
+  const opened: unknown[][] = [];
+  const out = await perform(parseCommand("overrule f1", ctx), { ui: p.ui, nav: { openLens: (...a: unknown[]) => { opened.push(a); } } as never, store: p.store() });
+  expect(out).toEqual({ cleared: false, say: "Overrule f1 from the Narrative lens" });
+  expect(opened).toEqual([["narrative", "overrule:f1"]]);
+});

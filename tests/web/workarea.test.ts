@@ -54,6 +54,28 @@ test("the brief shows the case, its marking, what was asked, goals, plan and dra
   expect(q.q("[data-status=draft]").textContent).toBe(`draft ${st(q).drafts.at(-1)!.n}`);
 });
 
+test("the brief says how many questions wait for you, and the count opens the Narrative lens", async () => {
+  const q = await open();
+  expect(q.all("[data-status=questions]").length).toBe(0);
+  const session = q.s.app.hub.read("CASE-1");
+  const researcher = { kind: "agent", id: "researcher-g1", stage: "research", profile: "investigation", model: "sample-run", effort: null, where: "machine" } as const;
+  const asks = (text: string): void => { session.commit((st, ids) => [
+    { type: "model.request", actor: researcher, run: st.run.id, stage: "research", payload: { request: ids.next("request"), provider: "scripted", model: "sample-run", effort: null, where: "machine", marking: "TLP:GREEN", pack: [], left_out: [], messages: session.blobs.put("{}"), tools: [] } },
+    { type: "question.asked", actor: researcher, run: st.run.id, stage: "research", payload: { question: { id: ids.next("question"), text, why: "it matters", cards: [], about: [], blocking: false } } },
+  ]); };
+  asks("Where is the access point AP-7?");
+  await q.settle();
+  expect(q.q("[data-status=questions]").textContent).toBe("1 question for you");
+  asks("Is the printer new?");
+  await q.settle();
+  expect(q.q("[data-status=questions]").textContent).toBe("2 questions for you");
+  q.click("[data-status=questions]");
+  expect(q.navCalls).toContainEqual(["openLens", "narrative"]);
+  expect((await q.s.command("CASE-1", "answer_question", { question: "ask-1", answer: "In the gym." })).status).toBe(200);
+  await q.settle();
+  expect(q.q("[data-status=questions]").textContent).toBe("1 question for you");
+});
+
 test("the phase strip groups stages under phases and marks each in words", async () => {
   const q = await open();
   const phases = q.all(".phase").map((e) => e.querySelector(".phase-title")!.textContent);

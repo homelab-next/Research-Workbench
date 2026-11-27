@@ -473,3 +473,12 @@ test("the ? card says the bar's state word, outside the key table", async () => 
   expect(q.q("[role=dialog] .command-words").textContent).toBe("state <what you know> in the command bar adds a statement of yours as a card in Incoming");
   expect(q.all("[role=dialog] tr").length).toBe(KEYMAP.length);
 });
+test("the ? card says the bar's answer and overrule words", async () => {
+  const q = await open();
+  q.press("?");
+  expect(q.all("[role=dialog] .command-words").map((e) => e.textContent)).toEqual([
+    "state <what you know> in the command bar adds a statement of yours as a card in Incoming",
+    "answer ask-1 <your answer> answers the question an agent put to you",
+    "overrule f1 opens the Narrative lens on that finding's Overrule form",
+  ]);
+});

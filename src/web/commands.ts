@@ -12,6 +12,8 @@ export type Intent =
   | { kind: "replay"; seq: number | null }
   | { kind: "ask"; text: string }
   | { kind: "state"; text: string }
+  | { kind: "answer"; question: string; text: string }
+  | { kind: "overrule"; finding: string }
   | { kind: "say"; text: string }
   | { kind: "playbook"; id: string; value: string };
 
@@ -67,6 +69,10 @@ export function parseCommand(text: string, ctx: CommandContext): Intent {
   if (playbook) return inCase({ kind: "playbook", id: playbook[1]!, value: playbook[2]! });
   const state = /^state\s+(\S[\s\S]*)$/i.exec(typed);
   if (state) return inCase({ kind: "state", text: state[1]! });
+  const answer = /^answer\s+(ask-[0-9]+)\s+(\S[\s\S]*)$/i.exec(typed);
+  if (answer) return inCase({ kind: "answer", question: answer[1]!.toLowerCase(), text: answer[2]!.trim() });
+  const overrule = /^overrule (\S+)$/.exec(l);
+  if (overrule) return inCase({ kind: "overrule", finding: overrule[1]! });
   const replay = /^replay(?: ([0-9]+))?$/.exec(l);
   if (replay) return inCase({ kind: "replay", seq: replay[1] === undefined ? null : Number(replay[1]) });
   if (l === "summarize") return inCase({ kind: "ask", text: "Give a synopsis of this case." });
@@ -88,6 +94,9 @@ export async function perform(intent: Intent, env: PerformEnv): Promise<{ cleare
     case "verify": nav.focusCard(intent.card); return { cleared: await ui.act("verify_card", { card: intent.card }) };
     case "replay": nav.openLens("replay", intent.seq === null ? undefined : String(intent.seq)); return done;
     case "state": return { cleared: await ui.act("add_statement", { statement: intent.text, basis: "unstated" }) };
+    case "answer": return { cleared: await ui.act("answer_question", { question: intent.question, answer: intent.text, basis: "unstated" }) };
+    // the values are chosen in the finding's form, where the draft they overrule is on screen
+    case "overrule": nav.openLens("narrative", `overrule:${intent.finding}`); return { cleared: false, say: `Overrule ${intent.finding} from the Narrative lens` };
     case "ask": nav.ask(intent.text); return done;
     case "playbook": {
       const pb = ui.ref.playbooks.find((x) => x.id === intent.id);

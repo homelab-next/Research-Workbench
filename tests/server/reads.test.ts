@@ -33,6 +33,12 @@ test("the reference holds types, sources, pivots, objectives, phases and the pro
   expect(ref.profile.id).toBe("investigation");
 });
 
+test("the reference lists the standard's likelihood terms, least likely first", async () => {
+  s = await served();
+  const ref = (await (await s.get("/api/reference")).json()) as Reference;
+  expect(ref.likelihood).toEqual(["almost no chance", "very unlikely", "unlikely", "roughly even chance", "likely", "very likely", "almost certain"]);
+});
+
 test("/api/me says who, in which role, at which origin, and the policy", async () => {
   s = await served();
   const me = (await (await s.get("/api/me")).json()) as Me;
