@@ -16,7 +16,7 @@ import type { Seeker } from "../modules/seeker";
 import type { Pipeline, Role, StageManifest } from "./manifests";
 import type { Components } from "./components";
 import { IMPLICIT_NOTE } from "./loops";
-import type { LoopCatalog, LoopOutput, ResolvedLoop } from "./loops";
+import type { LoopCatalog, LoopLock, LoopOutput, ResolvedLoop } from "./loops";
 import type { BlobStore } from "../core/blobs";
 import { firstUnpassedReview, nextStep } from "./next";
 import type { Step } from "./next";
@@ -57,6 +57,11 @@ export interface EngineDeps {
   retain?: () => () => void;
   /** How a stage that runs a loop reaches its child cases: the host's (the hub's, run.ts's). Without it such a stage stalls. */
   children?: ChildCases;
+  /**
+   * The lock of the version the case's run is bound to (or a new run would bind), set by Engine.bound: a sub-loop stage runs its child on the
+   * version of the child's loop that this lock names.
+   */
+  lock?: LoopLock;
 }
 export interface StageEnv {
   session: CaseSession; deps: EngineDeps; stage: StageManifest; attempt: number;
@@ -134,7 +139,7 @@ export class Engine {
       const { components: _components, ...rest } = this.deps;
       return { ...rest, pipeline: loop.pipeline, profile: loop.profile };
     }
-    return { ...this.deps, pipeline: loop.pipeline, profile: loop.profile, components: loop.components };
+    return { ...this.deps, pipeline: loop.pipeline, profile: loop.profile, components: loop.components, lock: loop.lock };
   }
 
   /** Why the engine cannot use the case's loop (a lock whose content is missing, a loop that is not usable); null when it can. */
@@ -190,7 +195,7 @@ export class Engine {
       this.lost = { run, why: NOT_IN_WORKBENCH };
       return;
     }
-    const deps: EngineDeps = { ...this.deps, pipeline: made.pipeline, profile: made.profile, components: made.components };
+    const deps: EngineDeps = { ...this.deps, pipeline: made.pipeline, profile: made.profile, components: made.components, lock: made.lock };
     this.held = { run, deps, loop: made, release: this.deps.retain?.() ?? null };
   }
 
@@ -213,10 +218,11 @@ export class Engine {
   }
 
   /**
-   * Starts a run. With loops, it binds the current version of the case's loop: the lock goes in the case's blobs, and loop.bound and run.started
-   * are one commit. Throws RunRefused, writing nothing, when a run is in progress or the loop is not usable (its first problem).
+   * Starts a run. With loops, it binds the current version of the case's loop, or `opts.loop` (a child's run binds the version its parent's lock
+   * names): the lock goes in the case's blobs, and loop.bound and run.started are one commit. Throws RunRefused, writing nothing, when a run is in
+   * progress, the loop is not usable (its first problem), or `opts.loop` is another loop's.
    */
-  start(actor: Actor): void {
+  start(actor: Actor, opts: { loop?: ResolvedLoop } = {}): void {
     const loops = this.deps.loops;
     this.session.commit((state, ids) => {
       const { status } = state.run;
@@ -227,7 +233,8 @@ export class Engine {
         return [{ type: "run.started", actor, payload: { run: ids.next("run"), pipeline: pipeline.id, pipeline_hash: pipeline.hash, stages: stagesOf(pipeline) } }];
       }
       const id = loopOf(state, this.deps.config.loops.default);
-      const loop = loops.current(id);
+      if (opts.loop !== undefined && opts.loop.lock.loop !== id) throw new RunRefused(`this case is for loop "${id}", not "${opts.loop.lock.loop}"`);
+      const loop = opts.loop ?? loops.current(id);
       if (loop === null) throw new RunRefused(firstProblem(loops, id));
       const { pipeline } = loop;
       const lock = this.session.blobs.put(canonical(loop.lock as unknown as Json));

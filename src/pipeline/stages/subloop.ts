@@ -7,6 +7,7 @@ import type { CaseState, SubloopState } from "../../core/state";
 import type { Actor, EntryInput } from "../../core/types";
 import type { ChildLink } from "../../core/workbench";
 import type { StageEnd, StageRunner } from "../engine";
+import type { ResolvedLoop } from "../loops";
 import { childRefOf, childWaitReason, inputsOf, notTheChild, outputHash, outputsOf, returnsOf } from "../subloop";
 import type { ChildCases } from "../subloop";
 
@@ -45,9 +46,11 @@ export const subloopRunner: StageRunner = async (env) => {
   // what was recorded stands, whether or not the child is loaded here now
   if (rec?.finished != null) return endOf(rec, readOf(rec)?.stop_reason ?? null);
 
-  const loop = deps.loops?.current(spec.loop) ?? null;
-  if (loop === null) {
-    const why = deps.loops?.problems(spec.loop)[0];
+  // the version of the child's loop this run runs: the one the run's lock names for this stage (the current one only for a run with no lock)
+  const named = rec?.loop_hash ?? deps.lock?.subloops.find((x) => x.stage === stage.id && x.loop === spec.loop)?.hash ?? null;
+  const loop: ResolvedLoop | string | null = deps.loops === undefined ? null : named === null ? deps.loops.current(spec.loop) : deps.loops.atHash(spec.loop, named);
+  if (loop === null || typeof loop === "string") {
+    const why = typeof loop === "string" ? loop : deps.loops?.problems(spec.loop)[0];
     return { kind: "stalled", reason: `${stage.title}: the loop "${spec.loop}" is not usable here${why === undefined ? "" : `: ${why}`}` };
   }
 
@@ -84,7 +87,7 @@ export const subloopRunner: StageRunner = async (env) => {
   if (before === null) return { kind: "waiting_child", child, reason: notTheChild(ref) };
   if (before.state.run.status !== "finished") {
     try {
-      await children.drive(ref);
+      await children.drive(ref, { loop });
     } catch (err) {
       return { kind: "waiting_child", child, reason: `it could not be carried on: ${firstLine(err)}` };
     }
@@ -92,9 +95,15 @@ export const subloopRunner: StageRunner = async (env) => {
   const view = children.read(ref);
   if (view === null) return { kind: "waiting_child", child, reason: notTheChild(ref) };
   const { state: cs, head } = view;
+  // the child runs the version this run's record names, or what it gives back is not what this run's lock describes
+  const ran = cs.loop.bound?.hash ?? null;
+  if (cs.run.status !== "none" && ran !== rec.loop_hash) {
+    return { kind: "stalled", reason: `${stage.title}: child ${child} runs version ${(ran ?? "none").slice(0, 12)} of loop "${spec.loop}"; this run's lock names ${rec.loop_hash.slice(0, 12)}` };
+  }
   if (cs.run.status !== "finished" || cs.run.id === null) return { kind: "waiting_child", child, reason: childWaitReason(cs) };
 
   const outcome = cs.run.outcome ?? "stopped";
+  // the outputs the child's version declares, not the current version's
   const outputs = outcome === "stopped" ? {} : outputsOf(cs, loop.manifest.outputs);
   const output_hash = outputHash(outputs);
   const childRun = cs.run.id;

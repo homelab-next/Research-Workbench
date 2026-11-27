@@ -262,7 +262,7 @@ export function verifyPublished(caseDir: string): PublishedReport {
   return { ok: bundles.every((b) => b.state === "ok") && unrecorded.length === 0, bundles, unrecorded };
 }
 
-export interface LinkReport { ok: boolean; links: { key: string; child: string; status: "matches" | "not_loaded" | "head_differs" | "not_its_child" }[] }
+export interface LinkReport { ok: boolean; links: { key: string; child: string; status: "matches" | "not_loaded" | "head_differs" | "not_its_child" | "version_differs" }[] }
 
 const CHILD_ID = /^CASE-[1-9][0-9]*$/;
 /** Each row's seq, type, hash, run and parsed payload, in order, read-only. */
@@ -281,12 +281,13 @@ function rowsOf(ledgerPath: string): { case: string; rows: { seq: number; type: 
 
 /**
  * For each subloop.finished of the case: the child's ledger holds an entry of that seq and hash, its subloop.child names this case, run, stage, attempt
- * and input hash and its first entry is the origin subloop.started recorded (when it recorded one). A child that is not in `casesDir` is
- * not_loaded and does not fail the report. Reads only; it does not recompute what came back.
+ * and input hash, its first entry is the origin subloop.started recorded (when it recorded one), and the run it finished bound the loop version
+ * subloop.started names (loop_hash). A child that is not in `casesDir` is not_loaded and does not fail the report. Reads only; it does not recompute
+ * what came back.
  */
 export function verifyLinks(caseDir: string, casesDir: string): LinkReport {
   const parent = rowsOf(join(caseDir, "ledger.sqlite"));
-  const started = new Map<string, { child: string; input_hash: string; origin: string | null }>();
+  const started = new Map<string, { child: string; input_hash: string; loop_hash: string | null; origin: string | null }>();
   const links: LinkReport["links"] = [];
   for (const r of parent.rows) {
     const p = r.payload;
@@ -294,7 +295,7 @@ export function verifyLinks(caseDir: string, casesDir: string): LinkReport {
     const key = `${r.run ?? ""}/${p.stage}/${p.attempt}`;
     if (r.type === "subloop.started") {
       if (typeof p.input_hash === "string" && !started.has(key)) {
-        started.set(key, { child: p.child, input_hash: p.input_hash, origin: typeof p.origin === "string" ? p.origin : null });
+        started.set(key, { child: p.child, input_hash: p.input_hash, loop_hash: typeof p.loop_hash === "string" ? p.loop_hash : null, origin: typeof p.origin === "string" ? p.origin : null });
       }
       continue;
     }
@@ -317,7 +318,13 @@ export function verifyLinks(caseDir: string, casesDir: string): LinkReport {
       out("not_its_child");
       continue;
     }
-
+    // the version the child's run bound: the loop.bound in the commit of that run's run.started
+    const startedAt = child.rows.findIndex((x) => x.type === "run.started" && isObj(x.payload) && x.payload.run === p.child_run);
+    const bound = startedAt > 0 && child.rows[startedAt - 1]!.type === "loop.bound" ? child.rows[startedAt - 1]!.payload : null;
+    if (startedAt >= 0 && opened.loop_hash !== null && !(isObj(bound) && bound.hash === opened.loop_hash)) {
+      out("version_differs");
+      continue;
+    }
     const head = isHead(p.head) ? p.head : null;
     const at = head === null ? undefined : child.rows.find((x) => x.seq === head.seq);
     out(at !== undefined && at.hash === head!.hash ? "matches" : "head_differs");
@@ -329,6 +336,7 @@ export function verifyLinks(caseDir: string, casesDir: string): LinkReport {
 export function linkLines(r: LinkReport): string[] {
   const said: Record<LinkReport["links"][number]["status"], string> = {
     matches: "matches", not_loaded: "not loaded here, not checked", head_differs: "BROKEN: its ledger does not hold the recorded head", not_its_child: "BROKEN: it does not name this case's stage as its parent",
+    version_differs: "BROKEN: its run bound another version of its loop than this case recorded",
   };
   return r.links.map((l) => `link ${l.key}: ${l.child} ${said[l.status]}`);
 }

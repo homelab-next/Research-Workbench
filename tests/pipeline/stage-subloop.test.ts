@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SAMPLE_START, SAMPLE_WINDOW } from "../../scripts/make-sample-data";
@@ -13,6 +13,7 @@ import type { CaseState } from "../../src/core/state";
 import type { Actor, Card, Entry } from "../../src/core/types";
 import type { ChildLink } from "../../src/core/workbench";
 import { Workbench } from "../../src/core/workbench";
+import { verifyLinks } from "../../src/core/verify";
 import { loadConfig } from "../../src/modules/config";
 import type { Config } from "../../src/modules/config";
 import { Engine } from "../../src/pipeline/engine";
@@ -65,10 +66,10 @@ class Host implements ChildCases {
     this.afterCreate?.();
     return { id: s.id, origin: s.entries(0, 1)[0]!.hash };
   }
-  async drive(ref: ChildRef): Promise<ReturnType<Engine["summary"]>> {
+  async drive(ref: ChildRef, opts: { loop: ResolvedLoop }): Promise<ReturnType<Engine["summary"]>> {
     if (this.read(ref) === null) throw new Error(`${ref.id} is not the child`);
     const e = this.engine(ref.id);
-    if (wb.session(ref.id).state.run.status === "none") e.start(ENGINE);
+    if (wb.session(ref.id).state.run.status === "none") e.start(ENGINE, { loop: opts.loop });
     return e.advance();
   }
   read(ref: ChildRef): ReturnType<ChildCases["read"]> {
@@ -535,7 +536,59 @@ test("a person's pause made while the child is driven is kept: the stage does no
   expect(s.entries()).toHaveLength(n);
 });
 
-// ---- final review: the stage reads only its own child (C1)
+// ---- final review: the version lock reaches the child (I1) and the stage reads only its own child (C1)
+
+test("a child binds the version of its loop that the parent's lock names, though that loop was saved after the parent bound; verifyLinks reads that it matches", async () => {
+  const s = wb.createCase(input, human, { loop: "triage" });
+  sessions.push(s);
+  const e = Engine.open(s, { ...composed.deps, children: host }, { runners: { frame: passFrame } });
+  engines.push(e);
+  e.start(human);
+  const named = e.loop!.lock.subloops.find((x) => x.stage === "investigate")!.hash;
+  appendFileSync(join(sample.root, "context", "personas", "planner.md"), "\nA line added after the parent bound.\n");
+  expect(composed.reload()).toEqual([]);
+  const now = composed.deps.loops!.current("investigation")!.pipeline.hash;
+  expect(now).not.toBe(named);
+  await e.advance();
+  const started = ofType(s, "subloop.started")[0]!.payload;
+  expect(started.loop_hash).toBe(named);
+  const bound = ofType(child(), "loop.bound")[0]!.payload;
+  expect(bound.hash).toBe(named);
+  expect(child().state.loop.bound!.hash).toBe(named);
+  await carryChild(e);
+  expect(s.state.run).toMatchObject({ status: "finished", outcome: "completed" });
+  expect(verifyLinks(s.dir, join(config.data_dir, "cases"))).toMatchObject({ ok: true, links: [{ child: "CASE-2", status: "matches" }] });
+});
+
+test("a child whose run bound another version than the parent's record names holds the stage, and verifyLinks says the version differs", async () => {
+  // a host that starts the child on the loop's current version, whatever the parent's lock says
+  class Careless extends Host {
+    override async drive(ref: Parameters<ChildCases["drive"]>[0]): Promise<ReturnType<Engine["summary"]>> {
+      const ce = this.engine(ref.id);
+      if (wb.session(ref.id).state.run.status === "none") ce.start(ENGINE);
+      return ce.advance();
+    }
+  }
+  const careless = new Careless(() => ({ ...composed.deps, children: careless }));
+  const s = wb.createCase(input, human, { loop: "triage" });
+  sessions.push(s);
+  const e = Engine.open(s, { ...composed.deps, children: careless }, { runners: { frame: passFrame } });
+  engines.push(e);
+  e.start(human);
+  appendFileSync(join(sample.root, "context", "personas", "planner.md"), "\nA line added after the parent bound.\n");
+  expect(composed.reload()).toEqual([]);
+  await e.advance();
+  expect(s.state.run.status).toBe("paused");
+  expect(s.state.run.pause_reason).toMatch(/^Investigate: child CASE-2 runs version [0-9a-f]{12} of loop "investigation"; this run's lock names [0-9a-f]{12}$/);
+  const ce = careless.engine("CASE-2");
+  ce.acceptPlan({ budgets: { s3: 1 }, actor: human });
+  await ce.advance();
+  ce.approve({ actor: human });
+  expect((await ce.advance()).outcome).toBe("published");
+  await e.resume(human);
+  expect(ofType(s, "subloop.finished")).toHaveLength(0);
+  expect(s.state.run.status).toBe("paused");
+});
 
 test("a finished child's recorded result is returned first: the stage run again with the child gone passes as recorded", async () => {
   const { s, e } = await startParent();

@@ -8,7 +8,7 @@ import { GENESIS } from "../../src/core/hash";
 import { canonical } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
 import { entryHash, InvalidEntryError, Ledger } from "../../src/core/ledger";
-import { formatReport, UnreadableLedgerError, verifyCase, verifyLedger, verifyLinks, verifyPublished } from "../../src/core/verify";
+import { formatReport, linkLines, UnreadableLedgerError, verifyCase, verifyLedger, verifyLinks, verifyPublished } from "../../src/core/verify";
 import { Workbench } from "../../src/core/workbench";
 import type { CaseSession } from "../../src/core/session";
 import type { BlobRef, Product } from "../../src/core/types";
@@ -577,7 +577,7 @@ function linkedParent(wb: Workbench, child: (parent: string) => CaseSession, hea
 const childOf = (wb: Workbench, over: Record<string, unknown> = {}) => (parent: string): CaseSession =>
   wb.createCase(linkCase, engineActor, { loop: "investigation", link: { parent, run: "run-1", stage: "investigate", attempt: 1, loop: "investigation", input_hash: LINK_HASH, depth: 1, floor: "TLP:GREEN", ...over } });
 
-test("verifyLinks: a child whose first entry is not the origin recorded is not_its_child", () => {
+test("verifyLinks: a child whose first entry is not the origin recorded is not_its_child; a child whose run bound another loop version than loop_hash is version_differs", () => {
   const wb = Workbench.open(join(root, "wb"), { onError: () => {} });
   try {
     const cases = join(root, "wb", "cases");
@@ -585,6 +585,19 @@ test("verifyLinks: a child whose first entry is not the origin recorded is not_i
     expect(verifyLinks(same.parent.dir, cases).links[0]!.status).toBe("matches");
     const other = linkedParent(wb, childOf(wb), undefined, () => ({ origin: "7".repeat(64) }));
     expect(verifyLinks(other.parent.dir, cases)).toMatchObject({ ok: false, links: [{ status: "not_its_child" }] });
+    // the child's run-1 bound version "c…", and the parent recorded "b…"
+    const ran = (hash: string) => (parent: string): CaseSession => {
+      const c = childOf(wb)(parent);
+      c.commit((_s, ids) => [
+        { type: "loop.bound", actor: engineActor, payload: { loop: "investigation", version: 1, hash, lock: c.blobs.put("{}") } },
+        { type: "run.started", actor: engineActor, payload: { run: ids.next("run"), pipeline: "investigation", pipeline_hash: hash, stages: linkStages } },
+      ]);
+      return c;
+    };
+    expect(verifyLinks(linkedParent(wb, ran("b".repeat(64))).parent.dir, cases).links[0]!.status).toBe("matches");
+    const drifted = linkedParent(wb, ran("c".repeat(64)));
+    expect(verifyLinks(drifted.parent.dir, cases)).toEqual({ ok: false, links: [{ key: "run-1/investigate/1", child: drifted.child.id, status: "version_differs" }] });
+    expect(linkLines(verifyLinks(drifted.parent.dir, cases))[0]).toContain("another version of its loop");
   } finally {
     wb.close();
   }

@@ -10,7 +10,7 @@ import { SECTIONS, strictest } from "../core/types";
 import type { Card, Entry, EntryInput, Finding, Marking, Product, Section } from "../core/types";
 import type { ChildLink, NewCase } from "../core/workbench";
 import type { RunSummary } from "./engine";
-import type { LoopInput, LoopOutput } from "./loops";
+import type { LoopInput, LoopOutput, ResolvedLoop } from "./loops";
 import { DEFAULT_LOOP } from "./loops";
 import type { InputSelector, SubloopSpec } from "./manifests";
 
@@ -246,10 +246,10 @@ export interface ChildCases {
   find(link: ChildLink): { id: string; origin: string } | null;
   create(input: NewCase, link: ChildLink, cards: Card[]): { id: string; origin: string };
   /**
-   * Starts the child's run when it has none, and carries it as far as it goes without a person. Never passes a gate. Throws Refused, doing
-   * nothing, when the case with that id is not the child `ref` names.
+   * Starts the child's run when it has none, bound to `loop` (the version the parent's lock names), and carries it as far as it goes without a person.
+   * Never passes a gate. Throws Refused, doing nothing, when the case with that id is not the child `ref` names.
    */
-  drive(ref: ChildRef): Promise<RunSummary>;
+  drive(ref: ChildRef, opts: { loop: ResolvedLoop }): Promise<RunSummary>;
   /** The child's state and head now; null when no case here is the child `ref` names. `stop_reason`: why its run was stopped, when the host knows it. */
   read(ref: ChildRef): ChildView | null;
 }

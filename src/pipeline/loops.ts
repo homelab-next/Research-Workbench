@@ -42,6 +42,11 @@ export interface LoopCatalog {
   fromLock(lock: LoopLock): ResolvedLoop | string;
   /** The lock a blob holds; null when it is not one. */
   readLock(bytes: Uint8Array): LoopLock | null;
+  /**
+   * The version of loop `id` whose pipeline hash is `hash`: the current one when it is that one, else the one the workbench chain recorded
+   * (loop.recorded), rebuilt from its lock and the content store; the reason when neither is here.
+   */
+  atHash(id: string, hash: string): ResolvedLoop | string;
 }
 
 /** The note an implicit loop carries: it is usable, and says where it came from. */
@@ -423,6 +428,19 @@ export function loadLoops(registry: Registry, ctx: ResolveContext, caps: LoopCap
     problems: (id) => (slots.has(id) ? [...slots.get(id)!.problems] : [`there is no loop "${id}"`]),
     fromLock: (lock) => fromLock(ctx, lock),
     readLock,
+    atHash: (id, hash) => {
+      const now = slots.get(id)?.loop ?? null;
+      if (now !== null && now.pipeline.hash === hash) return now;
+      const recorded = ctx.chain.read().filter((e) => e.type === "loop.recorded" && e.payload.loop === id && e.payload.hash === hash);
+      for (const e of recorded.reverse()) {
+        if (e.type !== "loop.recorded") continue;
+        let lock: LoopLock | null = null;
+        try { lock = ctx.content.check(e.payload.lock.blob) === "ok" ? readLock(ctx.content.get(e.payload.lock.blob)) : null; } catch { lock = null; }
+        if (lock === null || lock.loop !== id || lock.hash !== hash) continue;
+        return fromLock(ctx, lock);
+      }
+      return `version ${hash.slice(0, 12)} of loop "${id}" is not in this workbench; import its loop file`;
+    },
   };
 }
 

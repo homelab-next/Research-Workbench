@@ -12,6 +12,7 @@ import type { Card } from "../core/types";
 import { ConfigError, loadConfig } from "../modules/config";
 import { Engine, RunRefused } from "../pipeline/engine";
 import type { EngineDeps } from "../pipeline/engine";
+import type { ResolvedLoop } from "../pipeline/loops";
 import { notTheChild, readChild } from "../pipeline/subloop";
 import type { ChildCases, ChildRef } from "../pipeline/subloop";
 import { FeedbackRefused } from "../pipeline/feedback";
@@ -223,11 +224,11 @@ class Host implements ChildCases {
     const made = this.wb.createCase(input, { kind: "system", id: "engine" }, { loop: link.loop, link, cards });
     return { id: made.id, origin: made.entries(0, 1)[0]!.hash };
   }
-  async drive(ref: ChildRef): Promise<ReturnType<Engine["summary"]>> {
+  async drive(ref: ChildRef, opts: { loop: ResolvedLoop }): Promise<ReturnType<Engine["summary"]>> {
     // never a run on a case that is not this child: ids repeat across workbenches
     if (this.read(ref) === null) throw new RunRefused(notTheChild(ref));
     const e = this.engine(ref.id);
-    if (this.wb.session(ref.id).state.run.status === "none") e.start({ kind: "system", id: "engine" });
+    if (this.wb.session(ref.id).state.run.status === "none") e.start({ kind: "system", id: "engine" }, { loop: opts.loop });
     return e.advance();
   }
   read(ref: ChildRef): ReturnType<ChildCases["read"]> {

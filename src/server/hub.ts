@@ -9,6 +9,7 @@ import { CaseNotFoundError, CaseRefused, unloadProblem } from "../core/workbench
 import type { ChildLink, NewCase, UnloadResult, Workbench } from "../core/workbench";
 import { Engine } from "../pipeline/engine";
 import type { EngineDeps, RunSummary } from "../pipeline/engine";
+import type { ResolvedLoop } from "../pipeline/loops";
 import { notTheChild, readChild } from "../pipeline/subloop";
 import type { ChildCases, ChildRef } from "../pipeline/subloop";
 
@@ -77,11 +78,11 @@ export class CaseHub {
       const made = this.wb.createCase(input, ENGINE, { loop: link.loop, link, cards });
       return { id: made.id, origin: made.entries(0, 1)[0]!.hash };
     },
-    drive: async (ref: ChildRef): Promise<RunSummary> => {
+    drive: async (ref: ChildRef, opts: { loop: ResolvedLoop }): Promise<RunSummary> => {
       // never a run on a case that is not this child: ids repeat across workbenches
       if (this.children.read(ref) === null) throw new CaseRefused(notTheChild(ref));
       const engine = this.engine(ref.id);
-      if (this.wb.session(ref.id).state.run.status === "none") engine.start(ENGINE);
+      if (this.wb.session(ref.id).state.run.status === "none") engine.start(ENGINE, { loop: opts.loop });
       return engine.advance();
     },
     read: (ref: ChildRef) => {
