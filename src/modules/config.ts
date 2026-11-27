@@ -61,6 +61,16 @@ export interface Config {
     /** The folder imports land in, one folder each; every folder there is a root that is not trusted unless `roots` lists it. */
     imports: string;
   };
+  memory: {
+    /** The shared store's folder. */
+    store: string;
+    /** The folder memory files are exported into, listed from and loaded from by name. */
+    files: string;
+    /** The most lessons one run is given. */
+    max_lessons: number;
+    /** The most notes a case's notebook holds at once. */
+    max_notes: number;
+  };
 }
 
 const whereList: Schema = { type: "array", items: { type: "string", enum: [...WHERES] } };
@@ -112,6 +122,16 @@ const CONFIG_SCHEMA: Schema = {
         max_children: { type: "integer", minimum: 1 },
         store: { type: "string", minLength: 1 },
         imports: { type: "string", minLength: 1 },
+      },
+    },
+    memory: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        store: { type: "string", minLength: 1 },
+        files: { type: "string", minLength: 1 },
+        max_lessons: { type: "integer", minimum: 1 },
+        max_notes: { type: "integer", minimum: 1 },
       },
     },
   },
@@ -167,6 +187,7 @@ export function loadConfig(opts: { path?: string; env?: Record<string, string | 
     server?: { port?: number }; research?: { parallel?: number }; questions?: { max_open?: number }; glean?: { max_sendbacks?: number };
     cases?: { store?: string; on_complete?: "keep" | "unload"; max_bytes?: number };
     loops?: { default?: string; max_depth?: number; max_children?: number; store?: string; imports?: string };
+    memory?: { store?: string; files?: string; max_lessons?: number; max_notes?: number };
   };
 
   const base = path === null ? process.cwd() : dirname(path);
@@ -203,6 +224,12 @@ export function loadConfig(opts: { path?: string; env?: Record<string, string | 
       max_children: given.loops?.max_children ?? 8,
       store: given.loops?.store !== undefined ? place(given.loops.store) : join(data_dir, "loops"),
       imports: given.loops?.imports !== undefined ? place(given.loops.imports) : join(data_dir, "imported"),
+    },
+    memory: {
+      store: given.memory?.store !== undefined ? place(given.memory.store) : join(data_dir, "memory"),
+      files: given.memory?.files !== undefined ? place(given.memory.files) : join(data_dir, "memory-files"),
+      max_lessons: given.memory?.max_lessons ?? 12,
+      max_notes: given.memory?.max_notes ?? 40,
     },
   };
 }

@@ -245,3 +245,22 @@ test("a folder of loops.imports that config.roots lists is taken once, with the 
     { path: join(imports, "a-111111111111"), trusted: false, credentials: [], staged: true },
   ]);
 });
+
+// ---------- slice 13: the memory block ----------
+
+test("the memory block defaults to the data folder's memory and memory-files, 12 lessons and 40 notes", () => {
+  const c = loadConfig({ env: {}, home: "/h", repoRoot: "/repo" });
+  expect(c.memory).toEqual({ store: "/h/.local/share/research-workbench/memory", files: "/h/.local/share/research-workbench/memory-files", max_lessons: 12, max_notes: 40 });
+  const dir = tmp();
+  const q = file(dir, "d.yaml", "data_dir: /d\nmemory: {}\n");
+  expect(loadConfig({ path: q, env: {}, home: "/h", repoRoot: "/repo" }).memory).toEqual({ store: "/d/memory", files: "/d/memory-files", max_lessons: 12, max_notes: 40 });
+});
+
+test("a memory block in the file is read, its folders placed against the file's folder; max_lessons 0 is refused", () => {
+  const dir = tmp();
+  const p = file(dir, "conf/c.yaml", "data_dir: /d\nmemory:\n  store: ./shared\n  files: ~/shelf\n  max_lessons: 5\n  max_notes: 7\n");
+  expect(loadConfig({ path: p, env: {}, home: "/h", repoRoot: "/repo" }).memory).toEqual({ store: join(dir, "conf/shared"), files: "/h/shelf", max_lessons: 5, max_notes: 7 });
+  for (const [n, text] of [["a.yaml", "memory:\n  max_lessons: 0\n"], ["b.yaml", "memory:\n  max_notes: 0\n"], ["c.yaml", "memory:\n  max_lessons: 1.5\n"], ["d.yaml", "memory:\n  extra: 1\n"]] as const) {
+    expect(() => loadConfig({ path: file(dir, n, text), env: {}, home: "/h", repoRoot: "/repo" })).toThrow(ConfigError);
+  }
+});

@@ -16,7 +16,7 @@ const DEFAULT_ACTOR: Actor = { kind: "system", id: "registry" };
  */
 export const WORKBENCH_TRUSTED_ONLY: readonly string[] = [
   "model", "script", "check", "stage", "profile", "rules", "persona", "procedure", "skill", "gate", "playbook", "inventory", "reference", "objective", "framework", "standard", "schema",
-  "loop",
+  "loop", "case-types", "lesson-seeds",
 ];
 
 const key = (kind: string, id: string): string => `${kind}\0${id}`;

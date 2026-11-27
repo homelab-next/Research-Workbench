@@ -136,7 +136,7 @@ test("unloadCase writes case.unloaded, packs the folder into <store>/CASE-1.TLP-
   const m = await checkCaseFile(r.path);
   expect(m.head).toEqual(r.head);
   expect(m.entries).toBe(r.head.seq);
-  expect(m).toMatchObject({ id: "CASE-1", chain: "CASE-1", title: "Sample", status: "none", workbench: "0.12.0" });
+  expect(m).toMatchObject({ id: "CASE-1", chain: "CASE-1", title: "Sample", status: "none", workbench: "0.13.0" });
   expect(ls(cases())).toEqual([".high-water"]);
   expect(errors).toEqual([]);
 });
