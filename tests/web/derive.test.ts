@@ -259,3 +259,11 @@ test("the brief never offers two buttons with one label or one command, in any r
   expect(briefButtons(gate("paused"))).toEqual({ run: runButton(gate("paused")), next: null });
   expect(briefButtons(conflict(gate("paused")))).toEqual({ run: runButton(conflict(gate("paused"))), next: null });
 });
+
+test("a statement by the person is a statement, never 'nothing found'", () => {
+  // the fold takes a statement only from a human actor, so the state is made from a plain card and the person field is put on it
+  const statementCard: CardState = { ...cs({ kind: "note", made_by: "human", columns: [], column_types: [], rows: [], row_count: 0, coverage: null, empty: null }), person: { basis: "did", detail: "", about: [], answers: null } };
+  expect(cardStatus(statementCard)).toBe("statement");
+  // a person's card is a statement before any other test, even one with partial coverage
+  expect(cardStatus({ ...statementCard, coverage: { kind: "partial", reason: "timeout" } })).toBe("statement");
+});

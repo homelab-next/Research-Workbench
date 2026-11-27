@@ -88,3 +88,21 @@ test("the banner is the strictest of the product's marking and every cited card'
   expect(lines[0]).toBe("TLP:AMBER");
   expect(lines.at(-1)).toBe("TLP:AMBER");
 });
+
+test("the copied provenance of a statement says it is the person's word and how they know", async () => {
+  const { state, ref } = await sample();
+  const id = state.drafts.at(-1)!.product.key_findings[0]!.cites[0]!;
+  const c = state.cards[id]!;
+  const said: CaseState = { ...state, cards: { ...state.cards, [id]: { ...c, query: null, source: null, made_by: "human", kind: "note", rows: [], row_count: 0, coverage: null, why: "did it myself: I installed it\n## Injected",
+    person: { basis: "did", detail: "I installed it\n## Injected", about: [{ type: "address", value: "192.0.2.17" }], answers: "ask-1" } } } };
+  const md = narrativeMarkdown(said, ref);
+  const at = md.indexOf(`### ${id}:`);
+  const section = md.slice(at, md.indexOf("### ", at + 4) < 0 ? undefined : md.indexOf("### ", at + 4));
+  expect(section).toContain("- Source: the person (a statement, not data from a source)");
+  expect(section).toContain("- How they know: did it myself: I installed it \\#\\# Injected");
+  expect(section).toContain("- About: address 192\\.0\\.2\\.17");
+  expect(section).toContain("- Answers: ask\\-1");
+  expect(section).not.toContain("- Query:");
+  expect(section).not.toContain("- Coverage:");
+  expect(md.split("\n").filter((l) => l.startsWith("#"))).not.toContain("## Injected");
+});

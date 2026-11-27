@@ -1,3 +1,4 @@
+import { BASIS_TEXT, isPersonCard } from "../../core/state";
 import type { CardState, CaseState } from "../../core/state";
 import type { Observable } from "../../core/types";
 import { tag } from "../chips";
@@ -50,7 +51,11 @@ export function makeCardView(env: CardEnv, id: string): CardView {
     const out: HTMLElement[] = [];
     if (c.place === "incoming" && env.isNew(c.id)) out.push(tag(ui, "human", "new", "Not opened yet"));
     const status = cardStatus(c);
-    if (status === "partial" && c.coverage !== null && c.coverage.kind === "partial") {
+    if (status === "statement") {
+      const t = tag(ui, "human", "your statement", "What the person stated; not data from a source");
+      t.classList.add("statement");
+      out.push(t);
+    } else if (status === "partial" && c.coverage !== null && c.coverage.kind === "partial") {
       out.push(tag(ui, "attention", "partial", `${c.coverage.reason}${c.coverage.detail === undefined ? "" : ` — ${c.coverage.detail}`}`));
     } else if (status === "proven negative") out.push(tag(ui, "done", "proven negative", "Nothing found, and the source was fully searched"));
     else if (status === "nothing found") out.push(tag(ui, "human", "nothing found", "Nothing found; this does not prove it is not there"));
@@ -111,8 +116,17 @@ export function makeCardView(env: CardEnv, id: string): CardView {
   };
 
   const dl = (c: CardState, state: CaseState): HTMLElement => {
-    const q = c.query !== null && Object.hasOwn(state.queries, c.query) ? state.queries[c.query]! : null;
     const rows: [string, HTMLElement | string][] = [];
+    if (c.person !== undefined) {
+      rows.push(["Source", "the person: a statement, not data from a source"]);
+      rows.push(["How they know", c.person.detail === "" ? BASIS_TEXT[c.person.basis] : `${BASIS_TEXT[c.person.basis]}: ${c.person.detail}`]);
+      if (c.person.about.length > 0) rows.push(["About", c.person.about.map((o) => `${o.type} ${o.value}`).join(", ")]);
+      if (c.person.answers !== null) rows.push(["Answers", c.person.answers]);
+      rows.push(["Marking", markingChip(ui, c.marking)]);
+      rows.push(["When", timeEl(ui, c.created_ts, "utc")]);
+      return h("dl", { class: "provenance" }, rows.flatMap(([k, v]) => [h("dt", null, k), h("dd", null, v)]));
+    }
+    const q = c.query !== null && Object.hasOwn(state.queries, c.query) ? state.queries[c.query]! : null;
     rows.push(["Source", env.ui.ref.sources.find((s) => s.id === c.source)?.title ?? c.source ?? "none"]);
     rows.push(["Query", q === null ? "none" : h("pre", { class: "query" }, q.text)]);
     const why = q?.why ?? c.why;
@@ -133,11 +147,11 @@ export function makeCardView(env: CardEnv, id: string): CardView {
     const ro = env.readonly();
     const button = (action: string, label: string, onClick: (() => void) | null): HTMLElement =>
       h("button", { type: "button", class: "action", data: { action }, disabled: ro || onClick === null, on: onClick === null ? undefined : { click: onClick } }, label);
-    const row: HTMLElement[] = [
-      button("pivot", "Pivot…", () => env.nav.pivot(c.id, typedValues(c))),
-      button("verify", "Verify", () => { void ui.send("verify_card", { card: c.id }); }),
-      button("cite", "Cite", () => env.nav.cite(c.id)),
-    ];
+    const said = isPersonCard(c);
+    const row: HTMLElement[] = [];
+    if (!said) row.push(button("pivot", "Pivot…", () => env.nav.pivot(c.id, typedValues(c))));
+    if (!said) row.push(button("verify", "Verify", () => { void ui.send("verify_card", { card: c.id }); }));
+    row.push(button("cite", "Cite", () => env.nav.cite(c.id)));
     if (c.place === "incoming") row.push(button("keep", "Keep", () => env.keep(c.id)));
     if (c.place === "lane") {
       const others = state.lanes.filter((l) => l.id !== c.lane);

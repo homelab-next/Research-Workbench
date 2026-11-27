@@ -1,4 +1,4 @@
-import { cardRefs, latestDraft } from "../core/state";
+import { BASIS_TEXT, cardRefs, latestDraft } from "../core/state";
 import type { CaseState } from "../core/state";
 import { SECTIONS, strictest } from "../core/types";
 import type { Draft, Product } from "../core/types";
@@ -59,6 +59,14 @@ export function narrativeMarkdown(state: CaseState, ref: Reference): string {
     const q = c.query !== null && Object.hasOwn(state.queries, c.query) ? state.queries[c.query]! : null;
     const coverage = c.coverage === null ? "not recorded" : c.coverage.kind === "full" ? "full" : `partial: ${c.coverage.reason}${c.coverage.detail === undefined ? "" : ` — ${c.coverage.detail}`}`;
     out.push(`### ${id}: ${plain(c.title)}`, "");
+    if (c.person !== undefined) {
+      out.push("- Source: the person (a statement, not data from a source)");
+      out.push(`- How they know: ${plain(c.person.detail === "" ? BASIS_TEXT[c.person.basis] : `${BASIS_TEXT[c.person.basis]}: ${c.person.detail}`)}`);
+      if (c.person.about.length > 0) out.push(`- About: ${plain(c.person.about.map((o) => `${o.type} ${o.value}`).join(", "))}`);
+      if (c.person.answers !== null) out.push(`- Answers: ${plain(c.person.answers)}`);
+      out.push(`- By: ${plain(c.made_by)}`, `- When (UTC): ${c.created_ts}`, `- Marking: ${c.marking}`, `- Rows: ${c.row_count}`, "");
+      continue;
+    }
     out.push(`- Source: ${plain(ref.sources.find((s) => s.id === c.source)?.title ?? c.source ?? "none")}`);
     out.push("- Query:", "", q === null ? "none" : fenced(q.text), "");
     out.push(`- Why: ${plain(q?.why ?? c.why)}`);

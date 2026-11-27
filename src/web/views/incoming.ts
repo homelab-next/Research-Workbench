@@ -4,6 +4,7 @@ import { syncList } from "../dom";
 import type { CaseState } from "../../core/state";
 import type { CaseStore } from "../store";
 import type { Ui, View } from "../ui";
+import { makeStatementForm } from "../panels/statement";
 
 const SORT_LABEL: Record<IncomingSort, string> = { arrived: "Arrived", event_time: "Event time", step: "Step", source: "Source", started_by: "Started by", status: "Status" };
 const GROUP_LABEL: Record<IncomingGroup, string> = { none: "No groups", step: "Step", source: "Source", started_by: "Started by", type: "Type" };
@@ -32,7 +33,8 @@ export function makeIncoming(ui: Ui, store: CaseStore, card: (id: string, state:
   const sort = choose("sort", "Sort by", SORTS, SORT_LABEL, (v) => change({ ...view, sort: v }));
   const group = choose("group", "Group by", GROUPS, GROUP_LABEL, (v) => change({ ...view, group: v }));
   const reverse = h("button", { type: "button", class: "reverse", name: "Reverse order", title: "Reverse the order", on: { click: () => change({ ...view, reverse: !view.reverse }) } }, "↑↓");
-  const bar = h("div", { class: "incoming-bar" }, sort, reverse, group);
+  const statement = makeStatementForm(ui, store);
+  const bar = h("div", { class: "incoming-bar" }, sort, reverse, group, statement.el);
   const list = h("div", { class: "incoming-list" });
   const empty = h("p", { class: "empty muted" }, "Nothing waiting");
   const foot = h("div", { class: "incoming-foot muted" }, "J/K move · Space keep · X discard · ? keys");
@@ -40,6 +42,7 @@ export function makeIncoming(ui: Ui, store: CaseStore, card: (id: string, state:
 
   function update(): void {
     const state = store.shown;
+    statement.update();
     sort.value = view.sort; group.value = view.group;
     reverse.classList.toggle("on", view.reverse);
     const groups = orderIncoming(state, view);

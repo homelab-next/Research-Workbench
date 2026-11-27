@@ -341,3 +341,11 @@ kbd { font-family: var(--mono); font-size: 12px; background: var(--panel-2); bor
 .lens-graph .node-links .link { border: 0; background: transparent; color: var(--accent); padding: 0; text-align: left; text-decoration: underline; }
 .lens-graph .node-more { color: var(--muted); }
 .lens-graph .node-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.tag.statement { color: var(--accent); border-color: var(--accent); }
+.statement-form { flex-basis: 100%; }
+.statement-form summary { cursor: pointer; }
+.statement-form .form-body { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.statement-form textarea { min-height: 4em; resize: vertical; }
+.statement-form .about-row { display: flex; gap: 6px; }
+.statement-form .about-row input { flex: 1; min-width: 0; }

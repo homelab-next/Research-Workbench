@@ -411,3 +411,15 @@ test("the phase strip says which draft was sent back and by which stage", async 
   expect(b.dataset.mark).toBe("sent back");
   expect(b.textContent).not.toContain("✓");
 });
+
+test("a statement added from the Incoming bar arrives as a card in Incoming and is listed with the others", async () => {
+  const q = await open("none");
+  const before = st(q).incoming.length;
+  const r = await q.s.command("CASE-1", "add_statement", { statement: "The TV is in the gym", basis: "told" });
+  expect(r.status).toBe(200);
+  await q.settle();
+  expect(q.all("[data-area=incoming] [data-card]").length).toBe(before + 1);
+  expect(q.all("[data-area=incoming] .incoming-bar details.statement-form").length).toBe(1);
+  const id = st(q).incoming.at(-1)!;
+  expect(q.q(`[data-area=incoming] [data-card=${id}] .title`).textContent).toBe("Statement: The TV is in the gym");
+});

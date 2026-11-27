@@ -1,4 +1,4 @@
-import { blockers, latestDraft, publishable, runConflicts, subgoalAnswered } from "../core/state";
+import { blockers, isPersonCard, latestDraft, publishable, runConflicts, subgoalAnswered } from "../core/state";
 import type { CardState, CaseState, StageState } from "../core/state";
 import type { LensId } from "./app";
 
@@ -8,9 +8,10 @@ export interface IncomingView { sort: IncomingSort; reverse: boolean; group: Inc
 export const SORTS: readonly IncomingSort[] = ["arrived", "event_time", "step", "source", "started_by", "status"];
 export const GROUPS: readonly IncomingGroup[] = ["none", "step", "source", "started_by", "type"];
 
-export type CardStatus = "answered" | "partial" | "proven negative" | "nothing found";
+export type CardStatus = "statement" | "answered" | "partial" | "proven negative" | "nothing found";
 /** Partial coverage is never a proven negative: it is "partial" whatever else the card says. */
 export function cardStatus(card: CardState): CardStatus {
+  if (isPersonCard(card)) return "statement";            // what a person said has no rows by nature: never "nothing found"
   if (card.coverage !== null && card.coverage.kind === "partial") return "partial";
   if (card.row_count > 0) return "answered";
   return card.empty === "proven-negative" && card.coverage !== null && card.coverage.kind === "full" ? "proven negative" : "nothing found";

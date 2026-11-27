@@ -11,6 +11,7 @@ export type Intent =
   | { kind: "verify"; card: string }
   | { kind: "replay"; seq: number | null }
   | { kind: "ask"; text: string }
+  | { kind: "state"; text: string }
   | { kind: "say"; text: string }
   | { kind: "playbook"; id: string; value: string };
 
@@ -64,6 +65,8 @@ export function parseCommand(text: string, ctx: CommandContext): Intent {
   }
   const playbook = /^run playbook (\S+) on (\S+)$/i.exec(typed.replace(/\s+/g, " "));
   if (playbook) return inCase({ kind: "playbook", id: playbook[1]!, value: playbook[2]! });
+  const state = /^state\s+(\S[\s\S]*)$/i.exec(typed);
+  if (state) return inCase({ kind: "state", text: state[1]! });
   const replay = /^replay(?: ([0-9]+))?$/.exec(l);
   if (replay) return inCase({ kind: "replay", seq: replay[1] === undefined ? null : Number(replay[1]) });
   if (l === "summarize") return inCase({ kind: "ask", text: "Give a synopsis of this case." });
@@ -84,6 +87,7 @@ export async function perform(intent: Intent, env: PerformEnv): Promise<{ cleare
     case "lens": nav.openLens(intent.id); return done;
     case "verify": nav.focusCard(intent.card); return { cleared: await ui.act("verify_card", { card: intent.card }) };
     case "replay": nav.openLens("replay", intent.seq === null ? undefined : String(intent.seq)); return done;
+    case "state": return { cleared: await ui.act("add_statement", { statement: intent.text, basis: "unstated" }) };
     case "ask": nav.ask(intent.text); return done;
     case "playbook": {
       const pb = ui.ref.playbooks.find((x) => x.id === intent.id);

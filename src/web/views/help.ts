@@ -17,6 +17,7 @@ export function makeHelp(ui: Ui, host: HTMLElement): { open(): void; close(): bo
       h("h3", null, title),
       h("table", null, h("tbody", null, KEYMAP.filter((k) => k.area === area).map((k) =>
         h("tr", null, h("td", { class: "keys" }, k.keys.map((key, i) => [i > 0 ? " " : null, h("kbd", null, SHOWN[key] ?? key)])), h("td", null, k.label))))))),
+    h("p", { class: "command-words" }, h("code", null, "state <what you know>"), " in the command bar adds a statement of yours as a card in Incoming"),
     h("p", { class: "muted" }, "Esc closes this card"));
   const api = {
     isOpen: () => card !== null,

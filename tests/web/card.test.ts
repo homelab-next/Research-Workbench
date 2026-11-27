@@ -182,3 +182,68 @@ test("a click opens one card and closes the others; a kept-open card stays", asy
   expect(q.root.querySelector(`[data-card=${b}] dl`)).not.toBeNull();
   expect(c).toBeDefined();
 });
+
+// A statement by the person: made by a human actor, as the server writes it.
+const analyst = { kind: "human" as const, id: "analyst" };
+async function plantStatement(q: Page, body: string, over: Partial<NonNullable<Card["person"]>> = {}): Promise<string> {
+  let made = "";
+  q.s.app.hub.read("CASE-1").commit((_s, ids) => {
+    made = ids.next("card");
+    const c = card("x", { id: made, title: "Statement: the TV", body, kind: "note", made_by: "human", columns: [], column_types: [], rows: [], row_count: 0, coverage: null, empty: null, why: "did it myself: I installed it", marking: "TLP:AMBER",
+      person: { basis: "did", detail: "I installed it", about: [{ type: "address", value: "192.0.2.17" }], answers: null, ...over } });
+    return [{ type: "card.created", actor: analyst, payload: { card: c } }];
+  });
+  await q.settle();
+  return made;
+}
+const dlOf = (q: Page, id: string): Map<string, string> => {
+  const m = new Map<string, string>();
+  for (const dt of q.all(`[data-card=${id}] dt`)) m.set(dt.textContent!, dt.nextElementSibling!.textContent!);
+  return m;
+};
+
+test("a statement card is tagged as the person's statement, and its record says how they know and what it is about", async () => {
+  const q = await open();
+  const id = await plantStatement(q, "The device at 192.0.2.17 is the meeting-room TV.");
+  q.click(`[data-card=${id}] .card-head`);
+  await q.settle();
+  const tagTexts = [...q.q(`[data-card=${id}]`).querySelectorAll(".tag")].map((t) => t.textContent);
+  expect(tagTexts).toContain("your statement");
+  expect(tagTexts).not.toContain("nothing found");
+  const dl = dlOf(q, id);
+  expect(dl.get("Source")).toBe("the person: a statement, not data from a source");
+  expect(dl.get("How they know")).toBe("did it myself: I installed it");
+  expect(dl.get("About")).toBe("address 192.0.2.17");
+  expect([...dl.keys()]).toEqual(["Source", "How they know", "About", "Marking", "When"]);
+});
+
+test("an answer card names the question it answers", async () => {
+  const q = await open();
+  const id = await plantStatement(q, "It is the gym TV.", { answers: "ask-1" });
+  q.click(`[data-card=${id}] .card-head`);
+  await q.settle();
+  expect(dlOf(q, id).get("Answers")).toBe("ask-1");
+});
+
+test("a statement that looks like markup is drawn as text", async () => {
+  const q = await open();
+  const id = await plantStatement(q, "<img src=x onerror=1>");
+  expect(q.q(`[data-card=${id}]`).querySelector("img")).toBeNull();
+  expect(q.q(`[data-card=${id}] .body`).textContent).toBe("<img src=x onerror=1>");
+});
+
+test("a statement card has no Verify and no Pivot from rows; Keep and Discard work as for any card", async () => {
+  const q = await open();
+  const id = await plantStatement(q, "The TV is in the gym.");
+  q.click(`[data-card=${id}] .card-head`);
+  await q.settle();
+  expect(q.all(`[data-card=${id}] [data-action=verify]`).length).toBe(0);
+  expect(q.all(`[data-card=${id}] .chip.value`).length).toBe(0);
+  expect(q.all(`[data-card=${id}] .actions [data-action=cite]`).length).toBe(1);
+  q.click(`[data-card=${id}] [data-action=keep]`);
+  await q.settle();
+  expect(state(q).cards[id]!.place).toBe("lane");
+  q.click(`[data-card=${id}] [data-action=discard]`);
+  await q.settle();
+  expect(state(q).cards[id]!.place).toBe("discarded");
+});

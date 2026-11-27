@@ -466,3 +466,10 @@ test("in Replay, Escape returns to live first, and j and k step through the entr
   expect(q.store()!.at).toBeNull();
   expect(q.win.location.hash).toBe("#/case/CASE-1");
 });
+
+test("the ? card says the bar's state word, outside the key table", async () => {
+  const q = await open();
+  q.press("?");
+  expect(q.q("[role=dialog] .command-words").textContent).toBe("state <what you know> in the command bar adds a statement of yours as a card in Incoming");
+  expect(q.all("[role=dialog] tr").length).toBe(KEYMAP.length);
+});

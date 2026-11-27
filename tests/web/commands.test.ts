@@ -71,3 +71,28 @@ test("perform: a one-input playbook starts with the case window and opens the Jo
   expect(e.payload).toMatchObject({ playbook: "address-triage", inputs: [{ type: "address", value: "198.51.100.77" }], why: "run playbook address-triage on 198.51.100.77" });
   await p.s.app.hub.idle();
 });
+
+test("state <text> adds a statement, keeping the text's case; outside a case it says to open one", () => {
+  expect(parseCommand("state The TV is in the gym", ctx)).toEqual({ kind: "state", text: "The TV is in the gym" });
+  expect(parseCommand("  State   Two  spaces stay ", ctx)).toEqual({ kind: "state", text: "Two  spaces stay" });
+  expect(parseCommand("state The TV is in the gym", { ...ctx, in_case: false })).toEqual({ kind: "say", text: "Open a case first: investigate CASE-1" });
+  expect(parseCommand("state", ctx)).toEqual({ kind: "ask", text: "state" });
+  expect(parseCommand("statement of work", ctx)).toEqual({ kind: "ask", text: "statement of work" });
+});
+test("perform: state sends add_statement with basis unstated and clears the bar; a refusal leaves it", async () => {
+  p = await page();
+  const id = await p.s.newCase();
+  p.win.location.hash = `#/case/${id}`;
+  await p.settle();
+  const sent: unknown[][] = [];
+  const real = p.ui.act;
+  p.ui.act = async (...a) => { sent.push(a); return real(...a); };
+  const { out } = await performOn(p, "state The TV is in the gym");
+  expect(out.cleared).toBe(true);
+  expect(sent[0]!.slice(0, 2)).toEqual(["add_statement", { statement: "The TV is in the gym", basis: "unstated" }]);
+  await p.settle();
+  expect(Object.values(p.s.app.hub.read(id).state.cards).filter((c) => c.person !== undefined).length).toBe(1);
+  expect(p.s.app.hub.read(id).state.skipped).toEqual([]);
+  p.ui.act = async () => false;
+  expect((await performOn(p, "state again")).out.cleared).toBe(false);
+});
