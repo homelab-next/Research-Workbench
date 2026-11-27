@@ -26,6 +26,7 @@ import type { Reading } from "./roles";
 import { entryStream } from "./stream";
 import { deleteRoute, loadRoute, settingsRoute, storeRoute, unloadRoute } from "./store-routes";
 import { loopRoutes } from "./loop-routes";
+import { builderRoutes } from "./builder-routes";
 import type { StoreRouteDeps } from "./store-routes";
 import { agentView } from "./converse";
 import { routesFor } from "./seek";
@@ -177,6 +178,13 @@ export function createApp(opts: AppOptions): App {
     reload: () => { reloadRoots(); return opts.problems; }, secrets: () => opts.secrets?.() ?? [],
   });
 
+  const buildersTable = builderRoutes({
+    config, wb, hub, deps, human: () => ({ kind: "human", id: config.user }), shown: (r) => problemView(r),
+    reload: () => { reloadRoots(); return opts.problems; }, secrets: () => opts.secrets?.() ?? [],
+    // ended by the app when it closes
+    track: (close) => { open.add(close); return () => { open.delete(close); }; },
+  });
+
   const routes: Route[] = [
     { method: "GET", path: /^\/$/, needs: { read: "page" }, kind: "page", handle: () => text(assets.html, "text/html; charset=utf-8") },
     { method: "GET", path: /^\/app\.js$/, needs: { read: "page" }, kind: "api", handle: () => text(assets.js, "text/javascript; charset=utf-8") },
@@ -322,6 +330,7 @@ export function createApp(opts: AppOptions): App {
       },
     },
     ...loopsTable,
+    ...buildersTable,
   ];
 
   async function route(req: Request): Promise<{ res: Response; kind: Kind }> {

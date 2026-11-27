@@ -350,6 +350,25 @@ test("propose_change with a file that holds a planted secret value, or a key nam
   for (const value of [PLANTED.file, PLANTED.vault, PLANTED.env, "hunter2"]) expect(ledger).not.toContain(value);
 });
 
+test("propose_change with a file that holds the [hidden] mark of scrubbed text, or the [redacted secret] mark, records no proposal", async () => {
+  // controller ruling (Task 17): the reader shows a source's location as [hidden]; a proposal that copies it back would write the mark over the real value
+  const lakehouse = f.ctx.builder!.read("sources/lakehouse.yaml")!;
+  expect(lakehouse).toContain("[hidden]");
+  const cases: [string, string][] = [
+    ["sources/lakehouse.yaml", lakehouse.replace("Events kept in the lake.", "Events kept in the lake house.")],
+    ["sources/extra.yaml", sourceText("extra").replace("where: machine", "where: machine\nquality: \"[hidden]\"")],
+    ["sources/extra.yaml", sourceText("extra").replace("where: machine", "where: machine\nquality: \"[redacted secret]\"")],
+  ];
+  for (const [path, text] of cases) {
+    const r = await f.call("propose_change", { why: "w", title: "t", files: [{ path, text }] });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toContain(`${path}: it holds the mark of text kept from you`);
+    const v = await f.call("validate_manifest", { why: "w", path, text });
+    expect(view<{ ok: boolean }>(v).ok).toBe(false);
+  }
+  expect(ofType("builder.proposed")).toEqual([]);
+});
+
 test("propose_change with a check, a model, a persona or rules is refused: a save may not write a <kind>", async () => {
   const files: [string, string, string][] = [
     ["checks/99-x.yaml", "kind: check\nid: x\nscript: 99-x.ts\n", "check"],

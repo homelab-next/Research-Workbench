@@ -204,6 +204,30 @@ test("checkChange refuses a file that holds a secret value, without repeating th
   expect(checkChange({ ...deps(), secrets: ["short"] }, root, [{ path: "sources/extra.yaml", text: sourceText("extra", "quality: short\n") }]).ok).toBe(true);
 });
 
+test("checkChange validates every file it is given, whether or not a loop names it: a stage, a source, a pivot and a playbook that no loop uses", () => {
+  // controller ruling (Task 17): a stage file no loop names is checked as a stage, so a bad one is never written to wait for a loop to meet it
+  const stage = "kind: stage\nid: lonely\ntitle: Lonely\norder: 99\nphase: test\nruns: agent\nrole: oracle\ngate: null\nreviews: false\ntools: []\nschema: null\nmodel: null\non_pass: null\non_fail: null\n";
+  let check = checkChange(deps(), root, [{ path: "stages/lonely.yaml", text: stage }]);
+  expect(check.ok).toBe(false);
+  expect(check.problems.length).toBe(1);
+  expect(check.problems[0]).toStartWith(`stages/lonely.yaml: stage "lonely": `);
+  expect(check.problems[0]).toContain(`role "oracle"`);
+  // the same stage with a role a stage may have passes
+  expect(checkChange(deps(), root, [{ path: "stages/lonely.yaml", text: stage.replace("role: oracle", "role: feedback").replace("runs: agent", "runs: human") }]).problems).toEqual([]);
+
+  check = checkChange(deps(), root, [{ path: "sources/lonely.yaml", text: sourceText("lonely").replace("connector: http", "connector: carrier-pigeon") }]);
+  expect(check.ok).toBe(false);
+  expect(check.problems[0]).toStartWith("sources/lonely.yaml: ");
+
+  check = checkChange(deps(), root, [{ path: "pivots/lonely.yaml", text: "kind: pivots\npivots:\n  - id: lonely\n    title: Lonely\n    from: address\n    to: nothing-at-all\n    source: flows\n" }]);
+  expect(check.ok).toBe(false);
+  expect(check.problems[0]).toStartWith("pivots/lonely.yaml: ");
+
+  check = checkChange(deps(), root, [{ path: "playbooks/lonely.yaml", text: "kind: playbook\nid: lonely\ntitle: Lonely\ninputs: []\nsteps:\n  - { id: a, pivot: no_such_pivot, from: input.nothing }\nend: [a]\n" }]);
+  expect(check.ok).toBe(false);
+  expect(check.problems[0]).toStartWith("playbooks/lonely.yaml: ");
+});
+
 test("checkChange refuses a change that leaves another loop unusable: a stage manifest another loop names, edited so that loop's graph breaks", () => {
   const research = readFileSync(join(root, "stages", "research.yaml"), "utf8");
   const check = checkChange(deps(), root, [{ path: "stages/research.yaml", text: research.replace("on_fail: plan", "on_fail: nowhere") }]);

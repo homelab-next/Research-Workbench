@@ -21,6 +21,7 @@ import { rootRelative } from "../pipeline/components";
 import type { ResolveContext } from "../pipeline/components";
 import { DEFAULT_LOOP, IMPLICIT_NOTE, loadLoops } from "../pipeline/loops";
 import type { LoopCatalog, LoopManifest, ResolvedLoop } from "../pipeline/loops";
+import { stageFrom } from "../pipeline/manifests";
 import type { StageManifest } from "../pipeline/manifests";
 
 export class WriteRefused extends Refused {
@@ -242,6 +243,17 @@ function plan(deps: SaveDeps, root: string, files: ManifestFile[]): { check: Cha
     }
     for (const id of writes) if (!afterLoops.list().some((x) => x.id === id)) problems.push(`loop "${id}": it is not loaded`);
 
+    // every stage file written is a stage, whether or not a loop names it yet (a loop that names one also checks it, through its own graph)
+    for (const f of planned) {
+      if (f.kind !== "stage") continue;
+      const m = after.all("stage").find((x) => sameDir(x.root, copy) && rootRelative(x.root, x.path) === f.path);
+      if (m === undefined) continue; // the registry refused the file, which is reported above
+      const made = stageFrom(m.body, m.hash, m.title, true);
+      if (typeof made === "string") {
+        const problem = `${f.path}: stage "${f.id}": ${shown(made)}`;
+        if (!problems.includes(problem)) problems.push(problem);
+      }
+    }
     // every pivot the files write, or that reads a source they write, renders against the guard
     const sources = new Set(planned.filter((f) => f.kind === "source").map((f) => f.id));
     for (const pv of guardProblems(after, (pv) => {

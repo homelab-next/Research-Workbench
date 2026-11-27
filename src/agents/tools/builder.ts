@@ -20,6 +20,10 @@ const NOT_HERE = "this tool is the loop builder's";
 const ONE_PROBE = "one probe at a time; the person has not decided the last";
 const WAITING = "waiting for the person's approval";
 const HIDDEN = "[hidden]";
+/** The marks that stand for text kept from the model: scrub's and the redaction of a secret a person or a model wrote. */
+const MARKS = [HIDDEN, "[redacted secret]"] as const;
+/** The refusal of a file that holds one of the marks: written into a root, it would replace the real value with the mark. */
+export const MARK_REFUSAL = "it holds the mark of text kept from you; propose the file without it and leave that value to the person";
 const BUILD_ID = /^BUILD-[1-9][0-9]{0,8}$/;
 /** The keys whose value is a credential, wherever they are in a manifest. */
 const CREDENTIAL_KEYS: ReadonlySet<string> = new Set(["password", "token", "secret", "api_key", "apikey"]);
@@ -94,6 +98,9 @@ function checked(ctx: ToolContext, b: BuilderTools, files: ManifestFile[]): { ok
     // a path that itself holds a value is not repeated either
     return { ok: false, problems: leaked.map((f) => `${holdsSecret(f.path, b.secrets) ? "a file" : f.path}: ${CREDENTIAL_REFUSAL}`), files: [] };
   }
+  // a file copied from a scrubbed view holds the mark where the real text was: it is never proposed
+  const marked = files.filter((f) => MARKS.some((m) => f.text.includes(m) || f.path.includes(m)));
+  if (marked.length > 0) return { ok: false, problems: marked.map((f) => `${f.path}: ${MARK_REFUSAL}`), files: [] };
   const check = b.check(files);
   const problems = shown(ctx, b, check.problems) as string[];
   // the files a save would write besides these (the implicit loop made explicit) are the save's, not the proposal's

@@ -53,6 +53,15 @@ export interface LoopView extends LoopSummaryView {
 }
 /** A loop file in the loop store, and what importing it would do now (null with `problem` when it cannot be imported). */
 export interface LoopFileView { file: string; loop: string; version: number; title: string; hash: string; files: number; bytes: number; plan: { write: number; same: number; conflicts: string[] } | null; problem: string | null }
+
+// ---------- the loop builder (slice 12, part B) ----------
+/** One line of a diff: kept (" "), added ("+") or removed ("-"). The text is shown as text. */
+export interface DiffLine { op: " " | "+" | "-"; text: string }
+/** One file of a proposed change, as a line diff against the file on disk. `stale`: the file changed on disk since it was proposed, so it cannot be accepted. */
+export interface BuilderFileView { index: number; path: string; kind: string; id: string; new_file: boolean; lines: DiffLine[]; decided: null | { accepted: boolean }; stale: boolean }
+/** A builder session as its page shows it: what it proposed, file by file, and the probes it asked for with what the person decided. */
+export interface BuilderView { id: string; loop: string | null; marking: Marking; model: ModelChoice | null; changes: { id: string; title: string; why: string; files: BuilderFileView[] }[];
+  probes: { id: string; kind: "pivot" | "query"; source: string; pivot: string | null; value: Observable | null; text: string | null; why: string; costly: boolean; decided: null | { approved: boolean; outcome: string; detail: string; card: string | null } }[] }
 export interface SourceView { id: string; title: string; connector: string; marking: Marking; where: Where; confirmed: boolean; adhoc: boolean; cost: { weight: number; unit: string }; quality: string }
 export interface PivotView { id: string; title: string; from: string; to: string; source: string; free: boolean; weight: number; needs_window: boolean; empty_means: EmptyMeans; inventory: string | null }
 /** A list a source keeps, and whether it is declared complete for its scope (only then is an empty answer from it a proven negative). */
