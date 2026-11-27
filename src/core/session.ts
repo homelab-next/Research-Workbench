@@ -42,6 +42,7 @@ export class CaseSession {
   private readonly delivery: Delivery<Listener, { entry: Entry; state: CaseState }>;
   private current: CaseState;
   private building = false;
+  private closed = false;
 
   private readonly onClose: (() => void) | undefined;
 
@@ -128,8 +129,14 @@ export class CaseSession {
     };
   }
 
+  /** False once close() has run. */
+  get open(): boolean {
+    return !this.closed;
+  }
+
   /** Closes the ledger. The owner (the workbench) is told, so it stops handing out this session. */
   close(): void {
+    this.closed = true;
     try {
       this.ledger.close();
     } finally {

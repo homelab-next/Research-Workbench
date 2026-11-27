@@ -669,7 +669,7 @@ test("the engine itself unloads nothing: after the run the case folder is where 
   expect(unloadDue(f.s.state)).toBe(true);
   expect(existsSync(f.s.dir)).toBe(true);
   expect(listing(f.s.dir)).toEqual(before);
-  expect(readdirSync(join(f.s.dir, "..")).filter((n) => n.startsWith("."))).toEqual([]);
+  expect(readdirSync(join(f.s.dir, "..")).filter((n) => n.startsWith(".") && n !== ".high-water")).toEqual([]);
   const types = new Set(f.s.entries().map((e) => e.type));
   for (const t of ["case.unloaded", "case.unload_failed", "case.loaded"] as const) expect(types.has(t)).toBe(false);
   expect(f.s.state.archive).toMatchObject({ pending: null, failed: null, unloads: 0 });

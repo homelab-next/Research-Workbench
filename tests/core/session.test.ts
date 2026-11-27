@@ -279,3 +279,13 @@ test("every counted kind is checked: queries, jobs, runs and the rest", () => {
   s.commit((_st, ids) => [{ type: "job.started", payload: { job: ids.next("job"), title: "t", kind: "query", source: null }, actor: human }]);
   expect(Object.keys(s.state.jobs)).toEqual(["j1"]);
 });
+
+test("open is true until close() has run, and false after, even when the owner is told", () => {
+  let told = 0;
+  const own = new CaseSession({ id: "CASE-1", dir, ledger: Ledger.open(join(dir, "ledger.sqlite"), "CASE-1"), blobs: new BlobStore(join(dir, "blobs")), onClose: () => void told++ });
+  expect(own.open).toBe(true);
+  own.close();
+  expect(own.open).toBe(false);
+  expect(told).toBe(1);
+  expect(s.open).toBe(true);
+});

@@ -333,13 +333,16 @@ test("createCase refuses an input of the wrong shape before anything is written"
   expect(readdirSync(join(dir, "cases"))).toEqual([]);
 });
 
-test("after close the workbench refuses to work", () => {
+test("after close the workbench refuses to work", async () => {
   wb.createCase(newCase, human);
   wb.close();
   expect(() => wb.createCase(newCase, human)).toThrow(WorkbenchClosedError);
   expect(() => wb.session("CASE-1")).toThrow(WorkbenchClosedError);
   expect(() => wb.listCases()).toThrow(WorkbenchClosedError);
-  expect(readdirSync(join(dir, "cases"))).toEqual(["CASE-1"]);
+  await expect(wb.unloadCase("CASE-1", { actor: human })).rejects.toThrow(WorkbenchClosedError);
+  await expect(wb.loadCase(join(dir, "CASE-1.TLP-AMBER.tar.gz"), { actor: human })).rejects.toThrow(WorkbenchClosedError);
+  // the mark of the highest id given out sits beside the cases, and is never one
+  expect(readdirSync(join(dir, "cases")).sort()).toEqual([".high-water", "CASE-1"]);
   wb.close(); // closing twice is harmless
   wb = Workbench.open(dir, { now, onError });
 });
