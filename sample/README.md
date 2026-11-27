@@ -63,3 +63,21 @@ bun run investigate approve CASE-1
 The first stops at the plan gate and prints the steps, the second at the publish gate, the third publishes
 `published/1` in the case folder. Then `bun run verify <data_dir>/cases/CASE-1` should say the chain is intact. Add
 `--config <file>` to choose the settings; the root named first in them is where the sample data is generated.
+
+## Unloading the demo case
+
+Once `published/1` exists, the case can be put away and brought back (the server stopped, since these take the workbench's lock):
+
+```
+bun run cases unload CASE-1
+bun run cases store list --search 198.51.100.77
+bun run cases load CASE-1
+bun run verify <data_dir>/cases/CASE-1
+```
+
+The first writes `CASE-1.TLP-GREEN.tar.gz` to the case store (`<data_dir>/store` unless `cases.store` says otherwise) and takes the
+case off the list; the second finds it by its starting value; the third checks the file, verifies its chain and loads it again, and
+`verify` says the chain is intact (its last two entries are `case.unloaded` and `case.loaded`). `bun run investigate approve CASE-1 --unload`
+publishes and unloads in one step. The sample's script covers one run; `tests/sample/cases-acceptance.test.ts` adds a second run's
+turns to a copy of it, drives all of this on the scripted model, and has the follow-up run in the loaded case publish `published/2`,
+whose change is stated against product 1.

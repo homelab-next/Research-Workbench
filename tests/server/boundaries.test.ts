@@ -95,6 +95,50 @@ test("each rule catches a planted violation", () => {
   expect(listensOnlyOnLoopback("src/server/x.ts", `import { createServer } from "node:http";`).length).toBeGreaterThan(0);
 });
 
+// ---------- slice 11: only a person or code unloads, loads or deletes a case, and the case file stays on the server ----------
+
+/** Every text file under a folder of the repository. */
+function textFiles(dir: string): { path: string; text: string }[] {
+  return readdirSync(dir).flatMap((n) => {
+    const p = join(dir, n);
+    return statSync(p).isDirectory() ? textFiles(p) : /\.(ts|ya?ml|md|json)$/.test(n) ? [{ path: rel(p), text: readFileSync(p, "utf8") }] : [];
+  });
+}
+/** The calls, classes, routes and route permissions that unload, load or delete a case. */
+const CASE_MOVES = /\bunloadCase\b|\bloadCase\b|\bCaseStoreFolder\b|\/api\/store\b|\/unload\b|\bunload_case\b|\bload_case\b|\bdelete_stored\b/;
+const noAgentMovesCases: Rule = (path, text) =>
+  /^src\/(agents|pipeline)\//.test(path) && CASE_MOVES.test(text) ? [`${path} names ${text.match(CASE_MOVES)![0]}`] : [];
+const sampleNamesNoMove: Rule = (path, text) => (path.startsWith("sample/") && CASE_MOVES.test(text) ? [`${path} names ${text.match(CASE_MOVES)![0]}`] : []);
+/** The case file and the store are server-side core: neither the browser's code nor the fold imports them. */
+const caseFileStaysOnServer: Rule = (path, text) =>
+  /^src\/(web|core\/state)\//.test(path)
+    ? imports(text).filter((spec) => ["src/core/casefile", "src/core/store", "src/core/casefile.ts", "src/core/store.ts"].some((d) => reaches(path, spec, d))).map((spec) => `${path} imports ${spec}`)
+    : [];
+
+test("no agent tool and no stage runner can unload, load or delete a case", () => {
+  expect(sources.filter((f) => /^src\/(agents\/tools|pipeline\/stages)\//.test(f.path)).length).toBeGreaterThanOrEqual(10);
+  expect(sources.flatMap((f) => noAgentMovesCases(f.path, f.text))).toEqual([]);
+  const sample = textFiles(join(ROOT, "sample"));
+  expect(sample.some((f) => f.path.startsWith("sample/context/"))).toBe(true);
+  expect(sample.flatMap((f) => sampleNamesNoMove(f.path, f.text))).toEqual([]);
+  // the rules catch what they are for
+  expect(noAgentMovesCases("src/agents/tools/x.ts", "await wb.unloadCase(id, { actor })")).toHaveLength(1);
+  expect(noAgentMovesCases("src/pipeline/stages/x.ts", "new CaseStoreFolder(dir)")).toHaveLength(1);
+  expect(noAgentMovesCases("src/pipeline/engine.ts", `fetch("/api/store/load")`)).toHaveLength(1);
+  expect(noAgentMovesCases("src/server/hub.ts", "await wb.unloadCase(id, { actor })")).toEqual([]);
+  expect(sampleNamesNoMove("sample/context/personas/x.yaml", "tools: [list_cards, load_case]")).toHaveLength(1);
+});
+
+test("the case file and the store are never imported by the browser's code or by the fold", () => {
+  expect(sources.some((f) => f.path === "src/core/casefile.ts") && sources.some((f) => f.path === "src/core/store.ts")).toBe(true);
+  expect(sources.flatMap((f) => caseFileStaysOnServer(f.path, f.text))).toEqual([]);
+  expect(caseFileStaysOnServer("src/web/views/x.ts", `import { checkCaseFile } from "../../core/casefile";`)).toHaveLength(1);
+  expect(caseFileStaysOnServer("src/core/state/x.ts", `import type { CaseManifest } from "../casefile";`)).toHaveLength(1);
+  expect(caseFileStaysOnServer("src/web/x.ts", `import { CaseStoreFolder } from "../core/store.ts";`)).toHaveLength(1);
+  expect(caseFileStaysOnServer("src/web/app.ts", `import { CaseStore } from "./store";`)).toEqual([]);
+  expect(caseFileStaysOnServer("src/server/x.ts", `import { checkCaseFile } from "../core/casefile";`)).toEqual([]);
+});
+
 // ---------- what the security notes claim, over a real socket on 127.0.0.1 ----------
 
 const SECRET = "planted-secret-value-91d7", SECRET_NAME = "SAMPLE_PLANTED_SECRET";

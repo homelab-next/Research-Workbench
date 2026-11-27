@@ -336,6 +336,37 @@ It prints the address and any `problem:` lines. Fix those first.
 - Verify, on a card, re-runs the card's stored query as a new logged query and compares the result. It says validated, differs (the source may have changed) or could not run. The original is never replaced.
 - Replay, a lens, steps through the case one recorded action at a time.
 
+## Cases: load and unload
+
+A case is **loaded** while its folder is in `<data_dir>/cases/` (`ledger.sqlite`, `blobs/`, `published/`); the case list shows the loaded cases and nothing else. **Unloading** packs the case into one file in the **case store** and takes it out of the working set. **Loading** checks a case file, verifies the chain it holds, and brings the case back. The case store is a folder you choose, `<data_dir>/store` unless the configuration says otherwise; a backup disk, a share, or a folder another program reads will do. Export and import are the same two operations against another folder: `unload --to <dir>` and `load <file>`.
+
+```yaml
+cases:
+  store: /srv/workbench/store   # the case store (default <data_dir>/store); relative to this file
+  on_complete: keep             # keep (default) or unload: the default of "Unload after publishing"
+  max_bytes: 2147483648         # the largest case file a load accepts (2 GiB)
+```
+
+The four commands, with your configuration's `--config` on each:
+
+```bash
+bun run cases unload CASE-1 --config ~/workbench/config.yaml
+bun run cases unload CASE-1 --to /mnt/backup/cases --config ~/workbench/config.yaml
+bun run cases load CASE-1 --config ~/workbench/config.yaml
+bun run cases load /mnt/backup/cases/CASE-1.TLP-GREEN.tar.gz --config ~/workbench/config.yaml
+bun run cases store list --search 198.51.100.77   # by id, title, question or starting value --config ~/workbench/config.yaml
+bun run cases store delete CASE-1 --config ~/workbench/config.yaml
+```
+
+- `unload` and `load` take the workbench's lock, so the server must be stopped while they run (in the interface the server does the same work itself). `store list` and `store delete` read only the store folder, so they work while the server runs. `load` takes a case id (the file of that case in the store) or the path of a file.
+- `store delete` shows the case and asks you to type its id; it removes only that file from the store (a loaded case is not touched) and writes a line to `<store>/deleted.log` (id, title, head, when, who) before the file goes. The server checks the typed id too.
+- **The file.** One `CASE-12.TLP-AMBER.tar.gz` per case: the marking is in the name. Its first member is `case.json`, the manifest: the format (1), the case id, the hash of entry 1 (`origin`), the title, the question, the marking, the starting values, the run's status and outcome, the products published, the head (its sequence number and hash), the number of entries, the workbench version, when it was unloaded, and the size and sha256 of every other file. The rest is every regular file of the case folder, unchanged. Nothing is redacted or left out; a folder that holds a link or a special file is not packed, and the unload says which.
+- **The record goes with the case.** The ledger records `case.unloaded` (who, the store's name and the head before it) before the file is made, so the file holds that entry and its head is the one `case.json` names. A load records `case.loaded` (who, the file's name and the head it arrived with). Every entry before them is the same, byte for byte, so `bun run verify <data_dir>/cases/CASE-1` checks a loaded case like any other, and Replay shows it from entry 0.
+- **What may be unloaded.** Not while a run is running, a job or a query is running, or your agent is answering; pause or stop the run first. A paused or waiting run may be unloaded, and it comes back paused or waiting. The store file stays when a case is loaded; the next unload replaces it.
+- **Unload after publishing.** At the publish gate a box beside Approve, "Unload after publishing", is ticked or not as `cases.on_complete` says, and you may change it before you approve. Its value is recorded on your approval, and once the run has finished as published the workbench unloads the case. `bun run investigate approve CASE-1 --unload` (or `--keep`) does the same on the command line. If that unload fails, the case stays loaded, its tile says "unload failed" with the reason, and the failure is in its ledger; it is not tried again by itself.
+- **One id everywhere.** A case keeps the id it was made with, wherever it is loaded. A file whose id is held here by another case (another entry 1) is refused with "CASE-1 is taken here by another case"; the same case loaded twice is refused as "already loaded". The id counter never gives an id twice: it counts the loaded cases, the store's file names, `deleted.log` and a mark in the data folder (`cases/.high-water`) that only goes up, so an id stays used after its case was unloaded elsewhere, deleted, or while the store is unplugged.
+- **A stop in the middle.** An unload writes the file under a temporary name, reads it back against `case.json`, puts it in place, and only then takes the folder out of the working set. A stop or failure before that last step leaves the case loaded; the ledger records `case.unload_failed` (at the next open, after a stop) and the next unload replaces any file already written. A load extracts to a temporary folder, checks every file and verifies the chain before the case appears, and refuses the whole file otherwise.
+
 ## Known limits
 
 - A route that is in flight cannot be ended. Stopping the run stops what comes next, not a query already started.
@@ -356,3 +387,6 @@ It prints the address and any `problem:` lines. Fix those first.
 - A reviewer that keeps failing a draft only over a value you overruled pauses the run each time (it cannot move the value back, but "Evaluation failed on this revision" stays a publish blocker): edit the draft, or choose another model for that reviewer.
 - An overrule sets a finding's likelihood, confidence or place in code; the confidence basis and reasoning are the analyst's until its next Assemble pass rewrites them. An overrule made with no run in progress reaches the next run's drafts but is not sent to the analyst as a reason.
 - A blocking question holds the run after its stage's pass, not inside it: that stage does not run again on resume, so it finished its work without the answer. The stages after it read the answer.
+- The case store may be shared by several workbenches, so a temporary `.part` file an unload left behind after a stop is never removed by the workbench: the Case store view and `store list` count it as a leftover, and you remove it by hand.
+- A case file from another workbench whose id this workbench used once, for a case now unloaded elsewhere (not to this store), cannot be told from that case coming back, so it loads.
+- While a case open in a tab is being packed, the tab's next read of its custody or a blob is refused, and the browser logs it as a failed load before the tab goes to the list.
