@@ -263,3 +263,14 @@ test("the sample's windowed pivots give observed times", async () => {
   expect(peers.unread).toBe(0);
   for (const id of ["domain_to_clients", "asset_to_accounts", "account_to_signin_addresses"]) expect(registry.pivot(id)!.times).toMatchObject({ kind: "span", count: "events" });
 });
+
+const yamlOf = (...p: string[]): Record<string, unknown> => Bun.YAML.parse(readFileSync(join(REPO_SAMPLE, ...p), "utf8")) as Record<string, unknown>;
+const stage = (id: string): { tools: string[] } => yamlOf("stages", `${id}.yaml`) as unknown as { tools: string[] };
+const profile = yamlOf("context", "profile.yaml") as unknown as { stages: Record<string, { skills?: string[] }> };
+
+test("Plan, Research and Assemble may ask the person, the reviewers may not, and those three are given the skill", () => {
+  for (const id of ["plan", "research", "assemble"]) { expect(stage(id).tools).toContain("ask_person"); expect(profile.stages[id]!.skills).toEqual(["ask-the-person"]); }
+  for (const id of ["frame", "evaluate", "challenge", "publish"]) expect(stage(id).tools).not.toContain("ask_person");
+  const skill = registry.get("skill", "ask-the-person");
+  expect(skill?.title).toBe("Ask the person");
+});

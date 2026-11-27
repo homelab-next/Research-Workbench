@@ -7,7 +7,7 @@ runs: agent
 role: plan
 gate: plan
 reviews: false
-tools: [list_sources, describe_source, find_routes, list_playbooks]
+tools: [list_sources, describe_source, find_routes, list_playbooks, ask_person]
 schema: plan-output
 model: { provider: scripted, model: sample-run, effort: null }
 on_pass: research

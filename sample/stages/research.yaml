@@ -7,7 +7,7 @@ runs: agent
 role: research
 gate: null
 reviews: false
-tools: [find_routes, run_step, run_pivot, run_query, list_cards, read_card]
+tools: [find_routes, run_step, run_pivot, run_query, list_cards, read_card, ask_person]
 schema: research-output
 model: { provider: scripted, model: sample-run, effort: null }
 on_pass: assemble

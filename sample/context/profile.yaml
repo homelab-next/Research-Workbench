@@ -13,16 +13,19 @@ stages:
     agent: planner
     persona: planner
     goal: Break each goal into sub-goals and choose a route of pivots for each.
+    skills: [ask-the-person]
   research:
     agent: researcher
     persona: researcher
     goal: Run the accepted steps, collect what each returns and say what was not found.
     procedure: research-sop
+    skills: [ask-the-person]
   assemble:
     agent: analyst
     persona: analyst
     goal: Write the findings from the cards, with likelihood and confidence, and name the gaps.
     procedure: assemble-sop
+    skills: [ask-the-person]
   evaluate:
     agent: evaluator
     persona: evaluator

@@ -37,7 +37,7 @@ test("the sample pipeline has nine stages in order with two gates and three revi
   expect(checks.model).toBeNull();
   expect(checks.runs).toBe("script");
   expect(pipeline!.stages.find((s) => s.id === "research")!.model).toEqual({ provider: "scripted", model: "sample-run", effort: null });
-  expect(pipeline!.stages.find((s) => s.id === "research")!.tools).toEqual(["find_routes", "run_step", "run_pivot", "run_query", "list_cards", "read_card"]);
+  expect(pipeline!.stages.find((s) => s.id === "research")!.tools).toEqual(["find_routes", "run_step", "run_pivot", "run_query", "list_cards", "read_card", "ask_person"]);
 });
 
 test("a stage naming a tool outside the fixed list is left out with a problem", () => {

@@ -51,7 +51,7 @@ test("an unknown profile is a ContextError", () => {
 test("stage parts come in priority order with rules and schema fixed", () => {
   const p = loadProfile(registry, "investigation");
   const parts = stageParts(registry, p, "research", { schema: "research-output", objective: "sample-objective" });
-  expect(parts.map((x) => x.kind)).toEqual(["rules", "persona", "goal", "procedure", "schema", "objective", "framework", "standard"]);
+  expect(parts.map((x) => x.kind)).toEqual(["rules", "persona", "goal", "procedure", "skill", "schema", "objective", "framework", "standard"]);
   expect(parts.filter((x) => x.fixed).map((x) => x.kind)).toEqual(["rules", "schema"]);
   expect(parts[2]!.id).toBe("research-goal");
   expect(parts[2]!.text).toBe(p.stages.research!.goal);
