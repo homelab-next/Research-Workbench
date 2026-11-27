@@ -299,3 +299,90 @@ test("status of an unloaded case says it is in the store", () => {
   expect(r.out).toBe("");
   expect(r.err.trim()).toBe("CASE-1 is not loaded; the store holds CASE-1.TLP-GREEN.tar.gz");
 });
+
+// ---- loops: start --loop, and a parent whose stage runs a loop (its own workbench, so the cases above keep their numbers) ----
+
+const SCRIPTED = { provider: "scripted", model: "sample-run", effort: null };
+/** A loop `triage`: Frame, then a stage that runs the investigation loop as a child case. It has no gate of its own, so it completes. */
+function writeTriage(e: Env): void {
+  const stages = [
+    { id: "frame", title: "Frame", order: 1, runs: "agent", role: "frame", tools: [], schema: "frame-output", model: SCRIPTED, on_pass: "investigate", on_fail: null },
+    {
+      id: "investigate", title: "Investigate", order: 2, runs: "loop", role: "subloop", loop: "investigation",
+      inputs: { question: "case.question", observables: "case.observables", window: "case.window" },
+      returns: { cards: { as: "cards" } }, on_pass: null, on_fail: null,
+    },
+  ];
+  writeFileSync(join(e.dir, "sample", "loops", "triage.yaml"), JSON.stringify({
+    kind: "loop", id: "triage", title: "Triage", version: 1, profile: "investigation", entry: "frame", stages, outputs: { findings: { from: "findings" } },
+  }));
+}
+const entriesOf = (e: Env, id: string, type: string): unknown[] => {
+  const db = new Database(join(e.data, "cases", id, "ledger.sqlite"), { readonly: true });
+  try { return (db.query("select payload from entries where type = ? order by seq").all(type) as { payload: string }[]).map((r) => JSON.parse(r.payload)); } finally { db.close(); }
+};
+const withLoop = (loop: string): string[] => [...START, "--loop", loop];
+
+test("start --loop triage makes a case for that loop and starts it; start with no --loop is as before", () => {
+  const e = setup();
+  writeTriage(e);
+  const r = cli(e, withLoop("triage"));
+  expect(r.err).toBe("");
+  expect(entriesOf(e, "CASE-1", "case.loop_set")).toEqual([{ loop: "triage" }]);
+  expect(entriesOf(e, "CASE-1", "run.started")).toHaveLength(1);
+  const plain = setup();
+  const p = cli(plain, START);
+  expect(lines(p.out)[0]).toBe("CASE-1 waiting waiting=plan");
+  expect(entriesOf(plain, "CASE-1", "case.loop_set")).toEqual([]);
+});
+
+test("start --loop with an unknown or unusable loop exits 1 with the reason and makes no case", () => {
+  const e = setup();
+  const unknown = cli(e, withLoop("nope"));
+  expect(unknown.code).toBe(1);
+  expect(unknown.err).toContain('no loop "nope"');
+  writeFileSync(join(e.dir, "sample", "loops", "broken.yaml"), JSON.stringify({ kind: "loop", id: "broken", title: "Broken", version: 1, profile: "investigation", entry: "ghost", stages: ["ghost"] }));
+  const broken = cli(e, withLoop("broken"));
+  expect(broken.code).toBe(1);
+  expect(broken.err).toContain('loop "broken" is not usable');
+  expect(existsSync(join(e.data, "cases", "CASE-1"))).toBe(false);
+});
+
+test("a parent whose stage runs a loop reports waiting on child CASE-2 and the command to give the child", () => {
+  const e = setup();
+  writeTriage(e);
+  const r = cli(e, withLoop("triage"));
+  expect(r.code).toBe(0);
+  expect(lines(r.out)[0]).toContain('CASE-1 paused');
+  expect(lines(r.out)[0]).toContain("waiting on child CASE-2");
+  expect(r.out).toContain("child CASE-2 waiting=plan: bun run investigate accept-plan CASE-2");
+  expect(cli(e, ["status", "CASE-2"], false).out).toContain("CASE-2 waiting waiting=plan");
+});
+
+test("accept-plan and approve on the child carry the parent on in the same command, and status of the parent then says finished", () => {
+  const e = setup();
+  writeTriage(e);
+  cli(e, withLoop("triage"));
+  const planned = cli(e, ["accept-plan", "CASE-2", "--budget", "s3=1"]);
+  expect(planned.err).toBe("");
+  expect(lines(planned.out)[0]).toBe("CASE-2 waiting waiting=publish stage=publish draft=2");
+  expect(cli(e, ["status", "CASE-1"], false).out).toContain("waiting on child CASE-2");
+  expect(cli(e, ["status", "CASE-1"], false).out).toContain("child CASE-2 waiting=publish: bun run investigate approve CASE-2");
+  const approved = cli(e, ["approve", "CASE-2"]);
+  expect(approved.err).toBe("");
+  expect(lines(approved.out)[0]).toBe("CASE-2 finished published=published/1");
+  expect(approved.out).toContain("parent CASE-1 finished");
+  expect(lines(cli(e, ["status", "CASE-1"], false).out)[0]).toMatch(/^CASE-1 finished/);
+  // nothing here passed a gate for the child: the parent's record holds none
+  for (const type of ["gate.passed", "plan.accepted", "product.published"]) expect(entriesOf(e, "CASE-1", type)).toEqual([]);
+  expect(entriesOf(e, "CASE-1", "subloop.finished")).toHaveLength(1);
+});
+
+test("status of a child names its parent and the stage that made it", () => {
+  const e = setup();
+  writeTriage(e);
+  cli(e, withLoop("triage"));
+  const r = cli(e, ["status", "CASE-2"], false);
+  expect(r.code).toBe(0);
+  expect(r.out).toContain("parent CASE-1 stage investigate");
+});

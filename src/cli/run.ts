@@ -7,8 +7,12 @@ import type { CaseSession } from "../core/session";
 import { MARKINGS, isMarking } from "../core/types";
 import type { Actor, Marking, Observable } from "../core/types";
 import { CaseNotFoundError, Workbench, WorkbenchLockedError } from "../core/workbench";
+import type { ChildLink } from "../core/workbench";
+import type { Card } from "../core/types";
 import { ConfigError, loadConfig } from "../modules/config";
 import { Engine, RunRefused } from "../pipeline/engine";
+import type { EngineDeps } from "../pipeline/engine";
+import type { ChildCases } from "../pipeline/subloop";
 import { FeedbackRefused } from "../pipeline/feedback";
 import { PlanRefused } from "../pipeline/plans";
 import { PublishRefused } from "../pipeline/publish";
@@ -19,7 +23,7 @@ import { compose, ComposeError } from "./compose";
 
 const USAGE = [
   "usage:",
-  "  bun run src/cli/run.ts start  --title T --asked Q --why W --start type=value [--start ...] --from TS --to TS [--objective ID] [--marking M]",
+  "  bun run src/cli/run.ts start  --title T --asked Q --why W --start type=value [--start ...] --from TS --to TS [--objective ID] [--marking M] [--loop ID]",
   "  bun run src/cli/run.ts accept-plan <case> [--steps s1,s2] [--budget step=amount ...]",
   "  bun run src/cli/run.ts replan      <case> --note N",
   "  bun run src/cli/run.ts approve     <case> [--unload | --keep]",
@@ -40,7 +44,7 @@ const DEFAULT_PORT = 4801;
 type Command = "start" | "accept-plan" | "replan" | "approve" | "reject" | "resume" | "stop" | "feedback" | "status";
 interface Spec { values: string[]; repeated: string[]; flags: string[]; required: string[]; case: boolean }
 const SPECS: Record<Command, Spec> = {
-  start: { values: ["title", "asked", "why", "from", "to", "objective", "marking"], repeated: ["start"], flags: [], required: ["title", "asked", "why", "start", "from", "to"], case: false },
+  start: { values: ["title", "asked", "why", "from", "to", "objective", "marking", "loop"], repeated: ["start"], flags: [], required: ["title", "asked", "why", "start", "from", "to"], case: false },
   "accept-plan": { values: ["steps"], repeated: ["budget"], flags: [], required: [], case: true },
   replan: { values: ["note"], repeated: [], flags: [], required: ["note"], case: true },
   approve: { values: [], repeated: [], flags: ["unload", "keep"], required: [], case: true },
@@ -163,7 +167,74 @@ function report(session: CaseSession, asked: boolean): { lines: string[]; code: 
     for (const s of state.plan.current.steps) lines.push(`${s.id} ${s.free ? "free" : "costly"} ${s.source} ${s.pivot} ${s.from.value === "" ? "(from an earlier step)" : s.from.value}`);
   }
   if (waiting === "publish" && draft !== null) for (const b of blockers(state, draft.hash)) lines.push(`blocker: ${oneLine(b)}`);
-  return { lines, code: asked || (run.status !== "paused" && run.status !== "interrupted") ? 0 : 1 };
+  // a run that waits on a child waits for a person, as a gate does: it is not a failure
+  const waitsOnChild = run.status === "paused" && run.hold?.kind === "child";
+  return { lines, code: asked || waitsOnChild || (run.status !== "paused" && run.status !== "interrupted") ? 0 : 1 };
+}
+
+/** The command a person gives a child case to carry it on, from where it is. */
+function childCommand(state: CaseSession["state"], id: string): { where: string; command: string } {
+  const { run } = state;
+  if (run.status === "waiting" && run.waiting === "plan") return { where: "waiting=plan", command: `accept-plan ${id}` };
+  if (run.status === "waiting" && run.waiting === "publish") return { where: "waiting=publish", command: `approve ${id}` };
+  if (run.status === "paused" || run.status === "interrupted") return { where: run.status, command: run.hold?.kind === "child" ? `status ${id}` : `resume ${id}` };
+  return { where: run.status, command: `status ${id}` };
+}
+
+/** What a case says of the cases it is linked to: its parent and the stage that made it, and the child its run waits on with the command to give it. */
+function linkLines(wb: Workbench, session: CaseSession): string[] {
+  const { state } = session;
+  const lines: string[] = [];
+  const parent = state.loop.parent;
+  if (parent !== null) lines.push(`parent ${parent.case} stage ${parent.stage}`);
+  const hold = state.run.status === "paused" ? state.run.hold : null;
+  if (hold?.kind === "child") {
+    let child: CaseSession | null = null;
+    try { child = wb.session(hold.child); } catch { /* not loaded: said below */ }
+    if (child === null) lines.push(`child ${hold.child} is not loaded; load it, then resume ${session.id}`);
+    else {
+      const c = childCommand(child.state, hold.child);
+      lines.push(`child ${hold.child} ${c.where}: bun run investigate ${c.command}`);
+    }
+  }
+  return lines;
+}
+
+/** The host's ChildCases: a child is a case of this workbench, driven by an engine of this process. Never passes a gate. */
+class Host implements ChildCases {
+  private readonly engines = new Map<string, Engine>();
+  constructor(private readonly wb: Workbench, private readonly deps: () => EngineDeps) {}
+  engine(id: string): Engine {
+    let e = this.engines.get(id);
+    if (e === undefined) {
+      // an engine on a session this process did not create closes what a stopped process left half done
+      e = Engine.open(this.wb.session(id), this.deps());
+      this.engines.set(id, e);
+    }
+    return e;
+  }
+  find(link: ChildLink): string | null { return this.wb.findChild(link); }
+  create(input: Parameters<ChildCases["create"]>[0], link: ChildLink, cards: Card[]): string {
+    return this.wb.createCase(input, { kind: "system", id: "engine" }, { loop: link.loop, link, cards }).id;
+  }
+  async drive(child: string): Promise<ReturnType<Engine["summary"]>> {
+    const e = this.engine(child);
+    if (this.wb.session(child).state.run.status === "none") e.start({ kind: "system", id: "engine" });
+    return e.advance();
+  }
+  read(child: string): ReturnType<ChildCases["read"]> {
+    let s: CaseSession;
+    try { s = this.wb.session(child); } catch { return null; }
+    const stopped = s.entries().findLast((e) => e.type === "run.finished");
+    return {
+      state: s.state, head: s.head(), outputs: this.engine(child).loop?.manifest.outputs ?? {},
+      stop_reason: stopped !== undefined && stopped.type === "run.finished" ? stopped.payload.reason ?? null : null,
+    };
+  }
+  close(): void {
+    for (const e of this.engines.values()) { try { e.close(); } catch { /* closed */ } }
+    this.engines.clear();
+  }
 }
 
 const REFUSALS = [PlanRefused, ReviseRefused, PublishRefused, FeedbackRefused, RunRefused, CaseNotFoundError, WorkbenchLockedError, ComposeError];
@@ -191,6 +262,7 @@ async function main(argv: string[]): Promise<number> {
   let wb: Workbench | null = null;
   let composed: ReturnType<typeof compose> | null = null;
   let session: CaseSession | null = null;
+  let host: Host | null = null;
   try {
     if (p.fixture !== null) {
       const root = config.roots[0];
@@ -204,16 +276,20 @@ async function main(argv: string[]): Promise<number> {
     wb = Workbench.open(config.data_dir, { store: config.cases.store, max_case_bytes: config.cases.max_bytes, onError: (e) => console.error(`workbench: ${e instanceof Error ? e.message : String(e)}`) });
     // status only reads: no registry is loaded (that records on the workbench chain), no engine, no recovery, no anchor
     if (p.command === "status") {
-      const r = report(wb.session(p.case!), true);
-      console.log(r.lines.join("\n"));
+      const shown = wb.session(p.case!);
+      const r = report(shown, true);
+      console.log([...r.lines, ...linkLines(wb, shown)].join("\n"));
       return r.code;
     }
     composed = compose(config, wb);
     for (const problem of composed.problems) console.error(`problem: ${problem}`);
     const base = composed.deps;
     // what the engine anchored, so a run this command finished is anchored at its last entry once and only once
-    let anchoredAt: number | null = null;
-    const deps = { ...base, anchor: (a: Parameters<NonNullable<typeof base.anchor>>[0]) => { base.anchor?.(a); anchoredAt = a.seq; } };
+    const anchoredAt = new Map<string, number>();
+    const deps: EngineDeps = { ...base, anchor: (a: Parameters<NonNullable<typeof base.anchor>>[0]) => { base.anchor?.(a); anchoredAt.set(a.case, a.seq); } };
+    // a stage that runs a loop makes a child case of this workbench, which this process drives
+    host = new Host(wb, () => deps);
+    deps.children = host;
 
     if (p.command === "start") {
       let input;
@@ -224,19 +300,31 @@ async function main(argv: string[]): Promise<number> {
         console.error(`${err.message}\n${USAGE}`);
         return 2;
       }
-      session = wb.createCase({ ...input }, human);
+      const loopId = p.one.loop;
+      if (loopId !== undefined) {
+        const catalog = deps.loops;
+        if (catalog === undefined || !catalog.list().some((x) => x.id === loopId)) {
+          console.error(`no loop "${loopId}"; \`bun run loops list\` names the loops there are`);
+          return 1;
+        }
+        if (catalog.current(loopId) === null) {
+          console.error(`loop "${loopId}" is not usable: ${catalog.problems(loopId).join("; ")}`);
+          return 1;
+        }
+      }
+      session = wb.createCase({ ...input }, human, loopId === undefined ? {} : { loop: loopId });
     } else {
       session = wb.session(p.case!);
     }
     // an engine on a session this process did not create closes what a stopped process left half done
-    const engine = Engine.open(session, deps);
+    const engine = host.engine(session.id);
     const wasFinished = session.state.run.status === "finished";
-    const finishedHere = (): void => {
-      const { run } = session!.state;
-      const head = session!.head();
-      if (wasFinished || run.status !== "finished" || anchoredAt === head.seq) return;
+    const finishedHere = (s: CaseSession, was: boolean): void => {
+      const { run } = s.state;
+      const head = s.head();
+      if (was || run.status !== "finished" || anchoredAt.get(s.id) === head.seq) return;
       try {
-        deps.anchor({ case: session!.id, seq: head.seq, hash: head.hash, why: run.outcome === "published" ? "published" : "closed" });
+        deps.anchor?.({ case: s.id, seq: head.seq, hash: head.hash, why: run.outcome === "published" ? "published" : "closed" });
       } catch (err) {
         console.error(`the case head could not be anchored: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -275,9 +363,33 @@ async function main(argv: string[]): Promise<number> {
         break;
       }
     }
-    finishedHere();
+    finishedHere(session, wasFinished);
     const r = report(session, false);
     let failed = false;
+    // a command on a child carries each loaded parent on: its stage looks at the child again. Passes no gate.
+    const carried: string[] = [];
+    for (let at: CaseSession = session; at.state.loop.parent !== null;) {
+      const link = at.state.loop.parent;
+      let parent: CaseSession;
+      try {
+        parent = wb.session(link.case);
+      } catch {
+        carried.push(`parent ${link.case} is not loaded; its run is not carried on`);
+        break;
+      }
+      const parentWasFinished = parent.state.run.status === "finished";
+      try {
+        await host.engine(link.case).childSettled(at.id);
+      } catch (err) {
+        failed = true;
+        console.error(`parent ${link.case} could not be carried on: ${err instanceof Error ? err.message : String(err)}`);
+        break;
+      }
+      finishedHere(parent, parentWasFinished);
+      carried.push(`parent ${link.case} ${parent.state.run.status}`);
+      at = parent;
+    }
+    r.lines.push(...linkLines(wb, session), ...carried);
     // the host unloads once the drive has settled; what the report says was read before the case left
     if (unloadDue(session.state)) {
       try {
@@ -311,6 +423,7 @@ async function main(argv: string[]): Promise<number> {
     console.error(`unexpected error: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
     return 1;
   } finally {
+    try { host?.close(); } catch { /* closed */ }
     try { composed?.close(); } catch { /* the pool is already closed */ }
     try { wb?.close(); } catch (err) { console.error(`closing the workbench failed: ${err instanceof Error ? err.message : String(err)}`); }
     fixture?.stop();
