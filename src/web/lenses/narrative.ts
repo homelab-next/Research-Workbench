@@ -1,7 +1,7 @@
-import { blockers, CARD_REF, keepText, latestDraft, notedExceptions, proposalMarking, publishable, rulingText, runConflicts } from "../../core/state";
-import type { CaseState, ConflictState } from "../../core/state";
-import { CONFIDENCES } from "../../core/types";
-import type { Actor, Draft, Finding, Product } from "../../core/types";
+import { BASIS_TEXT, blockers, CARD_REF, keepText, latestDraft, notedExceptions, proposalMarking, publishable, rulingText, runConflicts, runQuestions } from "../../core/state";
+import type { CaseState, ConflictState, QuestionState } from "../../core/state";
+import { CONFIDENCES, PERSON_BASES } from "../../core/types";
+import type { Actor, Draft, Finding, PersonBasis, Product } from "../../core/types";
 import type { Preview } from "../../core/wire";
 import type { Open } from "../app";
 import { cardChip, markingChip, tag } from "../chips";
@@ -89,14 +89,16 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
   const gateBox = h("div", { class: "gate-box" });
   const copyBox = h("div", { class: "copy-box" });
   const proposalsBox = h("div", { class: "proposals-box" });
+  const questionsBox = h("div", { class: "questions-box" });
   draftBox.append(headBox, bodyBox);
-  el.append(draftBox, toolsBox, gateBox, reviewBox, previewBox, copyBox, proposalsBox);
+  el.append(questionsBox, draftBox, toolsBox, gateBox, reviewBox, previewBox, copyBox, proposalsBox);
 
   // ---------- repainting a part only when what it shows has changed ----------
   const sigs = new Map<HTMLElement, unknown[]>();
   const keyOf = (n: Element | null): string | null => n === null ? null : [
     n.tagName, n.getAttribute("aria-label") ?? "", n.getAttribute("data-action") ?? "",
-    n.closest("[data-challenge]")?.getAttribute("data-challenge") ?? "", n.closest("[data-conflict]")?.getAttribute("data-conflict") ?? "", n.closest("[data-proposal]")?.getAttribute("data-proposal") ?? "", n.getAttribute("data-tab") ?? "", n.getAttribute("data-pick") ?? "",
+    n.closest("[data-challenge]")?.getAttribute("data-challenge") ?? "", n.closest("[data-conflict]")?.getAttribute("data-conflict") ?? "", n.closest("[data-proposal]")?.getAttribute("data-proposal") ?? "",
+    n.closest("[data-question]")?.getAttribute("data-question") ?? "", n.closest("[data-finding]")?.getAttribute("data-finding") ?? "", n.getAttribute("data-tab") ?? "", n.getAttribute("data-pick") ?? "",
   ].join("|");
   const paint = (box: HTMLElement, sig: unknown[], build: () => Node[]): void => {
     const was = sigs.get(box);
@@ -475,6 +477,11 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
       on: { click: () => { rejecting = true; sigs.delete(gateBox); render(); (gateBox.querySelector("[aria-label='Reason for rejecting the draft']") as HTMLElement | null)?.focus(); } },
     }, "Reject");
     const out: Node[] = [h("div", { class: "gate-buttons" }, approve, reject)];
+    // an answer passes no gate: it is noted here, and the person decides whether the draft goes back
+    const made = draftSeq(d);
+    for (const q of Object.values(s.questions).sort((a, b) => a.seq - b.seq)) {
+      if (q.answer !== null && q.answer.seq > made) out.push(h("p", { class: "answered-since tag tag-human" }, `${q.id} was answered after draft ${d.n} was made (card ${q.answer.card}). Send the draft back if the answer changes it.`));
+    }
     if (rejecting) {
       const stop = h("input", { type: "checkbox", name: "and stop the run", disabled: ro(), checked: rejectStop, on: { change: (e) => { rejectStop = (e.target as HTMLInputElement).checked; } } }) as HTMLInputElement;
       const confirm = h("button", {
@@ -495,6 +502,68 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
       out.push(h("div", { class: "ask" }, box, h("label", null, stop, " and stop the run"), confirm, h("button", { type: "button", data: { action: "cancel-reject" }, on: { click: () => { rejecting = false; render(); } } }, "Cancel")));
     }
     return out;
+  };
+
+  // ---------- questions put to the person ----------
+  const qAnswers = new Map<string, { text: string; basis: PersonBasis; detail: string }>();
+  const qFields = (id: string): { text: string; basis: PersonBasis; detail: string } => {
+    let v = qAnswers.get(id);
+    if (v === undefined) { v = { text: "", basis: "unstated", detail: "" }; qAnswers.set(id, v); }
+    return v;
+  };
+  /** The questions of this run, and any earlier one still unanswered (it can still be answered), in the order asked. */
+  const shownQuestions = (s: CaseState): QuestionState[] => {
+    const now = new Set(runQuestions(s).map((q) => q.id));
+    return Object.values(s.questions).filter((q) => now.has(q.id) || q.answer === null).sort((a, b) => a.seq - b.seq);
+  };
+  const runGoing = (s: CaseState): boolean => s.run.status !== "none" && s.run.status !== "finished";
+  const questionTag = (s: CaseState, q: QuestionState): HTMLElement =>
+    q.answer !== null ? tag(ui, "done", "answered")
+      : q.waived !== null ? tag(ui, "human", "went on without your answer", "The run went on without the answer; you can still give it")
+        : q.blocking && q.run === s.run.id && runGoing(s) ? tag(ui, "attention", "the run waits on this", "The run does not go past this stage until you answer, or resume without the answer")
+          : tag(ui, "human", "question");
+  const questionForm = (q: QuestionState): HTMLElement => {
+    const v = qFields(q.id);
+    const busy = inflight.has(`question:${q.id}`);
+    const off = (): boolean => ro() || busy || v.text.trim() === "";
+    const send = h("button", {
+      type: "button", class: "primary", data: { action: "answer-question" }, disabled: off(), title: ro() ? REPLAY_REFUSAL : `Answer ${q.id}; the answer is a card of yours`,
+      on: { click: () => {
+        if (off()) return;
+        guarded(`question:${q.id}`, "answer_question", { question: q.id, answer: v.text.trim(), basis: v.basis, detail: v.detail.trim() }, () => { qAnswers.delete(q.id); });
+      } },
+    }, "Answer") as HTMLButtonElement;
+    const basis = h("select", {
+      name: `How you know the answer to ${q.id}`, disabled: ro(),
+      on: { change: (e) => { v.basis = (e.target as HTMLSelectElement).value as PersonBasis; } },
+    }, PERSON_BASES.map((b) => h("option", { value: b }, BASIS_TEXT[b]))) as HTMLSelectElement;
+    basis.value = v.basis;
+    return h("div", { class: "answer-form" },
+      h("textarea", {
+        name: `Answer to ${q.id}`, value: v.text, disabled: ro(), placeholder: "Your answer",
+        on: { input: (e) => { v.text = (e.target as HTMLTextAreaElement).value; send.disabled = off(); } },
+      }),
+      h("label", null, "How you know ", basis),
+      h("input", { type: "text", name: `How you know the answer to ${q.id}, in detail`, value: v.detail, disabled: ro(), placeholder: "How you know (optional)", on: { input: (e) => { v.detail = (e.target as HTMLInputElement).value; } } }),
+      send);
+  };
+  const questionsView = (s: CaseState): Node[] => {
+    const qs = shownQuestions(s);
+    if (qs.length === 0) return [];
+    const title = (id: string | null): string => (id === null ? "an agent" : s.run.stages.find((x) => x.id === id)?.title ?? id);
+    return [h("h3", { class: "section-title" }, "Questions for you"), ...qs.map((q) => h("div", { class: `question${q.answer === null ? " open" : ""}`, data: { question: q.id } },
+      questionTag(s, q), ` ${q.id}`,
+      h("p", { class: "text" }, q.text),
+      h("p", { class: "why" }, `Why it matters: ${q.why}`),
+      q.cards.length === 0 ? null : h("p", { class: "cards" }, h("span", { class: "label" }, "Cards "), q.cards.map((c) => [chipFor(c), " "])),
+      q.about.length === 0 ? null : h("p", { class: "about" }, `About: ${q.about.map((o) => `${o.type} ${o.value}`).join(", ")}`),
+      h("p", { class: "asked-by" }, `asked by ${title(q.stage)}`),
+      q.answer !== null ? h("p", { class: "answer" }, "Your answer: ", chipFor(q.answer.card)) : questionForm(q)))];
+  };
+  /** The entry that recorded a draft, for when it was made. */
+  const draftSeq = (d: Draft): number => {
+    const e = store.entries.findLast((x) => x.type === "draft.revised" && (x.payload as { draft?: { hash?: unknown } }).draft?.hash === d.hash);
+    return e === undefined ? Number.MAX_SAFE_INTEGER : e.seq;
   };
 
   // ---------- proposals ----------
@@ -549,15 +618,16 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
     const published = d !== null && s.published.length > 0 && s.published[s.published.length - 1]!.draft_hash === d.hash;
     draftBox.classList.toggle("proposed", !published);
     draftBox.hidden = d === null;
+    paint(questionsBox, [s.questions, s.run, s.cards, ro(), inflightVersion], () => questionsView(s));
     paint(headBox, [d, s.published, store.id, bundlesVersion], () => (d === null ? [] : headView(s, d)));
     paint(bodyBox, edit !== null ? [edit] : [d, s.cards], () => (d === null ? [h("p", { class: "empty" }, "No draft yet.")] : edit !== null ? [edit.el] : readBody(d)));
     if (d === null) {
       paint(toolsBox, [null], () => []); paint(gateBox, [null], () => []); paint(reviewBox, [null], () => []); paint(previewBox, [null], () => []);
-      if (el.querySelector(".no-draft") === null) el.insertBefore(h("p", { class: "empty no-draft" }, "No draft yet."), el.firstChild);
+      if (el.querySelector(".no-draft") === null) el.insertBefore(h("p", { class: "empty no-draft" }, "No draft yet."), questionsBox.nextSibling);
     } else {
       el.querySelector(".no-draft")?.remove();
       paint(toolsBox, [d.hash, edit, ro(), s.run.status, s.cards === s.cards], () => toolsView(s, d));
-      paint(gateBox, [d.hash, s.run, s.reviews, s.challenges, s.published, preview, store.live.seq, rejecting, ro(), inflightVersion], () => gateView(s, d));
+      paint(gateBox, [d.hash, s.run, s.reviews, s.challenges, s.published, s.questions, preview, store.live.seq, rejecting, ro(), inflightVersion], () => gateView(s, d));
       paint(reviewBox, [d.hash, s.reviews, s.challenges, s.conflicts, s.run, s.published, s.cards, ro(), inflightVersion], () => reviewView(s, d));
       paint(previewBox, [wantsPreview(s), preview, store.live.seq, tab], () => (wantsPreview(s) ? previewView() : []));
     }

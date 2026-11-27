@@ -217,6 +217,13 @@ kbd { font-family: var(--mono); font-size: 12px; background: var(--panel-2); bor
 .lens-narrative .tabs .active { border-color: var(--accent); color: var(--accent); }
 .lens-narrative pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20em; overflow: auto; }
 .lens-narrative [data-drop=cite].drop-hover { outline: 2px dashed var(--accent); }
+.lens-narrative .questions-box:empty { display: none; }
+.lens-narrative .questions-box { border: 1px solid var(--line); border-radius: var(--radius); padding: 8px; margin-bottom: 8px; }
+.lens-narrative .question { border-top: 1px solid var(--line); padding: 4px 0; overflow-wrap: anywhere; }
+.lens-narrative .question.open { border-left: 3px solid var(--accent); padding-left: 6px; }
+.lens-narrative .question p { margin: 2px 0; }
+.lens-narrative .question .why, .lens-narrative .question .asked-by, .lens-narrative .question .about { color: var(--muted); }
+.lens-narrative .answered-since { display: block; margin-top: 6px; }
 
 /* ---------- Agent lens ---------- */
 .lens-agent .agent-head { margin: 0 0 6px; }

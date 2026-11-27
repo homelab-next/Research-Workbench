@@ -659,3 +659,117 @@ test("while reviewers disagree the brief holds exactly one Settle the disagreeme
   expect(settle.length).toBe(1);
   expect(p.all(".brief button").some((b) => /^Resume/.test(b.textContent ?? ""))).toBe(false);
 });
+
+// ---------- questions put to the person (slice 8) ----------
+const researcher: Actor = { kind: "agent", id: "researcher-g1", stage: "research", profile: "investigation", model: "sample-run", effort: null, where: "machine" };
+/** A model request of the researcher, then a question it asks while answering it, as the agent's tool writes it. */
+function ask(text: string, opts: { why?: string; blocking?: boolean; about?: { type: string; value: string }[]; cards?: string[] } = {}): string {
+  const session = p.s.app.hub.read("CASE-1");
+  let id = "";
+  session.commit((st, ids) => {
+    id = ids.next("question");
+    return [
+      { type: "model.request", actor: researcher, run: st.run.id, stage: "research", payload: { request: ids.next("request"), provider: "scripted", model: "sample-run", effort: null, where: "machine", marking: st.meta!.marking, pack: [], left_out: [], messages: session.blobs.put("{}"), tools: [] } },
+      { type: "question.asked", actor: researcher, run: st.run.id, stage: "research", payload: { question: { id, text, why: opts.why ?? "it matters", cards: opts.cards ?? [], about: opts.about ?? [], blocking: opts.blocking ?? false } } },
+    ];
+  });
+  return id;
+}
+const AP7 = "Where is the access point AP-7, and is a TV expected there?";
+
+test("an open question is shown above the draft with why it matters, what it is about and who asked; a blocking one says the run waits on it", async () => {
+  await atGate();
+  ask(AP7, { why: "A TV there would explain the name.", blocking: true, about: [{ type: "address", value: "198.51.100.77" }] });
+  ask("Is the printer new?");
+  await settled();
+  expect((p.q(".lens-narrative").firstElementChild as HTMLElement).classList.contains("questions-box")).toBe(true);
+  expect(p.q('[data-question="ask-1"] .text').textContent).toBe(AP7);
+  expect(p.q('[data-question="ask-1"] .why').textContent).toBe("Why it matters: A TV there would explain the name.");
+  expect(p.q('[data-question="ask-1"] .about').textContent).toBe("About: address 198.51.100.77");
+  expect(p.q('[data-question="ask-1"] .asked-by').textContent).toBe("asked by Research");
+  expect(p.q('[data-question="ask-1"] .tag').textContent).toBe("the run waits on this");
+  expect(p.q('[data-question="ask-2"] .tag').textContent).toBe("question");
+});
+
+test("the question box is there before any draft exists", async () => {
+  p = await page();
+  const id = await p.s.newCase();
+  await p.s.toPlanGate(id);
+  ask(AP7, { blocking: true });
+  p.s.app.hub.read(id).commit((st) => [{ type: "run.paused", actor: { kind: "system", id: "engine" }, run: st.run.id, payload: { reason: "waiting for the person's answer to ask-1", hold: { kind: "question", stage: "research" } } }]);
+  p.win.location.hash = `#/case/${id}`;
+  await p.settle();
+  p.press("r");
+  await settled();
+  const lens = p.q(".lens-narrative");
+  expect((lens.firstElementChild as HTMLElement).classList.contains("questions-box")).toBe(true);
+  expect(lens.querySelector('[data-question="ask-1"] .text')!.textContent).toBe(AP7);
+  expect(lens.querySelector(".no-draft")!.textContent).toBe("No draft yet.");
+  expect(lens.querySelector('[data-question="ask-1"] [data-action=answer-question]')).not.toBeNull();
+});
+
+test("Answer sends answer_question with the text and how you know, once, and the answer's card replaces the form", async () => {
+  await atGate();
+  ask(AP7, { blocking: true });
+  await settled();
+  const log = sent();
+  const button = (): HTMLButtonElement => p.q('[data-question="ask-1"] [data-action=answer-question]') as HTMLButtonElement;
+  expect(button().disabled).toBe(true);
+  p.fill("[aria-label='Answer to ask-1']", "In the gym. A TV is expected there.");
+  const basis = p.q("[aria-label='How you know the answer to ask-1']") as HTMLSelectElement;
+  basis.value = "saw";
+  basis.dispatchEvent(new p.win.Event("change", { bubbles: true }) as unknown as Event);
+  expect(button().disabled).toBe(false);
+  p.click(button());
+  p.click(button());
+  await settled();
+  expect(log.filter((c) => c.command === "answer_question").map((c) => [c.command, c.args])).toEqual([["answer_question", { question: "ask-1", answer: "In the gym. A TV is expected there.", basis: "saw", detail: "" }]]);
+  const card = state().questions["ask-1"]!.answer!.card;
+  expect(p.q('[data-question="ask-1"] .card-chip').textContent).toContain("c");
+  expect(p.q('[data-question="ask-1"] .card-chip').textContent).toBe(card);
+  expect(p.q('[data-question="ask-1"] .tag').textContent).toBe("answered");
+  expect(p.all("[aria-label='Answer to ask-1']").length).toBe(0);
+});
+
+test("a question the person went on without answering says so and can still be answered", async () => {
+  await atGate();
+  ask(AP7, { blocking: true });
+  const session = p.s.app.hub.read("CASE-1");
+  session.commit((st) => [{ type: "run.paused", actor: { kind: "system", id: "engine" }, run: st.run.id, payload: { reason: "waiting", hold: { kind: "question", stage: "research" } } }]);
+  session.commit((st) => [{ type: "run.resumed", actor: { kind: "human", id: "analyst" }, run: st.run.id, payload: {} }]);
+  await settled();
+  expect(state().questions["ask-1"]!.waived).not.toBeNull();
+  expect(p.q('[data-question="ask-1"] .tag').textContent).toBe("went on without your answer");
+  expect(p.all("[aria-label='Answer to ask-1']").length).toBe(1);
+});
+
+test("a question written as markup is drawn as text; replay to before it shows no box; while replaying every control is off", async () => {
+  await atGate();
+  const before = p.s.entries("CASE-1").length;
+  ask("<img src=x onerror=alert(1)> <b>where</b>?", { why: "<i>because</i>" });
+  await settled();
+  expect(p.q('[data-question="ask-1"] .text').textContent).toBe("<img src=x onerror=alert(1)> <b>where</b>?");
+  expect(p.all(".questions-box img, .questions-box b, .questions-box i").length).toBe(0);
+  p.store()!.goTo(before);
+  await settled();
+  expect(p.all("[data-question]").length).toBe(0);
+  p.store()!.goTo(p.store()!.live.seq);
+  await settled();
+  const controls = [...p.q('[data-question="ask-1"]').querySelectorAll("textarea, select, input, button")] as HTMLInputElement[];
+  expect(controls.length).toBeGreaterThan(3);
+  expect(controls.filter((c) => !c.classList.contains("card-chip")).every((c) => c.disabled)).toBe(true);
+});
+
+test("an answer given after the latest draft was made is noted at the gate", async () => {
+  await atGate();
+  ask(AP7);
+  await settled();
+  expect(p.all(".gate-box .answered-since").length).toBe(0);
+  expect((await p.s.command("CASE-1", "answer_question", { question: "ask-1", answer: "In the gym." })).status).toBe(200);
+  await settled();
+  const card = state().questions["ask-1"]!.answer!.card;
+  expect(p.q(".gate-box .answered-since").textContent).toBe(`ask-1 was answered after draft ${latest().n} was made (card ${card}). Send the draft back if the answer changes it.`);
+  // the answer passes no gate
+  expect(state().run.waiting).toBe("publish");
+  expect(state().published.length).toBe(0);
+});
