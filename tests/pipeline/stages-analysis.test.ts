@@ -876,3 +876,50 @@ test("the change kinds the answer schema allows are the standard's own terms: al
   expect(structuredKinds()).toEqual([FOUR]);
   expect(f.s.state.drafts[0]!.product.change).toBe("Withdraws detail.");
 });
+
+// ---- the person's overrules (slice 8) ----
+
+const TV = "It is the TV I installed.";
+/** What the actor's request said, its messages' text joined. */
+const said = (actor: string, ordinal: number): string =>
+  (JSON.parse(requestText(actor, ordinal)) as { messages: { content: string }[] }).messages.map((m) => m.content).join("\n");
+const overruleAtGate = (r: Rig, over: Partial<Parameters<Rig["engine"]["overrule"]>[0]>) =>
+  r.engine.overrule({ actor: person, finding: "f1", draft_hash: latestDraft(f.s.state)!.hash, likelihood: null, confidence: null, stays: null, note: TV, ...over });
+
+test("Assemble proposes an overruled finding at another likelihood: the draft it records holds the overrule", async () => {
+  const r = rig({ analyst: [...FIRST, ...SECOND], evaluator: [EVAL_PASS, EVAL_PASS], adversary: [CHALLENGE_PASS, CHALLENGE_PASS] });
+  await go(r);
+  overruleAtGate(r, { likelihood: "almost certain" });
+  expect(await r.engine.advance()).toMatchObject({ status: "waiting", waiting: "publish" });
+  const d = latestDraft(f.s.state)!;
+  expect(d.author).toMatchObject({ kind: "agent", id: "analyst" });
+  // the analyst proposed f1 again at likely; code holds it to the overrule
+  expect(d.product.key_findings[0]).toMatchObject({ id: "f1", likelihood: "almost certain", statement: "We assess it is almost certain that it is internal and managed." });
+  expect(ofType("assessment.made").at(-1)!.payload.finding).toMatchObject({ id: "f1", likelihood: "almost certain" });
+  expect(blockers(f.s.state, d.hash)).toEqual([]);
+});
+
+test("Assemble leaves out a finding that must stay: the draft has it, restored", async () => {
+  const r = rig({ analyst: [...FIRST, ...SECOND], evaluator: [EVAL_PASS, EVAL_PASS], adversary: [CHALLENGE_PASS, CHALLENGE_PASS] });
+  await go(r);
+  const f2 = f.s.state.drafts[0]!.product.key_findings[1]!;
+  overruleAtGate(r, { finding: "f2", stays: true });
+  expect(await r.engine.advance()).toMatchObject({ status: "waiting", waiting: "publish" });
+  const d = latestDraft(f.s.state)!;
+  expect(d.product.key_findings.map((x) => x.id)).toEqual(["f1", "f2"]);
+  expect(d.product.key_findings[1]).toEqual(f2);
+  // the restored finding's card is cited, so its source is in the product
+  expect(d.product.sources.map((x) => x.source)).toEqual(["assets", "flows"]);
+});
+
+test("the analyst's and both reviewers' packs list the overrules as fixed", async () => {
+  const r = rig({ analyst: [...FIRST, ...SECOND], evaluator: [EVAL_PASS, EVAL_PASS], adversary: [CHALLENGE_PASS, CHALLENGE_PASS] });
+  await go(r);
+  overruleAtGate(r, { likelihood: "almost certain" });
+  await r.engine.advance();
+  const fixed = `Overrules by the person (fixed: code holds every draft to them, and neither reviewer may reopen them):\n- f1: likelihood almost certain. Note: ${TV}`;
+  // Assemble's second pass (request 2), then Evaluate and Challenge on draft 2
+  for (const [actor, ordinal] of [["analyst", 2], ["evaluator", 1], ["adversary", 1]] as const) expect(said(actor, ordinal)).toContain(fixed);
+  // the analyst is told what to rewrite, as the send-back said
+  expect(said("analyst", 2)).toContain("rewrite f1's confidence_basis and reasoning to rest on the person's note");
+});

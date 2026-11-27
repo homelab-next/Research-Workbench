@@ -1,6 +1,6 @@
 import type { Json } from "../../core/canonical";
 import { isPlainObject } from "../../core/canonical";
-import { latestDraft, openMustAddress } from "../../core/state";
+import { activeOverrules, latestDraft, openMustAddress } from "../../core/state";
 import type { Actor, Draft, Entry, EntryInput } from "../../core/types";
 import type { Schema } from "../../core/schema";
 import type { CaseSession } from "../../core/session";
@@ -9,6 +9,7 @@ import type { PackPart } from "../../agents/context";
 import { buildProduct, forcedProposal, lackingOf, carriedCites, composeChange, DraftWork, draftOf, termsOf } from "../../agents/draft";
 import { ToolError } from "../../agents/tools/kit";
 import type { StageEnd, StageEnv } from "../engine";
+import { overruledFindings } from "../overrule";
 import { reviewPointsPart } from "../review-points";
 import { agentActor, lastPass, noSchema, requestsOfPass, stageAgent, stageOfRole, titleOf } from "./agent";
 
@@ -161,6 +162,9 @@ export async function assembleRunner(env: StageEnv): Promise<StageEnd> {
   const entries = session.entries();
   const started = entries.reduce((n, e) => (e.type === "stage.started" && e.payload.stage === stage.id ? e.seq : n), 0);
   const written_at = entries.flatMap((e) => (e.type === "model.request" && e.stage === stage.id && e.seq > started ? [e.payload.marking] : []));
+  // the person's overrules hold in every draft, whatever the analyst proposed: code puts them in place
+  const held = overruledFindings(work.findings, activeOverrules(now), now.drafts, terms, (id) => Object.hasOwn(now.cards, id) && now.cards[id]!.place !== "discarded");
+  work.findings.splice(0, work.findings.length, ...held);
   let product;
   try {
     product = buildProduct(work, {

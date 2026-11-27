@@ -1,6 +1,7 @@
 import { Refused } from "../core/refused";
 import type { CaseSession } from "../core/session";
-import { latestDraft } from "../core/state";
+import { activeOverrules, holdsOverrule, latestDraft, overruleSays } from "../core/state";
+import type { CaseState, Overrule } from "../core/state";
 import { isObj, isOneOf, isStr, isStrList } from "../core/state/guards";
 import { CONFIDENCES, isMarking, strictest } from "../core/types";
 import type { Actor, Draft, EntryInput, Product } from "../core/types";
@@ -58,38 +59,49 @@ export function reviseDraft(session: CaseSession, pipeline: Pipeline, input: { p
   }
   let made: Draft | null = null;
   session.commit((state) => {
-    const { run } = state;
-    if (run.status === "none" || run.status === "finished") throw new ReviseRefused("there is no run in progress to edit a draft in");
-    const latest = latestDraft(state);
-    // a person's edit cannot lower the marking below the previous draft's
-    // ...nor below the case's, nor below any card the edited draft cites
-    const carried = carriedCites(latest, product, state.cards);
-    const cited = citedBy(product, carried).filter((id) => Object.hasOwn(state.cards, id));
-    const lowest = strictest(...(latest === null ? [] : [latest.product.marking]), ...(state.meta === null ? [] : [state.meta.marking]), ...cited.map((id) => state.cards[id]!.marking));
-    const marking = strictest(product.marking, lowest);
-    const lowered = marking !== product.marking;
-    const floor = lowered ? { ...product, marking } : product;
-    // what the person left unchanged keeps the cards it cited, so a lowered marking is still checked against them
-    const draft = draftOf(floor, state.drafts.length + 1, actor, reason, carried);
-    if (latest !== null && latest.hash === draft.hash) {
-      throw new ReviseRefused(lowered ? `the marking cannot be lowered below ${marking}` : "the edit changes nothing in the latest draft");
-    }
-    made = draft;
-    const out: EntryInput[] = [{ type: "draft.revised", actor, run: run.id, payload: { draft } }];
-    const current = run.stages.find((s) => s.id === run.current) ?? null;
-    const atGate = run.waiting === "publish";
-    const stopped = run.status === "paused" && current !== null && current.status === "failed";
-    if (atGate || stopped) {
-      const passed = Object.hasOwn(state.reviews, draft.hash) ? state.reviews[draft.hash]!.passed_stages : [];
-      const first = pipeline.stages.find((s) => s.reviews && !passed.includes(s.id));
-      if (first !== undefined) {
-        const attempts = run.stages.find((s) => s.id === first.id)?.attempts ?? 0;
-        out.push({ type: "stage.started", actor: ENGINE, run: run.id, stage: first.id, payload: { stage: first.id, attempt: attempts + 1 } });
-      }
-    }
-    return out;
+    const built = revisionEntries(state, pipeline, input);
+    made = built.draft;
+    return built.entries;
   });
   return made!;
+}
+
+/** What reviseDraft commits, built from one state: the revision and, at the gate or on a stopped stage, the review stage it starts. Throws ReviseRefused. */
+export function revisionEntries(state: Readonly<CaseState>, pipeline: Pipeline, input: { product: Product; reason: string; actor: Actor }, overrules: readonly Overrule[] = activeOverrules(state)): { draft: Draft; entries: EntryInput[] } {
+  const { product, reason, actor } = input;
+  const { run } = state;
+  if (run.status === "none" || run.status === "finished") throw new ReviseRefused("there is no run in progress to edit a draft in");
+  // the person's overrules hold against their own edit too: they overrule again, or withdraw, to change the finding
+  for (const o of overrules) {
+    if (holdsOverrule(product, o) === false) throw new ReviseRefused(`${o.finding} is overruled (${overruleSays(o)}); overrule it again, or withdraw the overrule, to change it`);
+  }
+  const latest = latestDraft(state);
+  // a person's edit cannot lower the marking below the previous draft's
+  // ...nor below the case's, nor below any card the edited draft cites
+  const carried = carriedCites(latest, product, state.cards);
+  const cited = citedBy(product, carried).filter((id) => Object.hasOwn(state.cards, id));
+  const lowest = strictest(...(latest === null ? [] : [latest.product.marking]), ...(state.meta === null ? [] : [state.meta.marking]), ...cited.map((id) => state.cards[id]!.marking));
+  const marking = strictest(product.marking, lowest);
+  const lowered = marking !== product.marking;
+  const floor = lowered ? { ...product, marking } : product;
+  // what the person left unchanged keeps the cards it cited, so a lowered marking is still checked against them
+  const draft = draftOf(floor, state.drafts.length + 1, actor, reason, carried);
+  if (latest !== null && latest.hash === draft.hash) {
+    throw new ReviseRefused(lowered ? `the marking cannot be lowered below ${marking}` : "the edit changes nothing in the latest draft");
+  }
+  const out: EntryInput[] = [{ type: "draft.revised", actor, run: run.id, payload: { draft } }];
+  const current = run.stages.find((s) => s.id === run.current) ?? null;
+  const atGate = run.waiting === "publish";
+  const stopped = run.status === "paused" && current !== null && current.status === "failed";
+  if (atGate || stopped) {
+    const passed = Object.hasOwn(state.reviews, draft.hash) ? state.reviews[draft.hash]!.passed_stages : [];
+    const first = pipeline.stages.find((s) => s.reviews && !passed.includes(s.id));
+    if (first !== undefined) {
+      const attempts = run.stages.find((s) => s.id === first.id)?.attempts ?? 0;
+      out.push({ type: "stage.started", actor: ENGINE, run: run.id, stage: first.id, payload: { stage: first.id, attempt: attempts + 1 } });
+    }
+  }
+  return { draft, entries: out };
 }
 
 /** A person answers an open challenge. The only way a challenge closes outside the analyst's own Assemble stage; an edit never does. */

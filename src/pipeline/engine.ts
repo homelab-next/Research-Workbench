@@ -17,6 +17,7 @@ import type { Pipeline, Role, StageManifest } from "./manifests";
 import { firstUnpassedReview, nextStep } from "./next";
 import { acceptPlan, denyPlan, requestReplan, spendPlanBudget } from "./plans";
 import { answerChallenge, reviseDraft } from "./revise";
+import { overrule } from "./overrule";
 import { assembleRunner } from "./stages/assemble";
 import { challengeRunner } from "./stages/challenge";
 import { checksRunner } from "./stages/checks";
@@ -163,6 +164,15 @@ export class Engine {
   /** A person edits the draft: a new revision in their name, and review starts again. Throws ReviseRefused; advances nothing. */
   revise(input: { product: Product; reason: string; actor: Actor }): Draft {
     return reviseDraft(this.session, this.deps.pipeline, input);
+  }
+
+  /**
+   * A person overrules a finding: its likelihood, its confidence, or whether it stays, with a note. Code holds every later draft to it. Off the
+   * publish gate the same commit writes the person's revision that holds it (not while Assemble is working); at the gate the work goes back to
+   * Assemble with the overrule as the reason. Throws OverruleRefused; advances nothing.
+   */
+  overrule(input: Parameters<typeof overrule>[2]): void {
+    overrule(this.session, this.deps, input);
   }
 
   /** A person answers an open challenge. Throws ReviseRefused. */

@@ -25,9 +25,9 @@ test("every refusal is a Refused", () => {
 });
 
 test("THEN_ADVANCE names every engine command, and no command advances the run itself", async () => {
-  expect(Object.keys(THEN_ADVANCE).sort()).toEqual(["acceptPlan", "answerChallenge", "approve", "denyPlan", "feedback", "pause", "reject", "replan", "resume", "revise", "rule", "setBudget", "setModel", "setPackLimit", "start", "stop"]);
+  expect(Object.keys(THEN_ADVANCE).sort()).toEqual(["acceptPlan", "answerChallenge", "approve", "denyPlan", "feedback", "overrule", "pause", "reject", "replan", "resume", "revise", "rule", "setBudget", "setModel", "setPackLimit", "start", "stop"]);
   const on = Object.entries(THEN_ADVANCE).filter(([, v]) => v).map(([k]) => k).sort();
-  expect(on).toEqual(["acceptPlan", "approve", "reject", "replan", "revise", "start"]);
+  expect(on).toEqual(["acceptPlan", "approve", "overrule", "reject", "replan", "revise", "start"]);
   const f = fixture(false);
   const dir = mkdtempSync(join(tmpdir(), "contract-"));
   try {

@@ -7,13 +7,13 @@
  * - `session.subscribe` is the entry stream.
  * - Every refusal is a `Refused` (src/core/refused.ts).
  */
-export type EngineCommand = "start" | "pause" | "resume" | "stop" | "acceptPlan" | "denyPlan" | "replan" | "revise" | "answerChallenge" | "approve" | "reject" | "feedback" | "setModel" | "setBudget" | "setPackLimit" | "rule";
+export type EngineCommand = "start" | "pause" | "resume" | "stop" | "acceptPlan" | "denyPlan" | "replan" | "revise" | "answerChallenge" | "approve" | "reject" | "feedback" | "setModel" | "setBudget" | "setPackLimit" | "rule" | "overrule";
 
 /**
- * Whether the server calls `advance()` after the command. `resume` drives by itself; `denyPlan` and `stop` end the run; `answerChallenge`
+ * Whether the server calls `advance()` after the command. `overrule` advances as `revise` does. `resume` drives by itself; `denyPlan` and `stop` end the run; `answerChallenge`
  * leaves a paused run paused; `rule` resumes by itself when it was the last open conflict.
  */
 export const THEN_ADVANCE: Readonly<Record<EngineCommand, boolean>> = {
-  start: true, acceptPlan: true, replan: true, revise: true, approve: true, reject: true,
+  start: true, acceptPlan: true, replan: true, revise: true, overrule: true, approve: true, reject: true,
   pause: false, resume: false, stop: false, denyPlan: false, answerChallenge: false, feedback: false, setModel: false, setBudget: false, setPackLimit: false, rule: false,
 };

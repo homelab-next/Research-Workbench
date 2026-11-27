@@ -1,5 +1,5 @@
 import type { CaseSession } from "../core/session";
-import { latestDraft, runConflicts, rulingText } from "../core/state";
+import { activeOverrules, latestDraft, overruleReason, overruleText, runConflicts, rulingText } from "../core/state";
 import type { CaseState } from "../core/state";
 import type { CheckFinding, Entry, Finding, Product } from "../core/types";
 import { packPart } from "../agents/context";
@@ -178,6 +178,12 @@ export function reviewPointsPart(session: CaseSession, pipeline: Pipeline, view:
   // the person's rulings are fixed, for the analyst and for both reviewers
   const rulings = runConflicts(state).filter((c) => c.ruling !== null).map((c) => `- ${c.finding}: ${c.reason}. Ruled: ${rulingText(state, c)}`);
   if (rulings.length > 0) sections.push(["Rulings by the person (fixed; neither reviewer may reopen them):", ...rulings].join("\n"));
+  // the person's overrules are fixed too: code holds every draft to them (controller ruling 5: the analyst rewrites the basis and reasoning)
+  const overrules = activeOverrules(state);
+  if (overrules.length > 0) {
+    sections.push(["Overrules by the person (fixed: code holds every draft to them, and neither reviewer may reopen them):", ...overrules.map((o) => `- ${overruleText(o)}`)].join("\n"));
+    if (view === "assemble") sections.push(["What the overrules ask of the analyst:", ...overrules.map((o) => `- ${overruleReason(o)}`)].join("\n"));
+  }
   if (sections.length === 0) return null;
   return packPart({ kind: "note", id, title, text: sections.join("\n\n"), fixed: true, entries, written_by: by, floor: d.product.marking });
 }

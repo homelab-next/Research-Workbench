@@ -7,7 +7,8 @@ import { canonical } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
 import type { CaseSession } from "../../src/core/session";
 import { blockers, latestDraft } from "../../src/core/state";
-import type { Actor, Product } from "../../src/core/types";
+import type { Actor, Finding, Product } from "../../src/core/types";
+import { draftOf } from "../../src/agents/draft";
 import { loadProfile } from "../../src/agents/context";
 import { Providers } from "../../src/agents/providers";
 import { loadConfig } from "../../src/modules/config";
@@ -15,7 +16,7 @@ import { Engine } from "../../src/pipeline/engine";
 import type { EngineDeps, StageEnd, StageRunner } from "../../src/pipeline/engine";
 import { loadPipeline } from "../../src/pipeline/manifests";
 import type { Role } from "../../src/pipeline/manifests";
-import { ReviseRefused } from "../../src/pipeline/revise";
+import { revisionEntries, ReviseRefused } from "../../src/pipeline/revise";
 import { markingProblem } from "../../src/pipeline/publish";
 import { card } from "../helpers/entries";
 import { fixture, PLAN } from "../helpers/tools-fixture";
@@ -272,4 +273,34 @@ test("an edit cannot lower the marking below the case's, nor below a card the ed
   const b = r.engine.revise({ product: { ...a.product, marking: "TLP:GREEN", summary: "see [c1]" }, reason: "cite", actor: person });
   expect(b.product.marking).toBe("TLP:AMBER");
   expect(() => r.engine.revise({ product: { ...b.product, marking: "TLP:CLEAR" }, reason: "lower", actor: person })).toThrow("the marking cannot be lowered below TLP:AMBER");
+});
+
+// ---- the person's overrule holds against their own edit (slice 8) ----
+
+const F1: Finding = { id: "f1", statement: "We assess it is almost certain that the device is idle.", likelihood: "almost certain", confidence: "moderate", confidence_basis: "b", cites: [], assumptions: [], reasoning: "r" };
+
+test("a person's edit that does not hold their overrule is refused with the way out", async () => {
+  const r = rig();
+  await toGate(r);
+  const held = { ...base, key_findings: [F1] };
+  f.s.commit((st) => [{ type: "draft.revised", actor: person, run: st.run.id, payload: { draft: draftOf(held, st.drafts.length + 1, person, "with f1") } }]);
+  f.s.commit((st) => [{ type: "finding.overruled", actor: person, run: st.run.id, payload: { finding: "f1", draft_hash: latestDraft(st)!.hash, likelihood: "almost certain", confidence: null, stays: null, note: "It is the TV I installed." } }]);
+  const way = "f1 is overruled (likelihood almost certain); overrule it again, or withdraw the overrule, to change it";
+  expect(() => edit(r, { key_findings: [{ ...F1, likelihood: "likely" }] })).toThrow(way);
+  expect(() => edit(r, { key_findings: [] })).toThrow(way);
+  // an edit that keeps the overruled value is taken
+  expect(edit(r, { summary: "tidied" }).product.key_findings).toEqual([F1]);
+});
+
+test("reviseDraft writes what it wrote before", async () => {
+  // the builder moved out unchanged: what revisionEntries builds from a state is what reviseDraft commits from it
+  const r = rig();
+  await toGate(r);
+  const { pipeline } = loadPipeline(f.sample.registry);
+  const product = { ...latestDraft(f.s.state)!.product, summary: "edited" };
+  const built = revisionEntries(f.s.state, pipeline!, { product, reason: "clearer wording", actor: person });
+  const head = f.s.head().seq;
+  const d = r.engine.revise({ product, reason: "clearer wording", actor: person });
+  expect(built.draft).toEqual(d);
+  expect(f.s.entries().filter((e) => e.seq > head).map(({ type, actor, payload }) => ({ type, actor, payload }))).toEqual(built.entries.map(({ type, actor, payload }) => ({ type, actor, payload })));
 });
