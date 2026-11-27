@@ -24,18 +24,13 @@ async function begin(path: string, url: (s: Served) => string, before: (s: Serve
 const listed = async (s: Served): Promise<string[]> => ((await (await s.get("/api/cases")).json()) as CaseSummaryView[]).map((c) => c.id);
 const inStore = async (s: Served): Promise<StoreView> => (await (await s.get("/api/store")).json()) as StoreView;
 const text = (tab: Tab, selector: string): Promise<string> => tab.evaluate<string>(`(document.querySelector(${JSON.stringify(selector)})?.textContent ?? "")`);
-/**
- * Known limit (reported in Task 10's report, not fixed here: src/server/app.ts and src/web are other tasks' files): while a case is being packed,
- * a read of it is refused with "CASE-1 is being unloaded", which app.ts answers 400, and the page, told of case.unloaded, still asks for the
- * case's custody and its blobs once. The browser logs those as failed loads; nothing else may be logged.
- */
-const BEING_UNLOADED = /^log: Failed to load resource: the server responded with a status of 400 \(Bad Request\) http:\/\/127\.0\.0\.1:\d+\/api\/cases\/CASE-1\/(custody|blobs\/[0-9a-f]{64})$/;
-const clean = async (s: Served, tab: Tab, unloadedWhileOpen = false): Promise<void> => {
+const clean = async (s: Served, tab: Tab): Promise<void> => {
   // a card that left the screen slides out as a copy for 160 ms (motion.ts); the page itself has no inline style
   await tab.waitFor(`document.querySelectorAll(".ghost").length === 0`);
   expect(await tab.evaluate<number>(`document.querySelectorAll("script:not([src]), style, [style], [onclick]").length`)).toBe(0);
   expect(tab.requests().filter((u) => !u.startsWith(s.origin))).toEqual([]);
-  expect(tab.problems().filter((p) => !(unloadedWhileOpen && BEING_UNLOADED.test(p)))).toEqual([]);
+  // nothing is logged, not even while the case was packed: the page does not read a case whose unload has begun
+  expect(tab.problems()).toEqual([]);
 };
 
 async function unloadFindLoadReplay(path: string): Promise<void> {
@@ -114,7 +109,9 @@ async function tickAndApprove(path: string): Promise<void> {
   const before = s.entries("CASE-1").length;
   await tab.click("[data-action=unload-after]");
   await tab.waitFor(`document.querySelector("[data-action=unload-after]").checked === true`);
-  await tab.evaluate(`new Promise((r) => setTimeout(r, 300))`);
+  // a round trip through the server after the tick, so anything the tick had sent would have arrived
+  expect(await tab.evaluate<number>(`fetch("/api/me").then((r) => r.status)`)).toBe(200);
+  await s.app.hub.idle();
   expect(s.entries("CASE-1").length).toBe(before);
 
   await tab.click("[data-action=approve]");
@@ -126,7 +123,7 @@ async function tickAndApprove(path: string): Promise<void> {
   const stored = (await inStore(s)).cases;
   expect(stored.map((c) => [c.id, c.outcome, c.published, c.loaded])).toEqual([["CASE-1", "published", 1, false]]);
   await tab.waitFor(`document.querySelector(".tile-menu[data-case='CASE-1']") === null`);
-  await clean(s, tab, true);
+  await clean(s, tab);
 }
 
 const CASES: [string, (path: string) => Promise<void>][] = [

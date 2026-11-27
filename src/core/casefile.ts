@@ -42,6 +42,8 @@ export interface CaseManifest {
 export type ManifestHeader = Omit<CaseManifest, "format" | "workbench" | "files">;
 
 const MANIFEST_NAME = "case.json";
+/** What SQLite leaves beside a ledger while a write is unfinished. */
+const JOURNALS = ["ledger.sqlite-journal", "ledger.sqlite-wal"];
 /** A case id: CASE- and one to nine digits, so its number is always an exact integer. The one pattern for an id, everywhere. */
 export const CASE_ID = /^CASE-[1-9][0-9]{0,8}$/;
 /** The highest case number there can be. */
@@ -198,7 +200,7 @@ function readPieces(fd: number, want: number | null, each: (piece: Uint8Array) =
 
 /** Every regular file under `dir`, hashed. Throws CaseFileError for a link or a special file, naming it. */
 export function listCaseFolder(dir: string): CaseFileEntry[] {
-  for (const journal of ["ledger.sqlite-journal", "ledger.sqlite-wal"]) {
+  for (const journal of JOURNALS) {
     let found = false;
     try { lstatSync(join(dir, journal)); found = true; } catch { /* absent, as it should be */ }
     if (found) throw new CaseFileError("the ledger has an unfinished journal");
@@ -461,6 +463,9 @@ async function readArchive(file: string, opts: { max: number; manifestOnly: bool
       throw new CaseFileError("case.json is not a case manifest");
     }
     if (!isCaseManifest(manifest)) throw new CaseFileError("case.json is not a case manifest");
+    // the writer never packs a journal (it refuses a folder that has one); one in a file would be applied to the ledger when it is opened
+    const journal = manifest.files.find((f) => JOURNALS.includes(f.path));
+    if (journal !== undefined) throw new CaseFileError(`the case file holds ${journal.path}, a ledger journal; a case file holds none`);
     if (opts.manifestOnly) return manifest;
     await src.skip(padding(first.size));
 
@@ -501,6 +506,8 @@ async function readArchive(file: string, opts: { max: number; manifestOnly: bool
     return manifest;
   } catch (err) {
     if (err instanceof CaseFileError) throw err;
+    if (codeOf(err) === "ENOENT") throw new CaseFileError("there is no file there");
+    if (codeOf(err) === "EISDIR") throw new CaseFileError("it is a folder, not a case file");
     throw new CaseFileError(UNREADABLE);
   } finally {
     raw.unpipe(gz);

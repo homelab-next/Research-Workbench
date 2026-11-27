@@ -531,7 +531,7 @@ test("a file whose ledger was cut short, with case.json re-hashed but naming the
   await expectRefused(cut, CaseFileError, "the case does not verify: its head is not the one case.json names");
 });
 
-test("a file whose case.json names another chain id or another origin than its ledger is refused", async () => {
+test("a file whose case.json names another chain or another origin than its ledger is refused", async () => {
   const s = newCase();
   note(s, "one");
   const r = await unloadOk("CASE-1");

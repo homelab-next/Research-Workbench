@@ -2,7 +2,7 @@ import { isPlainObject } from "../core/canonical";
 import { Refused } from "../core/refused";
 import { isMarking, MARKINGS } from "../core/types";
 import type { Actor, Observable } from "../core/types";
-import { CaseNotFoundError } from "../core/workbench";
+import { CaseNotFoundError, CaseRefused } from "../core/workbench";
 import type { NewCase, Workbench } from "../core/workbench";
 import type { CommandResult, Me, Preview } from "../core/wire";
 import type { Config } from "../modules/config";
@@ -329,6 +329,8 @@ export function createApp(opts: AppOptions): App {
         if (error instanceof BodyTooLarge) return secure(refused(413, "the body is larger than 1 MiB"), "api");
         if (error instanceof Declined) return secure(refused(error.status, ...error.reasons), "api");
         if (error instanceof CaseNotFoundError) return secure(refused(404, "there is no such case"), "api");
+        // a case being unloaded, say: the request was fine, the case is not in a state to answer it
+        if (error instanceof CaseRefused) return secure(refused(409, ...error.reasons.map((r) => shown(deps, r))), "api");
         if (error instanceof Refused) return secure(refused(400, ...error.reasons.map((r) => shown(deps, r))), "api");
         try { onError(error); } catch { /* the reporter failing must not change the answer */ }
         const message = error instanceof Error ? error.message : String(error);

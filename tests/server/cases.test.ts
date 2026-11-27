@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { extractCaseFile, readManifest, writeCaseFile } from "../../src/core/casefile";
@@ -99,6 +100,18 @@ test("an unload that fails after it began is 409 with the reason, the case is st
   expect(s.app.hub.read(id).state.skipped).toEqual([]);
 });
 
+test("a read of a case while it is being packed is 409, not 400: the request was fine, the case cannot answer it now", async () => {
+  s = await served();
+  const id = await s.newCase();
+  let during: Promise<Response> | null = null;
+  // heard as case.unloaded is written; the read goes once the unload has begun packing
+  s.wb.session(id).subscribe((e) => { if (e.type === "case.unloaded") during = Promise.resolve().then(() => s.get(`/api/cases/${id}/custody`)); });
+  expect((await unload(id)).status).toBe(200);
+  const r = await during!;
+  expect(r.status).toBe(409);
+  expect(((await r.json()) as { refused: string[] }).refused).toEqual([`${id} is being unloaded`]);
+});
+
 test("an unknown case is 404", async () => {
   s = await served();
   expect((await unload("CASE-7")).status).toBe(404);
@@ -142,6 +155,26 @@ test("GET /api/store lists a file whose case.json says other than its ledger as 
   const view = (await (await s.get("/api/store")).json()) as StoreView;
   expect(view.cases.map((c) => c.file)).toEqual([FILE]);
   expect(view.unreadable).toEqual([{ file: "CASE-1.TLP-CLEAR.tar.gz", reason: "case.json does not say what its ledger says (title, marking)" }]);
+});
+
+test("GET /api/store writes to no ledger: a case whose unload did not finish is not opened to say whether it is loaded", async () => {
+  s = await served();
+  const id = await s.newCase();
+  expect((await unload(id)).status).toBe(200);
+  expect((await s.post("/api/store/load", { file: FILE })).status).toBe(200);
+  // a stop after case.unloaded: the session is gone, the folder is here, and its ledger ends with case.unloaded
+  const session = s.wb.session(id);
+  session.commit(() => [{ type: "case.unloaded", payload: { store: "store", head: session.head() }, actor: { kind: "human", id: "analyst" } }]);
+  session.close();
+  const count = (): number => {
+    const db = new Database(join(s.dir, "wb", "cases", id, "ledger.sqlite"), { readonly: true });
+    try { return (db.query("SELECT count(*) AS n FROM entries").get() as { n: number }).n; } finally { db.close(); }
+  };
+  const before = count();
+  const view = (await (await s.get("/api/store")).json()) as StoreView;
+  expect(view.unreadable).toEqual([]);
+  expect(view.cases.map((c) => [c.id, c.loaded])).toEqual([[id, true]]);
+  expect(count()).toBe(before);
 });
 
 test("POST /api/store/load loads a file by its name and the case is listed again, paused where it was", async () => {

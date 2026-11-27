@@ -28,6 +28,11 @@ const make = (title = "Sample"): string => {
   const wb = Workbench.open(data, { store, onError: () => {} });
   try { return wb.createCase({ ...sample, title }, person).id; } finally { wb.close(); }
 };
+/** What the fold of a case skipped, read by a workbench opened for it and closed again. */
+const skippedOf = (id: string): unknown[] => {
+  const wb = Workbench.open(data, { store, onError: () => {} });
+  try { return [...wb.session(id).state.skipped]; } finally { wb.close(); }
+};
 const loaded = (): string[] => readdirSync(join(data, "cases")).filter((n) => /^CASE-/.test(n)).sort();
 
 beforeEach(() => {
@@ -67,6 +72,7 @@ test("load <case-id> takes the store's file; load <path> takes that file; each p
   const file = join(store, "CASE-1.TLP-GREEN.tar.gz");
   expect(out).toEqual([`loaded CASE-1 from ${file}`]);
   expect(loaded()).toEqual(["CASE-1"]);
+  expect(skippedOf("CASE-1")).toEqual([]);
   // the same case again, by path to a copy: now refused as already loaded
   out = [];
   const to = join(dir, "away");
@@ -76,6 +82,7 @@ test("load <case-id> takes the store's file; load <path> takes that file; each p
   expect(await run("load", join(to, "CASE-1.TLP-GREEN.tar.gz"))).toBe(0);
   expect(out).toEqual([`loaded CASE-1 from ${join(to, "CASE-1.TLP-GREEN.tar.gz")}`]);
   expect(err).toEqual([]);
+  expect(skippedOf("CASE-1")).toEqual([]);
 });
 
 test("a foreign file whose id is taken is refused, with the reason on stderr, and nothing is loaded", async () => {

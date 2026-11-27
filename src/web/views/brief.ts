@@ -27,6 +27,9 @@ function slot(el: HTMLElement): (sig: unknown[], build: () => Child[]) => void {
   };
 }
 
+/** A read refused because the case is being unloaded (409), which is not a failure of what was read. */
+const refusedForNow = (err: unknown): boolean => err instanceof Error && /: 409\b/.test(err.message);
+
 /** The brief (spec §10.2): the case and its marking, what was asked, the status buttons, the phase strip, and the custody chip. */
 export function makeBrief(ui: Ui, open: Open): View {
   const { h } = ui;
@@ -36,16 +39,24 @@ export function makeBrief(ui: Ui, open: Open): View {
   // ---------- custody ----------
   let custody: { report: Custody; at: string } | "failed" | null = null;
   let asked = 0;
+  const packing = (): boolean => store.live.archive.pending !== null;
+  /** The last check was refused for now: it is asked again at the next update. */
+  let refused = false;
   const checkCustody = (): void => {
     if (store.at !== null) return;                       // a past screen never fetches today's check
     const mine = ++asked;
+    refused = false;
+    // while the case is packed its reads are refused: it is asked again once the unload has ended (update, below)
+    if (packing()) { custody = null; return; }
     ui.api.custody(store.id).then((report) => {
       if (mine !== asked) return;
       custody = { report, at: new Date().toISOString() };
       render();
-    }).catch(() => {
+    }).catch((err: unknown) => {
       if (mine !== asked) return;
-      custody = "failed";
+      // refused for now (409: the case is being unloaded) is not a failed check; it is asked again when the unload has ended
+      refused = packing() || refusedForNow(err);
+      custody = refused ? null : "failed";
       render();
     });
   };
@@ -177,13 +188,20 @@ export function makeBrief(ui: Ui, open: Open): View {
   checkCustody();
   let published = store.live.published.length;
   let replaying = store.at !== null;
+  let wasPacking = packing();
+  let lastFailed = store.live.archive.failed?.seq ?? null;
   return {
     el,
     update() {
       const n = store.live.published.length;
       const back = replaying && store.at === null;      // back at the present: the check is asked again
       replaying = store.at !== null;
-      if (n !== published) { published = n; checkCustody(); } else if (back) checkCustody();
+      // an unload ended and the case is still here (seen packing, or a new failed unload): the check is asked again
+      const failed = store.live.archive.failed?.seq ?? null;
+      const unpacked = !packing() && (wasPacking || failed !== lastFailed);
+      wasPacking = packing();
+      lastFailed = failed;
+      if (n !== published) { published = n; checkCustody(); } else if (back || unpacked || (refused && !packing())) checkCustody();
       render();
     },
     destroy() { asked++; },

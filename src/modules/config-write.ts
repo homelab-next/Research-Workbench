@@ -1,6 +1,6 @@
 // Writing the one setting a person may change from the interface, cases.on_complete, into the configuration file by a line edit.
 import { randomUUID } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { Json } from "../core/canonical";
 import { canonical, isPlainObject } from "../core/canonical";
@@ -20,8 +20,9 @@ const UNSAFE = byHand("the configuration file");
 
 /** A top-level `cases:` with nothing after it but a comment: the start of a block-style mapping. */
 const BLOCK_START = /^cases:[ \t]*(#.*)?$/;
-/** Any other top-level line that names cases (a flow mapping, a scalar). */
-const OTHER_START = /^cases[ \t]*:/;
+/** Any other top-level line that names cases (a flow mapping, a scalar, a quoted key). */
+const OTHER_START = /^(["']?)cases\1[ \t]*:/;
+const BOM = "\uFEFF";
 /** A child `on_complete:` with a plain one-line value and perhaps a comment. */
 const CHILD = /^([ ]+)on_complete[ \t]*:([ \t]*)([^#]*?)([ \t]+#.*)?$/;
 const indentOf = (line: string): number => line.length - line.trimStart().length;
@@ -45,6 +46,8 @@ function parse(text: string): Record<string, unknown> {
 
 /** The line edit, before it is checked. */
 function edit(text: string, value: "keep" | "unload"): string {
+  // a byte-order mark reads as part of the first key (the loader would not see cases there either): such a file is edited by hand
+  if (text.startsWith(BOM)) throw UNSAFE;
   const nl = text.includes("\r\n") ? "\r\n" : "\n";
   const lines = text.split("\n").map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l));
   const endsWithNewline = text === "" || text.endsWith("\n");
@@ -83,6 +86,9 @@ export function withOnComplete(text: string, value: "keep" | "unload"): string {
   const cases = before.cases ?? null;
   if (cases !== null && !isPlainObject(cases)) throw UNSAFE;
   const next = edit(text, value);
+  // a YAML parser keeps the last of a key given twice, so the comparison below would not see a second cases mapping
+  const starts = next.split("\n").filter((l) => OTHER_START.test(l)).length;
+  if (starts > 1) throw UNSAFE;
   const after = parse(next);
   const expected = { ...before, cases: { ...(cases ?? {}), on_complete: value } };
   let same: boolean;
@@ -97,19 +103,26 @@ export function withOnComplete(text: string, value: "keep" | "unload"): string {
 
 /** Writes cases.on_complete to config.write_path (temporary file, fsync, rename; the folder is made when missing) and sets it on `config`. Throws ConfigWriteError and changes nothing. */
 export function saveOnComplete(config: Config, value: "keep" | "unload"): void {
-  const file = config.write_path;
+  const named = config.write_path;
+  // a link to the configuration file is written through, to the file it names: the link stays a link
+  let file = named;
+  try {
+    file = realpathSync(named);
+  } catch {
+    // not there yet: it is made where it is named
+  }
   const dir = dirname(file);
   let text: string;
   try {
     text = existsSync(file) ? readFileSync(file, "utf8") : "";
   } catch (err) {
-    throw new ConfigWriteError(`${file} could not be read: ${(err as Error).message}`);
+    throw new ConfigWriteError(`${named} could not be read: ${(err as Error).message}`);
   }
   let next: string;
   try {
     next = withOnComplete(text, value);
   } catch (err) {
-    if (err instanceof ConfigWriteError) throw byHand(file);
+    if (err instanceof ConfigWriteError) throw byHand(named);
     throw err;
   }
   let made: string | undefined;
@@ -128,7 +141,7 @@ export function saveOnComplete(config: Config, value: "keep" | "unload"): void {
     const created = made;
     quietly(() => rmSync(tmp, { force: true }));
     if (created !== undefined) quietly(() => rmSync(created, { recursive: true, force: true }));
-    throw new ConfigWriteError(`${file} could not be written: ${(err as Error).message}`);
+    throw new ConfigWriteError(`${named} could not be written: ${(err as Error).message}`);
   }
   try {
     const d = openSync(dir, "r");

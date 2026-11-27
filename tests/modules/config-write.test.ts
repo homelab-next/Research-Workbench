@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Refused } from "../../src/core/refused";
@@ -109,4 +109,26 @@ test("saveOnComplete leaves the file and the config as they were when it is refu
   expect(e.cases.on_complete).toBe("keep");
   expect(readdirSync(blocked)).toEqual(["config.yaml"]);
   expect(existsSync(join(blocked, "config.yaml"))).toBe(true);
+});
+
+test("a quoted cases key, or a file that begins with a byte-order mark, never gets a second cases mapping", () => {
+  // the quoted key is refused; a parser keeps the last of a key given twice, so the check after the edit would not see it
+  expect(refusal(() => withOnComplete("\"cases\":\n  on_complete: keep\n", "unload"))).toBeInstanceOf(ConfigWriteError);
+  expect(refusal(() => withOnComplete("'cases':\n  on_complete: keep\n", "unload"))).toBeInstanceOf(ConfigWriteError);
+  // a byte-order mark reads as part of the first key: such a file is left to be edited by hand
+  expect(refusal(() => withOnComplete("\uFEFFcases:\n  on_complete: keep\n", "unload"))).toBeInstanceOf(ConfigWriteError);
+  expect(refusal(() => withOnComplete("\uFEFFuser: a\n", "unload"))).toBeInstanceOf(ConfigWriteError);
+});
+
+test("saveOnComplete writes through a link to the configuration file: the link stays a link", () => {
+  const dir = tmp();
+  const real = join(dir, "real.yaml");
+  writeFileSync(real, "user: pat\n");
+  const link = join(dir, "config.yaml");
+  symlinkSync(real, link);
+  const c = loadConfig({ env: {}, home: join(dir, "home"), repoRoot: "/repo", path: link });
+  saveOnComplete(c, "unload");
+  expect(lstatSync(link).isSymbolicLink()).toBe(true);
+  expect(readFileSync(real, "utf8")).toBe("user: pat\ncases:\n  on_complete: unload\n");
+  expect(readdirSync(dir).sort()).toEqual(["config.yaml", "real.yaml"]);
 });

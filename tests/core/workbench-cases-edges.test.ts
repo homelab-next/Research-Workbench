@@ -1,9 +1,10 @@
 // The edges of unload and load the final review of slice 11 found: what an unload may replace, where it may write, how large an id may be,
 // and what an untrusted ledger.sqlite or case.json can still say after the checks.
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { Database } from "bun:sqlite";
 import { CaseFileError, extractCaseFile, readManifest, writeCaseFile } from "../../src/core/casefile";
 import type { CaseManifest, ManifestHeader } from "../../src/core/casefile";
@@ -15,6 +16,7 @@ import type { NewCase } from "../../src/core/workbench";
 
 const person: Actor = { kind: "human", id: "analyst" };
 const colleague: Actor = { kind: "human", id: "colleague" };
+const code: Actor = { kind: "system", id: "workbench" };
 const sample: NewCase = {
   title: "Sample", asked: "Who is behind the traffic to 198.51.100.77?", why: "test", starting: [{ type: "ip", value: "198.51.100.77" }],
   window: { from: null, to: null }, objective: null, marking: "TLP:AMBER",
@@ -243,12 +245,14 @@ const sql = (folder: string, text: string): void => {
   const db = new Database(join(folder, "ledger.sqlite"));
   try { db.exec(text); } finally { db.close(); }
 };
-async function unloadedFile(): Promise<string> {
-  const s = wb.createCase(sample, person);
-  note(s, "one");
-  const r = await wb.unloadCase("CASE-1", { actor: person });
+async function unloadedFileOf(id: string): Promise<string> {
+  const r = await wb.unloadCase(id, { actor: person });
   if (!r.ok) throw new Error(r.reason);
   return r.path;
+}
+async function unloadedFile(): Promise<string> {
+  note(wb.createCase(sample, person), "one");
+  return unloadedFileOf("CASE-1");
 }
 async function expectRefusedLoad(file: string, text: string): Promise<void> {
   const before = ls(cases());
@@ -364,4 +368,134 @@ test("a load whose case.loaded cannot be written leaves no cases/CASE-N and no .
   expect(ls(cases())).toEqual([".high-water"]);
   broken = false;
   expect((await wb.loadCase(file, { actor: person })).id).toBe("CASE-1");
+});
+
+// ---------- the minor findings ----------
+
+test("M3: the temporary file an unload writes names the case's marking", async () => {
+  const parts: string[] = [];
+  wb.close();
+  wb = openWb({ beforeUnloadStep: (step, part) => { if (step === "check") parts.push(basename(part)); } });
+  wb.createCase(sample, person);
+  expect((await wb.unloadCase("CASE-1", { actor: person })).ok).toBe(true);
+  expect(parts.length).toBe(1);
+  expect(parts[0]).toMatch(/^\.tmp-CASE-1\.TLP-AMBER-\d+-[0-9a-f-]{36}\.part$/);
+});
+
+test("M4: an unload after publishing that a stop left undone is recorded as failed when the case is next opened, so it is not lost silently", () => {
+  const s = wb.createCase(sample, person);
+  s.commit((_, ids) => [{ type: "run.started", payload: { run: ids.next("run"), pipeline: "investigate", pipeline_hash: "a".repeat(64), stages: [
+    { id: "publish", title: "Publish", phase: "publish", runs: "human", gate: "publish", reviews: false, model: null }] }, actor: code }]);
+  s.commit(() => [{ type: "gate.waiting", payload: { gate: "publish" }, actor: code }]);
+  s.commit(() => [{ type: "gate.passed", payload: { gate: "publish", unload_after: true }, actor: person }]);
+  s.commit(() => [{ type: "run.finished", payload: { outcome: "published" }, actor: code }]);
+  expect(s.state.archive.unload_after).toBe(true);
+  wb.close(); // the stop, before the host unloaded it
+  wb = openWb();
+  const back = wb.session("CASE-1");
+  expect(back.entries().at(-1)).toMatchObject({ type: "case.unload_failed", actor: { kind: "system", id: "recovery" }, payload: { reason: "the workbench stopped before the case was unloaded after publishing" } });
+  expect(back.state.archive.unload_after).toBe(false);
+  expect(back.state.skipped).toEqual([]);
+  expect(wb.listCases()[0]!.unload_failed).toBe("the workbench stopped before the case was unloaded after publishing");
+  wb.close();
+  wb = openWb();
+  expect(wb.session("CASE-1").entries().filter((e) => e.type === "case.unload_failed").length).toBe(1);
+});
+
+/** A case file made by hand from a case folder's files and a case.json from `m`, with `extra` members listed in it too. */
+function handMade(out: string, folder: string, m: CaseManifest, extra: { name: string; body: string }[]): void {
+  const sha = (b: Uint8Array): string => new Bun.CryptoHasher("sha256").update(b).digest("hex");
+  const members = [...m.files.map((f) => ({ name: f.path, body: new Uint8Array(readFileSync(join(folder, f.path))) })), ...extra.map((e) => ({ name: e.name, body: new TextEncoder().encode(e.body) }))]
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const files = members.map((x) => ({ path: x.name, sha256: sha(x.body), bytes: x.body.length }));
+  rawCaseFile(out, [{ name: "case.json", body: JSON.stringify({ ...m, files }) }, ...members]);
+}
+
+test("M6: a case file holding a ledger journal (ledger.sqlite-wal or -journal) is refused by name", async () => {
+  const file = await unloadedFile();
+  const folder = join(dir, "x");
+  const m = await extractCaseFile(file, folder);
+  for (const journal of ["ledger.sqlite-wal", "ledger.sqlite-journal"]) {
+    const out = join(dir, `${journal}.tar.gz`);
+    handMade(out, folder, m, [{ name: journal, body: "junk" }]);
+    await expectRefusedLoad(out, `the case file holds ${journal}, a ledger journal; a case file holds none`);
+  }
+});
+
+test("M7: a deleted.log that is a link or not a plain file is not read or written through", async () => {
+  wb.createCase(sample, person);
+  const r = await wb.unloadCase("CASE-1", { actor: person });
+  if (!r.ok) throw new Error(r.reason);
+  writeFileSync(join(dir, "elsewhere.log"), `${JSON.stringify({ id: "CASE-50" })}\n`);
+  symlinkSync(join(dir, "elsewhere.log"), join(dir, "store", "deleted.log"));
+  errors.length = 0;
+  expect(wb.createCase(sample, person).id).toBe("CASE-2");
+  expect(errors.map(String)).toEqual(["CaseFileError: the case store's deleted.log is not a plain file; its ids are not counted"]);
+  const err = await refusalOf(wb.store.delete(FILE, "CASE-1", "analyst", now()));
+  expect((err as Error).message).toBe("the deletion could not be recorded in deleted.log: deleted.log is not a plain file");
+  expect(existsSync(r.path)).toBe(true);
+  expect(readFileSync(join(dir, "elsewhere.log"), "utf8")).toBe(`${JSON.stringify({ id: "CASE-50" })}\n`);
+  // a FIFO is refused the same way, at once, rather than waited on
+  rmSync(join(dir, "store", "deleted.log"));
+  expect(Bun.spawnSync(["mkfifo", join(dir, "store", "deleted.log")]).exitCode).toBe(0);
+  expect((await refusalOf(wb.store.delete(FILE, "CASE-1", "analyst", now())) as Error).message).toContain("deleted.log");
+  expect(existsSync(r.path)).toBe(true);
+});
+
+test("M9: a failed unload's reason says its cause once, and names no temporary file, pid or folder", async () => {
+  wb.createCase(sample, person);
+  // a store folder this process may not write in: the temporary file cannot be made
+  mkdirSync(join(dir, "store"), { mode: 0o555 });
+  const r = await wb.unloadCase("CASE-1", { actor: person });
+  chmodSync(join(dir, "store"), 0o755);
+  if (r.ok) throw new Error("unloaded");
+  expect(r.reason).toStartWith("the case file could not be written: ");
+  expect(r.reason.split("the case file could not be written").length).toBe(2);
+  expect(r.reason).not.toContain(".tmp-");
+  expect(r.reason).not.toContain(String(process.pid));
+  expect(r.reason).not.toContain(dir);
+});
+
+test("M9: loading a file that is not there says so", async () => {
+  const err = await refusalOf(wb.loadCase(join(dir, "nothing.tar.gz"), { actor: person }));
+  expect(err).toBeInstanceOf(CaseFileError);
+  expect((err as Error).message).toBe("there is no file there");
+  const folder = await refusalOf(wb.loadCase(dir, { actor: person }));
+  expect((folder as Error).message).toBe("it is a folder, not a case file");
+});
+
+test("M11: the workbench closed in the middle of an unload leaves the case loaded, and its next open records the failed unload", async () => {
+  wb.close();
+  wb = openWb({ beforeUnloadStep: (step) => { if (step === "leave") wb.close(); } });
+  wb.createCase(sample, person);
+  const r = await wb.unloadCase("CASE-1", { actor: person });
+  if (r.ok) throw new Error("unloaded though the workbench was closed");
+  expect(r.reason).toBe("the case could not be taken out of the working set: the workbench is closed");
+  wb = openWb();
+  const s = wb.session("CASE-1");
+  expect(s.entries().map((e) => e.type)).toEqual(["case.created", "case.unloaded", "case.unload_failed"]);
+  expect(s.entries().at(-1)!.actor).toEqual({ kind: "system", id: "recovery" });
+});
+
+test("M11: a file named case.json in the case folder fails the unload; a case.json of link kind, or a header that is not ustar, is refused on load", async () => {
+  const s = wb.createCase(sample, person);
+  writeFileSync(join(s.dir, "case.json"), "{}");
+  const r = await wb.unloadCase("CASE-1", { actor: person });
+  if (r.ok) throw new Error("unloaded");
+  expect(r.reason).toBe("the case file could not be written: the case folder holds a file named case.json; a case file writes its own");
+  rmSync(join(s.dir, "case.json"));
+  const file = await unloadedFileOf("CASE-1");
+  const link = join(dir, "link.tar.gz");
+  rawCaseFile(link, [{ name: "case.json", type: "2", link: "elsewhere" }]);
+  await expectRefusedLoad(link, "case.json is a link; a case file holds only regular files");
+  // a header whose magic is not ustar, its checksum made right
+  const tar = gunzipSync(readFileSync(file));
+  tar.set(new TextEncoder().encode("gnu  \0"), 257);
+  tar.fill(0x20, 148, 156);
+  let sum = 0;
+  for (let i = 0; i < 512; i++) sum += tar[i]!;
+  tar.set(new TextEncoder().encode(sum.toString(8).padStart(6, "0") + "\0 "), 148);
+  const gnu = join(dir, "gnu.tar.gz");
+  writeFileSync(gnu, gzipSync(tar));
+  await expectRefusedLoad(gnu, "the file is not a readable case file");
 });

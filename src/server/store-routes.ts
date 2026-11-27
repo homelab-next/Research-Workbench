@@ -41,13 +41,9 @@ async function refusing(d: StoreRouteDeps, work: () => Promise<Response>): Promi
   }
 }
 
-/** Whether the case a file holds is in the working set now: its id is loaded and its first entry is the file's. */
+/** Whether the case a file holds is in the working set now: its id is loaded and its first entry is the file's. Read-only: a GET opens no session. */
 function loadedNow(wb: Workbench, c: StoredCase): boolean {
-  try {
-    return wb.session(c.manifest.id).entries(0, 1)[0]?.hash === c.manifest.origin;
-  } catch {
-    return false;
-  }
+  return wb.loadedOrigin(c.manifest.id) === c.manifest.origin;
 }
 
 function viewOf(wb: Workbench, c: StoredCase): StoredCaseView {

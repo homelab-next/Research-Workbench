@@ -148,16 +148,20 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
     });
   };
   const loadBundle = (n: number): void => {
+    // while the case is packed its reads are refused; the head is painted again when the unload ends (its deps hold archive.pending and failed)
+    if (store.live.archive.pending !== null) return;
     if (bundles.has(n)) return;
     bundles.set(n, "loading");
     const entry = [...store.entries].reverse().find((e) => e.type === "product.published" && e.payload.n === n);
     const done = (v: string[] | "failed"): void => { bundles.set(n, v); bundlesVersion++; render(); };
+    // refused for now (409: the case is being unloaded) is not kept as failed, so it is asked again; no render, so no loop
+    const notNow = (err: unknown): boolean => err instanceof Error && /: 409\b/.test(err.message);
     if (entry === undefined || entry.type !== "product.published") { done("failed"); return; }
     ui.api.blobText(store.id, entry.payload.bundle.blob).then((text) => {
       const files = (JSON.parse(text) as { manifest?: { files?: { name?: unknown }[] } }).manifest?.files;
       if (!Array.isArray(files)) { done("failed"); return; }
       done([...files.flatMap((f) => (typeof f.name === "string" && /^[a-z0-9.]+$/.test(f.name) ? [f.name] : [])), "manifest.json"]);
-    }).catch(() => done("failed"));
+    }).catch((err: unknown) => { if (store.live.archive.pending !== null || notNow(err)) bundles.delete(n); else done("failed"); });
   };
 
   // ---------- text with citations as chips ----------
@@ -707,7 +711,7 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
     draftBox.classList.toggle("proposed", !published);
     draftBox.hidden = d === null;
     questions.update();
-    paint(headBox, [d, s.published, store.id, bundlesVersion], () => (d === null ? [] : headView(s, d)));
+    paint(headBox, [d, s.published, store.id, bundlesVersion, store.live.archive.pending, store.live.archive.failed?.seq], () => (d === null ? [] : headView(s, d)));
     paint(bodyBox, edit !== null ? [edit] : [d, s.cards, s.overrules, s.conflicts, ro(), inflightVersion, ui.ref.likelihood, overruleVersion], () => (d === null ? [h("p", { class: "empty" }, "No draft yet.")] : edit !== null ? [edit.el] : readBody(s, d)));
     if (focusOverrule !== null && d !== null && edit === null) {
       const at = focusOverrule;

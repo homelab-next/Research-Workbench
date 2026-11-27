@@ -13,7 +13,7 @@ import { ignoreThrow, logToStderr } from "./deliver";
 import { Ledger, ledgerSchemaProblem } from "./ledger";
 import { Refused } from "./refused";
 import { CaseSession } from "./session";
-import { caseFields, fold, isCaseCreated } from "./state";
+import { caseFields, fold, isCaseCreated, unloadDue } from "./state";
 import type { CaseState, RunState } from "./state";
 import { CaseStoreFolder } from "./store";
 import type { StoreListing } from "./store";
@@ -84,6 +84,7 @@ const LEFTOVER = /^\.(loading-|unloading-|high-water\.)/;
 const RECOVERY: Actor = { kind: "system", id: "recovery" };
 const STOPPED = "the workbench stopped before the case was unloaded";
 const UNFINISHED = "an unload did not finish";
+const STOPPED_AFTER_PUBLISHING = "the workbench stopped before the case was unloaded after publishing";
 
 const numberOf = (id: string): number => Number(id.slice(5));
 const firstLine = (err: unknown): string => (err instanceof Refused ? err.reasons[0]! : err instanceof Error ? err.message : String(err)).split("\n")[0]!;
@@ -486,9 +487,12 @@ export class Workbench {
         },
       });
       this.sessions[id] = session;
-      if (!create && recover && session.state.archive.pending !== null) {
+      // an unload that never finished, or an unload after publishing the person asked for that a stop left undone (the host acts on that
+      // only as the drive settles, in the process that drove it): either is recorded, so it is neither lost silently nor tried later
+      const stopped = session.state.archive.pending !== null ? STOPPED : unloadDue(session.state) ? STOPPED_AFTER_PUBLISHING : null;
+      if (!create && recover && stopped !== null) {
         try {
-          session.commit(() => [{ type: "case.unload_failed", payload: { reason: STOPPED }, actor: RECOVERY }]);
+          session.commit(() => [{ type: "case.unload_failed", payload: { reason: stopped }, actor: RECOVERY }]);
         } catch (err) {
           this.reportError(new Error(`case ${id}: the unfinished unload could not be recorded: ${firstLine(err)}`, { cause: err }));
         }
@@ -549,6 +553,13 @@ export class Workbench {
       throw err;
     }
     syncDir(dir);
+  }
+
+  /** The hash of entry 1 of the loaded case `id`, read without opening a session or writing anything; null when no case has that id here. */
+  loadedOrigin(id: string): string | null {
+    this.open();
+    if (typeof id !== "string" || !CASE_ID.test(id)) return null;
+    return this.originOf(id);
   }
 
   /** The hash of entry 1 of a loaded case; null when it cannot be read. */
@@ -619,7 +630,8 @@ export class Workbench {
     };
     const file = caseFileName(id, meta.marking);
     const dest = join(store.dir, file);
-    const part = join(store.dir, `.tmp-${id}-${process.pid}-${randomUUID()}.part`);
+    // the marking is in its name too: a temporary file a stop leaves is a whole copy of the case
+    const part = join(store.dir, `.tmp-${file.slice(0, -".tar.gz".length)}-${process.pid}-${randomUUID()}.part`);
     const cases = join(this.dataDir, "cases");
     const away = join(cases, `.unloading-${id}-${randomUUID()}`);
     const step = (name: UnloadStep): void => this.beforeUnloadStep?.(name, part);
@@ -658,7 +670,9 @@ export class Workbench {
         // its folder is not there to hold it
       }
       this.unloading.delete(id);
-      const reason = this.withoutPaths(`${doing}: ${firstLine(err)}`, store);
+      const cause = firstLine(err).split(part).join("the temporary file");
+      // the cause may already say what was being done (writeCaseFile's own words): it is said once
+      const reason = this.withoutPaths(cause.startsWith(`${doing}: `) ? cause : `${doing}: ${cause}`, store);
       this.recordFailedUnload(id, session, reason, opts.actor);
       return { ok: false, reason };
     }
@@ -728,7 +742,9 @@ export class Workbench {
     const cases = join(this.dataDir, "cases");
     const tmp = join(cases, `.loading-${randomUUID()}`);
     try {
-      await extractCaseFile(file, tmp, { max_bytes: this.maxCaseBytes });
+      // the second pass must read the file the first one checked: a file swapped between them is refused here, not only by its head
+      const second = await extractCaseFile(file, tmp, { max_bytes: this.maxCaseBytes });
+      if (canonical(second as unknown as Json) !== canonical(m as unknown as Json)) throw new CaseFileError("the file changed while it was loaded");
       mkdirSync(join(tmp, "blobs"), { recursive: true });
       mkdirSync(join(tmp, "published"), { recursive: true });
       // 4. the ledger is exactly what Ledger.open makes, so nothing in it runs when case.loaded is written (a trigger, say)

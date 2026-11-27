@@ -445,3 +445,27 @@ test("a statement added from the Incoming bar arrives as a card in Incoming and 
   const id = st(q).incoming.at(-1)!;
   expect(q.q(`[data-area=incoming] [data-card=${id}] .title`).textContent).toBe("Statement: The TV is in the gym");
 });
+
+test("reads refused while the case was packed (409) are not kept as failed: once the unload has failed, the chip and the file list are read again", async () => {
+  const q = await open();
+  // the publish's custody and blob reads meet a case that is being packed: refused, 409
+  const real = { custody: q.ui.api.custody, blobText: q.ui.api.blobText };
+  let refuse = { custody: 1, blob: 1 };
+  q.ui.api.custody = async (id) => { if (refuse.custody > 0) { refuse.custody--; throw new Error(`/api/cases/${id}/custody: 409 CASE-1 is being unloaded`); } return real.custody(id); };
+  q.ui.api.blobText = async (id, hash) => { if (refuse.blob > 0) { refuse.blob--; throw new Error(`blob ${hash.slice(0, 12)}: 409`); } return real.blobText(id, hash); };
+  q.click(".next-thing"); await q.settle();
+  expect((await q.s.command("CASE-1", "approve")).status).toBe(200);
+  await q.s.app.hub.idle(); await q.settle();
+  expect(refuse).toEqual({ custody: 0, blob: 0 });
+  expect(q.q(".custody").textContent).not.toBe("custody not checked");
+  expect(q.q(".draft-head").textContent).not.toContain("could not be read");
+  // the unload, as the page sees it: begun, then failed; nothing is read while it is packed, and both are read once it has failed
+  const session = q.s.app.hub.read("CASE-1");
+  session.commit(() => [{ type: "case.unloaded", payload: { store: "store", head: session.head() }, actor: { kind: "human", id: "analyst" } }]);
+  await q.settle();
+  session.commit(() => [{ type: "case.unload_failed", payload: { reason: "the case file could not be written: the store is not a folder" }, actor: { kind: "human", id: "analyst" } }]);
+  await q.settle();
+  const c: Custody = await real.custody("CASE-1");
+  expect(q.q(".custody").textContent).toBe(c.line);
+  expect(q.q(".draft-head").textContent).toContain("manifest.json");
+});

@@ -354,7 +354,7 @@ bun run cases unload CASE-1 --config ~/workbench/config.yaml
 bun run cases unload CASE-1 --to /mnt/backup/cases --config ~/workbench/config.yaml
 bun run cases load CASE-1 --config ~/workbench/config.yaml
 bun run cases load /mnt/backup/cases/CASE-1.TLP-GREEN.tar.gz --config ~/workbench/config.yaml
-bun run cases store list --search 198.51.100.77   # by id, title, question or starting value --config ~/workbench/config.yaml
+bun run cases store list --search 198.51.100.77 --config ~/workbench/config.yaml   # by id, title, question or starting value
 bun run cases store delete CASE-1 --config ~/workbench/config.yaml
 ```
 
@@ -387,6 +387,8 @@ bun run cases store delete CASE-1 --config ~/workbench/config.yaml
 - A reviewer that keeps failing a draft only over a value you overruled pauses the run each time (it cannot move the value back, but "Evaluation failed on this revision" stays a publish blocker): edit the draft, or choose another model for that reviewer.
 - An overrule sets a finding's likelihood, confidence or place in code; the confidence basis and reasoning are the analyst's until its next Assemble pass rewrites them. An overrule made with no run in progress reaches the next run's drafts but is not sent to the analyst as a reason.
 - A blocking question holds the run after its stage's pass, not inside it: that stage does not run again on resume, so it finished its work without the answer. The stages after it read the answer.
-- The case store may be shared by several workbenches, so a temporary `.part` file an unload left behind after a stop is never removed by the workbench: the Case store view and `store list` count it as a leftover, and you remove it by hand.
+- The case store may be shared by several workbenches, so a temporary `.part` file an unload left behind after a stop is never removed by the workbench: the Case store view and `store list` count it as a leftover, and you remove it by hand. Its name carries the case's marking (`.tmp-CASE-1.TLP-AMBER-<pid>-<uuid>.part`), and it is a whole copy of the case.
+- An unload never replaces a file of another case that has the same id (two workbenches sharing a store or an export folder both have a CASE-1), nor a later or diverging copy of the same case: it is refused and nothing is written. It replaces only an earlier copy of the same case. A store or `--to` folder inside `<data_dir>/cases` is refused.
+- The Case store view and `store list` check each file against its own ledger: a file whose `case.json` gives another title, question, marking, starting value, status or products than its ledger is listed as unreadable, and a load refuses it.
 - A case file from another workbench whose id this workbench used once, for a case now unloaded elsewhere (not to this store), cannot be told from that case coming back, so it loads.
-- While a case open in a tab is being packed, the tab's next read of its custody or a blob is refused, and the browser logs it as a failed load before the tab goes to the list.
+- A tab does not read the custody or the blobs of a case while it is being unloaded. A read already on its way when the unload began is refused with 409 (the browser may log that); it is not shown as a failed check, and it is asked again if the case stays.

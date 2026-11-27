@@ -1,6 +1,6 @@
 // The case store: a folder of case files, read from each file's case.json alone. Server-side core (like workbench.ts): never imported by
 // src/web or src/core/state. Only a person or code deletes from it; no agent tool reaches this module.
-import { closeSync, fsyncSync, lstatSync, openSync, readdirSync, readFileSync, rmSync, writeSync } from "node:fs";
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readdirSync, readSync, rmSync, writeSync } from "node:fs";
 import type { Dirent } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { canonical } from "./canonical";
@@ -52,6 +52,41 @@ function syncDir(dir: string): void {
     fsyncSync(fd);
   } catch {
     // some file systems refuse fsync on a directory
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Opens deleted.log in a folder another party may share: never through a link (O_NOFOLLOW), never waiting on a FIFO (O_NONBLOCK), and only
+ * when it is a plain file. Throws a CaseFileError otherwise; an ENOENT is thrown as it is.
+ */
+function openLog(path: string, flags: number): number {
+  let fd: number;
+  try {
+    fd = openSync(path, flags | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o644);
+  } catch (err) {
+    if (codeOf(err) === "ELOOP" || codeOf(err) === "ENXIO") throw new CaseFileError(`${DELETED_LOG} is not a plain file`);
+    throw err;
+  }
+  if (!fstatSync(fd).isFile()) {
+    closeSync(fd);
+    throw new CaseFileError(`${DELETED_LOG} is not a plain file`);
+  }
+  return fd;
+}
+
+function readLog(path: string): string {
+  const fd = openLog(path, constants.O_RDONLY);
+  try {
+    const parts: Uint8Array[] = [];
+    for (;;) {
+      const buf = new Uint8Array(65536);
+      const n = readSync(fd, buf, 0, buf.length, null);
+      if (n === 0) break;
+      parts.push(buf.subarray(0, n));
+    }
+    return new TextDecoder().decode(Buffer.concat(parts));
   } finally {
     closeSync(fd);
   }
@@ -176,9 +211,10 @@ export class CaseStoreFolder {
     }
     let log: string | null = null;
     try {
-      log = readFileSync(join(this.dir, DELETED_LOG), "utf8");
+      log = readLog(join(this.dir, DELETED_LOG));
     } catch (err) {
-      if (codeOf(err) !== "ENOENT") onError?.(err);
+      if (err instanceof CaseFileError) onError?.(new CaseFileError(`the case store's ${reasonOf(err)}; its ids are not counted`));
+      else if (codeOf(err) !== "ENOENT") onError?.(err);
     }
     for (const line of log === null ? [] : log.split("\n")) {
       let rec: unknown;
@@ -202,7 +238,7 @@ export class CaseStoreFolder {
     if (typed !== m.id) throw new CaseFileError(`type ${m.id} to delete its file`);
     const line = canonical({ id: m.id, title: m.title, head: m.head.hash, when, who, file }) + "\n";
     try {
-      const fd = openSync(join(this.dir, DELETED_LOG), "a");
+      const fd = openLog(join(this.dir, DELETED_LOG), constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT);
       try {
         const bytes = new TextEncoder().encode(line);
         for (let at = 0; at < bytes.length; ) at += writeSync(fd, bytes, at, bytes.length - at);

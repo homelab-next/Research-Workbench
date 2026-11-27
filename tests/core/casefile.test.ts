@@ -237,7 +237,8 @@ test("an archive whose bytes are damaged is not a readable case file, and extrac
     expect({ what, reason: await refusal(extractCaseFile(bad, dest)) }).toEqual({ what, reason: "the file is not a readable case file" });
     expect({ what, left: existsSync(dest) }).toEqual({ what, left: false });
   }
-  expect(await refusal(checkCaseFile(join(root, "missing.tar.gz")))).toBe("the file is not a readable case file");
+  // a file that is not there is not called unreadable: it is not there
+  expect(await refusal(checkCaseFile(join(root, "missing.tar.gz")))).toBe("there is no file there");
 });
 
 test("a file over the size cap is refused from its headers, before the body is read, and by the bytes that come out", async () => {
