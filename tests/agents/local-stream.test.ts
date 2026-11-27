@@ -260,18 +260,66 @@ test("the defaults are a 400-character window seen 3 times, on", () => {
   expect(DEFAULT_LOOP_GUARD).toEqual({ enabled: true, window: 400, repeats: 3 });
 });
 
-test("a short unit repeated eight times is a loop; varied text of any length is not", () => {
-  expect(feedAll(new LoopGuard(DEFAULT_LOOP_GUARD), LOOP.repeat(9))).not.toBeNull();
+test("a short unit is a loop in the reasoning only at 40 repeats spanning 4000 characters; varied text of any length is not", () => {
+  // a window too long to fire, so the short-unit check is seen alone
+  const alone = { enabled: true, window: 20000, repeats: 1 };
+  const unit = `${LOOP}Then I look at the lease table again for it.`.padEnd(120, "!"); // 120 characters, no shorter period
+  expect(unit.length).toBe(120);
+  expect(feedAll(new LoopGuard(alone, { short: true }), unit.repeat(39))).toBeNull();
+  expect(feedAll(new LoopGuard(alone, { short: true }), unit.repeat(45))).not.toBeNull();
+  // a 74-character unit needs 55 repeats to span 4000 characters
+  expect(feedAll(new LoopGuard(alone, { short: true }), LOOP.repeat(54))).toBeNull();
+  expect(feedAll(new LoopGuard(alone, { short: true }), LOOP.repeat(60))).not.toBeNull();
+  // a 20-character unit needs 200 repeats to span 4000 characters
+  const small = `${"a".repeat(19)}b`;
+  expect(feedAll(new LoopGuard(alone, { short: true }), small.repeat(199))).toBeNull();
+  expect(feedAll(new LoopGuard(alone, { short: true }), small.repeat(210))).not.toBeNull();
+  // the reply is never read for short units
+  expect(feedAll(new LoopGuard(alone, { short: false }), unit.repeat(300))).toBeNull();
   const honest = Array.from({ length: 3000 }, (_, i) => `Step ${i}: the count of rows for host-${i % 97} is ${(i * 7919) % 1000}.\n`).join("");
-  expect(feedAll(new LoopGuard(DEFAULT_LOOP_GUARD), honest)).toBeNull();
+  expect(feedAll(new LoopGuard(DEFAULT_LOOP_GUARD, { short: true }), honest)).toBeNull();
   // a long rule of one character is not a short unit: only the window check can catch it
-  expect(feedAll(new LoopGuard(DEFAULT_LOOP_GUARD), `intro\n${"-".repeat(600)}\nafter`)).toBeNull();
+  expect(feedAll(new LoopGuard(DEFAULT_LOOP_GUARD, { short: true }), `intro\n${"-".repeat(600)}\nafter`)).toBeNull();
+});
+
+/** Ordinary replies that repeat a row or an object: a table, a JSON array, a plan. None is a loop. */
+const ROW = "| ws-17.example.net | connected | ap-9 |";
+const OBJECT = { address: "192.0.2.61", device: "ws-17.example.net", status: "connected", ap: "ap-9" };
+const ORDINARY: Record<string, string> = {
+  "7 identical rows": ["| device | status | ap |", "|---|---|---|", ...Array.from({ length: 7 }, () => ROW)].join("\n"),
+  "12 identical table rows": ["| device | status | ap |", "|---|---|---|", ...Array.from({ length: 12 }, () => ROW), "That is all."].join("\n"),
+  "10 identical pretty-printed objects": JSON.stringify(Array.from({ length: 10 }, () => OBJECT), null, 2),
+  "12 sub-goals from one pivot in a plan": JSON.stringify({ goal: "who", subgoals: Array.from({ length: 12 }, (_, i) => ({ id: `g${i}`, title: "Who uses the device", have: [{ type: "address", value: `192.0.2.${i}` }], want: "account", route: ["address_to_asset_by_lease", "asset_to_accounts"], playbook: null })) }, null, 2),
+  "300 varied rows": Array.from({ length: 300 }, (_, i) => `| 2026-01-03T10:${String(i % 60).padStart(2, "0")}:00Z | 192.0.2.${i % 250} | ws-${i}.example.net | ap-${i % 7} |`).join("\n"),
+  "80 rows differing in one late cell": Array.from({ length: 80 }, (_, i) => `| ws-17.example.net | connected to the corporate wireless network | ap-9 | band=5GHz | ${i} |`).join("\n"),
+};
+
+test.each(Object.keys(ORDINARY))("an ordinary reply with %s is not a loop, in the reply or in the reasoning", (name) => {
+  for (const step of [3, 13, 100]) {
+    expect({ name, step, hit: feedAll(new LoopGuard(DEFAULT_LOOP_GUARD, { short: false }), ORDINARY[name]!, step) }).toEqual({ name, step, hit: null });
+    expect({ name, step, hit: feedAll(new LoopGuard(DEFAULT_LOOP_GUARD, { short: true }), ORDINARY[name]!, step) }).toEqual({ name, step, hit: null });
+  }
+});
+
+test("the provider runs the short-unit check on the reasoning and not on the reply", async () => {
+  // a window too long to fire: only the short-unit check could cut these
+  const guard = { window: 20000, repeats: 1 };
+  const reasoning = sseStandin([{ chunks: looping("reasoning_content", 60), per_pull: 20 }]);
+  expect(asError(await provider(reasoning.url, { loop_guard: guard }).turn(req())).message).toStartWith("the model repeated itself in its reasoning: ");
+  const content = sseStandin([{ chunks: looping("content", 60), per_pull: 20 }]);
+  expect(await provider(content.url, { loop_guard: guard }).turn(req())).toMatchObject({ kind: "answer", stop: "length", content: LOOP.repeat(60) });
+});
+
+test("a streamed reply of 12 identical table rows is answered whole, not cut", async () => {
+  const text = ORDINARY["12 identical table rows"]!;
+  const s = sseStandin([{ chunks: [...pieces(text, 3).map((p) => delta({ content: p })), delta({}, "stop")], per_pull: 20 }]);
+  expect(await provider(s.url).turn(req())).toMatchObject({ kind: "answer", stop: "end", content: text });
 });
 
 test("a long passage seen again and again is a loop once its window has been seen K times before", () => {
   const passage = Array.from({ length: 12 }, (_, i) => `sentence ${i} says something new about the address; `).join("");
   expect(passage.length).toBeGreaterThan(400);
-  const g = new LoopGuard({ enabled: true, window: 400, repeats: 3 });
+  const g = new LoopGuard({ enabled: true, window: 400, repeats: 3 }, { short: true });
   expect(feedAll(g, passage.repeat(3))).toBeNull();
   const hit = feedAll(g, passage.repeat(3));
   expect(hit).not.toBeNull();
@@ -281,7 +329,7 @@ test("a long passage seen again and again is a loop once its window has been see
 test("an earlier unrelated quote of the window does not count as a loop", () => {
   const passage = Array.from({ length: 12 }, (_, i) => `sentence ${i} says something new about the address; `).join("");
   const fresh = Array.from({ length: 40 }, (_, i) => `and then point ${i} follows. `).join("");
-  expect(feedAll(new LoopGuard(DEFAULT_LOOP_GUARD), passage + fresh + passage + fresh + passage)).toBeNull();
+  expect(feedAll(new LoopGuard(DEFAULT_LOOP_GUARD, { short: true }), passage + fresh + passage + fresh + passage)).toBeNull();
 });
 
 // --- the loop asks again without thinking, and the ledger shows both

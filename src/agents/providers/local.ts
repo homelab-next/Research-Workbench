@@ -191,13 +191,13 @@ export class LocalProvider implements Provider {
 
   /**
    * Reads an event stream of chat-completion chunks into the completion they add up to. The reasoning and the content are each watched by a
-   * LoopGuard; when either repeats itself the request is cut there, and the Failure (cause "loop") holds what was received.
+   * LoopGuard (the short-unit check on the reasoning only); when either repeats itself the request is cut there, and the Failure (cause "loop") holds what was received.
    */
   async #readStream(stream: ReadableStream<Uint8Array>, ctl: AbortController, watch: StreamWatch): Promise<{ raw: Uint8Array; parsed: unknown }> {
     const reader = stream.getReader();
     const events = new SseEvents();
     const asm = new StreamAssembly();
-    const guards = { reasoning: new LoopGuard(watch.guard), content: new LoopGuard(watch.guard) };
+    const guards = { reasoning: new LoopGuard(watch.guard, { short: true }), content: new LoopGuard(watch.guard, { short: false }) };
     const secrets = this.#secret === null ? [] : [this.#secret];
     const text = new TextDecoder();
     const received: Uint8Array[] = [];

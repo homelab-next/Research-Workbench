@@ -21,10 +21,15 @@ export const LOOP_GUARD_SCHEMA: Schema = {
   },
 };
 
-/** The short-unit check: a unit of SHORT_MIN to SHORT_MAX characters, repeated SHORT_TIMES times back to back at the end of the text. */
+/**
+ * The short-unit check, on the reasoning only: a unit of SHORT_MIN to SHORT_MAX characters, repeated back to back at the end of the text at
+ * least SHORT_TIMES times and over at least SHORT_SPAN characters. A reply's tables and JSON arrays repeat a row or an object a few times by
+ * nature, so the reply is left to the window check, and the reasoning needs a run far longer than any honest table.
+ */
 export const SHORT_MIN = 20;
 export const SHORT_MAX = 200;
-export const SHORT_TIMES = 8;
+export const SHORT_TIMES = 40;
+export const SHORT_SPAN = 4000;
 /** The repeated text a hit reports, at most this long. */
 export const SHOWN_CHARS = 120;
 
@@ -50,11 +55,14 @@ function hasPeriod(s: string, from: number, p: number): boolean {
 export class LoopGuard {
   readonly #s: LoopGuardSettings;
   readonly #step: number;
+  readonly #shortCheck: boolean;
   #text = "";
   #checked = 0;
 
-  constructor(settings: LoopGuardSettings) {
+  /** `short`: run the short-unit check too (the reasoning); the window check always runs. */
+  constructor(settings: LoopGuardSettings, opts: { short: boolean }) {
     this.#s = settings;
+    this.#shortCheck = opts.short;
     this.#step = Math.max(16, Math.min(100, Math.floor(settings.window / 4)));
   }
 
@@ -67,14 +75,14 @@ export class LoopGuard {
     this.#text += piece;
     if (!this.#s.enabled || this.#text.length - this.#checked < this.#step) return null;
     this.#checked = this.#text.length;
-    return this.#short() ?? this.#window();
+    return (this.#shortCheck ? this.#short() : null) ?? this.#window();
   }
 
-  /** A unit of SHORT_MIN to SHORT_MAX characters repeated SHORT_TIMES times at the end; a run of a shorter unit is left to the window check. */
+  /** A unit of SHORT_MIN to SHORT_MAX characters repeated at the end SHORT_TIMES times over SHORT_SPAN characters; a shorter unit is left to the window check. */
   #short(): string | null {
     const t = this.#text;
     for (let p = SHORT_MIN; p <= SHORT_MAX; p++) {
-      const from = t.length - p * SHORT_TIMES;
+      const from = t.length - p * Math.max(SHORT_TIMES, Math.ceil(SHORT_SPAN / p));
       if (from < 0) break;
       if (!hasPeriod(t, from, p)) continue;
       const unit = t.slice(t.length - p);
