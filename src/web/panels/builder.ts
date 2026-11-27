@@ -40,7 +40,8 @@ function turnStatus(entries: readonly Entry[], t: CaseState["conversation"][numb
   return "thinking…";
 }
 
-export function builderPanel(shell: Shell, opts: { loop: string | null }): { el: HTMLElement; destroy(): void } {
+/** `onWritten` is called after an accepted file is written, so the screen that holds the panel can read the loops again. */
+export function builderPanel(shell: Shell, opts: { loop: string | null; onWritten?: () => void }): { el: HTMLElement; destroy(): void } {
   const { ui } = shell;
   const h = ui.h;
   let destroyed = false;
@@ -279,6 +280,7 @@ export function builderPanel(shell: Shell, opts: { loop: string | null }): { el:
     busy.delete(key);
     if (destroyed || openId !== id) return;
     if (!r.ok) refused.set(key, r.refused.join("; "));
+    else if (accept) opts.onWritten?.();
     readView();
     paintOpen();
   };

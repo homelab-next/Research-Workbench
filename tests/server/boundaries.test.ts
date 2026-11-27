@@ -90,6 +90,34 @@ const ACTOR_FROM_REQUEST =
 const serverNamesTheActor: Rule = (path, text) =>
   /^src\/server\//.test(path) && ACTOR_FROM_REQUEST.test(text) ? [`${path} reads ${text.match(ACTOR_FROM_REQUEST)![0]}`] : [];
 
+// ---------- slice 12, part B: the builder proposes and asks; only a person decides, and a probe is a query the runner sends ----------
+
+/** The one file that writes a decision on a builder's change or probe. */
+const BUILDER_SERVER = "src/server/builder.ts";
+/** An entry literal of one of the two decisions, from its type to the end of its object (a decision's payload is on one line). */
+const DECISION = /type:\s*["'](builder\.(?:probe_)?decided)["'][^\n]*/g;
+const decisionsAreThePersons: Rule = (path, text) => {
+  if (!/^src\//.test(path) || /^src\/(?:core|web)\//.test(path)) return [];
+  const found: string[] = [];
+  for (const m of text.matchAll(DECISION)) {
+    if (path !== BUILDER_SERVER) found.push(`${path} writes ${m[1]}`);
+    else if (!/\bactor:\s*ctx\.actor\b/.test(m[0])) found.push(`${path} writes ${m[1]} with an actor that is not the request's person`);
+  }
+  // the context a decision is written in names the person, and the routes give it the server's own person
+  if (path === BUILDER_SERVER && !/\bactor:\s*Extract<Actor,\s*\{\s*kind:\s*"human"\s*\}>/.test(text)) found.push(`${path}: the builder context's actor is not a person`);
+  if (path === "src/server/builder-routes.ts" && !/\bactor:\s*d\.human\(\)/.test(text)) found.push(`${path}: the builder context's actor is not the server's person`);
+  return found;
+};
+/** A connector, the pool, or a pool's connection reached from the builder's server code, which may only ask the runner. */
+const REACHES_A_SOURCE = /\bConnectorPool\b|\.pool\b|\bconnectorFor\b|\bopenConnector\b/;
+const probesGoThroughTheRunner: Rule = (path, text) => {
+  if (path !== BUILDER_SERVER) return [];
+  const found = imports(text).filter((spec) => reaches(path, spec, "src/modules/connectors")).map((spec) => `${path} imports ${spec}`);
+  if (REACHES_A_SOURCE.test(text)) found.push(`${path} names ${text.match(REACHES_A_SOURCE)![0]}`);
+  if (!/\brunQuery\s*\(/.test(text)) found.push(`${path} does not send a probe through runQuery`);
+  return found;
+};
+
 const RULES: [string, Rule][] = [
   ["no file under src/server or src/web imports from src/modules/connectors", noConnectorImports],
   ["no file under src/web except build.ts imports from src/server, src/modules, src/agents, src/pipeline or src/cli", webIsIsolated],
@@ -98,6 +126,8 @@ const RULES: [string, Rule][] = [
   ["only src/modules/loop-write.ts, src/modules/loop-import.ts and src/modules/config-write.ts write under a module root or the configuration", writesOnlyThere],
   ["nothing under src/agents or src/pipeline imports loop-write, loop-import, loopfile or config-write, type-only imports aside", agentsDoNotWriteManifests],
   ["no route handler takes an actor from a request: every new route names the person itself", serverNamesTheActor],
+  ["builder.decided and builder.probe_decided are written only in src/server/builder.ts, with the request's person as actor", decisionsAreThePersons],
+  ["runQuery and runPivot are the only senders of a probe: src/server/builder.ts imports no connector", probesGoThroughTheRunner],
 ];
 
 const sources = files(SRC).map((f) => ({ path: rel(f), text: readFileSync(f, "utf8") }));
@@ -159,6 +189,27 @@ test("each rule catches a planted violation", () => {
   expect(serverNamesTheActor("src/agents/x.ts", `const actor = body.actor;`)).toEqual([]);
   expect(serverNamesTheActor("src/server/x.ts", `if (request.actor.kind !== "agent") throw new Error("no request");`)).toEqual([]);
   expect(serverNamesTheActor("src/server/x.ts", `const who = req.actor;`)).toHaveLength(1);
+  // slice 12, part B: only the person decides; a probe goes through the runner
+  const HUMAN_CTX = `export interface BuilderContext { actor: Extract<Actor, { kind: "human" }> }\n`;
+  const decide = `session.commit(() => [{ type: "builder.decided", actor: ctx.actor, payload: { change, file, accepted: false, written: null } }]);`;
+  expect(decisionsAreThePersons(BUILDER_SERVER, HUMAN_CTX + decide)).toEqual([]);
+  expect(decisionsAreThePersons("src/server/converse.ts", decide)).toEqual(["src/server/converse.ts writes builder.decided"]);
+  expect(decisionsAreThePersons("src/agents/tools/x.ts", `return [{ type: 'builder.probe_decided', actor: ctx.actor, payload }];`)).toEqual(["src/agents/tools/x.ts writes builder.probe_decided"]);
+  expect(decisionsAreThePersons("src/pipeline/x.ts", `entries.push({ type: "builder.decided", actor, payload });`)).toHaveLength(1);
+  expect(decisionsAreThePersons(BUILDER_SERVER, HUMAN_CTX + `session.commit(() => [{ type: "builder.probe_decided", actor: agentActor, payload }]);`)).toEqual([`${BUILDER_SERVER} writes builder.probe_decided with an actor that is not the request's person`]);
+  expect(decisionsAreThePersons(BUILDER_SERVER, `export interface BuilderContext { actor: Actor }\n` + decide)).toEqual([`${BUILDER_SERVER}: the builder context's actor is not a person`]);
+  expect(decisionsAreThePersons("src/server/builder-routes.ts", `const ctxOf = (session) => ({ session, actor: { kind: "human", id: fields.who } });`)).toHaveLength(1);
+  expect(decisionsAreThePersons("src/server/builder-routes.ts", `const ctxOf = (session) => ({ session, actor: d.human() });`)).toEqual([]);
+  // the fold and the interface name the two types as data: that is not writing one
+  expect(decisionsAreThePersons("src/core/state/builder.ts", `if (e.type === "builder.decided") { }`)).toEqual([]);
+  expect(decisionsAreThePersons("src/web/describe.ts", `const rows = { type: "builder.decided", label: "a decision" };`)).toEqual([]);
+  const sends = `const r = await runQuery(session, deps.runner, { source, text, actor: ctx.actor });`;
+  expect(probesGoThroughTheRunner(BUILDER_SERVER, sends)).toEqual([]);
+  expect(probesGoThroughTheRunner(BUILDER_SERVER, `import { sqlConnector } from "../modules/connectors/sqlite";\n${sends}`)).toEqual([`${BUILDER_SERVER} imports ../modules/connectors/sqlite`]);
+  expect(probesGoThroughTheRunner(BUILDER_SERVER, `${sends}\nconst c = deps.runner.pool.get(source); await c.query(text);`)).toEqual([`${BUILDER_SERVER} names .pool`]);
+  expect(probesGoThroughTheRunner(BUILDER_SERVER, `const pool = new ConnectorPool(ctx);\n${sends}`)).toEqual([`${BUILDER_SERVER} names ConnectorPool`]);
+  expect(probesGoThroughTheRunner(BUILDER_SERVER, `const rows = await source.query(text);`)).toEqual([`${BUILDER_SERVER} does not send a probe through runQuery`]);
+  expect(probesGoThroughTheRunner("src/server/seek.ts", `deps.runner.pool.get(x)`)).toEqual([]);
 });
 
 test("the slice 12 rules see what they are about: the three writers write, the agents and stages exist, and the loop routes name the person", () => {

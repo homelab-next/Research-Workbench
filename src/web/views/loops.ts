@@ -41,7 +41,8 @@ export function loopsView(shell: Shell): Screen {
 
   const grid = h("div", { class: "grid loops-grid" });
   /** Build with help, about no loop: a conversation that makes a new one. */
-  const builder = builderPanel(shell, { loop: null });
+  // an accepted file may add or change a loop: the list is read again
+  const builder = builderPanel(shell, { loop: null, onWritten: () => read() });
   const fileList = h("div", { class: "loop-file-list", role: "list" });
   const rootList = h("div", { class: "untrusted-roots", role: "list" });
   const loadError = h("p", { class: "load-error say", role: "alert" });

@@ -1,0 +1,189 @@
+kind: script
+id: sample-builder
+title: Scripted loop builder conversation on the sample
+# The loop builder's turns for three questions from the person (tests/sample/builder-acceptance.test.ts drives them; see sample/README.md):
+#   1. "Add the partner blocklist in data/blocklist.sqlite as a source with a pivot from an address, and a loop that rechecks an address":
+#      read the catalogue, check the source, have a bad pivot refused, propose the source (with its field notes) and its pivot, then a stage and a loop.
+#   2. After the person accepts the four files: ask to list the new source's tables.
+#   3. After the person approves that probe: ask for the new pivot on one value.
+# Paths are relative to the write root. No file holds a credential value; the blocklist needs none.
+turns:
+  # question 1
+  - actor: builder
+    reply:
+      tool_calls:
+        - { tool: loop_catalogue, args: { why: "See which loops there are before adding one." } }
+  - actor: builder
+    reply:
+      tool_calls:
+        - { tool: adapter_catalogue, args: { why: "See the sources, pivots and types there are, so the new ones fit them." } }
+  - actor: builder
+    reply:
+      tool_calls:
+        - { tool: list_connectors, args: { why: "A SQLite file is read by the sql connector; see what it needs." } }
+  - actor: builder
+    reply:
+      tool_calls:
+        - tool: validate_manifest
+          args:
+            why: "Check the source before proposing it."
+            path: sources/blocklist.yaml
+            text: |
+              kind: source
+              id: blocklist
+              title: Partner blocklist
+              connector: sql
+              location: ../data/blocklist.sqlite
+              marking: "TLP:AMBER"
+              where: machine
+              limits: { max_rows: 200 }
+              purpose: Addresses a partner feed lists as bad, with when it listed them and why.
+              quality: The partner lists what its feed has seen; an address absent from the list is only not seen.
+              tables:
+                - name: blocklist
+                  about: One row per listed address.
+                  time_column: null
+                  columns:
+                    - { name: address, type: address, meaning: The listed address. }
+                    - { name: listed_at, meaning: When the partner listed the address. }
+                    - { name: verdict, type: verdict, meaning: The partner's verdict on the address. }
+                    - { name: domain, type: domain, meaning: The domain the partner saw the address serve. }
+                    - name: note
+                      meaning: The partner's note on why it listed the address, as free text.
+                      reveals: >-
+                        A beacon note names the domain the address was seen serving, as "partner-feed: seen as a beacon to <domain>".
+                      extract:
+                        - { id: beacon_domain, type: domain, pattern: 'a beacon to (\S+)$' }
+  # a deliberately bad pivot: its query deletes, so the guard refuses it and the person never sees it
+  - actor: builder
+    reply:
+      tool_calls:
+        - tool: propose_change
+          args:
+            why: "Bad on purpose: a pivot whose query the guard refuses."
+            title: "Bad: a pivot that deletes"
+            files:
+              - path: pivots/blocklist.yaml
+                text: |
+                  kind: pivots
+                  pivots:
+                    - id: address_to_blocklist
+                      title: Domains the partner blocklist names for the address
+                      from: address
+                      to: domain
+                      source: flows
+                      query: "delete from flows where dst = {value}"
+                      empty_means: not-seen
+                      yields: { domain: domain }
+  - actor: builder
+    reply:
+      tool_calls:
+        - tool: propose_change
+          args:
+            why: "The person asked for the partner blocklist as a source, with a pivot from an address to the domains the partner names for it."
+            title: "The partner blocklist and a pivot over it"
+            files:
+              - path: sources/blocklist.yaml
+                text: |
+                  kind: source
+                  id: blocklist
+                  title: Partner blocklist
+                  connector: sql
+                  location: ../data/blocklist.sqlite
+                  marking: "TLP:AMBER"
+                  where: machine
+                  limits: { max_rows: 200 }
+                  purpose: Addresses a partner feed lists as bad, with when it listed them and why.
+                  quality: The partner lists what its feed has seen; an address absent from the list is only not seen.
+                  tables:
+                    - name: blocklist
+                      about: One row per listed address.
+                      time_column: null
+                      columns:
+                        - { name: address, type: address, meaning: The listed address. }
+                        - { name: listed_at, meaning: When the partner listed the address. }
+                        - { name: verdict, type: verdict, meaning: The partner's verdict on the address. }
+                        - { name: domain, type: domain, meaning: The domain the partner saw the address serve. }
+                        - name: note
+                          meaning: The partner's note on why it listed the address, as free text.
+                          reveals: >-
+                            A beacon note names the domain the address was seen serving, as "partner-feed: seen as a beacon to <domain>".
+                          extract:
+                            - { id: beacon_domain, type: domain, pattern: 'a beacon to (\S+)$' }
+              - path: pivots/blocklist.yaml
+                text: |
+                  kind: pivots
+                  pivots:
+                    - id: address_to_blocklist
+                      title: Domains the partner blocklist names for the address
+                      from: address
+                      to: domain
+                      source: blocklist
+                      query: "select domain, verdict, listed_at, note from blocklist where address = {value}"
+                      empty_means: not-seen
+                      yields: { domain: domain }
+  - actor: builder
+    reply:
+      tool_calls:
+        - tool: propose_change
+          args:
+            why: "The person asked for a loop that rechecks an address by running the investigation on it."
+            title: "A recheck loop that runs the investigation"
+            files:
+              - path: stages/recheck.yaml
+                text: |
+                  kind: stage
+                  id: recheck
+                  title: Recheck
+                  order: 1
+                  phase: collection
+                  runs: loop
+                  role: subloop
+                  loop: investigation
+                  inputs: { question: case.question, observables: case.observables, window: case.window }
+                  returns: { findings: { as: cards } }
+                  on_pass: null
+                  on_fail: null
+              - path: loops/triage-recheck.yaml
+                text: |
+                  kind: loop
+                  id: triage-recheck
+                  title: Triage recheck
+                  about: Recheck an address by running the investigation loop on it, and bring its findings back.
+                  version: 1
+                  profile: triage
+                  entry: recheck
+                  stages: [recheck]
+                  inputs:
+                    question: { type: question, required: true }
+                    observables: { type: observables, required: true }
+                    window: { type: window, required: true }
+                  outputs:
+                    cards: { from: cards.kept }
+  - actor: builder
+    reply:
+      content: >-
+        I have proposed two changes. The first adds the partner blocklist as a source, with field notes that pull the beacon's domain out of the
+        partner's note, and a pivot from an address to the domains the partner names for it. The second adds a stage that runs the investigation loop and a loop,
+        Triage recheck, that runs it. My first pivot was refused by the query guard because its query deleted rows; the one proposed reads only.
+        Accept the source before its pivot and the stage before the loop. Then I can ask to probe the new source.
+
+  # question 2: the four files are accepted
+  - actor: builder
+    reply:
+      tool_calls:
+        - { tool: request_probe, args: { why: "List the new source's tables to see that the file is the one the source names.", kind: query, source: blocklist, text: "SELECT name FROM sqlite_master WHERE type = 'table'" } }
+  - actor: builder
+    reply:
+      content: >-
+        I do not need a password: the blocklist is a file, and a credential is only ever named by reference and set outside the workbench.
+        I have asked to list the blocklist's tables; the probe waits for your approval.
+
+  # question 3: the probe ran
+  - actor: builder
+    reply:
+      tool_calls:
+        - { tool: request_probe, args: { why: "Run the new pivot on the address the sample's story starts from.", kind: pivot, source: blocklist, pivot: address_to_blocklist, value: 198.51.100.77 } }
+  - actor: builder
+    reply:
+      content: The table is there. I have asked to run the new pivot on 198.51.100.77; the probe waits for your approval.

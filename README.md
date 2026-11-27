@@ -408,8 +408,26 @@ loops:
   imports: <data_dir>/imported    # where an import lands; each folder is a root that is not trusted
 ```
 
+## Build a loop with help
+
+The Loops page, and each loop's page, has a panel **Build with help**: a conversation with a **builder**, an agent that helps you wire a loop and what it needs (a source for a database or a service, its pivots, its field notes, a playbook, a skill, a stage). It does three things, and only three:
+
+- **It reads** the catalogue: the loops and their stages, the sources with their fields and pivots, the connector kinds and what each needs, the roots and whether each is trusted, and whether a file it drafted would pass a save's check. What it reads has every source's location and user, every path and every secret value taken out; roots are named by their folder's name, and credentials only by their names.
+- **It proposes** whole files under the root a save writes into. Each proposal is checked exactly as a save is checked, on a copy of the root with the files laid over it; one that does not pass is the builder's error, with the reasons, and you never see it. One that passes is shown to you file by file, as a diff against the file on disk. You **Accept** or **Reject** each file. Only an accepted file is written, in your name, and it is checked again against the root as it is then, so a file that needs another accepted first is refused with the reason. A file that changed on disk after it was proposed is *stale* and cannot be accepted: ask the builder to propose it again.
+- **It asks for a probe**: one loaded pivot on one value, or one read-only query on one loaded source (for example the statement that lists a SQLite file's tables). Nothing runs until you **Approve** it; then it runs through the same runner and query guard as a case's queries, in your name and with your budget when it is costly, and its answer is a card of the conversation. One probe waits at a time. To probe a source or pivot it proposed, accept its file first.
+
+The builder never decides, never writes a file and never sees a secret. A credential is named in a source by reference (`credential: <name>`), granted to its root in the configuration (`roots[].credentials`), and its value is set outside the workbench, in the secrets file or the environment. A file that holds a secret value or a key such as `password` is refused, and a value of a secret the workbench holds that is pasted into the conversation, or written by the model, is recorded as `[redacted secret]`. Each conversation is a ledger of its own, `<data_dir>/builders/BUILD-N/`, recorded like a case: what you asked, what the builder read, what it proposed, what you accepted or rejected, the probes and their answers. Its marking starts at the one you pick and rises to the strictest card a probe brought back, and that marking governs which models it may be sent to. Every file you accept is also recorded on the workbench chain as `manifest.written`, with `why: builder` and the conversation's id.
+
+The sample has a scripted builder conversation, `sample/scripts/sample-builder.yaml`, over the sample's partner blocklist (`data/blocklist.sqlite`, generated with the rest of the sample data and named by no source): asked for the blocklist as a source with a pivot from an address, and for a loop that rechecks an address with the investigation, the builder reads the catalogue, has a deliberately bad pivot (a query that deletes) refused by the guard, and proposes the source with its field notes and the pivot `address_to_blocklist`, then the stage `recheck` and the loop **Triage recheck**. Once the four files are accepted it asks to list the blocklist's tables, then to run the new pivot on `198.51.100.77`. The two tests drive it end to end on the scripted model, the second in a real browser:
+
+```bash
+bun test tests/sample/builder-acceptance.test.ts
+bun test tests/web/browser-builder.test.ts
+```
+
 ## Known limits
 
+- Build with help offers the models that the loops' stages name, so in the interface a builder conversation cannot be given the sample's scripted builder (`scripted / sample-builder`); the tests above set it through the conversation's model route.
 - A route that is in flight cannot be ended. Stopping the run stops what comes next, not a query already started.
 - A lookup run from the Pivot budget block is recorded, but is not part of the route's trail.
 - The files database is rebuilt for each query, so a large file source is slow.

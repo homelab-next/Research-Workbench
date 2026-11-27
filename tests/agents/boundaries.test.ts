@@ -56,3 +56,37 @@ test("src/agents imports nothing that writes a manifest or the configuration, an
   expect(builder).not.toMatch(/\brunPlaybook\b|\brunProposal\b/);
   for (const spec of imports(builder)) expect(`builder.ts: ${spec}`).not.toMatch(/modules\/(?:runner|pivots|playbook-run|proposals)$/);
 });
+
+// ---------- slice 12, part B: the builder's tools may know loop-write's shapes, never call it ----------
+
+const BUILDER_TOOLS = "src/agents/tools/builder.ts";
+/** Each import, export-from and dynamic import, with whether it is type-only (`import type …`, `export type … from`). */
+const importStatements = (text: string): { spec: string; typeOnly: boolean }[] => [
+  ...[...text.matchAll(/^\s*(import|export)\s+(type\s+)?[^;]*?\bfrom\s*["']([^"']+)["']/gm)].map((m) => ({ spec: m[3]!, typeOnly: m[2] !== undefined })),
+  ...[...text.matchAll(/^\s*import\s*["']([^"']+)["']/gm)].map((m) => ({ spec: m[1]!, typeOnly: false })),
+  ...[...text.matchAll(/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g)].map((m) => ({ spec: m[1]!, typeOnly: false })),
+];
+type Rule = (path: string, text: string) => string[];
+const builderToolsDoNotWrite: Rule = (path, text) =>
+  path === BUILDER_TOOLS
+    ? importStatements(text).filter((i) => !i.typeOnly && /(?:^|\/)modules\/loop-write(?:\.ts)?$/.test(i.spec)).map((i) => `${path} imports ${i.spec}`)
+    : [];
+const RULES: [string, Rule][] = [
+  ["src/agents/tools/builder.ts imports nothing from src/modules/loop-write.ts but types", builderToolsDoNotWrite],
+];
+for (const [name, rule] of RULES) {
+  test(name, () => {
+    const at = join(SRC, "agents", "tools", "builder.ts");
+    expect(rule(BUILDER_TOOLS, readFileSync(at, "utf8"))).toEqual([]);
+  });
+}
+
+test("the builder tools rule catches a planted violation", () => {
+  expect(builderToolsDoNotWrite(BUILDER_TOOLS, `import { saveManifests } from "../../modules/loop-write";`)).toEqual([`${BUILDER_TOOLS} imports ../../modules/loop-write`]);
+  expect(builderToolsDoNotWrite(BUILDER_TOOLS, `import { checkChange, type ManifestFile } from "../../modules/loop-write.ts";`)).toHaveLength(1);
+  expect(builderToolsDoNotWrite(BUILDER_TOOLS, `export { saveLoop } from "../../modules/loop-write";`)).toHaveLength(1);
+  expect(builderToolsDoNotWrite(BUILDER_TOOLS, `const w = await import("../../modules/loop-write");`)).toHaveLength(1);
+  expect(builderToolsDoNotWrite(BUILDER_TOOLS, `import type { ManifestFile, ChangeCheck } from "../../modules/loop-write";`)).toEqual([]);
+  expect(builderToolsDoNotWrite(BUILDER_TOOLS, `export type { LoopDraft } from "../../modules/loop-write";`)).toEqual([]);
+  expect(builderToolsDoNotWrite("src/agents/tools/kit.ts", `import { saveManifests } from "../../modules/loop-write";`)).toEqual([]);
+});

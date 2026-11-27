@@ -114,3 +114,28 @@ profiles, personas, rules, schemas, checks and the checks' programs; never a mod
 `bun run loops import <file> --config <other>` puts it in a root that is not trusted there, and `bun run loops trust triage-<12 hex> --config
 <other>` trusts it. `tests/sample/loops-acceptance.test.ts` drives all of this on the scripted model, and `tests/web/browser-loops.test.ts` in a
 browser.
+
+## Build with help: the partner blocklist
+
+The sample data has one file no source names: `data/blocklist.sqlite`, a partner's list of addresses it calls bad (table `blocklist`:
+`address`, `listed_at`, `verdict`, `domain` and a free-text `note`), which lists `198.51.100.77` as a beacon to `cdn-update.example.org`.
+`scripts/sample-builder.yaml` is a scripted conversation with the loop builder (the `loop-builder` profile in
+`context/builder-profile.yaml`, its persona and the `building-loops` skill) that wires it, over three questions from the person:
+
+1. "Add the blocklist as a source with a pivot from an address, and a loop that rechecks an address with the investigation." The builder
+   reads the loop catalogue, the adapter catalogue and the connector kinds, checks the source, and proposes a pivot whose query deletes,
+   which the query guard refuses (the person never sees it). It then proposes two changes: `sources/blocklist.yaml` (connector `sql`,
+   `TLP:AMBER`, with field notes: each column's meaning, and an extract rule that pulls the beacon's domain out of the note) with
+   `pivots/blocklist.yaml` (`address_to_blocklist`, address to domain); and `stages/recheck.yaml` (a stage that runs the investigation
+   loop) with `loops/triage-recheck.yaml` (**Triage recheck**, which runs it). The person accepts each file, the source before its pivot
+   and the stage before the loop.
+2. "What tables does the blocklist hold?" The builder asks for a query probe, `SELECT name FROM sqlite_master WHERE type = 'table'` on
+   `blocklist`. The person approves it; it runs through the runner in the conversation's ledger, and the conversation's marking rises
+   from `TLP:GREEN` to the source's `TLP:AMBER`.
+3. "Now try the pivot on 198.51.100.77." The builder asks for the new pivot on that value; approved, its card has the partner's row and
+   the domain the field notes extracted.
+
+Afterwards a new investigation case can run `address_to_blocklist` from the Pivot panel, and a case made from Triage recheck runs the
+investigation as a child that stops at its plan gate. `tests/sample/builder-acceptance.test.ts` drives all of this on the scripted model
+(and a fourth script whose model manifest, check, credential value and self-running loop are all refused), and
+`tests/web/browser-builder.test.ts` drives the first two questions in a browser.

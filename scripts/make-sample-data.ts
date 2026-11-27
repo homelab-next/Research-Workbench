@@ -133,14 +133,29 @@ export function makeSampleData(dir: string): void {
   ];
   writeFileSync(join(dir, "wifi.jsonl"), jsonl(wifi));
 
+  // blocklist: a partner's list of addresses it calls bad, in a SQLite file no source names yet; the scripted builder conversation wires it
+  const blockPath = join(dir, "blocklist.sqlite");
+  for (const suffix of ["", "-journal", "-wal", "-shm"]) rmSync(blockPath + suffix, { force: true });
+  const block = new Database(blockPath, { create: true });
+  try {
+    block.run("create table blocklist (address text, listed_at text, verdict text, domain text, note text)");
+    const insert = block.prepare("insert into blocklist values (?, ?, ?, ?, ?)");
+    block.transaction(() => {
+      insert.run(BEACON_TARGET, "2026-11-19T06:00:00.000Z", "suspicious", "cdn-update.example.org", "partner-feed: seen as a beacon to cdn-update.example.org");
+      insert.run("203.0.113.9", "2026-10-02T11:30:00.000Z", "suspicious", "scan.example.com", "partner-feed: scanning from a hosting range");
+    })();
+  } finally {
+    block.close();
+  }
+
   const reputation: Record<string, { verdict: string; first_seen: string }> = { [BEACON_TARGET]: { verdict: "suspicious", first_seen: "2026-11-19" } };
   for (const s of SERVICES) reputation[s] = { verdict: "benign", first_seen: "2025-03-02" };
   writeFileSync(join(dir, "reputation.json"), JSON.stringify(reputation, null, 2) + "\n");
 }
 
-/** Generates the data only when flows.sqlite is missing. */
+/** Generates the data only when flows.sqlite or blocklist.sqlite is missing. */
 export function ensureSampleData(sampleRoot: string): void {
-  if (!existsSync(join(sampleRoot, "data", "flows.sqlite"))) makeSampleData(join(sampleRoot, "data"));
+  if (!existsSync(join(sampleRoot, "data", "flows.sqlite")) || !existsSync(join(sampleRoot, "data", "blocklist.sqlite"))) makeSampleData(join(sampleRoot, "data"));
 }
 
 if (import.meta.main) {
