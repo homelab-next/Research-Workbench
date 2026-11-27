@@ -135,8 +135,9 @@ test("a refused load shows the server's reason on the row and loads nothing", as
   await q.s.newCase({ title: "Odd traffic" });
   await unload(q, "CASE-1");
   const m = await readManifest(join(storeDir(q), FILE));
-  rawCaseFile(join(storeDir(q), FILE), [{ name: "case.json", body: JSON.stringify(m) }, { name: "ledger.sqlite", type: "2", link: "/etc/passwd" }]);
   await toStore(q);
+  // the file is broken after the store was listed (a listing checks each file, so a broken one shows no Load button)
+  rawCaseFile(join(storeDir(q), FILE), [{ name: "case.json", body: JSON.stringify(m) }, { name: "ledger.sqlite", type: "2", link: "/etc/passwd" }]);
   q.click(row(q, "CASE-1")!.querySelector("[data-action=load]")!);
   await until(q, () => row(q, "CASE-1")?.querySelector(".refusal") !== null, "the refusal is shown");
   const why = row(q, "CASE-1")!.querySelector(".refusal")!;

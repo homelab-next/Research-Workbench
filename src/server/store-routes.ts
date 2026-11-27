@@ -70,10 +70,11 @@ export async function unloadRoute(d: StoreRouteDeps, id: string, body: unknown):
   });
 }
 
-/** GET /api/store?search=<text>: the store from each file's case.json. */
+/** GET /api/store?search=<text>: the store from each file's case.json, each checked against the file's own ledger. */
 export function storeRoute(d: StoreRouteDeps, url: URL): Promise<Response> {
   return refusing(d, async () => {
-    const listing = await d.wb.store.list(url.searchParams.get("search") ?? "");
+    // each file is checked against its own ledger: one whose case.json says otherwise is listed as unreadable
+    const listing = await d.wb.checkedStore(url.searchParams.get("search") ?? "");
     const view: StoreView = {
       store: d.wb.store.dir, cases: listing.cases.map((c) => viewOf(d.wb, c)), unreadable: listing.unreadable, leftovers: listing.leftovers.length,
     };

@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { readManifest } from "../../src/core/casefile";
+import { extractCaseFile, readManifest, writeCaseFile } from "../../src/core/casefile";
 import type { CaseSummaryView, StoreView } from "../../src/core/wire";
 import { Engine } from "../../src/pipeline/engine";
 import type { EngineDeps } from "../../src/pipeline/engine";
@@ -130,6 +130,18 @@ test("GET /api/store lists the store from each file's case.json, says which are 
   expect(found.cases.map((c) => c.id)).toEqual(["CASE-2"]);
   const none = (await (await s.get("/api/store?search=zzz")).json()) as StoreView;
   expect(none.cases).toEqual([]);
+});
+
+test("GET /api/store lists a file whose case.json says other than its ledger as unreadable, with the reason", async () => {
+  s = await served();
+  expect((await unload(await s.newCase({ title: "Sample" }))).status).toBe(200);
+  const folder = join(s.dir, "lie");
+  const m = await extractCaseFile(join(store(), FILE), folder);
+  const { format: _f, workbench: _w, files: _files, ...header } = m;
+  await writeCaseFile(folder, join(store(), "CASE-1.TLP-CLEAR.tar.gz"), { ...header, title: "Benign", marking: "TLP:CLEAR" });
+  const view = (await (await s.get("/api/store")).json()) as StoreView;
+  expect(view.cases.map((c) => c.file)).toEqual([FILE]);
+  expect(view.unreadable).toEqual([{ file: "CASE-1.TLP-CLEAR.tar.gz", reason: "case.json does not say what its ledger says (title, marking)" }]);
 });
 
 test("POST /api/store/load loads a file by its name and the case is listed again, paused where it was", async () => {

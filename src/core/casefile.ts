@@ -525,6 +525,28 @@ export async function checkCaseFile(file: string, opts?: { max_bytes?: number })
   return readArchive(file, { max: limitOf(opts), manifestOnly: false });
 }
 
+/**
+ * One member's bytes, read into memory, the whole file checked against case.json as checkCaseFile does; null when case.json lists no such
+ * member. Writes nothing. Throws CaseFileError.
+ */
+export async function readCaseMember(file: string, name: string, opts?: { max_bytes?: number }): Promise<{ manifest: CaseManifest; bytes: Uint8Array | null }> {
+  const pieces: Uint8Array[] = [];
+  let found = false;
+  const out: Destination = {
+    open: (member) => {
+      if (member !== name) return { write: () => {}, end: () => {} };
+      found = true;
+      return { write: (piece) => void pieces.push(piece.slice()), end: () => {} };
+    },
+  };
+  const manifest = await readArchive(file, { max: limitOf(opts), manifestOnly: false, out });
+  if (!found) return { manifest, bytes: null };
+  const bytes = new Uint8Array(pieces.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const p of pieces) { bytes.set(p, at); at += p.length; }
+  return { manifest, bytes };
+}
+
 /** Writes members under `root`, a directory this run made: each opened "wx" at a path checked to be inside `root`, flushed before it is closed. */
 class Extraction implements Destination {
   private fd: number | null = null;

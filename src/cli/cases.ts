@@ -2,6 +2,7 @@
 // Unloads a case to the case store (or any folder), loads one back, and lists or deletes what the store holds. Only a person, here the
 // configured user, runs it. `store list` and `store delete` read the store folder alone and never open the workbench, so they work
 // while the server runs; `unload` and `load` take the workbench's lock, so the server must be stopped.
+import { checkedListing } from "../core/case-check";
 import { CaseFileError } from "../core/casefile";
 import { CaseStoreFolder } from "../core/store";
 import type { Actor } from "../core/types";
@@ -101,7 +102,7 @@ export async function cases(argv: string[], io: CasesIO): Promise<number> {
   try {
     if (p.form === "store list") {
       const store = new CaseStoreFolder(config.cases.store);
-      const listing = await store.list(p.opts.search);
+      const listing = await checkedListing(store, p.opts.search, { max_bytes: config.cases.max_bytes });
       io.log(store.dir);
       for (const c of listing.cases) {
         const m = c.manifest;

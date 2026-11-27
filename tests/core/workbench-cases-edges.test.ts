@@ -278,3 +278,39 @@ test("a ledger with a view, a table or an index the workbench does not make is r
     await expectRefusedLoad(await repack(file, (folder) => sql(folder, change)), `the case's ledger is not one this workbench writes: ${what}`);
   }
 });
+
+// ---------- I4: case.json says what its ledger says ----------
+
+test("a case.json whose title, question, marking, starting values, status, outcome or products are not its ledger's is refused on load", async () => {
+  const file = await unloadedFile();
+  const d = "d".repeat(64);
+  const lies: [(m: CaseManifest) => ManifestHeader, string][] = [
+    [(m) => ({ ...m, title: "Benign", marking: "TLP:CLEAR", starting: [], published: [{ n: 1, draft_hash: d }] }), "title, marking, starting, published"],
+    [(m) => ({ ...m, asked: "Nothing to see" }), "asked"],
+    [(m) => ({ ...m, status: "finished" }), "status"],
+    [(m) => ({ ...m, outcome: "published" }), "outcome"],
+  ];
+  for (const [lie, fields] of lies) {
+    await expectRefusedLoad(await repack(file, () => {}, lie), `case.json does not say what its ledger says (${fields}); this file cannot be loaded`);
+  }
+  // the file as it was still loads
+  expect((await wb.loadCase(file, { actor: person })).session.state.meta?.marking).toBe("TLP:AMBER");
+});
+
+test("the checked store listing shows such a file as unreadable, with the reason, and lists the honest one", async () => {
+  const file = await unloadedFile();
+  const lying = await repack(file, () => {}, (m) => ({ ...m, id: "CASE-1", title: "Benign", marking: "TLP:CLEAR" }));
+  cpSync(lying, join(dir, "store", "CASE-1.TLP-CLEAR.tar.gz"));
+  const before = ls(join(dir, "store"));
+  const plain = await wb.store.list();
+  expect(plain.cases.map((c) => c.file).sort()).toEqual(["CASE-1.TLP-AMBER.tar.gz", "CASE-1.TLP-CLEAR.tar.gz"]);
+  const checked = await wb.checkedStore();
+  expect(checked.cases.map((c) => c.file)).toEqual(["CASE-1.TLP-AMBER.tar.gz"]);
+  expect(checked.unreadable).toEqual([{ file: "CASE-1.TLP-CLEAR.tar.gz", reason: "case.json does not say what its ledger says (title, marking)" }]);
+  // asked again, the same answer (from what was learned the first time) and nothing written
+  expect(await wb.checkedStore()).toEqual(checked);
+  expect(ls(join(dir, "store"))).toEqual(before);
+  expect(ls(cases())).toEqual([".high-water"]);
+  // a search applies to what is listed
+  expect((await wb.checkedStore("benign")).cases).toEqual([]);
+});

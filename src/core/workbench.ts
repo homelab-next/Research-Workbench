@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { BlobStore } from "./blobs";
+import { checkedListing, summaryProblem } from "./case-check";
+import type { StoreChecks } from "./case-check";
 import { canonical } from "./canonical";
 import type { Json } from "./canonical";
 import { CASE_ID, CaseFileError, caseFileName, MAX_CASE_NUMBER, checkCaseFile, DEFAULT_MAX_CASE_BYTES, extractCaseFile, readManifest, writeCaseFile } from "./casefile";
@@ -14,6 +16,7 @@ import { CaseSession } from "./session";
 import { caseFields, fold, isCaseCreated } from "./state";
 import type { CaseState, RunState } from "./state";
 import { CaseStoreFolder } from "./store";
+import type { StoreListing } from "./store";
 import { isMarking } from "./types";
 import type { Actor, Entry, Marking, Observable, TimeWindow } from "./types";
 import { formatReport, verifyCase } from "./verify";
@@ -301,6 +304,8 @@ export class Workbench {
   private readonly sessions: Record<string, CaseSession> = Object.create(null) as Record<string, CaseSession>;
   /** The cases an unload is packing, with their state as of case.unloaded. */
   private readonly unloading = new Map<string, { state: Readonly<CaseState>; created_ts: string }>();
+  /** What checkedStore learned of each store file, so a file that has not changed is not read again. */
+  private readonly storeChecks: StoreChecks = new Map();
 
   private constructor(dataDir: string, chain: Ledger, opts: WorkbenchOptions, onError: ErrorHandler, lock: Database, lockKey: string) {
     this.dataDir = dataDir;
@@ -561,6 +566,12 @@ export class Workbench {
     }
   }
 
+  /** The store's listing with each file checked against its own ledger: a case.json that says other than its ledger is listed as unreadable. */
+  async checkedStore(search?: string): Promise<StoreListing> {
+    this.open();
+    return checkedListing(this.store, search, { max_bytes: this.maxCaseBytes, checks: this.storeChecks });
+  }
+
   /** A path or an error message with this workbench's folders named rather than spelled out, for the ledger. */
   private withoutPaths(text: string, store: CaseStoreFolder): string {
     return text.split(store.dir).join(`the folder ${store.name}`).split(resolve(this.dataDir)).join("the data folder");
@@ -738,6 +749,9 @@ export class Workbench {
       const ledger = Ledger.open(join(tmp, "ledger.sqlite"), m.chain, { ...(this.now ? { now: this.now } : {}), onError: this.onError });
       let loaded: Entry;
       try {
+        // case.json is what the store view and the file's name are drawn from: it says what the ledger says, or the file is refused
+        const lie = summaryProblem(m, ledger.read());
+        if (lie !== null) throw new CaseFileError(`${lie}; this file cannot be loaded`);
         loaded = ledger.append({ type: "case.loaded", payload: { file: basename(file), head: { seq: m.head.seq, hash: m.head.hash }, id }, actor: opts.actor });
       } finally {
         ledger.close();
