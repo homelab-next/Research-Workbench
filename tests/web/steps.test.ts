@@ -49,6 +49,15 @@ test("the plan is a dashed proposal with its goal, counts, sub-goals and steps",
   expect(p.q("[data-action=free]").textContent).toBe("Run the free steps now (2)");
 });
 
+test("the plan view says what a playbook the plan runs only in part would also have fetched", async () => {
+  await atGate();
+  // the sample's plan runs address_to_asset from the address as a single pivot: one of address-triage's four lookups
+  const note = p.q(".lens .playbook-gaps");
+  expect(note.querySelector("h3")!.textContent).toBe("Playbooks run only in part");
+  expect(note.textContent).toContain("The plan uses address_to_asset of the playbook Triage an address (address-triage, from address) as single pivots; the playbook would also have fetched: ");
+  expect(note.textContent).toContain("(address_to_domains, finds domain)");
+});
+
 test("Accept is disabled until every checked costly step has a budget, and says which", async () => {
   await atGate();
   expect(accept().disabled).toBe(true);

@@ -1,4 +1,5 @@
 import { subgoalAnswered } from "../../core/state";
+import { gapsText, playbookGaps } from "../../core/state/gaps";
 import type { CaseState } from "../../core/state";
 import type { Cost, PlanStep } from "../../core/types";
 import type { Open } from "../app";
@@ -186,6 +187,12 @@ export function makeSteps(ui: Ui, open: Open, arg: string | null = null): View {
         h("div", { class: "steps" }, g.steps.flatMap((id) => { const x = steps.find((y) => y.id === id); return x === undefined ? [] : [stepRow(s, x, gate)]; })));
     });
     const out: Child[] = [head, goals];
+    // a playbook whose lookups the plan runs only in part, as single pivots: what the playbook would also have fetched (slice 9)
+    const gaps = playbookGaps(plan, s.plan.status === "accepted" ? s.plan.accepted_steps : null, ui.ref.playbooks, ui.ref.pivots);
+    if (gaps.length > 0) {
+      out.push(h("section", { class: "playbook-gaps" }, h("h3", null, "Playbooks run only in part"),
+        gapsText(gaps).split("\n").map((line) => h("p", { class: "playbook-gap" }, line.replace(/^- /, "")))));
+    }
     if (gate) {
       const chosen = steps.filter((x) => !unchecked.has(x.id));
       acceptBtn = h("button", { type: "button", class: "primary", data: { action: "accept_plan" }, on: { click: () => accept(state()) } }, `Accept: run ${chosen.length} steps`) as HTMLButtonElement;

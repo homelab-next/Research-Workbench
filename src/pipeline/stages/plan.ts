@@ -6,7 +6,7 @@ import type { Registry } from "../../modules/registry";
 import { ContextError, packPart } from "../../agents/context";
 import type { PackPart } from "../../agents/context";
 import { buildPlan } from "../plans";
-import { gleanPart } from "../glean";
+import { gapsPart, gleanPart } from "../glean";
 import type { PlanOutput } from "../plans";
 import type { StageEnd, StageEnv } from "../engine";
 import { frameOf, lastPass, noSchema, requestsOfPass, stageAgent, stageOfRole, titleOf } from "./agent";
@@ -112,10 +112,19 @@ export async function planRunner(env: StageEnv): Promise<StageEnd> {
   }
   const actorId = deps.profile.stages[stage.id]?.agent ?? "planner";
   const frame = frameOf(env);
-  // on a pass after a plan was accepted: what the values extracted since open up, listed by code (the sub-goal titles it quotes are as strict as the plan that named them)
-  const proposed = [...entries].reverse().find((e) => e.type === "plan.proposed");
-  const glean = gleanPart(state, entries, { registry: deps.registry, seeker: deps.seeker }, frame.limits, proposed === undefined ? [] : [proposed]);
-  if (glean !== null) extras.push(glean);
+  // on a pass after a plan was accepted: what the values extracted since open up, listed by code (the sub-goal titles it quotes are as strict
+  // as the plan that named them), and what a playbook the plan ran only in part would also have fetched
+  let glean: PackPart | null = null;
+  try {
+    const proposed = [...entries].reverse().find((e) => e.type === "plan.proposed");
+    glean = gleanPart(state, entries, { registry: deps.registry, seeker: deps.seeker }, frame.limits, proposed === undefined ? [] : [proposed]);
+    if (glean !== null) extras.push(glean);
+    const gaps = gapsPart(state, entries, deps.registry);
+    if (gaps !== null) extras.push(gaps);
+  } catch (err) {
+    if (err instanceof ContextError) return { kind: "stalled", reason: `${titleOf(env)}: ${err.message}` };
+    throw err;
+  }
   const research = researchWhere(env);
   const m = state.meta;
   let task = [

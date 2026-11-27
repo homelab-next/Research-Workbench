@@ -1,6 +1,7 @@
 // What the values the workbench extracted open up (slice 9 goal 3): listed by code, for the planner; the model only chooses which to follow.
 import type { CaseState } from "../core/state";
 import { subgoalAnswered } from "../core/state";
+import { gapsText, playbookGaps } from "../core/state/gaps";
 import type { Entry, Marking } from "../core/types";
 import { strictest } from "../core/types";
 import { packPart } from "../agents/context";
@@ -132,4 +133,24 @@ export function gleanSendBack(state: Readonly<CaseState>, entries: readonly Entr
   if (sent >= opts.cap) return null;
   const each = follow.map((o) => `${o.type} ${o.value} (card ${o.card}) opens ${o.bears.map((b) => `${b.route.join(", ")} to ${b.subgoal} "${b.title}" (wants ${b.want})`).join(" and ")}`);
   return `${GLEAN_PREFIX}: ${each.join("; ")}, and no accepted step starts from ${follow.length === 1 ? "it" : "them"}. Re-plan to follow ${follow.length === 1 ? "it" : "them"}, or leave ${follow.length === 1 ? "it" : "them"}.`;
+}
+
+/**
+ * The planner's part "What the playbooks would also have fetched" (goal 5): for an accepted plan whose single pivots cover only part of a
+ * playbook for the same start type, the lookups the playbook would also have made; null when there is none, or no plan is accepted. Titles
+ * are the catalogue's (withheld from an untrusted root); the part is as strict as the plan.proposed that chose the pivots.
+ */
+export function gapsPart(state: Readonly<CaseState>, entries: readonly Entry[], registry: Registry): PackPart | null {
+  const plan = state.plan.current;
+  if (plan === null || (state.plan.status !== "accepted" && state.plan.status !== "replanning")) return null;
+  const cat = catalogueOf(registry);
+  const gaps = playbookGaps(plan, state.plan.accepted_steps.length > 0 ? state.plan.accepted_steps : null, cat.playbooks, cat.pivots);
+  if (gaps.length === 0) return null;
+  const proposed = [...entries].reverse().find((e) => e.type === "plan.proposed");
+  const text = [
+    "The accepted plan runs some of a playbook's lookups as single pivots. A playbook runs all of its lookups in code; these were left out:",
+    gapsText(gaps),
+    "Plan the playbook itself (give its id as \"playbook\") where what it would also have fetched bears on the question.",
+  ].join("\n");
+  return packPart({ kind: "playbook-gaps", id: "playbook-gaps", title: "What the playbooks would also have fetched", text, fixed: false, entries, written_by: proposed === undefined ? [] : [proposed], floor: null });
 }
