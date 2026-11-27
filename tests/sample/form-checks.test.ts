@@ -303,3 +303,73 @@ test("gaps-and-negatives fails a draft whose gaps do not name an unanswered ques
   i.draft.product.gaps_and_limits += "\n- ask-1: Who owns the laptop?";
   expect(await run("gaps-and-negatives", i)).toMatchObject({ pass: true, findings: [] });
 });
+
+// Silence is never a reason, anywhere: the real dev-case sentences, with synthetic names
+const SILENCE_FAIL = [
+  "We assess it is unlikely that this device is an expected part of the homelab because the owner reported it as unrecognized and no identifying DNS or flow data was observed.",
+  "The lack of further activity makes persistent ownership less likely, favoring the transient/guest hypothesis slightly.",
+  "No DNS answer was recorded for 198.51.100.77, so it is unlikely to belong to the household.",
+  "The absence of traffic after the first hour suggests the device was a visitor's phone.",
+];
+const SILENCE_PASS = [
+  // an absence that limits what can be said is a gap, not a reason
+  "No network flows to or from this address were observed, which limits our ability to determine what services it accessed.",
+  "Ownership cannot be confirmed from network data alone; it requires the owner's confirmation.",
+  "We cannot tell who owns the device because the data is missing.",
+  "We cannot tell who owns the device because no DNS data was observed.",
+  // a reason that is not the silence, with the silence in another clause
+  "We assess it is very likely a managed laptop because the lease matches, but no proxy traffic was seen.",
+  // a mention with no reason drawn from it
+  "No DNS answer was recorded for the address.",
+];
+
+test.each(["summary", "assessment", "alternatives"] as const)("check 8 fails a %s that gives silence as the reason for a judgment, quoting the sentence", async (k) => {
+  for (const sentence of SILENCE_FAIL) {
+    const i = good();
+    i.draft.product[k] += ` ${sentence} Other text follows.`;
+    const r = await run("gaps-and-negatives", i);
+    // one finding, on the section, quoting the sentence and saying why
+    expect({ sentence, pass: r.pass, where: r.findings.map((f) => f.where) }).toEqual({ sentence, pass: false, where: [k] });
+    expect(r.findings[0]!.message.startsWith(`the ${k} gives silence as a reason: "${sentence}" draws a judgment`)).toBe(true);
+    expect(r.findings[0]!.message).toContain("nothing seen is a gap, not evidence");
+  }
+});
+
+test.each(["summary", "assessment", "alternatives"] as const)("check 8 passes a %s that names silence as a limit, or cannot tell, or reasons from something else", async (k) => {
+  for (const sentence of SILENCE_PASS) {
+    const i = good();
+    i.draft.product[k] += ` ${sentence}`;
+    expect({ sentence, r: await run("gaps-and-negatives", i) }).toMatchObject({ r: { pass: true, findings: [] } });
+  }
+});
+
+test("check 8 never reads gaps_and_limits for silence: the dev case's gaps sentence and every failing sentence pass there", async () => {
+  const i = good();
+  i.cards.c4 = { id: "c4", title: "c4", source: "flows", marking: "TLP:AMBER", coverage: { kind: "full" }, empty: "not-seen", row_count: 0, quality_notes: [] };
+  i.cited = ["c1", "c2", "c3", "c4"];
+  i.draft.product.gaps_and_limits += " No network flows to or from this address were observed [c4], which limits our ability to determine what services it accessed. " + SILENCE_FAIL.join(" ");
+  expect(await run("gaps-and-negatives", i)).toMatchObject({ pass: true, findings: [] });
+});
+
+test("check 8 accepts silence as a reason when the sentence cites a proven negative over full coverage", async () => {
+  const i = good();
+  i.draft.product.summary += " No unmanaged record was found [c1], so it is very unlikely the address is an unmanaged host.";
+  expect(await run("gaps-and-negatives", i)).toMatchObject({ pass: true, findings: [] });
+  // the same reason with no proven negative cited fails
+  const j = good();
+  j.draft.product.summary += " No unmanaged record was found, so it is very unlikely the address is an unmanaged host.";
+  expect(await run("gaps-and-negatives", j)).toMatchObject({ pass: false, findings: [{ where: "summary" }] });
+});
+
+test("check 8 quotes the sentence that cites a not-seen card in the summary, assessment or alternatives", async () => {
+  for (const k of ["summary", "assessment", "alternatives"] as const) {
+    const i = good();
+    i.cards.c4 = { id: "c4", title: "c4", source: "flows", marking: "TLP:AMBER", coverage: { kind: "full" }, empty: "not-seen", row_count: 0, quality_notes: [] };
+    i.cited = ["c1", "c2", "c3", "c4"];
+    i.draft.product.gaps_and_limits += " Nothing was seen [c4].";
+    i.draft.product[k] += " The address is absent from the DNS log [c4]. It is a laptop.";
+    expect(await run("gaps-and-negatives", i)).toMatchObject({
+      pass: false, findings: [{ where: k, message: expect.stringContaining(`the ${k} cites c4, which has no rows and is not a proven negative with full coverage: "The address is absent from the DNS log [c4]."`) }],
+    });
+  }
+});
