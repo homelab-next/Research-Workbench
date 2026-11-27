@@ -13,12 +13,12 @@ import { ignoreThrow, logToStderr } from "./deliver";
 import { Ledger, ledgerSchemaProblem } from "./ledger";
 import { Refused } from "./refused";
 import { CaseSession } from "./session";
-import { caseFields, fold, isCaseCreated, unloadDue } from "./state";
+import { caseFields, fold, isCard, isCaseCreated, unloadDue } from "./state";
 import type { CaseState, RunState } from "./state";
 import { CaseStoreFolder } from "./store";
 import type { StoreListing } from "./store";
-import { isMarking } from "./types";
-import type { Actor, Entry, Marking, Observable, TimeWindow } from "./types";
+import { isMarking, strictest } from "./types";
+import type { Actor, Card, Entry, EntryInput, Marking, Observable, TimeWindow } from "./types";
 import { formatReport, verifyCase } from "./verify";
 
 export class CaseNotFoundError extends Error {
@@ -59,7 +59,15 @@ export interface CaseSummary { id: string; title: string; marking: Marking; crea
   /** Jobs with status running: a job left so by a stopped process (a playbook started from the Pivot panel, say) has no run to say so. */
   jobs_running: number;
   /** archive.failed's reason; "an unload did not finish" while archive.pending is set; null otherwise. */
-  unload_failed: string | null }
+  unload_failed: string | null;
+  /** The loop the case is for (state.loop.id); null when its ledger names none, which is read as the default loop. */
+  loop: string | null;
+  /** The case whose run made this one (state.loop.parent?.case); null for a case no case started. */
+  parent: string | null;
+  /** The child a pause of this case's run waits on (a `child` hold); null otherwise. */
+  waiting_on: string | null }
+/** What a child case's first commit names of the stage that made it: subloop.child's payload. */
+export interface ChildLink { parent: string; run: string; stage: string; attempt: number; loop: string; input_hash: string; depth: number; floor: Marking }
 export type ErrorHandler = (error: unknown, entry?: Entry) => void;
 
 export type UnloadResult = { ok: true; file: string; path: string; head: { seq: number; hash: string } } | { ok: false; reason: string };
@@ -346,9 +354,31 @@ export class Workbench {
     }
   }
 
-  createCase(input: NewCase, actor: Actor): CaseSession {
+  /**
+   * Makes a case, in one commit. `loop`: the loop the case is for (case.loop_set; omitted, none is recorded and the case is read as the default
+   * loop's). `link` and `cards`: a child case, with subloop.child and one card.created per card its inputs name, both by the engine. Throws
+   * TypeError, having written nothing, for what the fold would not read: a link without a loop, a malformed link or card, cards without a link,
+   * a child less strictly marked than its link's floor or than a card it is given.
+   */
+  createCase(input: NewCase, actor: Actor, opts: { loop?: string; link?: ChildLink; cards?: Card[] } = {}): CaseSession {
     this.open();
     if (!isMarking(input?.marking)) throw new TypeError(`unknown marking ${JSON.stringify(input?.marking)}`);
+    const { loop, link } = opts;
+    const cards = opts.cards ?? [];
+    if (loop !== undefined && !(typeof loop === "string" && loop !== "")) throw new TypeError("a case's loop is a non-empty string");
+    if (loop !== undefined && actor?.kind === "agent") throw new TypeError("a case's loop is chosen by a person or the workbench");
+    if (!Array.isArray(cards)) throw new TypeError("cards must be a list");
+    if (link !== undefined) {
+      if (loop === undefined) throw new TypeError("a child case names the loop it is for");
+      if (!isChildLink(link)) throw new TypeError("a child's link names its parent, run, stage, attempt (1 or more), loop, input hash, depth and floor marking");
+      if (strictest(input.marking, link.floor) !== input.marking) throw new TypeError(`a child case is marked at least ${link.floor}, its floor; this one is ${input.marking}`);
+    } else if (cards.length > 0) {
+      throw new TypeError("only a child case is made with cards");
+    }
+    for (const c of cards) {
+      if (!isCard({ ...c, id: "c1" })) throw new TypeError("a child's input card is not a card the fold would read");
+      if (strictest(input.marking, c.marking) !== input.marking) throw new TypeError(`a child case is marked at least as strictly as each card it is given; one is ${c.marking}, the case ${input.marking}`);
+    }
     const n = this.nextNumber();
     const id = `CASE-${n}`;
     // The seven case fields and nothing else, with the id last so nothing in the input can replace it.
@@ -366,7 +396,16 @@ export class Workbench {
       throw err;
     }
     try {
-      session.commit(() => [{ type: "case.created", payload, actor }]);
+      session.commit((_state, ids) => {
+        const entries: EntryInput[] = [{ type: "case.created", payload, actor }];
+        if (loop !== undefined) entries.push({ type: "case.loop_set", payload: { loop }, actor: link === undefined ? actor : ENGINE });
+        if (link !== undefined) {
+          const { parent, run, stage, attempt, input_hash, depth, floor } = link;
+          entries.push({ type: "subloop.child", payload: { parent, run, stage, attempt, loop: link.loop, input_hash, depth, floor }, actor: ENGINE });
+          for (const c of cards) entries.push({ type: "card.created", payload: { card: { ...c, id: ids.next("card") } }, actor: ENGINE });
+        }
+        return entries;
+      });
     } catch (err) {
       delete this.sessions[id];
       try {
@@ -409,12 +448,73 @@ export class Workbench {
           kept: s.lanes.reduce((count, l) => count + l.cards.length, 0),
           jobs_running: Object.values(s.jobs).filter((j) => j.status === "running").length,
           unload_failed: s.archive.pending !== null ? UNFINISHED : s.archive.failed?.reason ?? null,
+          loop: s.loop.id,
+          parent: s.loop.parent?.case ?? null,
+          waiting_on: waitingOn(s),
         });
       } catch (err) {
         this.reportError(new Error(`case ${id} could not be loaded: ${err instanceof Error ? err.message : String(err)}`, { cause: err }));
       }
     }
     return out;
+  }
+
+  /** The loaded case whose subloop.child names exactly this link; null when there is none. Reads ledgers, opens no session it does not already hold. */
+  findChild(link: ChildLink): string | null {
+    this.open();
+    if (!isChildLink(link)) throw new TypeError("a child's link names its parent, run, stage, attempt (1 or more), loop, input hash, depth and floor marking");
+    const want = canonical(linkFields(link) as unknown as Json);
+    for (const n of this.caseNumbers().sort((a, b) => a - b)) {
+      const id = `CASE-${n}`;
+      if (!existsSync(join(this.dataDir, "cases", id, "ledger.sqlite"))) continue;
+      let parent: CaseState["loop"]["parent"];
+      try {
+        parent = this.summaryOf(id).state.loop.parent;
+      } catch (err) {
+        this.reportError(new Error(`case ${id} could not be read while looking for a child of ${link.parent}: ${firstLine(err)}`, { cause: err }));
+        continue;
+      }
+      if (parent === null) continue;
+      const { case: of, ...rest } = parent;
+      if (canonical(linkFields({ ...rest, parent: of }) as unknown as Json) === want) return id;
+    }
+    return null;
+  }
+
+  /**
+   * Why a case may not be unloaded now for what it is linked to; null when it may. A parent is not unloaded while a child it started and has not
+   * heard back from is running (its drive would settle into a case that is gone); a child is not unloaded alone while its loaded parent's run
+   * waits on it. A case at the other end that is not loaded, or cannot be read, holds nothing back.
+   */
+  private linkProblem(id: string, state: Readonly<CaseState>): string | null {
+    for (const c of Object.values(state.loop.children)) {
+      if (c.finished !== null) continue;
+      const child = this.linkedState(c.child);
+      if (child === null) continue;
+      if (child.loop.parent?.case !== id) continue;
+      if (child.run.status === "running" || Object.values(child.jobs).some((j) => j.status === "running")) {
+        return `${c.child}, a child of this case, is running; wait for it or pause it first`;
+      }
+    }
+    const parentId = state.loop.parent?.case;
+    if (parentId !== undefined) {
+      const parent = this.linkedState(parentId);
+      const waits = parent !== null && parent.run.status !== "none" && parent.run.status !== "finished"
+        && Object.values(parent.loop.children).some((c) => c.child === id && c.finished === null);
+      if (waits) return `${parentId} waits on this case; unload ${parentId} first`;
+    }
+    return null;
+  }
+
+  /** The state of another loaded case, for a link check; null when it is not loaded here or cannot be read. */
+  private linkedState(id: string): Readonly<CaseState> | null {
+    if (!CASE_ID.test(id)) return null;
+    if (!Object.hasOwn(this.sessions, id) && !this.unloading.has(id) && !existsSync(join(this.dataDir, "cases", id, "ledger.sqlite"))) return null;
+    try {
+      return this.summaryOf(id).state;
+    } catch {
+      return null;
+    }
   }
 
   /** Closes every session and the chain even if some fail, releases the lock, then rethrows the first error. */
@@ -613,7 +713,7 @@ export class Workbench {
       if (problem !== null) throw new CaseRefused(problem);
     }
     const [entry] = session.commit((state) => {
-      const problem = unloadProblem(state);
+      const problem = unloadProblem(state) ?? this.linkProblem(id, state);
       if (problem !== null) throw new CaseRefused(problem);
       return [{ type: "case.unloaded", payload: { store: store.name, head: session.head() }, actor: opts.actor }];
     });
@@ -791,6 +891,28 @@ export class Workbench {
     // 7.
     return { id, session: this.openSession(id, false) };
   }
+}
+
+/** The engine, which writes a child's link and its input cards. */
+const ENGINE: Actor = { kind: "system", id: "engine" };
+
+const isLinkText = (x: unknown): x is string => typeof x === "string" && x !== "";
+/** The shape the fold reads subloop.child by. */
+function isChildLink(x: unknown): x is ChildLink {
+  if (typeof x !== "object" || x === null || Array.isArray(x)) return false;
+  const l = x as Record<string, unknown>;
+  const count = (v: unknown): boolean => Number.isSafeInteger(v) && (v as number) >= 0;
+  return isLinkText(l.parent) && isLinkText(l.run) && isLinkText(l.stage) && count(l.attempt) && (l.attempt as number) >= 1 && isLinkText(l.loop)
+    && typeof l.input_hash === "string" && count(l.depth) && isMarking(l.floor);
+}
+/** A link's eight fields and nothing else. */
+const linkFields = (l: ChildLink): ChildLink => ({
+  parent: l.parent, run: l.run, stage: l.stage, attempt: l.attempt, loop: l.loop, input_hash: l.input_hash, depth: l.depth, floor: l.floor,
+});
+/** The child a pause of the case's run waits on; null when the run is not paused on a child. */
+function waitingOn(s: Readonly<CaseState>): string | null {
+  const hold = s.run.status === "paused" ? s.run.hold : null;
+  return hold?.kind === "child" ? hold.child : null;
 }
 
 /** Removes what a stopped load or unload left in cases/, reporting each. */

@@ -81,7 +81,7 @@ test("listCases is newest first with a summary of each", () => {
   a.commit(() => [{ type: "card.kept", payload: { card: "c1", lane: "l1", index: null }, actor: human }]);
   const list = wb.listCases();
   expect(list.map((c) => c.id)).toEqual(["CASE-2", "CASE-1"]);
-  expect(list[0]).toMatchObject({ title: "Second", marking: "TLP:RED", run_status: "none", phase: null, incoming: 0, kept: 0 });
+  expect(list[0]).toMatchObject({ title: "Second", marking: "TLP:RED", run_status: "none", phase: null, incoming: 0, kept: 0, loop: null, parent: null, waiting_on: null });
   expect(list[1]).toMatchObject({ title: "Beaconing", marking: "TLP:AMBER", incoming: 1, kept: 1 });
   expect(list[1]!.created_ts).toBe(a.entries()[0]!.ts);
 });

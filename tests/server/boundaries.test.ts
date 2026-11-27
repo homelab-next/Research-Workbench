@@ -109,10 +109,11 @@ const CASE_MOVES = /\bunloadCase\b|\bloadCase\b|\bCaseStoreFolder\b|\/api\/store
 const noAgentMovesCases: Rule = (path, text) =>
   /^src\/(agents|pipeline)\//.test(path) && CASE_MOVES.test(text) ? [`${path} names ${text.match(CASE_MOVES)![0]}`] : [];
 const sampleNamesNoMove: Rule = (path, text) => (path.startsWith("sample/") && CASE_MOVES.test(text) ? [`${path} names ${text.match(CASE_MOVES)![0]}`] : []);
-/** The case file and the store are server-side core: neither the browser's code nor the fold imports them. */
+/** The case file, the store and the tar code they share are server-side core: neither the browser's code nor the fold imports them. */
+const SERVER_CORE = ["src/core/casefile", "src/core/store", "src/core/tar"].flatMap((d) => [d, `${d}.ts`]);
 const caseFileStaysOnServer: Rule = (path, text) =>
   /^src\/(web|core\/state)\//.test(path)
-    ? imports(text).filter((spec) => ["src/core/casefile", "src/core/store", "src/core/casefile.ts", "src/core/store.ts"].some((d) => reaches(path, spec, d))).map((spec) => `${path} imports ${spec}`)
+    ? imports(text).filter((spec) => SERVER_CORE.some((d) => reaches(path, spec, d))).map((spec) => `${path} imports ${spec}`)
     : [];
 
 test("no agent tool and no stage runner can unload, load or delete a case", () => {
@@ -129,12 +130,17 @@ test("no agent tool and no stage runner can unload, load or delete a case", () =
   expect(sampleNamesNoMove("sample/context/personas/x.yaml", "tools: [list_cards, load_case]")).toHaveLength(1);
 });
 
-test("the case file and the store are never imported by the browser's code or by the fold", () => {
+test("the case file, the store and the tar code are never imported by the browser's code or by the fold", () => {
   expect(sources.some((f) => f.path === "src/core/casefile.ts") && sources.some((f) => f.path === "src/core/store.ts")).toBe(true);
   expect(sources.flatMap((f) => caseFileStaysOnServer(f.path, f.text))).toEqual([]);
   expect(caseFileStaysOnServer("src/web/views/x.ts", `import { checkCaseFile } from "../../core/casefile";`)).toHaveLength(1);
   expect(caseFileStaysOnServer("src/core/state/x.ts", `import type { CaseManifest } from "../casefile";`)).toHaveLength(1);
   expect(caseFileStaysOnServer("src/web/x.ts", `import { CaseStoreFolder } from "../core/store.ts";`)).toHaveLength(1);
+  // the tar code the case file and the loop file share is server-side core too (slice 12)
+  expect(sources.some((f) => f.path === "src/core/tar.ts")).toBe(true);
+  expect(caseFileStaysOnServer("src/web/views/x.ts", `import { readTarGz } from "../../core/tar";`)).toHaveLength(1);
+  expect(caseFileStaysOnServer("src/core/state/x.ts", `import type { TarMember } from "../tar.ts";`)).toHaveLength(1);
+  expect(caseFileStaysOnServer("src/server/x.ts", `import { writeTarGz } from "../core/tar";`)).toEqual([]);
   expect(caseFileStaysOnServer("src/web/app.ts", `import { CaseStore } from "./store";`)).toEqual([]);
   expect(caseFileStaysOnServer("src/server/x.ts", `import { checkCaseFile } from "../core/casefile";`)).toEqual([]);
 });
