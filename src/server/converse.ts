@@ -14,7 +14,7 @@ import { DEFAULT_CONTEXT } from "../agents/providers/local";
 import type { Provider } from "../agents/providers/types";
 import { DEFAULT_LIMITS } from "../modules/seeker";
 import type { EngineDeps } from "../pipeline/engine";
-import { draftPart } from "../pipeline/stages/agent";
+import { contextFrom, draftPart } from "../pipeline/stages/agent";
 import { defineCommand } from "./commands";
 import type { CommandContext } from "./commands";
 import type { CaseHub } from "./hub";
@@ -63,7 +63,8 @@ export function agentParts(session: CaseSession, deps: EngineDeps, added: readon
   const { state } = session;
   const { registry, profile } = deps;
   try {
-    const parts: PackPart[] = [...stageParts(registry, profile, STAGE, { schema: null, objective: state.meta?.objective ?? null }), casePart(state)];
+    // the rules, persona and the rest of your agent's context are the loop version's; what a person adds for one turn is read from the roots
+    const parts: PackPart[] = [...stageParts(contextFrom(deps), profile, STAGE, { schema: null, objective: state.meta?.objective ?? null }), casePart(state)];
     const draft = latestDraft(state);
     if (draft !== null) parts.push(draftPart(session, draft));
     const kept = Object.values(state.cards).filter((c) => c.place === "lane").sort((a, b) => b.created_seq - a.created_seq);

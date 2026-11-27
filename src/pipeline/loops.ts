@@ -151,19 +151,31 @@ function profileFrom(m: LoadedManifest): Profile {
   return loadProfile(one as unknown as Registry, m.id);
 }
 
-/** The components a stage has, as kind and id: its profile entry's, its schema, and a checks stage's checks with their scripts. */
+/** The profile's entry for your agent, which no loop stage runs: its components are listed under this name. */
+export const AGENT_ENTRY = "agent";
+/** The schema every check is given: a checks stage's component. */
+const PRODUCT_SCHEMA = "product";
+
+/** A profile entry's components, as kind and id: its persona, procedure, skills, references and gate guides. */
+function entryComponents(entry: Profile["stages"][string]): [string, string][] {
+  const out: [string, string][] = [["persona", entry.persona]];
+  if (entry.procedure !== null) out.push(["procedure", entry.procedure]);
+  for (const id of entry.skills) out.push(["skill", id]);
+  for (const id of entry.references) out.push(["reference", id]);
+  for (const id of entry.gates) out.push(["gate", id]);
+  return out;
+}
+
+/** The components a stage has, as kind and id: its profile entry's, its schema, and a checks stage's checks with their scripts and the product schema they are given. */
 function componentsOf(stage: StageManifest, profile: Profile, checks: readonly string[]): [string, string][] {
   const out: [string, string][] = [];
   const entry = stage.runs === "loop" || !Object.hasOwn(profile.stages, stage.id) ? null : profile.stages[stage.id]!;
-  if (entry !== null) {
-    out.push(["persona", entry.persona]);
-    if (entry.procedure !== null) out.push(["procedure", entry.procedure]);
-    for (const id of entry.skills) out.push(["skill", id]);
-    for (const id of entry.references) out.push(["reference", id]);
-    for (const id of entry.gates) out.push(["gate", id]);
-  }
+  if (entry !== null) out.push(...entryComponents(entry));
   if (stage.schema !== null) out.push(["schema", stage.schema]);
-  if (stage.role === "checks") for (const id of checks) out.push(["check", id], [CHECK_SCRIPT, id]);
+  if (stage.role === "checks") {
+    for (const id of checks) out.push(["check", id], [CHECK_SCRIPT, id]);
+    out.push(["schema", PRODUCT_SCHEMA]);
+  }
   return out;
 }
 const profileComponents = (profile: Profile): [string, string][] => [
@@ -355,6 +367,10 @@ export function loadLoops(registry: Registry, ctx: ResolveContext, caps: LoopCap
     for (const st of stages) {
       if (st.runs === "agent" && !Object.hasOwn(profile.stages, st.id)) problems.push(`stage "${st.id}" runs an agent, and profile "${profile.id}" has no entry for it`);
       for (const [k, i] of componentsOf(st, profile, checkIds)) want.push([st.id, k, i]);
+    }
+    // your agent is no stage of the loop, and reads its context through the loop's version as a stage does
+    if (Object.hasOwn(profile.stages, AGENT_ENTRY) && !stages.some((st) => st.id === AGENT_ENTRY)) {
+      for (const [k, i] of entryComponents(profile.stages[AGENT_ENTRY]!)) want.push([AGENT_ENTRY, k, i]);
     }
     for (const [stage, kind, id] of want) {
       const set = named.get(stage) ?? new Set<string>();

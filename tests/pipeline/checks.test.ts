@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonical } from "../../src/core/canonical";
@@ -11,7 +11,12 @@ import { Registry, TRUSTED_ONLY_KINDS } from "../../src/modules/registry";
 import { loadRegistry } from "../../src/modules/registry-record";
 import type { StageEnv } from "../../src/pipeline/engine";
 import type { CheckInput } from "../../src/pipeline/checks";
-import { CHECK_MAX_OUTPUT, checkInput, runCheck } from "../../src/pipeline/checks";
+import { CHECK_MAX_OUTPUT, checkInput, checksFor, runCheck } from "../../src/pipeline/checks";
+import { BlobStore } from "../../src/core/blobs";
+import { Ledger } from "../../src/core/ledger";
+import type { ResolveContext } from "../../src/pipeline/components";
+import { loadLoops } from "../../src/pipeline/loops";
+import type { LoopLock } from "../../src/pipeline/loops";
 import { loadChecks } from "../../src/pipeline/manifests";
 import type { CheckManifest } from "../../src/pipeline/manifests";
 import { checksRunner } from "../../src/pipeline/stages/checks";
@@ -555,4 +560,90 @@ test("a check is told the run's unanswered questions; with none the input is wha
     expect(input.questions).toEqual([{ id: "ask-1", text: "Who owns the laptop?" }]);
     expect(s.state.skipped).toEqual([]);
   } finally { close(); }
+});
+
+// ---- slice 12: a bound run's checks come from the content store
+
+/** The sample's eleven checks for a run bound to the sample loop's lock, made before the root's script is edited. */
+function boundRig(): { env: StageEnv; root: string; lock: LoopLock; blobs: string; plain(): StageEnv; close(): void } {
+  const f = fixture(false);
+  const root = join(dir, "bound-root");
+  copySample(root);
+  const chain = Ledger.open(join(dir, "chain.db"), "workbench");
+  const blobs = join(dir, "blobs");
+  const content = new BlobStore(blobs);
+  const ctxOf = (registry: Registry): ResolveContext => ({ registry, content, chain, trusted: [root], output: () => null });
+  const first = loadRegistry([{ path: root, trusted: true, credentials: [] }], { chain, content });
+  const lock = loadLoops(first, ctxOf(first), { max_depth: 2, max_children: 8 }).current("investigation")!.lock;
+  f.s.commit((_s, ids) => [{ type: "card.created", actor: person, payload: { card: {
+    id: ids.next("card"), title: "t", body: "b", kind: "result", made_by: "human", query: null, columns: [], column_types: [], rows: [], row_count: 0, coverage: null, empty: null,
+    marking: "TLP:GREEN", source: "assets", step: null, subgoal: null, why: "w", event_time: null, quality_notes: [],
+  } } }]);
+  f.s.commit(() => [{ type: "draft.revised", actor: person, payload: { draft: { n: 1, hash: sha256Hex(canonical(DRAFT_PRODUCT as never)), author: person, product: DRAFT_PRODUCT, reason: "r" } } }]);
+  const stage = { id: "checks", title: "Checks", role: "checks" };
+  const envOf = (deps: Record<string, unknown>): StageEnv => ({ session: f.s, attempt: 1, onNeedsBudget: async () => null, stage, deps } as unknown as StageEnv);
+  return {
+    root, lock, blobs,
+    get env(): StageEnv {
+      const now = loadRegistry([{ path: root, trusted: true, credentials: [] }], { chain, content });
+      const bound = loadLoops(now, ctxOf(now), { max_depth: 2, max_children: 8 }).fromLock(lock);
+      if (typeof bound === "string") throw new Error(bound);
+      return envOf({ registry: now, profile: bound.profile, pipeline: bound.pipeline, components: bound.components, content });
+    },
+    plain(): StageEnv {
+      const now = loadRegistry([{ path: root, trusted: true, credentials: [] }]);
+      return envOf({ registry: now, profile: loadProfile(now, "investigation") });
+    },
+    close: () => { chain.close(); f.close(); },
+  };
+}
+const EDITED = `await Bun.stdin.text(); console.log(JSON.stringify({ pass: false, findings: [{ where: "x", message: "the edited script ran" }] }));`;
+
+test("a bound run's checks stage runs the eleven checks from the content store: an edited check script in the root does not change the result, and check.run records the pinned script's hash", async () => {
+  const rig = boundRig();
+  try {
+    writeFileSync(join(rig.root, "checks", "01-schema.ts"), EDITED);
+    const env = rig.env;
+    const end = await checksRunner(env);
+    expect(end.kind).toBe("finished");
+    const pinned = new Map(rig.lock.items.filter((i) => i.kind === "check-script").map((i) => [i.id, i.hash]));
+    expect(pinned.size).toBe(11);
+    const ran = runs(env);
+    expect(new Set(ran.map((e) => e.type === "check.run" && e.payload.check))).toEqual(new Set(pinned.keys()));
+    for (const e of ran) {
+      if (e.type !== "check.run") continue;
+      expect(e.payload.script_hash).toBe(pinned.get(e.payload.check)!);
+      expect(e.payload.findings.map((x) => x.message)).not.toContain("the edited script ran");
+    }
+    // the script ran from a file written from the content store into the case's folder
+    const hash = pinned.get("schema")!;
+    expect(readFileSync(join(env.session.dir, `checks-${hash.slice(0, 12)}`, "01-schema.ts"))).toEqual(readFileSync(join(import.meta.dir, "..", "..", "sample", "checks", "01-schema.ts")));
+    // the same case without a bound version reads the root, and meets the edited script
+    const before = ran.length;
+    const plain = rig.plain();
+    await checksRunner(plain);
+    const later = runs(plain).slice(before).filter((e) => e.type === "check.run" && e.payload.check === "schema");
+    expect(later.length).toBeGreaterThan(0);
+    for (const e of later) if (e.type === "check.run") expect(e.payload.findings.map((x) => x.message)).toContain("the edited script ran");
+    expect(env.session.state.skipped).toEqual([]);
+  } finally { rig.close(); }
+});
+
+test("a check item whose bytes are gone from the content store is a broken check: the stage does not pass, and says which", async () => {
+  const rig = boundRig();
+  try {
+    const env = rig.env;
+    const hash = rig.lock.items.find((i) => i.kind === "check-script" && i.id === "citations")!.hash;
+    rmSync(join(rig.blobs, hash));
+    const end = await checksRunner(env);
+    expect(end).toEqual({ kind: "stalled", reason: `Checks cannot run: check citations could not be loaded: its script (${hash.slice(0, 12)}) is not in the content store` });
+    expect(runs(env)).toEqual([]);
+    const manifest = rig.lock.items.find((i) => i.kind === "check" && i.id === "marking")!.hash;
+    rmSync(join(rig.blobs, manifest));
+    const { broken } = checksFor(env.deps, "checks", env.session.dir);
+    expect(broken).toEqual([
+      { id: "citations", problem: `its script (${hash.slice(0, 12)}) is not in the content store` },
+      { id: "marking", problem: `its manifest (${manifest.slice(0, 12)}) is not in the content store` },
+    ]);
+  } finally { rig.close(); }
 });

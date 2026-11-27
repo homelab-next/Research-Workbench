@@ -6,6 +6,7 @@ import { BASIS_TEXT, PERSON_SOURCE } from "../core/state/person";
 import type { Entry, Marking, PersonStatement } from "../core/types";
 import { isMarking, strictest } from "../core/types";
 import type { LoadedManifest, Registry } from "../modules/registry";
+import type { Components } from "../pipeline/components";
 import { scrub, scrubCoverage } from "./tools/kit";
 
 export class ContextError extends Error {
@@ -29,11 +30,40 @@ function trustedManifest(registry: Registry, kind: string, id: string): LoadedMa
   return m;
 }
 
+/** A registry has `rootOf`; a loop's components never do. */
+const isRegistry = (from: Components | Registry): from is Registry => typeof (from as Partial<Registry>).rootOf === "function";
+
+/**
+ * Where a stage reads a manifest: a registry's trusted roots (as `rootComponents` reads them, with the reasons it has always given), or a
+ * loop's components for that stage ("*" for the profile's own), and nothing else.
+ */
+function manifestIn(from: Components | Registry, kind: string, id: string, stage: string): LoadedManifest {
+  if (isRegistry(from)) return trustedManifest(from, kind, id);
+  const m = from.get(stage, kind, id);
+  if (m === null) throw new ContextError(`${stage === "*" ? "the loop" : `stage "${stage}"`}: ${kind} "${id}" is not one of this loop's components`);
+  return m;
+}
+
+/** The kinds a loop never holds: a case's objective and a person's lesson are the case's, read live from the registry's trusted roots. */
+export const LIVE_KINDS: readonly string[] = ["objective", "lesson"];
+
+/** A loop's components, with the kinds a loop never holds read from the registry's trusted roots. */
+export function withLive(components: Components, registry: Registry): Components {
+  return {
+    get(stage: string, kind: string, id: string): LoadedManifest | null {
+      if (!LIVE_KINDS.includes(kind)) return components.get(stage, kind, id);
+      const m = registry.get(kind, id);
+      return m !== null && registry.rootOf(m.path)?.trusted === true ? m : null;
+    },
+    items: () => components.items(),
+  };
+}
+
 const str = (x: unknown): x is string => typeof x === "string" && x !== "";
 const strList = (x: unknown): x is string[] => Array.isArray(x) && x.every(str);
 
-export function loadProfile(registry: Registry, id: string): Profile {
-  const m = trustedManifest(registry, "profile", id);
+export function loadProfile(from: Components | Registry, id: string): Profile {
+  const m = manifestIn(from, "profile", id, "*");
   const b = m.body;
   const bad = (why: string): never => { throw new ContextError(`profile "${id}": ${why}`); };
   if (!str(b.rules)) bad("rules must name a rules manifest");
@@ -63,30 +93,31 @@ function markingOf(m: LoadedManifest): Marking | null {
   return isMarking(x) ? x : x === undefined || x === null ? null : (x as never);
 }
 
-/** A manifest as a part: Markdown after the front matter, or the body as JSON for a YAML file. */
-export function partOf(registry: Registry, kind: string, id: string, fixed = false): PackPart {
-  const m = trustedManifest(registry, kind, id);
+/** A manifest as a part: Markdown after the front matter, or the body as JSON for a YAML file. `stage` is the stage whose component it is ("*" for the profile's own). */
+export function partOf(from: Components | Registry, kind: string, id: string, fixed = false, stage = "*"): PackPart {
+  const m = manifestIn(from, kind, id, stage);
   const text = m.text !== null ? m.text : JSON.stringify(m.body, null, 2);
   if (text.trim() === "") throw new ContextError(`${kind} "${id}" has no text`);
   return { kind, id, title: m.title, text, marking: markingOf(m), fixed };
 }
 
-export function stageParts(registry: Registry, profile: Profile, stage: string, opts: { schema: string | null; objective: string | null; narrow?: (s: Schema) => Schema }): PackPart[] {
+/** `from` is where the stage's manifests are read: a loop's components, or the registry's trusted roots. `registry` is still what scrubbing reads. */
+export function stageParts(from: Components | Registry, profile: Profile, stage: string, opts: { schema: string | null; objective: string | null; narrow?: (s: Schema) => Schema }): PackPart[] {
   const s = profile.stages[stage];
   if (s === undefined) throw new ContextError(`profile "${profile.id}" has no stage "${stage}"`);
   // what the profile's own marking covers: its rules and its goals
-  const rules = partOf(registry, "rules", profile.rules, true);
+  const rules = partOf(from, "rules", profile.rules, true, stage);
   if (profile.marking !== null) rules.marking = rules.marking === null ? profile.marking : strictest(rules.marking, profile.marking);
-  const parts: PackPart[] = [rules, partOf(registry, "persona", s.persona)];
+  const parts: PackPart[] = [rules, partOf(from, "persona", s.persona, false, stage)];
   parts.push({ kind: "goal", id: `${stage}-goal`, title: "Goal", text: s.goal, marking: profile.marking, fixed: false });
-  if (s.procedure !== null) parts.push(partOf(registry, "procedure", s.procedure));
-  for (const id of s.skills) parts.push(partOf(registry, "skill", id));
-  if (opts.schema !== null) parts.push(schemaPart(registry, opts.schema, opts.narrow));
-  for (const id of s.references) parts.push(partOf(registry, "reference", id));
-  for (const id of s.gates) parts.push(partOf(registry, "gate", id));
-  if (opts.objective !== null) parts.push(partOf(registry, "objective", opts.objective));
-  if (profile.framework !== null) parts.push(partOf(registry, "framework", profile.framework));
-  if (profile.standard !== null) parts.push(partOf(registry, "standard", profile.standard));
+  if (s.procedure !== null) parts.push(partOf(from, "procedure", s.procedure, false, stage));
+  for (const id of s.skills) parts.push(partOf(from, "skill", id, false, stage));
+  if (opts.schema !== null) parts.push(schemaPart(from, opts.schema, opts.narrow, stage));
+  for (const id of s.references) parts.push(partOf(from, "reference", id, false, stage));
+  for (const id of s.gates) parts.push(partOf(from, "gate", id, false, stage));
+  if (opts.objective !== null) parts.push(partOf(from, "objective", opts.objective, false, stage));
+  if (profile.framework !== null) parts.push(partOf(from, "framework", profile.framework, false, stage));
+  if (profile.standard !== null) parts.push(partOf(from, "standard", profile.standard, false, stage));
   return parts;
 }
 
@@ -200,8 +231,8 @@ export function packPart(from: PartFrom): PackPart {
   return { kind: from.kind, id: from.id, title: from.title, text: from.text, marking: markings.length === 0 ? null : strictest(...markings), fixed: from.fixed };
 }
 
-export function schemaOf(registry: Registry, id: string): Schema {
-  const m = trustedManifest(registry, "schema", id);
+export function schemaOf(from: Components | Registry, id: string, stage = "*"): Schema {
+  const m = manifestIn(from, "schema", id, stage);
   if (!isPlainObject(m.body.schema)) throw new ContextError(`schema "${id}" has no schema`);
   return m.body.schema as unknown as Schema;
 }
@@ -235,9 +266,9 @@ export function exampleOf(schema: Schema): Json {
 }
 
 /** A stage's output schema as a part: the lead line, the JSON Schema body alone (never the manifest's kind, id and title), and an example. */
-export function schemaPart(registry: Registry, id: string, narrow?: (s: Schema) => Schema): PackPart {
-  const m = trustedManifest(registry, "schema", id);
-  const schema = narrow === undefined ? schemaOf(registry, id) : narrow(schemaOf(registry, id));
+export function schemaPart(from: Components | Registry, id: string, narrow?: (s: Schema) => Schema, stage = "*"): PackPart {
+  const m = manifestIn(from, "schema", id, stage);
+  const schema = narrow === undefined ? schemaOf(from, id, stage) : narrow(schemaOf(from, id, stage));
   const text = `${SCHEMA_LEAD}\n${JSON.stringify(schema, null, 2)}\nExample:\n${JSON.stringify(exampleOf(schema))}`;
   return { kind: "schema", id, title: m.title, text, marking: markingOf(m), fixed: true };
 }

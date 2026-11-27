@@ -4,7 +4,7 @@ import type { Schema } from "../../core/schema";
 import type { CaseSession } from "../../core/session";
 import { runUsage } from "../../core/state";
 import type { Actor, Draft, Entry, ModelChoice, PackItem, TimeWindow } from "../../core/types";
-import { ContextError, casePart, packPart, schemaOf, stageParts } from "../../agents/context";
+import { ContextError, casePart, packPart, schemaOf, stageParts, withLive } from "../../agents/context";
 import type { PackPart } from "../../agents/context";
 import type { CallRecord } from "../../agents/loop";
 import { runAgent } from "../../agents/loop";
@@ -19,6 +19,7 @@ import { DEFAULT_LIMITS } from "../../modules/seeker";
 import type { StageEnd, StageEnv } from "../engine";
 import type { Role } from "../manifests";
 import type { Registry } from "../../modules/registry";
+import type { Components } from "../components";
 import { questionsPart } from "../questions";
 
 export type AgentStageEnd = { kind: "output"; output: Json; calls: CallRecord[] } | Exclude<StageEnd, { kind: "finished" }>;
@@ -101,8 +102,9 @@ export async function stageAgent(env: StageEnv, opts: {
   let schema: ReturnType<typeof schemaOf> | null = null;
   try {
     const asked = questionsPart(session, deps.registry);
-    const parts = [...stageParts(deps.registry, deps.profile, stage.id, { schema: stage.schema, objective: state.meta?.objective ?? null, ...(opts.narrow === undefined ? {} : { narrow: opts.narrow }) }), casePart(state), ...(asked === null ? [] : [asked]), ...opts.extras];
-    if (stage.schema !== null) schema = opts.narrow === undefined ? schemaOf(deps.registry, stage.schema) : opts.narrow(schemaOf(deps.registry, stage.schema));
+    const from = contextFrom(deps);
+    const parts = [...stageParts(from, deps.profile, stage.id, { schema: stage.schema, objective: state.meta?.objective ?? null, ...(opts.narrow === undefined ? {} : { narrow: opts.narrow }) }), casePart(state), ...(asked === null ? [] : [asked]), ...opts.extras];
+    if (stage.schema !== null) schema = opts.narrow === undefined ? schemaOf(from, stage.schema, stage.id) : opts.narrow(schemaOf(from, stage.schema, stage.id));
     pack = assemblePack(parts, { budget: packBudget(fast === null ? who.context : Math.min(who.context, fast.context)), case_marking: state.meta!.marking, max_marking: Object.hasOwn(state.pack_limits, stage.id) ? state.pack_limits[stage.id]! : null });
   } catch (err) {
     if (err instanceof ContextError) return { kind: "stalled", reason: `${title}: ${firstLine(err.message)}` };
@@ -222,6 +224,11 @@ export function agentActor(session: CaseSession, actorId: string): AgentActor {
 }
 
 /** Every card the draft cites, as pack parts: the findings' cards in finding order, then the rest of citedOf(draft). A card no longer in the case is left out. */
+/** Where a stage's context is read: its loop's components (a case's objective and a person's lessons from the registry), or the registry's trusted roots when there is no loop. */
+export function contextFrom(deps: Pick<StageEnv["deps"], "components" | "registry">): Components | Registry {
+  return deps.components === undefined ? deps.registry : withLive(deps.components, deps.registry);
+}
+
 export function citedCardParts(session: CaseSession, registry: Registry, draft: Draft): PackPart[] {
   const first = [...new Set(draft.product.key_findings.flatMap((f) => f.cites))];
   const ids = [...first, ...citedOf(draft).filter((id) => !first.includes(id))];

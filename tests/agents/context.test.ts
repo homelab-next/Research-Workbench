@@ -11,6 +11,16 @@ import type { Product } from "../../src/core/types";
 import { Registry } from "../../src/modules/registry";
 import { loadRegistry } from "../../src/modules/registry-record";
 import { copySample } from "../helpers/sample-root";
+import { BlobStore } from "../../src/core/blobs";
+import { Ledger } from "../../src/core/ledger";
+import { strictest } from "../../src/core/types";
+import type { Marking } from "../../src/core/types";
+import type { PackPart } from "../../src/agents/context";
+import { tooStrict } from "../../src/agents/pack";
+import { rootComponents } from "../../src/pipeline/components";
+import type { ResolveContext } from "../../src/pipeline/components";
+import { loadLoops } from "../../src/pipeline/loops";
+import type { LoopCatalog } from "../../src/pipeline/loops";
 
 let dir: string;
 let root: string;
@@ -282,4 +292,106 @@ test("a statement card's part says it is the person's word, not data, and has no
   const bare = packPart({ card: { ...card, person: { basis: "told", detail: "", about: [], answers: null } } as CardState, registry });
   expect(bare.text).toBe(["Card c1: Statement: The device at 192.0.2.17 is the meeting-room TV.", "The device at 192.0.2.17 is the meeting-room TV.",
     "Source: the person (was told). A statement by the person running the investigation, not data from a source."].join("\n"));
+});
+
+// ---- slice 12: a stage's context read through its loop's components
+
+const loopsOf = (over: { output?: ResolveContext["output"] } = {}): { registry: Registry; loops: LoopCatalog; close(): void } => {
+  const chain = Ledger.open(join(dir, "chain.db"), "workbench");
+  const content = new BlobStore(join(dir, "blobs"));
+  const r = loadRegistry([{ path: root, trusted: true, credentials: [] }], { chain, content });
+  const loops = loadLoops(r, { registry: r, content, chain, trusted: [root], output: over.output ?? (() => null) }, { max_depth: 2, max_children: 8 });
+  return { registry: r, loops, close: () => chain.close() };
+};
+const keyed = (parts: PackPart[]): string[] => parts.map((x) => `${x.kind}:${x.id}`);
+
+test("stageParts given the registry is what it was: the same parts, in the same order, with the same text and markings", () => {
+  const p = loadProfile(registry, "investigation");
+  const research = stageParts(registry, p, "research", { schema: "research-output", objective: "sample-objective" });
+  expect(keyed(research)).toEqual([
+    "rules:base-rules", "persona:researcher", "goal:research-goal", "procedure:research-sop", "skill:ask-the-person", "schema:research-output",
+    "objective:sample-objective", "framework:intel-cycle", "standard:icd203",
+  ]);
+  expect(research.map((x) => x.marking)).toEqual(research.map(() => null));
+  expect(research.find((x) => x.kind === "persona")!.text).toBe(registry.get("persona", "researcher")!.text!);
+  // the registry wrapped as components gives the same parts, and so does the sample's loop (every component from root)
+  const { loops, close } = loopsOf();
+  try {
+    const loop = loops.current("investigation")!;
+    for (const stage of ["frame", "plan", "research", "assemble", "evaluate", "challenge", "publish"]) {
+      const schema = loop.pipeline.stages.find((s) => s.id === stage)!.schema;
+      const want = stageParts(registry, p, stage, { schema, objective: null });
+      expect(stageParts(rootComponents(registry), p, stage, { schema, objective: null })).toEqual(want);
+      expect(stageParts(loop.components, loop.profile, stage, { schema, objective: null })).toEqual(want);
+    }
+    expect(loadProfile(loop.components, "investigation")).toEqual(p);
+    expect(schemaOf(loop.components, "research-output", "research")).toEqual(schemaOf(registry, "research-output"));
+  } finally { close(); }
+});
+
+test("stageParts given a loop's components reads a pinned persona's text, not the root's", () => {
+  const first = loopsOf();
+  const pinned = first.registry.get("persona", "researcher")!.hash;
+  first.close();
+  const file = join(root, "context", "personas", "researcher.md");
+  writeFileSync(file, readFileSync(file, "utf8").replace("You are the researcher.", "You are someone else."));
+  mkdirSync(join(root, "loops"), { recursive: true });
+  const loop = Bun.YAML.parse(readFileSync(join(root, "loops", "investigation.yaml"), "utf8")) as Record<string, unknown>;
+  writeFileSync(join(root, "loops", "pinned.yaml"), JSON.stringify({ ...loop, id: "pinned", title: "Pinned", components: { research: { "persona:researcher": { pinned } } } }));
+  const { registry: now, loops, close } = loopsOf();
+  try {
+    const got = loops.current("pinned");
+    if (got === null) throw new Error(loops.problems("pinned").join("; "));
+    const parts = stageParts(got.components, got.profile, "research", { schema: "research-output", objective: null });
+    const persona = parts.find((x) => x.kind === "persona")!;
+    expect(persona.text).toContain("You are the researcher.");
+    expect(persona.text).not.toContain("someone else");
+    expect(stageParts(now, loadProfile(now, "investigation"), "research", { schema: null, objective: null }).find((x) => x.kind === "persona")!.text).toContain("You are someone else.");
+    // the rest of the stage is the root's, unchanged
+    expect(keyed(parts)).toEqual(keyed(stageParts(now, loadProfile(now, "investigation"), "research", { schema: "research-output", objective: null })));
+  } finally { close(); }
+});
+
+test("a loop-output reference is a part of kind reference marked with the product's marking, and an unknown marking counts as the strictest", () => {
+  const profile = join(root, "context", "profile.yaml");
+  writeFileSync(profile, readFileSync(profile, "utf8").replace("    procedure: assemble-sop\n", "    procedure: assemble-sop\n    references: [prior-findings]\n"));
+  mkdirSync(join(root, "loops"), { recursive: true });
+  const loop = Bun.YAML.parse(readFileSync(join(root, "loops", "investigation.yaml"), "utf8")) as Record<string, unknown>;
+  writeFileSync(join(root, "loops", "reader.yaml"), JSON.stringify({
+    ...loop, id: "reader", title: "Reader", components: { assemble: { "reference:prior-findings": { "loop-output": "investigation.findings" } } },
+  }));
+  const partWith = (marking: string): PackPart => {
+    const { loops, close } = loopsOf({ output: () => ({ case: "CASE-1", head: "a".repeat(64), marking: marking as Marking, hash: "b".repeat(64), text: "The earlier finding." }) });
+    try {
+      const got = loops.current("reader");
+      if (got === null) throw new Error(loops.problems("reader").join("; "));
+      const parts = stageParts(got.components, got.profile, "assemble", { schema: "assemble-output", objective: null });
+      const ref = parts.find((x) => x.kind === "reference")!;
+      // the lock rebuilds it with the same marking
+      const back = loops.fromLock(got.lock);
+      if (typeof back === "string") throw new Error(back);
+      expect(partOf(back.components, "reference", "prior-findings", false, "assemble")).toEqual(ref);
+      return ref;
+    } finally { close(); }
+  };
+  const amber = partWith("TLP:AMBER");
+  expect(amber).toEqual({ kind: "reference", id: "prior-findings", title: "prior-findings", text: "The earlier finding.", marking: "TLP:AMBER", fixed: false });
+  const odd = partWith("TLP:PURPLE");
+  expect(odd.marking as unknown).toBe("TLP:PURPLE");
+  expect(strictest(odd.marking)).toBe("TLP:RED");
+  expect(tooStrict(odd.marking, "TLP:AMBER")).toBe(true);
+});
+
+test("a component the loop does not hold is a ContextError naming the stage, the kind and the id", () => {
+  const { loops, close } = loopsOf();
+  try {
+    const loop = loops.current("investigation")!;
+    const p = { ...loop.profile, stages: { ...loop.profile.stages, frame: { ...loop.profile.stages.frame!, skills: ["ghost-skill"] } } };
+    expect(() => stageParts(loop.components, p, "frame", { schema: null, objective: null })).toThrow(ContextError);
+    expect(() => stageParts(loop.components, p, "frame", { schema: null, objective: null })).toThrow('stage "frame": skill "ghost-skill" is not one of this loop\'s components');
+    // a component of another stage is not this stage's: plan's skill is not frame's
+    expect(() => partOf(loop.components, "procedure", "research-sop", false, "frame")).toThrow('stage "frame": procedure "research-sop" is not one of this loop\'s components');
+    expect(() => schemaOf(loop.components, "plan-output", "frame")).toThrow('stage "frame": schema "plan-output" is not one of this loop\'s components');
+    expect(() => loadProfile(loop.components, "other")).toThrow('the loop: profile "other" is not one of this loop\'s components');
+  } finally { close(); }
 });

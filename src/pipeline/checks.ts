@@ -1,6 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import type { Json } from "../core/canonical";
 import { canonical } from "../core/canonical";
 import { sha256Hex } from "../core/hash";
@@ -12,6 +12,10 @@ import { citedOf } from "../agents/draft";
 import type { Profile } from "../agents/context";
 import { schemaOf } from "../agents/context";
 import type { Registry } from "../modules/registry";
+import { CHECK_SCRIPT } from "./components";
+import type { Components } from "./components";
+import type { EngineDeps } from "./engine";
+import { loadChecks } from "./manifests";
 import type { CheckManifest } from "./manifests";
 
 export interface CheckInput {
@@ -33,8 +37,12 @@ export interface CheckInput {
 export interface CheckOutcome { pass: boolean; findings: CheckFinding[]; script_hash: string; input: Uint8Array; output: Uint8Array }
 export const CHECK_MAX_OUTPUT = 1048576;
 
-/** What a check is told: the draft, the cards it cites that exist, their sources, the schema and the standard. Throws when the profile's standard or the schema is missing. */
-export function checkInput(check: string, state: Readonly<CaseState>, draft: Draft, registry: Registry, profile: Profile): CheckInput {
+/**
+ * What a check is told: the draft, the cards it cites that exist, their sources, the schema and the standard. Throws when the profile's standard
+ * or the schema is missing. The standard and the schema are read from `from` (a bound run's components, for its checks `stage`); the sources
+ * and the objective are the registry's.
+ */
+export function checkInput(check: string, state: Readonly<CaseState>, draft: Draft, registry: Registry, profile: Profile, from: Components | Registry = registry, stage = "*"): CheckInput {
   const cards: CheckInput["cards"] = {};
   const sources: CheckInput["sources"] = {};
   const cited = citedOf(draft);
@@ -52,7 +60,7 @@ export function checkInput(check: string, state: Readonly<CaseState>, draft: Dra
     }
   }
   if (profile.standard === null) throw new Error("the profile names no standard");
-  const standard = registry.get("standard", profile.standard);
+  const standard = "rootOf" in from ? from.get("standard", profile.standard) : from.get(stage, "standard", profile.standard);
   if (standard === null) throw new Error(`standard "${profile.standard}" was not found`);
   const objective = state.meta?.objective ?? null;
   const objectiveManifest = objective === null ? null : registry.get("objective", objective);
@@ -61,7 +69,7 @@ export function checkInput(check: string, state: Readonly<CaseState>, draft: Dra
     check,
     draft: { n: draft.n, hash: draft.hash, product: draft.product },
     cards, sources,
-    schema: schemaOf(registry, "product") as unknown as Json,
+    schema: schemaOf(from, "product", stage) as unknown as Json,
     standard: standard.body as Json,
     markings: [...MARKINGS],
     objective: objective === null ? null : { id: objective, title: objectiveManifest?.title ?? objective },
@@ -182,4 +190,51 @@ export async function runCheck(check: CheckManifest, input: CheckInput): Promise
     killGroup();
     if (cwd !== null) rmSync(cwd, { recursive: true, force: true });
   }
+}
+
+type Found = ReturnType<typeof loadChecks>;
+const HASH12 = 12;
+
+/** A bound check's manifest body as a CheckManifest, or why it cannot run. */
+function boundCheck(id: string, title: string, hash: string, body: Record<string, unknown>): Omit<CheckManifest, "path"> | string {
+  const { script, order, runner, timeout_ms, blocking } = body;
+  if (typeof script !== "string" || script === "" || script !== basename(script) || script === "." || script === ".." || isAbsolute(script) || /[\\/]/.test(script)) return "its script is not a plain file name";
+  if (typeof order !== "number") return "order must be a number";
+  if (runner !== "bun" && runner !== "exec") return "runner must be bun or exec";
+  if (typeof timeout_ms !== "number" || !(timeout_ms > 0) || !Number.isFinite(timeout_ms)) return "timeout_ms must be a positive number";
+  return { id, title: typeof body.title === "string" && body.title !== "" ? body.title : title, order, hash, script, runner, timeout_ms, blocking: blocking !== false };
+}
+
+/** The checks of a checks stage: the lock's check items and their scripts when the run is bound; loadChecks(registry) otherwise. A bound check runs from a file written from the content store under <case>/checks-<hash12>/. */
+export function checksFor(deps: EngineDeps, stage: string, caseDir: string): { checks: CheckManifest[]; problems: string[]; broken: { id: string; problem: string }[] } {
+  const from = deps.components;
+  if (from === undefined) return loadChecks(deps.registry);
+  const found: Found = { checks: [], problems: [], broken: [] };
+  const items = from.items().filter((i) => i.stage === stage);
+  for (const item of items.filter((i) => i.kind === "check")) {
+    const bad = (problem: string): void => { found.problems.push(`check ${item.id}: ${problem}`); found.broken.push({ id: item.id, problem }); };
+    const scriptItem = items.find((i) => i.kind === CHECK_SCRIPT && i.id === item.id);
+    const manifest = from.get(stage, "check", item.id);
+    if (scriptItem === undefined || manifest === null) { bad("the loop holds no script for it"); continue; }
+    const content = deps.content;
+    if (content === undefined) { bad("there is no content store to read it from"); continue; }
+    if (content.check(item.hash) !== "ok") { bad(`its manifest (${item.hash.slice(0, HASH12)}) is not in the content store`); continue; }
+    if (content.check(scriptItem.hash) !== "ok") { bad(`its script (${scriptItem.hash.slice(0, HASH12)}) is not in the content store`); continue; }
+    const made = boundCheck(item.id, item.title, item.hash, manifest.body);
+    if (typeof made === "string") { bad(made); continue; }
+    // the script is written once per hash, from the content store's bytes, into the case's own folder
+    const folder = join(caseDir, `checks-${scriptItem.hash.slice(0, HASH12)}`);
+    const file = join(folder, made.script);
+    const bytes = content.get(scriptItem.hash);
+    if (sha256Hex(bytes) !== scriptItem.hash) { bad(`its script (${scriptItem.hash.slice(0, HASH12)}) is not in the content store`); continue; }
+    let held: Uint8Array | null = null;
+    try { held = existsSync(file) ? new Uint8Array(readFileSync(file)) : null; } catch { held = null; }
+    if (held === null || sha256Hex(held) !== scriptItem.hash) {
+      mkdirSync(folder, { recursive: true });
+      writeFileSync(file, bytes, { mode: 0o600 });
+    }
+    found.checks.push({ ...made, path: join(folder, basename(item.path ?? `${item.id}.yaml`)) });
+  }
+  found.checks.sort((a, b) => a.order - b.order);
+  return found;
 }

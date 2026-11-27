@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Entry } from "../../src/core/types";
@@ -21,6 +21,13 @@ import { frameOf, lastOutput, stageAgent } from "../../src/pipeline/stages/agent
 import { packBudget } from "../../src/agents/pack";
 import { fixture, person, WINDOW } from "../helpers/tools-fixture";
 import type { Fixture } from "../helpers/tools-fixture";
+import { BlobStore } from "../../src/core/blobs";
+import { sha256Hex } from "../../src/core/hash";
+import { Ledger } from "../../src/core/ledger";
+import type { Registry } from "../../src/modules/registry";
+import { loadRegistry } from "../../src/modules/registry-record";
+import type { ResolveContext } from "../../src/pipeline/components";
+import { loadLoops } from "../../src/pipeline/loops";
 
 let f: Fixture;
 let dir: string;
@@ -367,4 +374,32 @@ test("every agent stage's pack holds the questions part once a question is asked
   expect(pack).toContain("note:questions");
   // after the case
   expect(pack.indexOf("note:questions")).toBe(pack.indexOf("case:" + f.s.state.meta!.id) + 1);
+});
+
+test("an agent stage of a bound run packs the pinned skill after the root's copy was edited", async () => {
+  // the run's loop is resolved (its lock made), the root's skill is edited, and the run is rebuilt from its lock as a bound run is
+  const chain = Ledger.open(join(dir, "chain.db"), "workbench");
+  const content = new BlobStore(join(dir, "blobs"));
+  try {
+    const root = f.sample.root;
+    const ctxOf = (registry: Registry): ResolveContext => ({ registry, content, chain, trusted: [root], output: () => null });
+    const before = loadRegistry([{ path: root, trusted: true, credentials: [] }], { chain, content });
+    const lock = loadLoops(before, ctxOf(before), { max_depth: 2, max_children: 8 }).current("investigation")!.lock;
+    const skill = join(root, "context", "skills", "ask-the-person.md");
+    const was = before.get("skill", "ask-the-person")!.text!;
+    writeFileSync(skill, readFileSync(skill, "utf8").replace("Ask one thing at a time", "Ask everything at once"));
+    const now = loadRegistry([{ path: root, trusted: true, credentials: [] }], { chain, content });
+    expect(now.get("skill", "ask-the-person")!.text).toContain("Ask everything at once");
+    const bound = loadLoops(now, ctxOf(now), { max_depth: 2, max_children: 8 }).fromLock(lock);
+    if (typeof bound === "string") throw new Error(bound);
+    const r = rig([{ id: "sample-run", turns: [{ actor: "planner", reply: say({}) }] }]);
+    const deps: EngineDeps = { ...r.deps, registry: now, pipeline: bound.pipeline, profile: bound.profile, components: bound.components, content };
+    r.engine.start(person);
+    const env: StageEnv = { session: f.s, deps, stage: bound.pipeline.stages.find((s) => s.id === "plan")!, attempt: 1, onNeedsBudget: async () => null };
+    await stageAgent(env, { actor_id: "planner", task: "plan it", extras: [] });
+    const req = ofType("model.request")[0]! as Extract<Entry, { type: "model.request" }>;
+    const item = req.payload.pack.find((i) => i.kind === "skill" && i.id === "ask-the-person")!;
+    expect(item.hash).toBe(sha256Hex(was));
+    expect(item.hash).not.toBe(sha256Hex(now.get("skill", "ask-the-person")!.text!));
+  } finally { chain.close(); }
 });

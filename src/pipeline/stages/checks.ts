@@ -2,10 +2,10 @@ import type { Json } from "../../core/canonical";
 import { latestDraft } from "../../core/state";
 import type { Actor, CheckFinding, Draft } from "../../core/types";
 import { draftOf, withFormExceptions } from "../../agents/draft";
-import { checkInput, runCheck } from "../checks";
+import { checkInput, checksFor, runCheck } from "../checks";
 import type { StageEnd, StageEnv } from "../engine";
-import { loadChecks } from "../manifests";
 import type { CheckManifest } from "../manifests";
+import { contextFrom } from "./agent";
 
 const CHECKS: Actor = { kind: "system", id: "checks" };
 
@@ -18,7 +18,7 @@ async function runAll(env: StageEnv, checks: CheckManifest[], d: Draft): Promise
   for (const check of checks) {
     let input: ReturnType<typeof checkInput>;
     try {
-      input = checkInput(check.id, session.state, d, deps.registry, deps.profile);
+      input = checkInput(check.id, session.state, d, deps.registry, deps.profile, contextFrom(deps), stage.id);
     } catch (err) {
       return `Checks cannot be given its input: ${(err as Error).message.split("\n")[0]}`;
     }
@@ -51,7 +51,8 @@ export async function checksRunner(env: StageEnv): Promise<StageEnd> {
   const { session, deps } = env;
   const first = latestDraft(session.state);
   if (first === null) return { kind: "stalled", reason: "Checks: there is no draft to check" };
-  const { checks, problems, broken } = loadChecks(deps.registry);
+  // a bound run's checks are its loop version's, run from the content store; with no loop, every check the trusted roots declare
+  const { checks, problems, broken } = checksFor(deps, env.stage.id, session.dir);
   if (checks.length === 0 && broken.length === 0) return { kind: "stalled", reason: `Checks has nothing to run: ${problems.length === 0 ? "no check is installed" : problems.join("; ")}` };
   // a check that is declared but cannot be loaded stalls the run before anything runs: it is for a person to repair, not for the analyst to answer
   if (broken.length > 0) {

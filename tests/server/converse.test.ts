@@ -1,4 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { loadRegistry } from "../../src/modules/registry-record";
+import { loadLoops } from "../../src/pipeline/loops";
 import { latestDraft, runUsage } from "../../src/core/state";
 import type { Actor, Entry } from "../../src/core/types";
 import type { AgentView } from "../../src/core/wire";
@@ -368,4 +372,37 @@ test("the view skips an earlier turn whose request cannot be found", async () =>
   await s.app.hub.idle();
   expect(state(id).conversation.at(-1)!.answer).not.toBeNull();
   expect((await s.command(id, "keep_answer", { turn })).status).toBe(409);
+});
+
+test("your agent on a case with a bound run reads that version's rules and persona", async () => {
+  s = await served();
+  const id = await s.newCase();
+  cases.push(id);
+  const deps = s.app.hub.deps;
+  const lock = deps.loops!.current("investigation")!.lock;
+  // the root's rules and the assistant's persona are edited after the run bound its version
+  const root = s.config.roots[0]!.path;
+  const edit = (rel: string, from: string, to: string): void => {
+    const p = join(root, rel);
+    const text = readFileSync(p, "utf8");
+    if (!text.includes(from)) throw new Error(`${from} not in ${rel}`);
+    writeFileSync(p, text.replace(from, to));
+  };
+  const rulesWere = deps.registry.get("rules", "base-rules")!.text!;
+  const personaWas = deps.registry.get("persona", "assistant")!.text!;
+  edit("context/rules.md", rulesWere.trim().split("\n")[0]!, "Edited rules.");
+  edit("context/personas/assistant.md", "You are the assistant", "You are an edited assistant");
+  const now = loadRegistry([{ path: root, trusted: true, credentials: [] }], { chain: s.wb.chain, content: s.wb.chainBlobs });
+  const catalog = loadLoops(now, { registry: now, content: s.wb.chainBlobs, chain: s.wb.chain, trusted: [root], output: () => null }, { max_depth: 2, max_children: 8 });
+  const bound = catalog.fromLock(lock);
+  if (typeof bound === "string") throw new Error(bound);
+  const session = s.app.hub.read(id);
+  const parts = agentParts(session, { ...deps, registry: now, pipeline: bound.pipeline, profile: bound.profile, components: bound.components }, []);
+  expect(parts.find((p) => p.kind === "rules")!.text).toBe(rulesWere);
+  expect(parts.find((p) => p.kind === "persona")!.text).toBe(personaWas);
+  // the current version reads the edited ones
+  const current = catalog.current("investigation")!;
+  const fresh = agentParts(session, { ...deps, registry: now, pipeline: current.pipeline, profile: current.profile, components: current.components }, []);
+  expect(fresh.find((p) => p.kind === "rules")!.text).toContain("Edited rules.");
+  expect(fresh.find((p) => p.kind === "persona")!.text).toContain("You are an edited assistant");
 });
