@@ -168,10 +168,12 @@ function heldWhileRunning(pool: ConnectorPool, retain: () => () => void): Connec
     let seen = views.get(connector);
     if (seen === undefined) {
       seen = Object.create(connector) as Connector;
+      // the view only forwards what its caller (runQuery, the one custody point) asks of the connector, holding the pool while it does
+      const forward = connector.run.bind(connector);
       seen.run = async (req) => {
         const release = retain();
         try {
-          return await connector.run(req);
+          return await forward(req);
         } finally {
           release();
         }

@@ -456,3 +456,14 @@ test("the sample's loop-builder profile names the builder stage with its persona
   for (const said of ["credential: <name>", "secrets file or the environment", "SELECT name FROM sqlite_master WHERE type = 'table'", "SHOW TABLES FROM <catalog>.<schema>", "one at a time", "approval", "MCP server"]) expect(skill).toContain(said);
   expect(f.registry.problems.filter((p) => /builder|building/.test(relative(p.root, p.path)))).toEqual([]);
 });
+
+test("a secret value in any text a builder tool shows is hidden from its view, though the registry's scrub would let it through", async () => {
+  const real = f.ctx.builder!.loops;
+  f.ctx.builder!.loops = () => real().map((l, i) => (i === 0 ? { ...l, title: `Loop holding ${PLANTED.file}`, about: `about ${PLANTED.vault}` } : l));
+  const r = await f.call("loop_catalogue", { why: "look" });
+  expect(r.ok).toBe(true);
+  const text = JSON.stringify(r.view);
+  expect(text).not.toContain(PLANTED.file);
+  expect(text).not.toContain(PLANTED.vault);
+  expect(text).toContain("Loop holding");
+});

@@ -134,6 +134,20 @@ function inspect(path: string, text: string, secrets: readonly string[]): { kind
   return { kind: parsed.kind, id };
 }
 
+/** The first folder or file of `path` under `root` that is a symbolic link (root-relative), or null; a part that does not exist yet is no link. */
+function linkOnTheWay(root: string, path: string): string | null {
+  const parts = path.split("/");
+  for (let i = 1; i <= parts.length; i++) {
+    const rel = parts.slice(0, i).join("/");
+    try {
+      if (lstatSync(join(root, ...parts.slice(0, i))).isSymbolicLink()) return rel;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 /** What the file a save would replace is: its kind and id ("" for a list file), "file that is not a manifest" when it does not parse as one. */
 function replaced(path: string, bytes: Uint8Array): { kind: string; id: string } {
   let parsed: ReturnType<typeof parseManifestFile>;
@@ -205,6 +219,9 @@ function plan(deps: SaveDeps, root: string, files: ManifestFile[]): { check: Cha
     const planned: Planned[] = [];
     for (const f of inspected) {
       const at = join(root, ...f.path.split("/"));
+      // the path's text stays in the root; a link on the way would take the write out of it
+      const linked = linkOnTheWay(root, f.path);
+      if (linked !== null) { problems.push(`${f.path}: ${linked} is a link; a save writes through no link`); continue; }
       let before: string | null = null;
       try {
         const st = lstatSync(at);

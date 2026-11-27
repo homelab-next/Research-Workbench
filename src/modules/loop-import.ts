@@ -176,6 +176,11 @@ function pivotIds(path: string, bytes: Uint8Array): string[] {
   return Array.isArray(list) ? list.filter(isMapping).map((p) => p.id).filter((x): x is string => typeof x === "string") : [];
 }
 
+/** A lock as a loop file carries it: a loop-output item's origin (the case it came from, that case's head and marking) stays in this workbench. */
+function exportedLock(lock: LoopLock): LoopLock {
+  return { ...lock, items: lock.items.map(({ origin: _origin, ...item }) => item) };
+}
+
 /** The loop file of loop `id`, written into `toDir` under its own name. */
 export async function exportLoop(deps: { loops: LoopCatalog; registry: Registry; secrets: readonly string[] }, id: string, toDir: string): Promise<{ file: string; path: string; manifest: LoopFileManifest }> {
   const loop = deps.loops.current(id);
@@ -184,10 +189,10 @@ export async function exportLoop(deps: { loops: LoopCatalog; registry: Registry;
     throw new LoopFileError(`loop "${id}" cannot be exported: ${problems.length > 0 ? problems.join("; ") : "it is not usable"}`);
   }
   const files = exportFiles(loop, deps.loops, deps.registry, deps.secrets);
-  const subloops: LoopLock[] = loopsOf(loop, deps.loops).slice(1).map((l) => l.lock);
+  const subloops: LoopLock[] = loopsOf(loop, deps.loops).slice(1).map((l) => exportedLock(l.lock));
   const header = {
     loop: id, version: loop.lock.version, title: loop.lock.title, about: loop.lock.about, hash: loop.pipeline.hash, legacy_hash: loop.pipeline.legacy_hash ?? null,
-    lock: loop.lock as unknown as Json, subloops: subloops as unknown as Json[],
+    lock: exportedLock(loop.lock) as unknown as Json, subloops: subloops as unknown as Json[],
   };
   searchSecrets("loop.json", enc.encode(canonical(header as unknown as Json)), deps.secrets);
   const file = loopFileName(id, header.version, header.hash);

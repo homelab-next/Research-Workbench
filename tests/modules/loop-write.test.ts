@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import type { Json } from "../../src/core/canonical";
@@ -404,4 +404,14 @@ test("a save may replace a skill with a skill of the same id, and is refused one
   const other = checkChange(deps(), root, [{ path, text: "---\nkind: skill\nid: something-else\ntitle: Else\n---\nAsk once.\n" }]);
   expect(other.ok).toBe(false);
   expect(other.problems.join(" | ")).toContain(`${path}: the file there is skill "ask-the-person"; a save keeps a file's id`);
+});
+
+test("a save through a linked folder inside the root is refused, and nothing is written where the link leads", () => {
+  const outside = join(dir, "outside");
+  mkdirSync(outside);
+  symlinkSync(outside, join(root, "linked"));
+  const r = saveManifests(deps(), root, [{ path: "linked/note.md", text: "---\nkind: skill\nid: zz-out\ntitle: zz\n---\nx\n" }], { actor: human, why: "save", session: null });
+  expect(r.ok).toBe(false);
+  expect(r.problems).toContain("linked/note.md: linked is a link; a save writes through no link");
+  expect(readdirSync(outside)).toEqual([]);
 });

@@ -103,12 +103,17 @@ function pivotModulesLoaded(): string[] {
   return [...seen].map((f) => relative(join(PIVOT, "src"), f)).sort();
 }
 
+const FORWARD = "const forward = connector.run.bind(connector);";
 test("a connector's run is still called only by the runner", () => {
   const SRC = join(REPO, "src");
   const found = files(SRC)
     .map((f) => ({ file: relative(SRC, f), calls: connectorCalls(readFileSync(f, "utf8")) }))
+    // the one exception (final review I5): compose's view of a pool forwards runQuery's own call, to hold the pool while the query runs; it is the
+    // only such line, and it calls nothing of its own accord
+    .map(({ file, calls }) => ({ file, calls: file === "cli/compose.ts" ? calls.filter((c) => !c.endsWith(FORWARD)) : calls }))
     .filter(({ file, calls }) => file !== "modules/runner.ts" && calls.length > 0);
   expect(found).toEqual([]);
+  expect(readFileSync(join(SRC, "cli", "compose.ts"), "utf8").split(FORWARD).length - 1).toBe(1);
   expect(connectorCalls(readFileSync(join(SRC, "modules", "runner.ts"), "utf8")).length).toBeGreaterThanOrEqual(3);
   // and nothing the workbench loads from pivot is its run code or its service
   const loaded = pivotModulesLoaded();

@@ -510,3 +510,14 @@ test("a query in flight across a reload completes when no bound run holds the po
   composed.reload();
   expect(closed).toBe(1);
 });
+
+test("a loop-output reads only a published run's output: a completed run's later output is never taken, and a loop with only completed runs has none", () => {
+  const put = (outcome: "published" | "completed", text: string, run: string): void => {
+    wb.chain.append({ type: "loop.output", actor: { kind: "system", id: "engine" }, payload: { loop: "triage", output: "findings", case: "CASE-9", run, head: { seq: 1, hash: "a".repeat(64) }, outcome, marking: "TLP:GREEN", hash: "b".repeat(64), value: wb.chainBlobs.put(JSON.stringify(text)) } });
+  };
+  put("completed", "only a completed run", "run-1");
+  expect(latestOutput(wb.chain, wb.chainBlobs, "triage", "findings")).toBeNull();
+  put("published", "the published one", "run-2");
+  put("completed", "a later completed one", "run-3");
+  expect(latestOutput(wb.chain, wb.chainBlobs, "triage", "findings")).toMatchObject({ case: "CASE-9", text: "the published one" });
+});

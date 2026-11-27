@@ -397,3 +397,17 @@ test("a source the person holds is the same as the shape in a loop file when the
   expect(sameContent({ kind: "skill", body: { kind: "skill", id: "k", title: "K" }, text: "Be brief.\n" }, { kind: "skill", body: { kind: "skill", id: "k", title: "K" }, text: "Be brief.\n" })).toBe(true);
   expect(sameContent({ kind: "skill", body: { kind: "skill", id: "k", title: "K" }, text: "Be brief.\n" }, { kind: "skill", body: { kind: "skill", id: "k", title: "K" }, text: "Be long.\n" })).toBe(false);
 });
+
+test("an exported lock carries no loop-output item's origin: the case it came from, its head and marking stay in this workbench", async () => {
+  const { registry, loops } = sampleWb();
+  const inv = loops.current("investigation")!;
+  const origin = { case: "CASE-77", head: "d".repeat(64), marking: "TLP:AMBER" as const };
+  const marked = { ...inv, lock: { ...inv.lock, items: inv.lock.items.map((i) => (i.kind === "persona" && i.id === "planner" ? { ...i, origin } : i)) } };
+  const withOrigin: LoopCatalog = { ...loops, current: (id) => (id === "investigation" ? marked : loops.current(id)) };
+  const { path, manifest } = await exportLoop({ loops: withOrigin, registry, secrets }, "investigation", join(dir, "out"));
+  const text = tarText(path);
+  expect(text).not.toContain("CASE-77");
+  expect(text).not.toContain("d".repeat(64));
+  expect(JSON.stringify(manifest)).not.toContain("CASE-77");
+  expect((manifest.lock as unknown as { items: { id: string }[] }).items.some((i) => i.id === "planner")).toBe(true);
+});

@@ -8,7 +8,8 @@ import type { Entry, EntryType } from "../../src/core/types";
 import type { BuilderView, LoopSummaryView } from "../../src/core/wire";
 import { BUILDER_TOOL_NAMES, parseCall } from "../../src/agents/tools";
 import { copyOf, loopText } from "../../src/modules/loop-write";
-import { lineDiff, REDACTED } from "../../src/server/builder";
+import { builderParts, lineDiff, REDACTED, redactSecrets } from "../../src/server/builder";
+import { card } from "../helpers/entries";
 import { served } from "../helpers/served";
 import type { Served } from "../helpers/served";
 
@@ -420,7 +421,7 @@ test("no route lets the builder agent decide: a tool call named builder_decide i
   expect(existsSync(join(root(), "context", "skills", "extra-notes.md"))).toBe(false);
 });
 
-// ---------- final review I2: a proposal never replaces a manifest of another kind ----------
+// ---------- final review I2, and the redaction the mutants showed untested ----------
 
 /** A builder.proposed written straight into the session, as if the tool had let it through: what the person's accept must still refuse. */
 function proposedByHand(id: string, path: string, text: string, kind: string, fileId: string): void {
@@ -447,4 +448,44 @@ test("a proposal that replaces a check with a skill is the builder's error; writ
   expect(JSON.stringify(await res.json())).toContain("the file there is a check");
   expect(readFileSync(join(root(), "checks", "11-marking.yaml"), "utf8")).toBe(before);
   expect(checksOf()).toHaveLength(11);
+});
+
+test("an accepted file that holds the mark of text kept from the builder is refused, and nothing is written", async () => {
+  await start([{ content: "Nothing yet." }]);
+  const id = await newBuilder();
+  const text = "---\nkind: skill\nid: marked\ntitle: Marked\n---\nThe key is [hidden].\n";
+  proposedByHand(id, "context/skills/marked.md", text, "skill", "marked");
+  const res = await decide(id, "chg-1", 0, true);
+  expect(res.status).toBe(409);
+  expect(JSON.stringify(await res.json())).toContain("mark of text kept from the builder");
+  expect(existsSync(join(root(), "context", "skills", "marked.md"))).toBe(false);
+});
+
+test("the person's view of a proposal shows no secret value, though the bundle holds one", async () => {
+  await start([{ content: "Nothing yet." }]);
+  const id = await newBuilder();
+  proposedByHand(id, "context/skills/leaky.md", `---\nkind: skill\nid: leaky\ntitle: Leaky ${SECRET}\n---\nUse ${SECRET} here.\n`, "skill", "leaky");
+  const v = await view(id);
+  expect(v.changes[0]!.files[0]!.lines.length).toBeGreaterThan(0);
+  expect(JSON.stringify(v)).not.toContain(SECRET);
+  expect(JSON.stringify(v)).toContain(REDACTED);
+});
+
+test("redactSecrets finds a value as it is written inside a JSON string, escapes and all", () => {
+  const value = 'pa"ss\\word-1234';
+  const inJson = JSON.stringify({ k: `x ${value} y` });
+  expect(inJson).not.toContain(value);
+  expect(redactSecrets(inJson, [value])).toBe(JSON.stringify({ k: `x ${REDACTED} y` }).replace(REDACTED, REDACTED));
+  expect(redactSecrets(inJson, [value])).not.toContain(JSON.stringify(value).slice(1, -1));
+  expect(redactSecrets(`plain ${value}`, [value])).toBe(`plain ${REDACTED}`);
+});
+
+test("a secret value in a card of the session never reaches a pack part sent to the builder's model", async () => {
+  await start([{ content: "Nothing yet." }]);
+  const id = await newBuilder();
+  const session = s.wb.builder(id);
+  session.commit((_s, ids) => [{ type: "card.created", actor: { kind: "human", id: s.config.user }, payload: { card: { ...card(ids.next("card"), { kind: "note", made_by: "human", title: `About ${SECRET}`, body: `It said ${SECRET}.`, rows: [[SECRET]] }) } } }]);
+  const parts = builderParts(session, s.app.hub.deps, [SECRET]);
+  expect(parts.some((p) => p.kind === "card")).toBe(true);
+  expect(JSON.stringify(parts)).not.toContain(SECRET);
 });

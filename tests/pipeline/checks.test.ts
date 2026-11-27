@@ -647,3 +647,16 @@ test("a check item whose bytes are gone from the content store is a broken check
     ]);
   } finally { rig.close(); }
 });
+
+test("a bound check whose script item the lock does not hold is a broken check, never skipped: the stage stalls naming it", async () => {
+  const rig = boundRig();
+  try {
+    const env = rig.env;
+    const from = env.deps.components!;
+    const deps = { ...env.deps, components: { items: () => from.items().filter((i) => !(i.kind === "check-script" && i.id === "citations")), get: (st: string, k: string, id: string) => from.get(st, k, id) } };
+    expect(checksFor(deps, "checks", env.session.dir).broken).toEqual([{ id: "citations", problem: "the loop holds no script for it" }]);
+    const end = await checksRunner({ ...env, deps });
+    expect(end).toEqual({ kind: "stalled", reason: "Checks cannot run: check citations could not be loaded: the loop holds no script for it" });
+    expect(runs(env)).toEqual([]);
+  } finally { rig.close(); }
+});
