@@ -1,5 +1,5 @@
 import type { Entry } from "../core/types";
-import type { AgentView, CaseSummaryView, CommandResult, Custody, Difference, Me, ModelView, NewCaseInput, Preview, Reference, RouteView, StoreView } from "../core/wire";
+import type { AgentView, CaseSummaryView, CommandResult, Custody, Difference, LoopFileView, LoopSummaryView, LoopView, Me, ModelView, NewCaseInput, Preview, Reference, RouteView, StoreView } from "../core/wire";
 
 export type Fetcher = (req: Request) => Promise<Response>;
 /**
@@ -31,6 +31,18 @@ export interface Api {
   deleteStored(file: string, id: string): Promise<Refusable>;
   /** Saves the one setting the interface may change. */
   setSetting(key: "cases.on_complete", value: "keep" | "unload"): Promise<Refusable>;
+  /** The loops the registry holds, usable or not, and one loop as an outline (slice 12). */
+  loops(): Promise<LoopSummaryView[]>; loop(id: string): Promise<LoopView>;
+  /** The files of the loop store, each with what an import would do now. */
+  loopFiles(): Promise<LoopFileView[]>;
+  /** Writes the loop's file into the loop store. */
+  exportLoop(id: string): Promise<{ file: string } | { refused: string[] }>;
+  /** Imports a file of the loop store, by its name, into a root that is not trusted. */
+  importLoop(file: string): Promise<{ root: string; written: number; same: number } | { refused: string[] }>;
+  /** Trusts an imported root; `typed` is what the person typed, which the server requires to be the root's folder name. */
+  trustRoot(root: string, typed: string): Promise<{ ok: true } | { refused: string[] }>;
+  /** Where a file of the loop store is downloaded from. */
+  loopFilePath(file: string): string;
   entries: EntrySource;
 }
 
@@ -60,6 +72,13 @@ export function makeApi(fetcher: Fetcher, origin: string, entries: EntrySource):
     try { res = await post(path, body); } catch { return { ok: false, refused: ["The server did not answer."] }; }
     if (res.ok) return (await res.json()) as Refusable<T>;
     return { ok: false, refused: await refusedOf(res) };
+  };
+  /** A POST answered with `T`, or the refusal in the server's words; a server that does not answer is a refusal too. */
+  const answered = async <T extends object>(path: string, body: unknown): Promise<T | { refused: string[] }> => {
+    let res: Response;
+    try { res = await post(path, body); } catch { return { refused: ["The server did not answer."] }; }
+    if (res.ok) return (await res.json()) as T;
+    return { refused: await refusedOf(res) };
   };
   return {
     me: () => read<Me>("/api/me"),
@@ -100,6 +119,13 @@ export function makeApi(fetcher: Fetcher, origin: string, entries: EntrySource):
     load: (file) => refusable("/api/store/load", { file }),
     deleteStored: (file, id) => refusable("/api/store/delete", { file, id }),
     setSetting: (key, value) => refusable("/api/settings", { key, value }),
+    loops: () => read<LoopSummaryView[]>("/api/loops"),
+    loop: (id) => read<LoopView>(`/api/loops/${seg(id)}`),
+    loopFiles: () => read<LoopFileView[]>("/api/loop-files"),
+    exportLoop: (id) => answered<{ file: string }>(`/api/loops/${seg(id)}/export`, {}),
+    importLoop: (file) => answered<{ root: string; written: number; same: number }>(`/api/loop-files/${seg(file)}/import`, {}),
+    trustRoot: (root, typed) => answered<{ ok: true }>("/api/roots/trust", { root, typed }),
+    loopFilePath: (file) => `/api/loop-files/${seg(file)}`,
     entries,
   };
 }

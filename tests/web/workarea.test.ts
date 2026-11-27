@@ -5,6 +5,7 @@ import { page } from "../helpers/dom";
 import type { Page } from "../helpers/dom";
 import type { Custody } from "../../src/core/wire";
 import { card } from "../helpers/entries";
+import { writeTriage } from "../helpers/loop-files";
 
 let p: Page | null = null;
 let allowSkipped = false;
@@ -468,4 +469,48 @@ test("reads refused while the case was packed (409) are not kept as failed: once
   const c: Custody = await real.custody("CASE-1");
   expect(q.q(".custody").textContent).toBe(c.line);
   expect(q.q(".draft-head").textContent).toContain("manifest.json");
+});
+
+/** A triage case (CASE-1), started: the server drives it until it waits on its child, CASE-2, at the child's plan gate. */
+async function parentAndChild(): Promise<Page> {
+  p = await page({ before: writeTriage });
+  const parent = await p.s.newCase({ loop: "triage" });
+  expect((await p.s.command(parent, "start_run")).status).toBe(200);
+  await p.settle();
+  expect(p.s.app.hub.read("CASE-1").state.run.hold).toEqual({ kind: "child", stage: "investigate", child: "CASE-2" });
+  return p;
+}
+
+test("a child case's top bar says child of CASE-1 and goes there", async () => {
+  const q = await parentAndChild();
+  q.win.location.hash = "#/case/CASE-2";
+  await q.settle();
+  const link = q.q(".topbar [data-action=open-parent]");
+  expect(link.textContent).toBe("child of CASE-1");
+  q.click(link);
+  await q.settle();
+  expect(q.win.location.hash).toBe("#/case/CASE-1");
+  // the parent is no one's child
+  expect(q.root.querySelector(".topbar [data-action=open-parent]")).toBeNull();
+  expect(st(q).skipped).toEqual([]);
+  expect(q.s.app.hub.read("CASE-2").state.skipped).toEqual([]);
+});
+
+test("a run paused on a child shows Open CASE-2 beside the reason; a pause with another hold does not", async () => {
+  const q = await parentAndChild();
+  q.win.location.hash = "#/case/CASE-1";
+  await q.settle();
+  const at = q.q(".topbar .pause-child");
+  expect(at.querySelector(".reason")!.textContent).toStartWith("Paused: waiting on child CASE-2: ");
+  expect(at.querySelector("[data-action=open-child]")!.textContent).toBe("Open CASE-2");
+  q.click(".topbar [data-action=open-child]");
+  await q.settle();
+  expect(q.win.location.hash).toBe("#/case/CASE-2");
+  // the child, at its plan gate, paused by the person: a pause with no child hold says nothing of the kind
+  expect((await q.s.command("CASE-2", "pause")).status).toBe(200);
+  await q.settle();
+  expect(q.s.app.hub.read("CASE-2").state.run.status).toBe("paused");
+  expect(q.root.querySelector(".topbar .pause-child")).toBeNull();
+  expect(q.root.querySelector(".topbar [data-action=open-child]")).toBeNull();
+  expect(q.s.app.hub.read("CASE-2").state.skipped).toEqual([]);
 });

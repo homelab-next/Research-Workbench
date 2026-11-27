@@ -1,6 +1,6 @@
-import type { Me } from "../../core/wire";
+import type { LoopSummaryView, Me } from "../../core/wire";
 import { parseCommand, perform } from "../commands";
-import type { Shell, Screen } from "../app";
+import type { Route, Shell, Screen } from "../app";
 
 export interface Mode { id: string; column: "help" | "work" | "resources"; label: string; roles: readonly Me["role"][]; live: boolean }
 
@@ -16,6 +16,7 @@ export const MODES: readonly Mode[] = [
   { id: "hunt", column: "work", label: "Hunt", roles: A, live: false },
   { id: "actors", column: "work", label: "Actors", roles: A, live: false },
   { id: "folders", column: "work", label: "My folders", roles: A, live: false },
+  { id: "loops", column: "resources", label: "Loops", roles: A, live: true },
   { id: "strategy", column: "resources", label: "Strategy", roles: AL, live: false },
   { id: "requirements", column: "resources", label: "Requirements", roles: AL, live: false },
   { id: "gaps", column: "resources", label: "Gaps", roles: AL, live: false },
@@ -23,6 +24,12 @@ export const MODES: readonly Mode[] = [
   { id: "learn", column: "resources", label: "Learn", roles: A, live: false },
   { id: "inventory", column: "resources", label: "Agent inventory", roles: A, live: false },
 ];
+
+/** Where a mode's tile goes: a live mode to its own screen, the rest to the honest "not built yet". */
+export function modeRoute(m: Mode): Route {
+  if (!m.live) return { screen: "soon", mode: m.id };
+  return m.id === "loops" ? { screen: "loops" } : { screen: "pick" };
+}
 
 const COLUMNS: { id: Mode["column"]; title: string; subtitle: string }[] = [
   { id: "help", title: "Get help", subtitle: "Ask the team" },
@@ -35,16 +42,20 @@ export function homeView(shell: Shell): Screen {
   const h = ui.h;
   const role = ui.me.role;
   const open = (): number => shell.cases().filter((c) => c.run_status !== "finished").length;
-  /** Investigate's count is the server's answer: "…" until it comes, nothing when the read failed. */
+  /** The loops the server listed (an analyst's read only): null until it answers, "failed" when it did not. */
+  let loops: LoopSummaryView[] | null | "failed" = null;
+  let destroyed = false;
+  /** Investigate's and Loops' counts are the server's answers: "…" until they come, nothing when the read failed. */
   const count = (m: Mode): string => {
     if (!m.live) return "soon";
+    if (m.id === "loops") return loops === null ? "…" : loops === "failed" ? "" : `${loops.filter((l) => l.usable).length} usable`;
     const status = shell.casesStatus();
     return status === "loading" ? "…" : status === "failed" && shell.cases().length === 0 ? "" : `${open()} open`;
   };
 
   const makeTile = (m: Mode): HTMLElement => h("button", {
     type: "button", class: m.live ? "mode" : "mode soon", data: { mode: m.id }, name: count(m) === "" ? m.label : `${m.label}: ${count(m)}`, title: count(m) === "" ? m.label : `${m.label}: ${count(m)}`,
-    on: { click: () => nav.go(m.live ? { screen: "pick" } : { screen: "soon", mode: m.id }) },
+    on: { click: () => nav.go(modeRoute(m)) },
   }, h("span", { class: "label" }, m.label), h("span", { class: "count" }, count(m)));
   const columns = COLUMNS.map((col) => {
     const modes = MODES.filter((m) => m.column === col.id && m.roles.includes(role));
@@ -81,19 +92,26 @@ export function homeView(shell: Shell): Screen {
     command === null ? null : h("div", { class: "home-command" }, command, say),
     h("p", { class: "hint" }, "Press ? for keys"));
 
+  /** The live counts are Investigate's and Loops': replace those tiles, keeping focus where it was. */
+  const repaint = (id: string): void => {
+    const old = el.querySelector(`[data-mode=${id}]`);
+    if (old === null) return;
+    const had = ui.doc.activeElement === old;
+    const fresh = makeTile(MODES.find((m) => m.id === id)!);
+    if (fresh.textContent === old.textContent) return;
+    old.replaceWith(fresh);
+    if (had) fresh.focus();
+  };
+  if (MODES.some((m) => m.id === "loops" && m.roles.includes(role))) {
+    ui.api.loops().then((list) => { if (destroyed) return; loops = list; repaint("loops"); }, () => { if (destroyed) return; loops = "failed"; repaint("loops"); });
+  }
   return {
     el,
     update() {
-      // The only live count is Investigate's: replace that tile, keeping focus where it was.
       loadError.textContent = shell.casesStatus() === "failed" ? "The cases could not be loaded" : "";
-      const old = el.querySelector("[data-mode=investigate]");
-      if (old === null) return;
-      const had = ui.doc.activeElement === old;
-      const fresh = makeTile(MODES.find((m) => m.id === "investigate")!);
-      if (fresh.textContent === old.textContent) return;
-      old.replaceWith(fresh);
-      if (had) fresh.focus();
+      repaint("investigate");
     },
     focus() { (command ?? el).focus(); },
+    destroy() { destroyed = true; },
   };
 }

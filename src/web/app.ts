@@ -7,6 +7,8 @@ import { homeView, MODES } from "./views/home";
 import { newView } from "./views/newcase";
 import { pickView, soonView } from "./views/pick";
 import { caseStoreView } from "./views/casestore";
+import { loopsView } from "./views/loops";
+import { loopView } from "./views/loop";
 import { topBar } from "./views/topbar";
 import { caseScreenFor } from "./views/workarea";
 import { AT_GATE, makeSend } from "./ui";
@@ -16,19 +18,34 @@ import { dispatchKey } from "./keys";
 import { nextThing } from "./derive";
 
 export type LensId = "agent" | "steps" | "timeline" | "graph" | "narrative" | "worklog" | "discarded" | "jobs" | "pipeline" | "replay";
-export type Route = { screen: "home" } | { screen: "pick" } | { screen: "new" } | { screen: "store" } | { screen: "soon"; mode: string } | { screen: "case"; id: string };
+export type Route = { screen: "home" } | { screen: "pick" } | { screen: "new"; loop?: string } | { screen: "store" } | { screen: "soon"; mode: string } | { screen: "case"; id: string }
+  | { screen: "loops" } | { screen: "loop"; id: string } | { screen: "loop_edit"; id: string };
 
-/** "#/" · "#/investigate" · "#/investigate/new" · "#/investigate/store" · "#/soon/<mode>" · "#/case/CASE-1". Anything else is home. */
+/** A loop's id as the server takes one: letters, digits, ".", "_" and "-", starting with a letter or digit, at most 64, never "..". */
+const LOOP_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const loopId = (s: string | undefined): s is string => s !== undefined && LOOP_ID.test(s) && !s.includes("..");
+
+/**
+ * "#/" · "#/investigate" · "#/investigate/new" · "#/investigate/new/<loop>" · "#/investigate/store" · "#/soon/<mode>" · "#/case/CASE-1" · "#/loops" ·
+ * "#/loops/<loop>" · "#/loops/<loop>/edit". Anything else is home.
+ */
 export function parseRoute(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/").filter((p) => p !== "");
   const home: Route = { screen: "home" };
   if (parts[0] === "investigate") {
     if (parts.length === 1) return { screen: "pick" };
     if (parts.length === 2 && parts[1] === "new") return { screen: "new" };
+    if (parts.length === 3 && parts[1] === "new" && loopId(parts[2])) return { screen: "new", loop: parts[2] };
     if (parts.length === 2 && parts[1] === "store") return { screen: "store" };
     return home;
   }
   if (parts[0] === "soon" && parts.length === 2 && /^[a-z0-9-]+$/.test(parts[1]!)) return { screen: "soon", mode: parts[1]! };
+  if (parts[0] === "loops") {
+    if (parts.length === 1) return { screen: "loops" };
+    if (parts.length === 2 && loopId(parts[1])) return { screen: "loop", id: parts[1] };
+    if (parts.length === 3 && loopId(parts[1]) && parts[2] === "edit") return { screen: "loop_edit", id: parts[1] };
+    return home;
+  }
   if (parts[0] === "case" && parts.length === 2 && /^CASE-[1-9][0-9]{0,8}$/.test(parts[1]!)) return { screen: "case", id: parts[1]! };
   return home;
 }
@@ -37,10 +54,13 @@ export function routeHash(route: Route): string {
   switch (route.screen) {
     case "home": return "#/";
     case "pick": return "#/investigate";
-    case "new": return "#/investigate/new";
+    case "new": return route.loop === undefined ? "#/investigate/new" : `#/investigate/new/${route.loop}`;
     case "store": return "#/investigate/store";
     case "soon": return `#/soon/${route.mode}`;
     case "case": return `#/case/${route.id}`;
+    case "loops": return "#/loops";
+    case "loop": return `#/loops/${route.id}`;
+    case "loop_edit": return `#/loops/${route.id}/edit`;
   }
 }
 
@@ -116,7 +136,10 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
     nextThing: () => actions().next_thing?.(),
     up() {
       if (route.screen === "case") { if (!(handlers.closeLens?.() ?? false)) nav.go({ screen: "pick" }); }
+      else if (route.screen === "new" && route.loop !== undefined) nav.go({ screen: "loop", id: route.loop });
       else if (route.screen === "new" || route.screen === "store") nav.go({ screen: "pick" });
+      else if (route.screen === "loop") nav.go({ screen: "loops" });
+      else if (route.screen === "loop_edit") nav.go({ screen: "loop", id: route.id });
       else if (route.screen !== "home") nav.go({ screen: "home" });
     },
   };
@@ -182,9 +205,12 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
     switch (next.screen) {
       case "home": view = homeView(shell); break;
       case "pick": view = pickView(shell); break;
-      case "new": view = newView(shell); break;
+      case "new": view = newView(shell, next.loop); break;
       case "store": view = caseStoreView(shell); break;
       case "soon": view = soonView(shell, next.mode); break;
+      case "loops": view = loopsView(shell); break;
+      // the edit forms are Task 13's; until then the outline stands in for them
+      case "loop": case "loop_edit": view = loopView(shell, next.id); break;
       case "case": view = (opts.caseScreen ?? caseScreenFor(ui))({ store: store!, nav }, (hs) => { handlers = hs; }); break;
     }
     clear(stage);

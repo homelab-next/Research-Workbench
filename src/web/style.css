@@ -415,3 +415,46 @@ button.danger:not(:disabled) { border-color: var(--tlp-red); color: var(--tlp-re
 .stored-unreadable { display: flex; gap: 8px; flex-wrap: wrap; padding: 8px 12px; border: 1px dashed var(--line); border-radius: var(--radius); }
 .stored-unreadable .file { font-family: var(--mono); overflow-wrap: anywhere; }
 .store-none { color: var(--muted); }
+/* slice 12: Loops beside the cases, a loop as a plain outline, and a case's parent and child */
+.link-button { border: 0; background: transparent; color: var(--accent); padding: 0; text-align: left; text-decoration: underline; cursor: pointer; }
+.chip.hash { font-family: var(--mono); color: var(--muted); }
+.chip.source { color: var(--muted); }
+.chip.source-pinned { color: var(--violet); border-color: var(--violet); }
+.chip.source-built-in { border-style: dashed; }
+.chip.source-loop-output { color: var(--amber); border-color: var(--amber); }
+.tile .chip.parent, .tile .chip.waiting-on { color: var(--accent); border-color: var(--accent); }
+.loops-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.loop-tile { display: flex; flex-direction: column; gap: 6px; padding: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); overflow-wrap: anywhere; }
+.loop-tile.unusable { border-style: dashed; }
+.loop-tile .head { font-weight: 600; }
+.loop-tile .version, .loop-head .version { font-family: var(--mono); color: var(--muted); font-size: 12px; }
+.loop-tile .stages { margin: 0; font-size: 13px; }
+.loop-tile .about { margin: 0; color: var(--muted); flex: 1; }
+.loop-tile > button.primary { align-self: flex-start; }
+.problems { margin: 0; padding-left: 18px; color: var(--amber); overflow-wrap: anywhere; }
+.loop-files { margin-top: 24px; }
+.loop-file-list, .untrusted-roots { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.loop-file, .untrusted-root { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius); }
+.loop-file-head, .loop-file-actions, .trust-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.loop-file .file, .untrusted-root .file { font-family: var(--mono); overflow-wrap: anywhere; }
+.loop-file .plan, .loop-file .problem, .untrusted-root p { margin: 0; }
+.conflicts { margin: 0; padding-left: 18px; color: var(--amber); overflow-wrap: anywhere; }
+.loop-head h1 { margin-bottom: 4px; overflow-wrap: anywhere; }
+.loop-head .facts { margin: 0; color: var(--muted); }
+.loop-head .about { overflow-wrap: anywhere; }
+.loop-actions, .export-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+.loop-stages { display: flex; flex-direction: column; gap: 6px; padding-left: 0; list-style: none; }
+.loop-stages details.stage { border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px; background: var(--panel); }
+.loop-stages details.stage > summary { cursor: pointer; overflow-wrap: anywhere; }
+.loop-stages .stage-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 8px; }
+.loop-stages .stage-group h3 { margin: 0 0 4px; font-size: 13px; }
+.loop-stages .stage-group ul { margin: 0; padding-left: 16px; overflow-wrap: anywhere; }
+.loop-stages .stage-group li { margin: 2px 0; }
+.loop-stages .mapping { color: var(--muted); }
+.topbar .case-links { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.topbar .pause-child { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+/* Task 13's forms */
+.loop-form { display: flex; flex-direction: column; gap: 8px; }
+.loop-form .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.loop-form .problems { margin: 4px 0; }
+.stage-edit { border: 1px solid var(--line); border-radius: var(--radius); padding: 8px; display: flex; flex-direction: column; gap: 6px; }

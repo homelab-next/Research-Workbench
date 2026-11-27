@@ -12,7 +12,8 @@ export function defaultWindow(now: Date): { from: string; to: string } {
 
 interface Row { sel: HTMLSelectElement; inp: HTMLInputElement }
 
-export function newView(shell: Shell): Screen {
+/** The new-case form; `loop` (from "New case from this loop") is posted with the case, and the server makes the case for that loop. */
+export function newView(shell: Shell, loop?: string): Screen {
   const { ui, nav } = shell;
   const h = ui.h;
   const field = (id: string, label: string, control: HTMLElement): HTMLElement => h("div", { class: "field" }, h("label", { for: id }, label), control);
@@ -67,6 +68,7 @@ export function newView(shell: Shell): Screen {
         window: { from: from.value.trim(), to: to.value.trim() },
         objective: objective.value === "" ? null : objective.value,
         marking: marking.value as Marking,
+        ...(loop === undefined ? {} : { loop }),
       });
       if ("refused" in made) {
         for (const reason of made.refused) refusals.appendChild(h("li", null, reason));
@@ -87,8 +89,18 @@ export function newView(shell: Shell): Screen {
     }
   };
 
+  // the loop's title once the server says it; its id until then
+  const loopLine = loop === undefined ? null : h("p", { class: "loop-line" }, `Loop: ${loop}`);
+  let destroyed = false;
+  if (loop !== undefined && loopLine !== null) {
+    ui.api.loops().then((list) => {
+      const found = list.find((l) => l.id === loop);
+      if (!destroyed && found !== undefined) loopLine.textContent = `Loop: ${found.title}`;
+    }, () => {});
+  }
   const el = h("main", { class: "top", data: { screen: "new" }, tabindex: -1 },
-    h("h1", null, "New investigation"),
+    h("h1", null, loop === undefined ? "New investigation" : "New case from a loop"),
+    loopLine,
     h("div", { class: "form" },
       field("nc-title", "Title", title), field("nc-asked", "What was asked", asked), field("nc-why", "Why", why),
       h("fieldset", null, h("legend", null, "Starting values"), list, add),
@@ -101,5 +113,5 @@ export function newView(shell: Shell): Screen {
     const filled = [title, asked, why].some((f) => f.value.trim() !== "") || current().some((r) => r.value.trim() !== "");
     if (filled) e.stopPropagation();
   });
-  return { el, update() {}, focus() { title.focus(); } };
+  return { el, update() {}, focus() { title.focus(); }, destroy() { destroyed = true; } };
 }

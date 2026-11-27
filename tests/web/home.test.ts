@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { page } from "../helpers/dom";
 import type { Page } from "../helpers/dom";
 import { parseRoute, routeHash } from "../../src/web/app";
+import { writeTriage } from "../helpers/loop-files";
 
 let p: Page | null = null;
 afterEach(async () => { await p?.close(); p = null; });
@@ -367,4 +368,23 @@ test("a case open in the interface when it is unloaded says it was unloaded and 
   for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 2));
   expect(followed.connection).toBe("gone");
   expect(p.root.querySelector(".connection")).toBeNull();
+});
+
+test("the case list shows a case's loop when it is not the default, and child of CASE-1 on a child", async () => {
+  const q = await open({ before: writeTriage });
+  const parent = await q.s.newCase({ loop: "triage" });
+  expect((await q.s.command(parent, "start_run")).status).toBe(200);
+  await q.s.newCase({ title: "Plain" });
+  await q.settle();
+  q.win.location.hash = "#/investigate"; await q.settle();
+  const tile = (id: string): HTMLElement => q.all(".tile-wrap").find((w) => w.querySelector(".tile")!.getAttribute("aria-label")!.includes(` · ${id} · `))!;
+  // the triage case names its loop by title, and the child it waits on
+  expect([...tile("CASE-1").querySelectorAll(".chip.loop")].map((c) => c.textContent)).toEqual(["Triage"]);
+  expect(tile("CASE-1").querySelector(".chip.waiting-on")!.textContent).toBe("waiting on CASE-2");
+  // the child is of the default loop, so says nothing of it, and names its parent
+  expect(tile("CASE-2").querySelector(".chip.loop")).toBeNull();
+  expect(tile("CASE-2").querySelector(".chip.parent")!.textContent).toBe("child of CASE-1");
+  // a plain case says neither
+  expect(tile("CASE-3").querySelector(".chip.loop, .chip.parent, .chip.waiting-on")).toBeNull();
+  for (const id of ["CASE-1", "CASE-2", "CASE-3"]) expect(q.s.app.hub.read(id).state.skipped).toEqual([]);
 });

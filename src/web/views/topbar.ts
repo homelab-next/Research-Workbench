@@ -34,13 +34,36 @@ export function topBar(shell: Shell): View {
   const connection = h("span", { class: "connection-slot" });
   const jobs = h("button", { type: "button", class: "jobs", name: "Jobs", title: "Open the Jobs lens", on: { click: () => nav.openLens("jobs") } }, "jobs (0)");
   const right = h("div", { class: "right" }, connection, jobs);
-  const el = h("header", { class: "topbar" }, t.el, h("div", { class: "cmd" }, input, say), right);
+  /** A child case's parent, and the child a run paused on a child hold waits on, each a way to open it (slice 12). */
+  const links = h("div", { class: "case-links" });
+  const el = h("header", { class: "topbar" }, t.el, links, h("div", { class: "cmd" }, input, say), right);
 
   let lastConnection = "live";
+  let lastLinks = "";
+  const paintLinks = (): void => {
+    const state = shell.store()?.shown ?? null;
+    const parent = state?.loop.parent?.case ?? null;
+    const run = state?.run ?? null;
+    const child = run !== null && run.status === "paused" && run.hold !== null && run.hold.kind === "child" ? run.hold.child : null;
+    const reason = child === null ? "" : (run?.pause_reason ?? "");
+    const sig = JSON.stringify([parent, child, reason]);
+    if (sig === lastLinks) return;
+    lastLinks = sig;
+    while (links.firstChild) links.removeChild(links.firstChild);
+    if (parent !== null) {
+      links.appendChild(h("button", { type: "button", class: "link-button", data: { action: "open-parent" }, title: `Open ${parent}, the case that made this one`, on: { click: () => nav.go({ screen: "case", id: parent }) } }, `child of ${parent}`));
+    }
+    if (child !== null) {
+      links.appendChild(h("span", { class: "pause-child" },
+        h("span", { class: "reason tag tag-attention" }, `Paused: ${reason}`), " ",
+        h("button", { type: "button", data: { action: "open-child" }, title: `Open ${child}: its gate is a person's, and passing it carries this case on`, on: { click: () => nav.go({ screen: "case", id: child }) } }, `Open ${child}`)));
+    }
+  };
   const update = (): void => {
     t.update();
     const store = shell.store();
     right.hidden = store === null;                       // jobs belong to a case
+    paintLinks();
     if (store === null) return;
     if (store.connection !== lastConnection) {
       lastConnection = store.connection;

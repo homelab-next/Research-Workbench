@@ -1,7 +1,7 @@
 import type { CaseSummaryView } from "../../core/wire";
 import { clear } from "../dom";
 import type { Route, Shell } from "../app";
-import { MODES } from "./home";
+import { MODES, modeRoute } from "./home";
 import type { Mode } from "./home";
 import { newestFirst } from "./pick";
 
@@ -10,6 +10,7 @@ function modeOf(route: Route): string | null {
   switch (route.screen) {
     case "home": return null;
     case "soon": return route.mode;
+    case "loops": case "loop": case "loop_edit": return "loops";
     default: return "investigate";
   }
 }
@@ -26,9 +27,9 @@ export function trail(shell: Shell): { el: HTMLElement; update(): void } {
   const sep = (): HTMLElement => h("span", { class: "sep", aria: { hidden: "true" } }, "›");
 
   const modeButton = (m: Mode, current: boolean, cases: CaseSummaryView[]): HTMLElement => {
-    const go = (): void => nav.go(m.live ? { screen: "pick" } : { screen: "soon", mode: m.id });
+    const go = (): void => nav.go(modeRoute(m));
     const button = current ? pill(m.label, m.label, go) : dot(m.label, go);
-    if (!m.live) return button;
+    if (m.id !== "investigate") return button;
     return h("span", { class: "fly" }, button,
       h("span", { class: "flyout", role: "group", name: "Investigations" }, cases.map((c) => h("button", { type: "button", title: c.title, on: { click: () => nav.go({ screen: "case", id: c.id }) } }, `${c.id} · ${c.title}`))));
   };
