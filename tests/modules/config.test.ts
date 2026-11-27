@@ -126,3 +126,54 @@ test("questions.max_open defaults to 3, is read from the file, and a negative or
   expect(() => loadConfig({ ...opts, path: file(dir, "e.yaml", "questions:\n  max_open: 1.5\n") })).toThrow(ConfigError);
   expect(() => loadConfig({ ...opts, path: file(dir, "f.yaml", "questions:\n  most: 2\n") })).toThrow(ConfigError);
 });
+
+test("cases defaults: the store is <data_dir>/store, on_complete is keep, max_bytes is 2 GiB", () => {
+  const c = loadConfig({ env: {}, home: "/h", repoRoot: "/repo" });
+  expect(c.cases).toEqual({ store: "/h/.local/share/research-workbench/store", on_complete: "keep", max_bytes: 2147483648 });
+  const p = file(tmp(), "c.yaml", "data_dir: /d\ncases:\n  on_complete: unload\n");
+  expect(loadConfig({ path: p, env: {}, home: "/h", repoRoot: "/repo" }).cases).toEqual({ store: "/d/store", on_complete: "unload", max_bytes: 2147483648 });
+  const q = file(tmp(), "d.yaml", "cases: {}\n");
+  expect(loadConfig({ path: q, env: { XDG_DATA_HOME: "/x" }, home: "/h", repoRoot: "/repo" }).cases.store).toBe("/x/research-workbench/store");
+});
+
+test("cases.store is placed like data_dir: relative to the file, with ~ expanded", () => {
+  const dir = tmp();
+  const opts = { env: {}, home: "/h", repoRoot: "/repo" };
+  expect(loadConfig({ ...opts, path: file(dir, "conf/a.yaml", "cases:\n  store: ./shelf\n  max_bytes: 10\n") }).cases)
+    .toEqual({ store: join(dir, "conf/shelf"), on_complete: "keep", max_bytes: 10 });
+  expect(loadConfig({ ...opts, path: file(dir, "conf/b.yaml", "cases:\n  store: ~/shelf\n") }).cases.store).toBe("/h/shelf");
+  expect(loadConfig({ ...opts, path: file(dir, "conf/c.yaml", "cases:\n  store: /mnt/share\n") }).cases.store).toBe("/mnt/share");
+});
+
+test("cases.on_complete other than keep or unload, max_bytes below 1 and an unknown key under cases are refused", () => {
+  const dir = tmp();
+  const opts = { env: {}, home: "/h", repoRoot: "/repo" };
+  for (const [name, text] of [
+    ["a.yaml", "cases:\n  on_complete: archive\n"],
+    ["b.yaml", "cases:\n  max_bytes: 0\n"],
+    ["c.yaml", "cases:\n  max_bytes: 1.5\n"],
+    ["d.yaml", "cases:\n  shelf: /x\n"],
+    ["e.yaml", "cases:\n  store: ''\n"],
+    ["f.yaml", "cases: unload\n"],
+  ] as const) {
+    let err: unknown;
+    try { loadConfig({ ...opts, path: file(dir, name, text) }); } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(ConfigError);
+  }
+  let err: unknown;
+  try { loadConfig({ ...opts, path: file(dir, "g.yaml", "cases:\n  shelf: /x\n") }); } catch (e) { err = e; }
+  expect((err as Error).message).toContain("shelf");
+});
+
+test("write_path is the file the settings came from, or the home file when there was none", () => {
+  const dir = tmp();
+  const home = join(dir, "home");
+  const opts = { home, repoRoot: "/repo" };
+  expect(loadConfig({ ...opts, env: {} }).write_path).toBe(join(home, ".config/research-workbench/config.yaml"));
+  const named = file(dir, "named.yaml", "user: a\n");
+  expect(loadConfig({ ...opts, env: {}, path: named }).write_path).toBe(named);
+  expect(loadConfig({ ...opts, env: { RESEARCH_WORKBENCH_CONFIG: named } }).write_path).toBe(named);
+  const homeFile = file(home, ".config/research-workbench/config.yaml", "user: b\n");
+  const c = loadConfig({ ...opts, env: {} });
+  expect([c.path, c.write_path]).toEqual([homeFile, homeFile]);
+});

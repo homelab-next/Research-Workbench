@@ -26,6 +26,8 @@ export type { RootConfig } from "pivot/catalogue/roots";
 export interface Config {
   /** The file the settings came from, or null when the defaults were used. */
   path: string | null;
+  /** The file a setting is written to: `path`, or the home configuration file when the defaults were used. */
+  write_path: string;
   data_dir: string;
   user: string;
   role: "analyst" | "requester" | "leader";
@@ -39,6 +41,14 @@ export interface Config {
   questions: { max_open: number };
   /** At most this many times in a run Research sends the work back to Plan for values the workbench extracted (slice 9); 0 turns it off. */
   glean: { max_sendbacks: number };
+  cases: {
+    /** The case store folder. */
+    store: string;
+    /** The default of "Unload after publishing". */
+    on_complete: "keep" | "unload";
+    /** The largest case a load accepts, in bytes. */
+    max_bytes: number;
+  };
 }
 
 const whereList: Schema = { type: "array", items: { type: "string", enum: [...WHERES] } };
@@ -72,6 +82,15 @@ const CONFIG_SCHEMA: Schema = {
     research: { type: "object", additionalProperties: false, properties: { parallel: { type: "integer", minimum: 1 } } },
     questions: { type: "object", additionalProperties: false, properties: { max_open: { type: "integer", minimum: 0 } } },
     glean: { type: "object", additionalProperties: false, properties: { max_sendbacks: { type: "integer", minimum: 0 } } },
+    cases: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        store: { type: "string", minLength: 1 },
+        on_complete: { type: "string", enum: ["keep", "unload"] },
+        max_bytes: { type: "integer", minimum: 1 },
+      },
+    },
   },
 };
 
@@ -82,6 +101,8 @@ const DEFAULT_POLICY = Object.fromEntries(MARKINGS.map((m, i): [Marking, Where[]
 const DEFAULT_MAX_OPEN_QUESTIONS = 3;
 /** The default of glean.max_sendbacks (the same number as the pipeline's DEFAULT_GLEAN_SENDBACKS; modules do not import the pipeline). */
 const DEFAULT_GLEAN_SENDBACKS = 2;
+/** The default of cases.max_bytes (the same number as the case file's DEFAULT_MAX_CASE_BYTES). */
+const DEFAULT_MAX_CASE_BYTES = 2147483648;
 
 const expandHome = (p: string, home: string): string => (p === "~" ? home : p.startsWith("~/") ? join(home, p.slice(2)) : p);
 
@@ -119,16 +140,20 @@ export function loadConfig(opts: { path?: string; env?: Record<string, string | 
     data_dir?: string; user?: string; role?: Config["role"]; roots?: { path: string; trusted?: boolean; credentials?: string[] }[];
     secrets_file?: string; seeker?: string; marking_policy?: Partial<Record<Marking, Where[]>>;
     server?: { port?: number }; research?: { parallel?: number }; questions?: { max_open?: number }; glean?: { max_sendbacks?: number };
+    cases?: { store?: string; on_complete?: "keep" | "unload"; max_bytes?: number };
   };
 
   const base = path === null ? process.cwd() : dirname(path);
   const place = (p: string): string => resolve(base, expandHome(p, home));
   const defaultSecrets = join(home, ".config/research-workbench/secrets.yaml");
 
+  const data_dir = given.data_dir !== undefined ? place(given.data_dir)
+    : join(env.XDG_DATA_HOME ? env.XDG_DATA_HOME : join(home, ".local/share"), "research-workbench");
+
   return {
     path,
-    data_dir: given.data_dir !== undefined ? place(given.data_dir)
-      : join(env.XDG_DATA_HOME ? env.XDG_DATA_HOME : join(home, ".local/share"), "research-workbench"),
+    write_path: path ?? homeFile,
+    data_dir,
     user: given.user ?? (env.USER || "analyst"),
     role: given.role ?? "analyst",
     roots: given.roots !== undefined
@@ -141,5 +166,10 @@ export function loadConfig(opts: { path?: string; env?: Record<string, string | 
     research: { parallel: given.research?.parallel ?? 3 },
     questions: { max_open: given.questions?.max_open ?? DEFAULT_MAX_OPEN_QUESTIONS },
     glean: { max_sendbacks: given.glean?.max_sendbacks ?? DEFAULT_GLEAN_SENDBACKS },
+    cases: {
+      store: given.cases?.store !== undefined ? place(given.cases.store) : join(data_dir, "store"),
+      on_complete: given.cases?.on_complete ?? "keep",
+      max_bytes: given.cases?.max_bytes ?? DEFAULT_MAX_CASE_BYTES,
+    },
   };
 }
