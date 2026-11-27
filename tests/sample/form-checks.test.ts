@@ -343,6 +343,93 @@ test.each(["summary", "assessment", "alternatives"] as const)("check 8 passes a 
   }
 });
 
+// Every sentence the rule has been tried on, with what it should give. Silence may lower confidence, or be named as a limit or as what cannot
+// be told; it is never the reason for a likelihood or a belonging judgment. c1 is a proven negative over full coverage; c2 has rows.
+const SILENCE_TABLE: [string, "pass" | "fail"][] = [
+  ...SILENCE_FAIL.map((t): [string, "fail"] => [t, "fail"]),
+  ...SILENCE_PASS.map((t): [string, "pass"] => [t, "pass"]),
+  // confidence, the unknown, a method, a time: no likelihood is drawn
+  ["We have low confidence because no flow data was observed.", "pass"],
+  ["The lack of flow data means confidence is low.", "pass"],
+  ["No flows were observed, so the device's activity is unknown.", "pass"],
+  ["No flows were observed, so we did not assess what services it used.", "pass"],
+  ["No flows were seen, so this judgment rests on the lease alone.", "pass"],
+  ["No lease was found for the address, so the vendor lookup was used instead.", "pass"],
+  ["The address has been held by ws-17 since Monday and no other holder was recorded.", "pass"],
+  ["There is no doubt the laptop was found on the lease, so it is very likely managed.", "pass"],
+  ["No DNS answer was recorded and the lease is so short that little can be said.", "pass"],
+  ["Since no DNS data was found, we cannot say whether it is likely a guest device.", "pass"],
+  ["It is likely a managed laptop because the lease names ws-17 and the vendor matches; no flows were seen.", "pass"],
+  ["Because the lease names ws-17, it is likely managed, and no conflicting record was found.", "pass"],
+  ["The device is no longer seen after 10:00, so the window ends there.", "pass"],
+  ["No analyst has found a reason to doubt the lease, which indicates ws-17.", "pass"],
+  ["No unmanaged record was found [c1], so it is very unlikely the address is an unmanaged host.", "pass"],
+  ["No flows were seen, which means this is a gap, not evidence.", "pass"],
+  // silence drawn into a likelihood or a belonging judgment, however it is worded
+  ["It is unlikely to belong to the homelab, as no identifying DNS or flow data was observed.", "fail"],
+  ["It is unlikely to belong to the homelab due to the lack of DNS or flow data.", "fail"],
+  ["Given the absence of DNS or flow data, it is unlikely to belong to the homelab.", "fail"],
+  ["With no DNS or flow data observed, it is unlikely to belong to the homelab.", "fail"],
+  ["Without any DNS or flow data, the device is unlikely to belong to the homelab.", "fail"],
+  ["It is unlikely to belong to the homelab: no DNS or flow data was observed.", "fail"],
+  ["No DNS or flow data was observed; therefore it is unlikely to belong to the homelab.", "fail"],
+  ["No DNS or flow data was observed. Therefore it is unlikely to belong to the homelab.", "fail"],
+  ["No DNS or flow data was observed, which makes it unlikely to belong to the homelab.", "fail"],
+  ["No DNS or flow data was observed, meaning it is unlikely to belong to the homelab.", "fail"],
+  ["The device generated no DNS or flow data, so it is unlikely to belong to the homelab.", "fail"],
+  ["DNS and flow data were not observed, so it is unlikely to belong to the homelab.", "fail"],
+  ["It is unlikely to belong because there is no identifying DNS or flow data.", "fail"],
+  ["It is unlikely to belong because we did not see any DNS or flow data.", "fail"],
+  ["It is unlikely to belong because it produced no DNS or flow data.", "fail"],
+  ["The absence of traffic implies the device was a visitor's phone.", "fail"],
+  ["The absence of traffic suggests the device was a visitor's phone, and we cannot rule out a neighbour.", "fail"],
+  ["No DNS answer was recorded, so it does not belong to the household and cannot be a managed laptop.", "fail"],
+  ["The lack of further activity makes persistent ownership less likely.", "fail"],
+  ["The lack of any further network activity makes it improbable that the device is owned.", "fail"],
+  ["Unlikely to belong because no identifying DNS or flow data was observed for approx. two hours.", "fail"],
+  ["No DNS answer was recorded for approx. two hours, so it is unlikely to belong.", "fail"],
+  ["No DNS or flow data was observed, so it is unlikely to be managed [c2].", "fail"],
+  // a proven negative cited after the judgment is not the reason's evidence
+  ["No DNS or flow data was observed, so it is unlikely to be managed [c1].", "fail"],
+  ["That no DNS or flow data was observed supports the guest hypothesis.", "fail"],
+  ["No DNS or flow data was observed, consistent with a guest device.", "fail"],
+  ["It is unlikely to belong because no identifying DNS or flow data was observed, although the lease exists.", "fail"],
+  ["Although the lease exists, no DNS data was observed, so it is unlikely to belong.", "fail"],
+  ["The owner did not recognise it, but no DNS data was observed, so it is unlikely to belong.", "fail"],
+  ["It is unlikely, since no DNS data was observed.", "fail"],
+  // the edges of each part of the rule
+  ["No DNS data was observed, so it is unlikely to belong and we cannot say more.", "fail"],
+  ["No DNS answer was recorded so far today for this likely managed laptop.", "pass"],
+  ["No DNS answer was recorded, and the lease is so short it is likely a guest's.", "pass"],
+  ["It is likely the laptop held the address since Monday, when no other holder was recorded.", "pass"],
+  ["No DNS data was observed, so the window is short, and the lease says it is likely a laptop.", "pass"],
+  ["It is likely the laptop the owner described as missing, and no other device was recorded.", "pass"],
+];
+
+test.each(SILENCE_TABLE)("check 8 on %p: %s", async (sentence, expected) => {
+  const i = good();
+  i.draft.product.assessment += ` ${sentence}`;
+  const r = await run("gaps-and-negatives", i);
+  expect({ sentence, got: r.pass ? "pass" : "fail" }).toEqual({ sentence, got: expected });
+  if (expected === "fail") {
+    expect(r.findings).toHaveLength(1);
+    // the message says the rule, not only that it was broken
+    expect(r.findings[0]!.message).toContain("silence may lower confidence, or be named as a limit or as what cannot be told, but it is never the reason for a likelihood");
+  }
+});
+
+test("check 8 gives the same answer every time, and reads a very long sentence", async () => {
+  const i = good();
+  i.draft.product.assessment += ` ${SILENCE_FAIL[0]}`;
+  const outs = new Set<string>();
+  for (let n = 0; n < 3; n++) outs.add(JSON.stringify(await run("gaps-and-negatives", i)));
+  expect(outs.size).toBe(1);
+  // a sentence a quarter of a megabyte long, full of markers and silences, each clause scanned once per pattern
+  const j = good();
+  j.draft.product.assessment += ` ${"No data was observed because nothing was seen so no thing was found therefore ".repeat(3000)}`;
+  expect((await run("gaps-and-negatives", j)).pass).toBe(true);
+});
+
 test("check 8 never reads gaps_and_limits for silence: the dev case's gaps sentence and every failing sentence pass there", async () => {
   const i = good();
   i.cards.c4 = { id: "c4", title: "c4", source: "flows", marking: "TLP:AMBER", coverage: { kind: "full" }, empty: "not-seen", row_count: 0, quality_notes: [] };
