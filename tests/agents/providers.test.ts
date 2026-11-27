@@ -204,3 +204,16 @@ test("request_extra is a map that may not name a key the workbench sends itself;
     expect(out.problems.map((p) => p.error).join()).toContain("request_extra");
   }
 });
+
+test("loop_guard is on with a 400-character window seen 3 times when the manifest gives none; its settings are checked", () => {
+  const guard = (text: string): unknown => (loadLocal(text).providers.get("lm") as { loop_guard?: unknown } | null)?.loop_guard ?? null;
+  expect(guard(local({}))).toEqual({ enabled: true, window: 400, repeats: 3 });
+  expect(guard(local({ loop_guard: "null" }))).toEqual({ enabled: true, window: 400, repeats: 3 });
+  expect(guard(local({ loop_guard: "{ window: 800 }" }))).toEqual({ enabled: true, window: 800, repeats: 3 });
+  expect(guard(local({ loop_guard: "{ enabled: false, repeats: 5 }" }))).toEqual({ enabled: false, window: 400, repeats: 5 });
+  for (const bad of ["{ window: 10 }", "{ window: 1.5 }", "{ repeats: 0 }", "{ repeats: 101 }", "{ enabled: yes }", "{ windows: 400 }", "[1]", "3"]) {
+    const out = loadLocal(local({ loop_guard: bad }));
+    expect(out.providers.get("lm")).toBeNull();
+    expect(out.problems.map((p) => p.error).join()).toContain("loop_guard");
+  }
+});

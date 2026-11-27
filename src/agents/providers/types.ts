@@ -30,8 +30,13 @@ export type TurnResult =
   | { kind: "error"; message: string; raw: Uint8Array | null; transient?: Transient;
       /** The HTTP status when the endpoint answered with one other than 200. */
       status?: number;
-      /** "context": the endpoint refused the request as too big for the model's context. */
-      cause?: "context" };
+      /** "context": the endpoint refused the request as too big for the model's context. "loop": the reply repeated itself and was cut short;
+       * `raw` is what was received, as a completion with finish_reason "loop". */
+      cause?: "context" | "loop";
+      /** With cause "loop": the reasoning received before the cut, when there was any. */
+      reasoning?: string;
+      /** With cause "loop": the effort that switches the model's thinking off, when its manifest lists one and the request did not use it. */
+      retry_effort?: string };
 /** A failure that may not recur when the same request is made again: no answer in time, or the endpoint could not be reached. */
 export type Transient = { kind: "timeout"; ms: number } | { kind: "transport" };
 export interface Provider {

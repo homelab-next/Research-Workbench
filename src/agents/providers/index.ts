@@ -9,6 +9,8 @@ import type { Secrets } from "../../modules/secrets";
 import { LocalProvider } from "./local";
 import { requestExtraProblem } from "./extra";
 import type { RequestExtra } from "./extra";
+import { LOOP_GUARD_SCHEMA } from "./loopguard";
+import type { LoopGuardSettings } from "./loopguard";
 import { SAMPLING_SCHEMA } from "./sampling";
 import { ScriptedProvider, toScript } from "./scripted";
 import type { Script } from "./scripted";
@@ -57,6 +59,7 @@ const LOCAL_SCHEMA: Schema = {
     structured_output: { type: "boolean" },
     sampling: SAMPLING_SCHEMA,
     request_extra: { type: "object" },
+    loop_guard: LOOP_GUARD_SCHEMA,
   },
   additionalProperties: true,
 };
@@ -89,6 +92,7 @@ function buildLocal(m: LoadedManifest, registry: Registry, secrets: Secrets, own
       ...(typeof body.structured_output === "boolean" ? { structured_output: body.structured_output } : {}),
       ...(isPlainObject(body.sampling) ? { sampling: body.sampling as Sampling } : {}),
       ...(isPlainObject(body.request_extra) ? { request_extra: body.request_extra as RequestExtra } : {}),
+      ...(isPlainObject(body.loop_guard) ? { loop_guard: body.loop_guard as Partial<LoopGuardSettings> } : {}),
       ...(own === undefined ? {} : { refuse_hosts: own }),
     });
   } catch (err) {

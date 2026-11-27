@@ -118,12 +118,13 @@ const count = (n: unknown): number => (typeof n === "number" && Number.isFinite(
 const ranPast = (limit: number | undefined): string => (limit === undefined
   ? "the model ran past its output limit" : `the model ran past ${limit} output tokens`);
 
-/** A failed call that is made once more for the same turn: no answer in time, the endpoint not reached, or the output limit reached. */
-type Attempt = { kind: "timeout"; ms: number } | { kind: "transport"; message: string } | { kind: "length" };
+/** A failed call that is made once more for the same turn: no answer in time, the endpoint not reached, the output limit reached, or a reply
+ * that repeated itself (asked again with the model's thinking off). */
+type Attempt = { kind: "timeout"; ms: number } | { kind: "transport"; message: string } | { kind: "length" } | { kind: "loop" };
 const seconds = (ms: number): string => (ms % 1000 === 0 ? `${ms / 1000} s` : `${ms} ms`);
 const subject = (a: Attempt): string => (a.kind === "transport" ? "the model endpoint" : "the model");
 const verb = (a: Attempt, limit: number | undefined): string => (a.kind === "timeout" ? `did not answer within ${seconds(a.ms)}`
-  : a.kind === "transport" ? "could not be reached" : ranPast(limit).slice("the model ".length));
+  : a.kind === "transport" ? "could not be reached" : a.kind === "loop" ? "repeated itself" : ranPast(limit).slice("the model ".length));
 /** What two failed calls for one turn did, in plain words: "the model did not answer within 300 s twice". */
 function twice(first: Attempt, second: Attempt, limit: number | undefined): string {
   const same = first.kind === second.kind;
@@ -173,6 +174,8 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
   // the failed attempt of this turn that is being made once more, and the seq of its response, which causes the new request
   let failedOnce: Attempt | null = null;
   let retryCause: number | null = null;
+  // set when a reply repeated itself and the provider named the effort that turns thinking off: the retry is made with it, and says why
+  let retryEffort: { effort: string; why: string } | null = null;
   const maxTurns = spec.max_turns ?? MAX_TURNS;
   const put = (data: Uint8Array | string): BlobRef => session.blobs.put(data);
   /** What would be forced for `missing`: the spec's choice, if it is one of this agent's tools. */
@@ -201,9 +204,11 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     const routing = spec.fast !== undefined && !last && !reasked && !answerNow && spec.tools.length > 0;
     const via = routing ? spec.fast!.provider : provider;
     const viaModel = routing ? spec.fast!.model : spec.model;
-    const viaEffort = routing ? spec.fast!.effort : spec.effort;
+    const switched = retryEffort;
+    retryEffort = null;
+    const viaEffort = switched !== null ? switched.effort : routing ? spec.fast!.effort : spec.effort;
     // what the entries of this turn's request and response say the agent was
-    const who: typeof actor = routing ? { ...actor, model: viaModel, effort: viaEffort, where: via.where } : actor;
+    const who: typeof actor = routing ? { ...actor, model: viaModel, effort: viaEffort, where: via.where } : switched !== null ? { ...actor, effort: viaEffort } : actor;
     const limit = spec.max_output_tokens ?? via.max_output_tokens;
     // 2. marking: the strictest of the pack and every tool result so far. A fixed part over the stage's limit (what must be fixed, say) is
     // never left out, so the call is not made instead.
@@ -227,7 +232,11 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     if (spec.request_extra !== undefined) req.request_extra = spec.request_extra;
     if (last || answerNow || answerTurn) req.tool_choice = "none";
     else if (forced !== null) req.tool_choice = namedRefused ? "required" : { type: "function", function: { name: forced.tool } };
-    const note = forced !== null && namedRefused ? `the endpoint refused a tool_choice naming ${forced.tool} (400); "required" was sent instead` : null;
+    const notes = [
+      ...(forced !== null && namedRefused ? [`the endpoint refused a tool_choice naming ${forced.tool} (400); "required" was sent instead`] : []),
+      ...(switched !== null ? [clip(`asked again with reasoning_effort ${switched.effort}: ${switched.why}`, 500)] : []),
+    ];
+    const note = notes.length === 0 ? null : notes.join("; ");
     if ((reasked || last || answerNow) && forced === null && spec.schema !== null && via.structured_output === true) req.response_format = { name: spec.schema_id ?? "output", schema: spec.schema };
     const body = via.body(req);
     const messagesBlob = put(body);
@@ -287,12 +296,23 @@ export async function runAgent(session: CaseSession, spec: AgentSpec): Promise<A
     if (result.kind === "error") {
       const message = clip(result.message, 500);
       const raw = put(result.raw ?? JSON.stringify({ error: message }));
+      // a reply cut short for repeating itself keeps the reasoning it had given
+      const partial = result.cause === "loop" && result.reasoning !== undefined ? put(result.reasoning) : null;
       let seq = -1;
       const wrote = guarded(() => [{
         type: "model.response", actor: who, ...link, cause: requested!.seq,
-        payload: { request: requestId, response: raw, stop: "error", usage: { input: 0, output: 0, reasoning: 0 }, served_by: clip(viaModel, NAME_CHARS), reasoning: null },
+        payload: { request: requestId, response: raw, stop: "error", usage: { input: 0, output: 0, reasoning: 0 }, served_by: clip(viaModel, NAME_CHARS), reasoning: partial },
       }], (s) => { seq = s; });
       if (!wrote) return failed(message);
+      // a reply that repeated itself is asked once more with thinking off, when the provider can switch it off; else it ends the agent
+      if (result.cause === "loop") {
+        if (result.retry_effort === undefined && failedOnce === null) return { kind: "error", message };
+        const end = again({ kind: "loop" }, seq, message);
+        if (end !== null) return end;
+        if (result.retry_effort !== undefined) retryEffort = { effort: result.retry_effort, why: message };
+        turn--;
+        continue;
+      }
       // an endpoint that refuses a named tool_choice is asked again, for this turn, with "required"
       if (typeof req.tool_choice === "object" && result.status === 400 && !namedRefused) {
         namedRefused = true;

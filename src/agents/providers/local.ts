@@ -6,7 +6,10 @@ import { assertNoEcho, CONTROL, LOOPBACK, loadCredential, NUMERIC_LOOPBACK, pars
 import type { Secrets } from "../../modules/secrets";
 import { mergeRequestExtra, requestExtraProblem } from "./extra";
 import type { RequestExtra } from "./extra";
+import { LoopGuard, loopGuardSettings } from "./loopguard";
+import type { LoopGuardSettings } from "./loopguard";
 import { mergeSampling } from "./sampling";
+import { SseEvents, StreamAssembly } from "./stream";
 import type { ModelInfo, Provider, Sampling, ToolCall, Transient, TurnRequest, TurnResult } from "./types";
 
 export const DEFAULT_CONTEXT = 8192;
@@ -38,15 +41,31 @@ export interface LocalOptions {
   request_extra?: RequestExtra;
   /** `host:port` of this workbench's own server, asked each time: a model endpoint may not point at it. */
   refuse_hosts?: () => readonly string[];
+  /** How a streamed reply is watched for a loop; each setting absent is its default (on, a 400-character window seen 3 times). */
+  loop_guard?: Partial<LoopGuardSettings>;
 }
+
+/** The effort that switches a model's thinking off, where its manifest lists it: a reply that loops is asked once more with it. */
+export const NO_THINKING = "none";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 const ECHOED = "the endpoint echoed the credential; response refused";
 
 class Failure extends Error {
-  constructor(message: string, readonly raw: Uint8Array | null = null, readonly transient: Transient | null = null, readonly cause_: "context" | null = null, readonly status: number | null = null) { super(message); }
+  constructor(message: string, readonly raw: Uint8Array | null = null, readonly transient: Transient | null = null, readonly cause_: "context" | "loop" | null = null, readonly status: number | null = null,
+    readonly extra: { reasoning?: string; retry_effort?: string } = {}) { super(message); }
 }
+
+/** How a chat request's streamed reply is read: the guard's settings, and the effort the request was made with. */
+interface StreamWatch { guard: LoopGuardSettings; effort: string | null }
+
+const concat = (parts: Uint8Array[], total: number): Uint8Array => {
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const p of parts) { out.set(p, at); at += p.length; }
+  return out;
+};
 
 /** What an endpoint says a request got wrong. */
 const CONTEXT_RE = /context (?:size|length|window)|exceed\w* .{0,40}context|maximum context|n_ctx|too many tokens/i;
@@ -63,6 +82,7 @@ export class LocalProvider implements Provider {
   readonly structured_output: boolean;
   readonly sampling: Sampling;
   readonly request_extra: RequestExtra;
+  readonly loop_guard: LoopGuardSettings;
   readonly #base: string;
   readonly #origin: string;
   readonly #secret: string | null;
@@ -101,6 +121,7 @@ export class LocalProvider implements Provider {
       if (problem !== null) throw new Error(problem);
     }
     this.request_extra = mergeRequestExtra(undefined, opts.request_extra);
+    this.loop_guard = loopGuardSettings(opts.loop_guard);
   }
 
   /** The endpoint's own line about a refusal: `error.message`, else a string `error`, else a string `message`; "" when it gives none. */
@@ -124,8 +145,11 @@ export class LocalProvider implements Provider {
     return oneLine(scrub(text, this.#secret === null ? [] : [this.#secret]));
   }
 
-  /** One request. Throws Failure with a scrubbed one-line message; the bytes are returned only when they passed the echo check. */
-  async #send(method: "GET" | "POST", url: string, body: Uint8Array | null): Promise<{ status: number; raw: Uint8Array; parsed: unknown }> {
+  /**
+   * One request. Throws Failure with a scrubbed one-line message; the bytes are returned only when they passed the echo check.
+   * With `watch`, a 200 reply that is an event stream is read as it arrives, watched for a loop, and returned as the completion it adds up to.
+   */
+  async #send(method: "GET" | "POST", url: string, body: Uint8Array | null, watch: StreamWatch | null = null): Promise<{ status: number; raw: Uint8Array; parsed: unknown }> {
     try {
       this.#refuseOwnServer(this.#base);
     } catch (err) {
@@ -140,6 +164,9 @@ export class LocalProvider implements Provider {
       if (this.#secret !== null) headers.authorization = `Bearer ${this.#secret}`;
       // timeout: false turns off Bun's own idle timer (5 minutes by default), so timeout_ms above is the only deadline
       const res = await fetch(url, { method, headers, ...(body === null ? {} : { body: body as unknown as BodyInit }), redirect: "error", signal: ctl.signal, timeout: false });
+      if (watch !== null && res.status === 200 && res.body !== null && (res.headers.get("content-type") ?? "").toLowerCase().includes("text/event-stream")) {
+        return { status: 200, ...(await this.#readStream(res.body, ctl, watch)) };
+      }
       const raw = await readCapped(res, ctl.signal, this.#max);
       let parsed: unknown;
       try { parsed = JSON.parse(dec.decode(raw)); } catch { parsed = undefined; }
@@ -160,6 +187,80 @@ export class LocalProvider implements Provider {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /**
+   * Reads an event stream of chat-completion chunks into the completion they add up to. The reasoning and the content are each watched by a
+   * LoopGuard; when either repeats itself the request is cut there, and the Failure (cause "loop") holds what was received.
+   */
+  async #readStream(stream: ReadableStream<Uint8Array>, ctl: AbortController, watch: StreamWatch): Promise<{ raw: Uint8Array; parsed: unknown }> {
+    const reader = stream.getReader();
+    const events = new SseEvents();
+    const asm = new StreamAssembly();
+    const guards = { reasoning: new LoopGuard(watch.guard), content: new LoopGuard(watch.guard) };
+    const secrets = this.#secret === null ? [] : [this.#secret];
+    const text = new TextDecoder();
+    const received: Uint8Array[] = [];
+    let total = 0;
+    let done = false;
+    const echoCheck = (raw: Uint8Array, parsed: unknown): void => {
+      try {
+        assertNoEcho(concat(received, total), secrets);
+        assertNoEcho(raw, secrets, parsed);
+      } catch {
+        throw new Failure(ECHOED);
+      }
+    };
+    const take = (data: string): void => {
+      if (data.trim() === "[DONE]") { done = true; return; }
+      let chunk: unknown;
+      try { chunk = JSON.parse(data); } catch { throw new Failure("a streamed chunk of the reply is not JSON", enc.encode(JSON.stringify(asm.result()))); }
+      if (isPlainObject(chunk) && chunk.error !== undefined && chunk.choices === undefined) {
+        const said = this.#endpointSaid(chunk);
+        const raw = enc.encode(JSON.stringify(chunk));
+        if (said !== "" && CONTEXT_RE.test(said)) throw new Failure(`the request did not fit the model's context (the endpoint said: ${said})`, raw, null, "context");
+        throw new Failure(said === "" ? "the endpoint broke off the reply with an error" : `the endpoint broke off the reply: ${said}`, raw);
+      }
+      const added = asm.add(chunk);
+      for (const where of ["reasoning", "content"] as const) {
+        const hit = guards[where].feed(added[where]);
+        if (hit === null) continue;
+        const message = this.#redact(`the model repeated itself in ${where === "reasoning" ? "its reasoning" : "its reply"}: "${oneLine(hit)}"`);
+        const parsed = { ...asm.result({ finish: "loop", reasoning: false }), error: message };
+        const raw = enc.encode(JSON.stringify(parsed));
+        echoCheck(raw, parsed);
+        const reasoning = guards.reasoning.text;
+        const retry = watch.effort !== NO_THINKING && this.#efforts.includes(NO_THINKING) ? { retry_effort: NO_THINKING } : {};
+        throw new Failure(message, raw, null, "loop", null, { ...(reasoning === "" ? {} : { reasoning }), ...retry });
+      }
+    };
+    try {
+      while (!done) {
+        if (ctl.signal.aborted) throw new TimedOut();
+        const { done: ended, value } = await reader.read();
+        if (ended) {
+          for (const data of events.end()) if (!done) take(data);
+          break;
+        }
+        total += value.length;
+        if (total > this.#max) throw new TooBig(this.#max);
+        received.push(value);
+        for (const data of events.push(text.decode(value, { stream: true }))) if (!done) take(data);
+      }
+    } catch (err) {
+      ctl.abort();
+      await reader.cancel().catch(() => undefined);
+      throw err;
+    }
+    // past [DONE] nothing more is read
+    if (done) await reader.cancel().catch(() => undefined);
+    if (!done && !asm.finished) {
+      throw new Failure("the endpoint could not be reached: the stream ended before the reply was complete", null, { kind: "transport" });
+    }
+    const parsed = asm.result();
+    const raw = enc.encode(JSON.stringify(parsed));
+    echoCheck(raw, parsed);
+    return { raw, parsed };
   }
 
   async models(): Promise<ModelInfo[]> {
@@ -200,7 +301,9 @@ export class LocalProvider implements Provider {
       out.tools = req.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters as Json } }));
       if (req.tool_choice !== undefined) out.tool_choice = req.tool_choice as Json;
     }
-    out.stream = false;
+    // streamed, so a reply that loops can be cut short; the last chunk carries the usage
+    out.stream = true;
+    out.stream_options = { include_usage: true };
     out.max_tokens = req.max_output_tokens ?? this.max_output_tokens;
     Object.assign(out, mergeSampling(this.sampling, req.sampling));
     // reserved keys are left out of both, so these add fields and never replace one the workbench set; a chosen effort below wins over a reasoning_effort here
@@ -217,7 +320,9 @@ export class LocalProvider implements Provider {
     try {
       return await this.#turn(req);
     } catch (err) {
-      if (err instanceof Failure) return { kind: "error", message: err.message, raw: err.raw, ...(err.transient === null ? {} : { transient: err.transient }), ...(err.cause_ === null ? {} : { cause: err.cause_ }), ...(err.status === null ? {} : { status: err.status }) };
+      if (err instanceof Failure) {
+        return { kind: "error", message: err.message, raw: err.raw, ...(err.transient === null ? {} : { transient: err.transient }), ...(err.cause_ === null ? {} : { cause: err.cause_ }), ...(err.status === null ? {} : { status: err.status }), ...err.extra };
+      }
       return { kind: "error", message: this.#redact(`the reply could not be read: ${(err as Error).message ?? String(err)}`), raw: null };
     }
   }
@@ -225,7 +330,7 @@ export class LocalProvider implements Provider {
   async #turn(req: TurnRequest): Promise<TurnResult> {
     let r: { status: number; raw: Uint8Array; parsed: unknown };
     try {
-      r = await this.#send("POST", `${this.#base}/chat/completions`, this.body(req));
+      r = await this.#send("POST", `${this.#base}/chat/completions`, this.body(req), { guard: this.loop_guard, effort: req.effort !== null && this.#efforts.includes(req.effort) ? req.effort : null });
     } catch (err) {
       if (err instanceof Failure && err.message === ECHOED) return { kind: "error", message: ECHOED, raw: null };
       throw err;

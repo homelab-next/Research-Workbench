@@ -305,6 +305,8 @@ The rule is `max_output_tokens + floor(slot × 0.5) ≤ slot`, where `slot` is t
 
 Load the model in one slot. If the server splits the context between several slots, each request has only its share, so `parallel` in the model manifest says how many slots share the context, and `context` is the whole of it. Preflight checks the reply caps against the share, and a stage whose cap does not fit stops before it calls the model.
 
+A reply is streamed, and watched as it comes in. A model that falls into a loop, saying the same thing over and over until its output limit, is cut off at once instead of running for minutes. The reasoning and the reply are watched apart: either is a loop when its last `window` characters have already appeared `repeats` times before, or when it ends in one short passage (20 to 200 characters) said eight times in a row. The model manifest sets this with `loop_guard: { enabled, window, repeats }`; each left out is its default (on, 400, 3). The cut reply is in the ledger as a failed response, with what the model had said so far and the text it repeated. When the manifest's `efforts` list `none`, the same request is then made once more with `reasoning_effort: none`, which turns the model's thinking off, and the ledger notes why. Otherwise, or when that loops too, the stage fails as on any other model failure.
+
 When `model loaded` fails, load the model in the model server's own loader, with a large context (131072 tokens is a good start), and run preflight again. Do not start a run on a model that loaded itself on the first request. An automatic load may use the server's small default context, and a run needs a large one.
 
 When it says `ready`:

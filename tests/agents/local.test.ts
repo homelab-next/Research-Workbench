@@ -82,7 +82,7 @@ test("sends exactly the bytes body() returned and no stored header", async () =>
 test("body shape: tools only when present, effort only when the manifest lists it, tool calls mapped", () => {
   const p = provider("http://127.0.0.1:1/v1", { efforts: ["low", "high"] });
   const plain = JSON.parse(new TextDecoder().decode(p.body(req()))) as Record<string, unknown>;
-  expect(plain).toEqual({ model: "qwen/qwen3.6-35b-a3b", messages: [{ role: "system", content: "be brief" }, { role: "user", content: "hi" }], stream: false, max_tokens: 8192 });
+  expect(plain).toEqual({ model: "qwen/qwen3.6-35b-a3b", messages: [{ role: "system", content: "be brief" }, { role: "user", content: "hi" }], stream: true, stream_options: { include_usage: true }, max_tokens: 8192 });
   const rich = JSON.parse(new TextDecoder().decode(p.body(req({
     effort: "high",
     tools: [{ name: "t", description: "d", parameters: { type: "object" } }],
@@ -337,12 +337,12 @@ test("request_extra from the model and from the request go in the chat body, the
 });
 
 test("request_extra cannot set a key the workbench sends itself: the model's is refused, a request's is left out", () => {
-  for (const k of ["model", "messages", "tools", "tool_choice", "response_format", "max_tokens", "stream", "temperature", "top_k", "repeat_penalty"]) {
+  for (const k of ["model", "messages", "tools", "tool_choice", "response_format", "max_tokens", "stream", "stream_options", "temperature", "top_k", "repeat_penalty"]) {
     expect(() => provider("http://127.0.0.1:9/v1", { request_extra: { [k]: 1 } })).toThrow(k);
   }
   const p = provider("http://127.0.0.1:9/v1", { sampling: { temperature: 0.5 }, max_output_tokens: 100 });
-  const sent = JSON.parse(new TextDecoder().decode(p.body(req({ request_extra: { model: "other", max_tokens: 1, temperature: 2, stream: true, seed: 3 } as never })))) as Record<string, unknown>;
-  expect(sent).toMatchObject({ model: "qwen/qwen3.6-35b-a3b", max_tokens: 100, temperature: 0.5, stream: false, seed: 3 });
+  const sent = JSON.parse(new TextDecoder().decode(p.body(req({ request_extra: { model: "other", max_tokens: 1, temperature: 2, stream: false, stream_options: {}, seed: 3 } as never })))) as Record<string, unknown>;
+  expect(sent).toMatchObject({ model: "qwen/qwen3.6-35b-a3b", max_tokens: 100, temperature: 0.5, stream: true, stream_options: { include_usage: true }, seed: 3 });
 });
 
 test("a 400 about context size is reported as not fitting the context, with the endpoint's own line", async () => {
