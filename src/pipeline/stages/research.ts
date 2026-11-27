@@ -12,6 +12,7 @@ import { stepLine } from "../../agents/tools/research";
 import { stepPins } from "../../modules/pins";
 import { beginPlaybook, runPlaybook } from "../../modules/playbook-run";
 import { spendPlanBudget } from "../plans";
+import { DEFAULT_GLEAN_SENDBACKS, gleanOf, gleanSendBack } from "../glean";
 import type { StageEnd, StageEnv } from "../engine";
 import { frameOf, lastPass, noSchema, requestsOfPass, resolveAgent, stageAgent, stageOfRole, titleOf } from "./agent";
 import type { AgentStageEnd } from "./agent";
@@ -299,6 +300,13 @@ export async function researchRunner(env: StageEnv): Promise<StageEnd> {
   });
   const requested = [...answeredBefore.map((a) => ({ question: a.question, note: "" })), ...units.flatMap((u, i) => (u.question === null ? [] : [{ question: u.question, note: noteOf(results[i]) }]))];
   const output = { subgoals, requested } as unknown as Json;
+  // a value the workbench extracted that opens a route to an open sub-goal, with no accepted step from it, goes back to Plan (at most the cap a run)
+  if (!sentBack) {
+    const g = gleanOf(session.state, session.entries(), { registry: deps.registry, seeker: deps.seeker }, frameOf(env).limits);
+    const cap = deps.config.glean?.max_sendbacks ?? DEFAULT_GLEAN_SENDBACKS;
+    const reason = g === null ? null : gleanSendBack(session.state, session.entries(), g.openings, { cap, stage: stage.id });
+    if (reason !== null) return { kind: "finished", outcome: "fail", draft_hash: null, output, reason };
+  }
   if (subgoals.some((g) => g.outcome === "answered") || requested.length > 0) return { kind: "finished", outcome: "pass", draft_hash: null, output, reason: null };
   const notes = subgoals.map((g) => `${g.title}: ${g.note === "" ? "no note" : g.note}`).join("; ");
   return { kind: "finished", outcome: "fail", draft_hash: null, output, reason: `no sub-goal could be answered: ${notes}` };

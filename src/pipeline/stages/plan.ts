@@ -6,6 +6,7 @@ import type { Registry } from "../../modules/registry";
 import { ContextError, packPart } from "../../agents/context";
 import type { PackPart } from "../../agents/context";
 import { buildPlan } from "../plans";
+import { gleanPart } from "../glean";
 import type { PlanOutput } from "../plans";
 import type { StageEnd, StageEnv } from "../engine";
 import { frameOf, lastPass, noSchema, requestsOfPass, stageAgent, stageOfRole, titleOf } from "./agent";
@@ -111,6 +112,10 @@ export async function planRunner(env: StageEnv): Promise<StageEnd> {
   }
   const actorId = deps.profile.stages[stage.id]?.agent ?? "planner";
   const frame = frameOf(env);
+  // on a pass after a plan was accepted: what the values extracted since open up, listed by code (the sub-goal titles it quotes are as strict as the plan that named them)
+  const proposed = [...entries].reverse().find((e) => e.type === "plan.proposed");
+  const glean = gleanPart(state, entries, { registry: deps.registry, seeker: deps.seeker }, frame.limits, proposed === undefined ? [] : [proposed]);
+  if (glean !== null) extras.push(glean);
   const research = researchWhere(env);
   const m = state.meta;
   let task = [
@@ -118,6 +123,7 @@ export async function planRunner(env: StageEnv): Promise<StageEnd> {
     m === null ? "" : `The question asked: ${m.asked}`,
     `Reply with the goal and, for each sub-goal, its starting values, the type wanted and a route of pivot ids that the route finder offers (use find_routes).`,
     `Where a playbook fits a sub-goal (use list_playbooks), give its id as "playbook" and an empty route; code runs it with no further model call.`,
+    glean === null ? "" : `The part titled "What the new values open up" lists values the workbench extracted since the plan was last accepted, with the pivots from each and the open sub-goals each bears on. Choose which, if any, to follow: a sub-goal may start from one of them.`,
   ].filter((x) => x !== "").join("\n");
 
   let errors: string[] = [];
