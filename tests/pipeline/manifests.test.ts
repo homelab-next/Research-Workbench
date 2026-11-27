@@ -2,7 +2,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadPipeline, ROLES } from "../../src/pipeline/manifests";
+import { legacyHash, loadPipeline, pipelineProblem, ROLES, stageFrom } from "../../src/pipeline/manifests";
+import type { StageManifest } from "../../src/pipeline/manifests";
 import { Registry } from "../../src/modules/registry";
 import { loadRegistry } from "../../src/modules/registry-record";
 import { copySample } from "../helpers/sample-root";
@@ -194,4 +195,31 @@ test("a stage's fast_model loads with effort null; a malformed one is a problem 
   const bad = load();
   expect(bad.problems.some((p) => p.includes("research") && p.includes("fast_model"))).toBe(true);
   expect(bad.pipeline?.stages.map((s) => s.id) ?? []).not.toContain("research");
+});
+
+test("loadPipeline keeps its own stricter rules and messages: exactly one stage per gate, a review stage, and the old hash", () => {
+  edit("plan", "gate: plan", "gate: null");
+  const { pipeline, problems } = load();
+  expect(pipeline).toBeNull();
+  expect(problems).toContain("there must be exactly one stage for gate plan; there are 0");
+});
+
+test("stageFrom reads a stage body without the registry: the same stage loadPipeline builds, refused when its bytes are not trusted", () => {
+  const registry = loadRegistry([{ path: root, trusted: true, credentials: [] }]);
+  const m = registry.get("stage", "research")!;
+  const made = stageFrom(m.body, m.hash, m.title, true);
+  expect(made).toEqual(loadPipeline(registry).pipeline!.stages.find((s) => s.id === "research")!);
+  expect(stageFrom(m.body, m.hash, m.title, false)).toBe("a stage manifest is accepted only from a trusted root");
+  expect(legacyHash(loadPipeline(registry).pipeline!.stages)).toBe(loadPipeline(registry).pipeline!.hash);
+});
+
+test("pipelineProblem is today's rules loosened: no gate is allowed, two for one gate are not, and a review stage is needed only before a publish gate", () => {
+  const registry = loadRegistry([{ path: root, trusted: true, credentials: [] }]);
+  const all = loadPipeline(registry).pipeline!.stages;
+  expect(pipelineProblem(all)).toBeNull();
+  const frame = { ...all[0]!, on_pass: null };
+  expect(pipelineProblem([frame])).toBeNull();
+  expect(pipelineProblem([])).toBe("a loop has no stage");
+  const twice: StageManifest[] = [{ ...frame, gate: "plan", on_pass: "plan" }, { ...all[1]!, on_pass: null }];
+  expect(pipelineProblem(twice)).toBe("there may be at most one stage for gate plan; there are 2");
 });

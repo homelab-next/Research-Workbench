@@ -14,6 +14,9 @@ import type { Registry } from "../modules/registry";
 import type { RunnerDeps, RunQueryResult } from "../modules/runner";
 import type { Seeker } from "../modules/seeker";
 import type { Pipeline, Role, StageManifest } from "./manifests";
+import type { Components } from "./components";
+import type { LoopCatalog } from "./loops";
+import type { BlobStore } from "../core/blobs";
 import { firstUnpassedReview, nextStep } from "./next";
 import type { Step } from "./next";
 import { acceptPlan, denyPlan, requestReplan, spendPlanBudget } from "./plans";
@@ -36,6 +39,8 @@ import { publishRunner } from "./stages/publish";
 
 export interface EngineDeps {
   config: Config; registry: Registry; runner: RunnerDeps; seeker: Seeker; providers: Providers; pipeline: Pipeline; profile: Profile;
+  /** Every loop of the roots, resolved; the components of the default loop; the content store (the workbench chain's blobs). Set by compose. */
+  loops?: LoopCatalog; components?: Components; content?: BlobStore;
   /** Where problems that do not stop the work are reported (a failed anchor, a leftover folder, a missing objective); stderr when absent. */
   onError?: (error: unknown) => void;
   anchor?: (a: { case: string; seq: number; hash: string; why: "published" | "closed" }) => void;
@@ -278,7 +283,9 @@ export class Engine {
   private async drive(allowCapped: boolean): Promise<RunSummary> {
     let allow = allowCapped;
     const { status } = this.session.state.run;
-    if (status === "running" && this.startedWith() !== this.deps.pipeline.hash) {
+    // a run started before slice 12 recorded the old formula's hash of the same stages, which a loop keeps as legacy_hash
+    const started = this.startedWith();
+    if (status === "running" && started !== this.deps.pipeline.hash && (started === null || started !== this.deps.pipeline.legacy_hash)) {
       this.session.commit(() => [this.paused(ENGINE, "the pipeline has changed since this run started")]);
       return this.summary();
     }

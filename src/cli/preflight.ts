@@ -2,7 +2,8 @@
 // Is this configuration ready to run? Reads manifests, renders every pivot against the guard, checks the marking policy, and asks the
 // model endpoint what it lists and has loaded. It never contacts a data source, opens no workbench, takes no lock and writes nothing.
 // The one thing it sends anywhere is a fixed test question to each model a stage names; the question carries no case data.
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isPlainObject } from "../core/canonical";
@@ -11,12 +12,15 @@ import { fitProblem, mayGo, packBudget, slotContext } from "../agents/pack";
 import { loadProviders } from "../agents/providers";
 import type { ModelInfo, Provider } from "../agents/providers";
 import { describeSampling } from "../agents/providers/sampling";
-import { ConfigError, loadConfig } from "../modules/config";
+import { ConfigError, loadConfig, rootsOf } from "../modules/config";
 import { ConnectorPool } from "../modules/connectors";
 import { GuardError } from "../modules/sqlguard";
 import { Observables } from "../modules/observables";
 import { Registry } from "../modules/registry";
-import { loadRegistry } from "../modules/registry-record";
+import { loadRegistry, recordRegistry } from "../modules/registry-record";
+import { BlobStore } from "../core/blobs";
+import { Ledger } from "../core/ledger";
+import { IMPLICIT_NOTE, loadLoops } from "../pipeline/loops";
 import { Secrets, SecretError } from "../modules/secrets";
 import { loadChecks, loadPipeline } from "../pipeline/manifests";
 import type { StageManifest } from "../pipeline/manifests";
@@ -25,7 +29,7 @@ export interface Check { name: string; level: "ok" | "fail" | "note"; detail: st
 
 const USAGE = "usage: bun run preflight [--config <file>] [--min-context <tokens>] [--no-question]\nexit 0 ready, 1 not ready, 2 bad command line or configuration, 3 unexpected error";
 const DEFAULT_MIN_CONTEXT = 32768;
-const NAMES = ["configuration", "outside the repository", "secrets", "manifests", "pipeline", "checks", "lake sources", "pivots", "model listed", "model loaded", "context", "context fit", "marking policy", "model answers"] as const;
+const NAMES = ["configuration", "outside the repository", "secrets", "manifests", "pipeline", "loops", "checks", "lake sources", "pivots", "model listed", "model loaded", "context", "context fit", "marking policy", "model answers"] as const;
 type Name = (typeof NAMES)[number];
 
 /** The command line is wrong. The process exits 2. */
@@ -150,7 +154,8 @@ export async function preflight(
     secrets = new Secrets(env, null);
   }
 
-  const registry = loadRegistry(config.roots);
+  const roots = rootsOf(config);
+  const registry = loadRegistry(roots);
   const named = new Set<string>();
   for (const s of registry.sources()) if (s.credential !== null) named.add(s.credential);
   for (const m of registry.all("model")) if (typeof m.body.credential === "string") named.add(m.body.credential);
@@ -179,6 +184,29 @@ export async function preflight(
   try { loadProfile(registry, "investigation"); } catch (err) { profileOk = false; add("pipeline", "fail", `no usable investigation profile: ${reason(err)}`); }
   if (pipeline === null && pipelineProblems.length === 0) add("pipeline", "fail", "there is no usable pipeline");
   if (pipeline !== null && pipelineProblems.length === 0 && profileOk) add("pipeline", "ok", `${pipeline.stages.length} stages and the investigation profile`);
+
+  // loops: resolved against a content store and a chain of this run's own, made in memory and a temporary folder and removed, so nothing
+  // is written; a pinned component resolves when it is what the roots hold now
+  const store = mkdtempSync(join(tmpdir(), "preflight-loops-"));
+  const scratch = Ledger.open(":memory:", "preflight");
+  try {
+    recordRegistry(registry, scratch);
+    const trusted = roots.filter((r) => r.trusted).map((r) => r.path);
+    const loops = loadLoops(registry, { registry, content: new BlobStore(store), chain: scratch, trusted, output: () => null }, { max_depth: config.loops.max_depth, max_children: config.loops.max_children });
+    const strip = (q: string): string => roots.reduce((t, r) => t.split(`${r.path}/`).join(""), q);
+    const list = loops.list();
+    for (const x of list) {
+      if (x.loop !== null) {
+        add("loops", "ok", `${x.id}: usable, version ${x.loop.manifest.version}, hash ${x.loop.pipeline.hash.slice(0, 12)}${x.loop.manifest.implicit ? ` (${IMPLICIT_NOTE})` : ""}`);
+      } else {
+        for (const q of x.problems.filter((p) => p !== IMPLICIT_NOTE)) add("loops", "fail", `${x.id}: ${strip(q)}`);
+      }
+    }
+    if (!list.some((x) => x.id === config.loops.default)) add("loops", "fail", `there is no loop "${config.loops.default}", which the configuration's loops.default names`);
+  } finally {
+    scratch.close();
+    rmSync(store, { recursive: true, force: true });
+  }
 
   // checks
   const cks = loadChecks(registry);

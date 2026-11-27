@@ -1,0 +1,16 @@
+kind: loop
+id: investigation
+title: Investigation
+about: Frame a question, plan and run the research, assemble a product, review it and publish it at a person's gate.
+version: 1
+profile: investigation
+entry: frame
+stages: [frame, plan, research, assemble, checks, evaluate, challenge, publish, feedback]
+inputs:
+  question: { type: question, required: true }
+  observables: { type: observables, required: true }
+  window: { type: window, required: true }
+outputs:
+  product: { from: product }
+  findings: { from: findings }
+  cards: { from: cards.kept }

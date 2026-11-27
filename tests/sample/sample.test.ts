@@ -19,6 +19,17 @@ import type { Seeker } from "../../src/modules/seeker";
 import { runRoute } from "../../src/modules/routes";
 import { ensureSampleData, makeSampleData, SAMPLE_START, SAMPLE_WINDOW } from "../../scripts/make-sample-data";
 import { startReputationFixture } from "../../sample/fixture/reputation-server";
+import { compose } from "../../src/cli/compose";
+import { fold } from "../../src/core/state";
+import { loadConfig } from "../../src/modules/config";
+import type { Config } from "../../src/modules/config";
+import { Engine } from "../../src/pipeline/engine";
+import type { EngineDeps } from "../../src/pipeline/engine";
+import { loadPipeline } from "../../src/pipeline/manifests";
+import { sampleRoot } from "../helpers/sample-root";
+
+/** The sample's pipeline hash as the workbench computed it before slice 12 (loadPipeline on the tree before any change). */
+const SAMPLE_LEGACY_HASH = "19f7829f3f9c97faf5c149c0eddc4b047471ca3b2119f168abe2cbef93761329";
 
 const human: Actor = { kind: "human", id: "analyst" };
 const REPO_SAMPLE = join(import.meta.dir, "..", "..", "sample");
@@ -273,4 +284,69 @@ test("Plan, Research and Assemble may ask the person, the reviewers may not, and
   for (const id of ["frame", "evaluate", "challenge", "publish"]) expect(stage(id).tools).not.toContain("ask_person");
   const skill = registry.get("skill", "ask-the-person");
   expect(skill?.title).toBe("Ask the person");
+});
+
+test("the sample's pipeline is the loop manifest loops/investigation.yaml: the nine stages by id and the investigation profile", () => {
+  const loop = registry.get("loop", "investigation")!;
+  expect(loop.body).toEqual({
+    kind: "loop", id: "investigation", title: "Investigation",
+    about: "Frame a question, plan and run the research, assemble a product, review it and publish it at a person's gate.",
+    version: 1, profile: "investigation", entry: "frame", stages: ["frame", "plan", "research", "assemble", "checks", "evaluate", "challenge", "publish", "feedback"],
+    inputs: { question: { type: "question", required: true }, observables: { type: "observables", required: true }, window: { type: "window", required: true } },
+    outputs: { product: { from: "product" }, findings: { from: "findings" }, cards: { from: "cards.kept" } },
+  });
+  expect(loadPipeline(registry).pipeline!.hash).toBe(SAMPLE_LEGACY_HASH);
+});
+
+test("a case started before slice 12 and stopped at its plan gate goes on to the publish gate under the loops: the hash it recorded, no pause, nothing skipped, replay unchanged", async () => {
+  const d = mkdtempSync(join(tmpdir(), "sample-old-"));
+  const sample = sampleRoot(d);
+  try {
+    const config: Config = { ...loadConfig({ env: {}, home: d, repoRoot: d }), data_dir: join(d, "wb"), roots: [{ path: sample.root, trusted: true, credentials: [] }], research: { parallel: 1 } };
+    // what the workbench ran with before slice 12: the pipeline of every stage manifest, id "default" and the old formula's hash, and no loops
+    let wb = Workbench.open(config.data_dir, { onError: () => {} });
+    let composed = compose(config, wb);
+    const { loops: _l, components: _c, content: _b, ...rest } = composed.deps;
+    const old: EngineDeps = { ...rest, pipeline: loadPipeline(composed.deps.registry).pipeline! };
+    const first = wb.createCase({ title: "Sample", asked: "Who is behind the traffic to 198.51.100.77?", why: "test", starting: [SAMPLE_START], window: SAMPLE_WINDOW, objective: "sample-objective", marking: "TLP:GREEN" }, human);
+    const oldEngine = Engine.open(first, old);
+    oldEngine.start(human);
+    expect((await oldEngine.advance()).waiting).toBe("plan");
+    const before = first.entries();
+    const started = before.find((e) => e.type === "run.started")!;
+    expect(started.type === "run.started" && [started.payload.pipeline, started.payload.pipeline_hash]).toEqual(["default", SAMPLE_LEGACY_HASH]);
+    const id = first.id;
+    wb.close();
+    composed.close();
+
+    // after the upgrade: the composed deps are the investigation loop's, whose legacy hash is the one the run recorded
+    wb = Workbench.open(config.data_dir, { onError: () => {} });
+    composed = compose(config, wb);
+    try {
+      expect(composed.deps.pipeline.id).toBe("investigation");
+      expect(composed.deps.pipeline.legacy_hash).toBe(SAMPLE_LEGACY_HASH);
+      const again = wb.session(id);
+      const engine = Engine.open(again, composed.deps);
+      engine.acceptPlan({ budgets: { s3: 1 }, actor: human });
+      expect(await engine.advance()).toMatchObject({ status: "waiting", waiting: "publish" });
+      const entries = again.entries();
+      expect(entries.slice(0, before.length)).toEqual(before);
+      expect(entries.some((e) => e.type === "run.paused")).toBe(false);
+      expect(entries.some((e) => e.type === "loop.bound")).toBe(false);
+      expect(entries.filter((e) => e.type === "run.started").length).toBe(1);
+      expect(again.state.skipped).toEqual([]);
+      expect(verifyCase(again.dir).ok).toBe(true);
+      for (let n = 1; n <= entries.length; n++) {
+        const at = fold(entries, n);
+        if (n <= before.length) expect(at).toEqual(fold(before, n));
+        expect(at.skipped).toEqual([]);
+      }
+    } finally {
+      wb.close();
+      composed.close();
+    }
+  } finally {
+    sample.close();
+    rmSync(d, { recursive: true, force: true });
+  }
 });

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configFor, newRoot } from "../../scripts/new-root";
@@ -89,6 +89,30 @@ test("the sample is ready, with a note where a model is scripted", async () => {
   expect(by(r, "model answers")[0]).toMatchObject({ level: "note" });
 });
 
+test("preflight reports each loop: usable with its version and hash, or its problems", async () => {
+  const tmp = tmpDir();
+  const root = join(tmp, "sample");
+  copySample(root);
+  makeSampleData(join(root, "data"));
+  writeFileSync(join(root, "loops", "broken.yaml"), JSON.stringify({ kind: "loop", id: "broken", title: "Broken", version: 3, profile: "investigation", entry: "frame", stages: ["frame", "nowhere"] }));
+  const config = join(tmp, "config.yaml");
+  writeFileSync(config, [`data_dir: ${join(tmp, "data")}`, "roots:", `  - { path: ${JSON.stringify(root)}, trusted: true, credentials: [] }`, ""].join("\n"));
+  const r = await preflight(["--config", config, "--no-question"], { env: {}, home: tmp, repoRoot: REPO });
+  const loops = by(r, "loops");
+  expect(loops.map((c) => c.level)).toEqual(["fail", "ok"]);
+  expect(loops[0]!.detail).toBe('broken: stage "nowhere" is no stage manifest and no inline stage');
+  expect(loops[1]!.detail).toMatch(/^investigation: usable, version 1, hash [0-9a-f]{12}$/);
+  expect(r.ok).toBe(false);
+  // preflight writes nothing: no data folder was made
+  expect(existsSync(join(tmp, "data"))).toBe(false);
+  // a root with no loop manifest has the implicit loop, which is usable
+  const m = standin([]);
+  const e = env(m.url);
+  const plain = await run(e, ["--no-question"]);
+  expect(by(plain, "loops").map((c) => c.level)).toEqual(["ok"]);
+  expect(by(plain, "loops")[0]!.detail).toMatch(/^investigation: usable, version 1, hash [0-9a-f]{12} \(no loop manifest: every stage manifest is the investigation loop\)$/);
+});
+
 test("a root from new-root on a loaded model is ready", async () => {
   const m = standin([GOOD()]);
   const e = env(m.url);
@@ -100,7 +124,7 @@ test("a root from new-root on a loaded model is ready", async () => {
   expect(by(r, "model answers")[0]!.detail).toBe("one well-formed call (40 tokens in, 8 out); this question carries no case data and is not in a ledger");
   expect(m.requests.filter((q) => q.path.endsWith("/chat/completions"))).toHaveLength(1);
   expect(r.checks.map((c) => c.name)).toEqual(
-    ["configuration", "outside the repository", "secrets", "manifests", "pipeline", "checks", "lake sources", "pivots", "model listed", "model loaded", "context", "context fit", "marking policy", "model answers"]
+    ["configuration", "outside the repository", "secrets", "manifests", "pipeline", "loops", "checks", "lake sources", "pivots", "model listed", "model loaded", "context", "context fit", "marking policy", "model answers"]
       .flatMap((n) => r.checks.filter((c) => c.name === n).map((c) => c.name)),
   );
 });
