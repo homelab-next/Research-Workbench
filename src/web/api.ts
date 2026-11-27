@@ -1,12 +1,14 @@
-import type { Entry } from "../core/types";
-import type { AgentView, CaseSummaryView, CommandResult, Custody, Difference, LoopFileView, LoopSummaryView, LoopView, Me, ModelView, NewCaseInput, Preview, Reference, RouteView, StoreView } from "../core/wire";
+import type { Entry, Marking, ModelChoice } from "../core/types";
+import type { AgentView, BuilderSummaryView, BuilderView, CaseSummaryView, CommandResult, Custody, Difference, LoopFileView, LoopSummaryView, LoopView, Me, ModelView, NewCaseInput, Preview, Reference, RouteView, StoreView } from "../core/wire";
 
 export type Fetcher = (req: Request) => Promise<Response>;
 /**
  * `onDrop` is told "ahead" when the server says the position is ahead of the case, so what the store holds is not this case's record; "gone" when the
  * server says there is no such case (it was unloaded, or never loaded), so there is nothing to reconnect to.
  */
-export interface EntrySource { open(caseId: string, after: number, onEntry: (entry: Entry) => void, onDrop: (why?: "ahead" | "gone") => void): () => void }
+export interface EntrySource { open(caseId: string, after: number, onEntry: (entry: Entry) => void, onDrop: (why?: "ahead" | "gone") => void, prefix?: EntryPrefix): () => void }
+/** Whose entries a stream reads: a case's (/api/cases/<id>/entries, the default) or a builder session's (/api/builders/<id>/entries). */
+export type EntryPrefix = "cases" | "builders";
 /** What a route of the case store answers: done, or refused in the server's words. */
 export type Refusable<T extends object = Record<never, never>> = ({ ok: true } & T) | { ok: false; refused: string[] };
 export interface Api {
@@ -49,6 +51,17 @@ export interface Api {
   checkLoop(id: string, draft: unknown): Promise<{ ok: boolean; problems: string[] }>;
   /** Saves the draft as the loop's next version; `version` is the one the screen loaded. */
   saveLoop(id: string, draft: unknown, version: number): Promise<{ id: string; version: number; hash: string } | { refused: string[] }>;
+  /** The builder sessions, newest first (slice 12, part B). */
+  builders(): Promise<BuilderSummaryView[]>;
+  /** Starts a builder session about a loop (null: a new loop) at the marking the person picked. */
+  newBuilder(loop: string | null, marking: Marking): Promise<{ id: string } | { refused: string[] }>;
+  builderView(id: string): Promise<BuilderView>;
+  builderAsk(id: string, text: string): Promise<CommandResult>;
+  /** The person's decision on one file of a proposed change. */
+  builderDecide(id: string, change: string, file: number, accept: boolean): Promise<CommandResult>;
+  /** The person's decision on a probe; `budget` for a costly one, else null. */
+  builderProbe(id: string, probe: string, approve: boolean, budget: number | null): Promise<CommandResult>;
+  builderModel(id: string, choice: ModelChoice): Promise<CommandResult>;
   entries: EntrySource;
 }
 
@@ -137,17 +150,24 @@ export function makeApi(fetcher: Fetcher, origin: string, entries: EntrySource):
       const r = await answered<{ ok: boolean; problems: string[] }>(`/api/loops/${seg(id)}/check`, { draft });
       return "refused" in r ? { ok: false, problems: r.refused } : r;
     },
+    builders: () => read<BuilderSummaryView[]>("/api/builders"),
+    newBuilder: (loop, marking) => answered<{ id: string }>("/api/builders", { loop, marking }),
+    builderView: (id) => read<BuilderView>(`/api/builders/${seg(id)}/view`),
+    builderAsk: (id, text) => refusable<{ seq: number }>(`/api/builders/${seg(id)}/ask`, { text }) as Promise<CommandResult>,
+    builderDecide: (id, change, file, accept) => refusable<{ seq: number }>(`/api/builders/${seg(id)}/decide`, { change, file, accept }) as Promise<CommandResult>,
+    builderProbe: (id, probe, approve, budget) => refusable<{ seq: number }>(`/api/builders/${seg(id)}/probe`, { probe, approve, budget }) as Promise<CommandResult>,
+    builderModel: (id, choice) => refusable<{ seq: number }>(`/api/builders/${seg(id)}/model`, { choice }) as Promise<CommandResult>,
     saveLoop: (id, draft, version) => answered<{ id: string; version: number; hash: string }>(`/api/loops/${seg(id)}/save`, { draft, version }),
     entries,
   };
 }
 
-/** The browser's source: an EventSource on /api/cases/<id>/entries?after=N. It never reconnects by itself; the store's `follow` decides when. */
+/** The browser's source: an EventSource on /api/<prefix>/<id>/entries?after=N (cases unless told builders). It never reconnects by itself; the store's `follow` decides when. */
 export function eventSourceEntries(win: Window, origin: string): EntrySource {
   return {
-    open(caseId, after, onEntry, onDrop) {
+    open(caseId, after, onEntry, onDrop, prefix = "cases") {
       const Source = (win as Window & typeof globalThis).EventSource;
-      const url = `${origin}/api/cases/${seg(caseId)}/entries?after=${after}`;
+      const url = `${origin}/api/${prefix}/${seg(caseId)}/entries?after=${after}`;
       const es = new Source(url);
       let done = false;
       let got = false;

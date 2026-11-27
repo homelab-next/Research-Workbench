@@ -4,6 +4,7 @@ import { clear } from "../dom";
 import { loopFileLink } from "../links";
 import { refusalLine } from "../refusal";
 import type { Screen, Shell } from "../app";
+import { builderPanel } from "../panels/builder";
 
 /** The first 12 hex of a hash: how every hash is shown; the whole hash is the element's title. */
 export const short = (hash: string): string => hash.slice(0, 12);
@@ -39,6 +40,8 @@ export function loopsView(shell: Shell): Screen {
   const typed = new Map<string, string>();
 
   const grid = h("div", { class: "grid loops-grid" });
+  /** Build with help, about no loop: a conversation that makes a new one. */
+  const builder = builderPanel(shell, { loop: null });
   const fileList = h("div", { class: "loop-file-list", role: "list" });
   const rootList = h("div", { class: "untrusted-roots", role: "list" });
   const loadError = h("p", { class: "load-error say", role: "alert" });
@@ -160,8 +163,9 @@ export function loopsView(shell: Shell): Screen {
     h("h1", null, "Loops"),
     h("p", { class: "muted" }, "What a case runs: its stages in order, their gates, and where each part comes from."),
     loadError, grid,
-    h("section", { class: "loop-files" }, h("h2", null, "Loop files"), fileList, rootList));
+    h("section", { class: "loop-files" }, h("h2", null, "Loop files"), fileList, rootList),
+    builder.el);
   read();
   render();
-  return { el, update() {}, focus() { el.focus(); }, destroy() { destroyed = true; } };
+  return { el, update() {}, focus() { el.focus(); }, destroy() { destroyed = true; builder.destroy(); } };
 }

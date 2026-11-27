@@ -4,6 +4,7 @@ import { clear } from "../dom";
 import { loopFileLink } from "../links";
 import { refusalLine } from "../refusal";
 import type { Screen, Shell } from "../app";
+import { builderPanel } from "../panels/builder";
 import { hashChip, problemList, versionLine } from "./loops";
 
 /** Where Task 13 puts its Edit and Copy buttons: a function the loop view calls with the loaded LoopView and gets elements back; null until Task 13 sets it. */
@@ -122,6 +123,8 @@ export function loopView(shell: Shell, id: string): Screen {
 
   ui.api.loop(id).then((v) => { if (destroyed) return; loop = v; render(); }, () => { if (destroyed) return; failed = true; render(); });
 
-  const el = h("main", { class: "top loop", data: { screen: "loop", loop: id }, tabindex: -1 }, body);
-  return { el, update() {}, focus() { el.focus(); }, destroy() { destroyed = true; } };
+  /** Build with help, about this loop. */
+  const builder = builderPanel(shell, { loop: id });
+  const el = h("main", { class: "top loop", data: { screen: "loop", loop: id }, tabindex: -1 }, body, builder.el);
+  return { el, update() {}, focus() { el.focus(); }, destroy() { destroyed = true; builder.destroy(); } };
 }

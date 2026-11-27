@@ -1,7 +1,7 @@
 import { apply, initial, isNext } from "../core/state";
 import type { CaseState } from "../core/state";
 import type { Entry } from "../core/types";
-import type { EntrySource } from "./api";
+import type { EntryPrefix, EntrySource } from "./api";
 
 export const SNAPSHOT_EVERY = 200;
 
@@ -89,9 +89,10 @@ const BACKOFF_MS = [1000, 2000, 5000];
 /**
  * Keeps a store fed: opens the source after the store's head; on "gap" or a drop, closes and reopens after the head (after 1 s, 2 s, then every 5 s), setting `connection`.
  * An entry off the store's chain, or a server that says the head is ahead of the case, empties the store first, so it reopens from 0. A server that says
- * the case is gone (not loaded) sets the connection to "gone" and opens nothing more; what was read is kept. Returns the stop function.
+ * the case is gone (not loaded) sets the connection to "gone" and opens nothing more; what was read is kept. `prefix` names whose stream it is (a builder
+ * session's is "builders"). Returns the stop function.
  */
-export function follow(store: CaseStore, source: EntrySource, win: Window): () => void {
+export function follow(store: CaseStore, source: EntrySource, win: Window, prefix: EntryPrefix = "cases"): () => void {
   let stopped = false;
   let closeStream: (() => void) | null = null;
   let timer: number | null = null;
@@ -125,7 +126,7 @@ export function follow(store: CaseStore, source: EntrySource, win: Window): () =
       // a skipped seq is reopened after the head; anything else that does not follow on is off the chain
       if (result === "gap") lost(entry.case === store.id && entry.seq > store.live.seq + 1 ? undefined : "fork");
       else if (result === "applied") { failures = 0; store.setConnection("live"); }
-    }, lost);
+    }, lost, prefix);
     if (lostEarly) closer(); else closeStream = closer;
   };
   open();

@@ -59,6 +59,8 @@ export interface LoopFileView { file: string; loop: string; version: number; tit
 export interface DiffLine { op: " " | "+" | "-"; text: string }
 /** One file of a proposed change, as a line diff against the file on disk. `stale`: the file changed on disk since it was proposed, so it cannot be accepted. */
 export interface BuilderFileView { index: number; path: string; kind: string; id: string; new_file: boolean; lines: DiffLine[]; decided: null | { accepted: boolean }; stale: boolean }
+/** A builder session, as the Loops page lists it: what it is about, its marking now, and what waits for the person (GET /api/builders, newest first). */
+export interface BuilderSummaryView { id: string; title: string; loop: string | null; marking: Marking; created_ts: string; open_changes: number; open_probes: number; turns: number }
 /** A builder session as its page shows it: what it proposed, file by file, and the probes it asked for with what the person decided. */
 export interface BuilderView { id: string; loop: string | null; marking: Marking; model: ModelChoice | null; changes: { id: string; title: string; why: string; files: BuilderFileView[] }[];
   probes: { id: string; kind: "pivot" | "query"; source: string; pivot: string | null; value: Observable | null; text: string | null; why: string; costly: boolean; decided: null | { approved: boolean; outcome: string; detail: string; card: string | null } }[] }

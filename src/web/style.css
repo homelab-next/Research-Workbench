@@ -467,3 +467,38 @@ button.danger:not(:disabled) { border-color: var(--tlp-red); color: var(--tlp-re
 .field-problem, .edge-note, .leave-ask { color: var(--amber); margin: 2px 0; }
 .problems.general:empty { display: none; }
 .copy-form { margin-top: 4px; }
+
+/* Build with help (slice 12, part B): the builder's chat, its diffs and its probes. A diff line's sign says what it is; the colour only repeats it. */
+.builder-panel { margin-top: 24px; display: flex; flex-direction: column; gap: 8px; }
+.builder-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.builder-head h2 { margin: 0; }
+.builder-sessions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.builder-sessions li { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.builder-sessions [aria-current="true"] { font-weight: 600; }
+.builder-new, .builder-open-head, .file-actions, .probe-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.builder-open { display: flex; flex-direction: column; gap: 8px; }
+.builder-open[hidden] { display: none; }
+.builder-open-head .builder-id { margin: 0; font-family: var(--mono); }
+.builder-turns .turn { border-top: 1px solid var(--line); padding: 6px 0; }
+.builder-turns .question { font-weight: 600; white-space: pre-wrap; }
+.builder-turns .answer-text { white-space: pre-wrap; }
+.builder-open textarea { width: 100%; min-height: 3em; }
+.builder-waits { display: flex; flex-direction: column; gap: 8px; }
+.builder-change, .builder-probe { display: flex; flex-direction: column; gap: 6px; }
+.builder-change .change-title, .builder-probe h3 { margin: 0; }
+.builder-change .change-why, .builder-probe p { margin: 0; overflow-wrap: anywhere; }
+.builder-file { border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px; }
+.builder-file.stale { border-color: var(--amber); }
+.builder-file > summary { cursor: pointer; }
+.builder-file .file-path { font-family: var(--mono); overflow-wrap: anywhere; }
+.builder-file .file-state.new { color: var(--green); border-color: var(--green); }
+.builder-file .file-decided, .builder-file .file-stale { margin: 6px 0; }
+.diff { font-family: var(--mono); font-size: 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 0; margin: 6px 0; overflow-x: auto; }
+.diff-line { white-space: pre; padding: 0 10px; }
+.diff-added { color: var(--green); background: color-mix(in srgb, var(--green) 10%, transparent); }
+.diff-removed { color: var(--tlp-red); background: color-mix(in srgb, var(--tlp-red) 10%, transparent); }
+.diff-context { color: var(--muted); }
+.probe-query { white-space: pre-wrap; overflow-wrap: anywhere; }
+.probe-actions input[type="number"] { width: 8em; }
+.probe-card { border-top: 1px solid var(--line); padding-top: 6px; }
+.probe-card .card-title { font-weight: 600; }
