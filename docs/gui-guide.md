@@ -125,6 +125,11 @@ Behaviours:
 - Drag: onto a lane keeps it there; onto the upper or lower third of a card moves it above or below (a line shows where); onto the middle of a card, or with Alt, links the two (the link shows in the graph); onto Incoming sends it back to triage.
 - Two-finger swipe in Incoming: right keeps, left discards.
 
+Your statements:
+
+- **"Add what you know"** opens a form at the top of Incoming: what you know, how you know it (saw it myself, did it myself, was told, did not say how), a detail, the values it is about (a type and a value per row, "Add another value", at most 20) and a marking (the case's, or a stricter one). Add stays off until there is text. A refused statement leaves the form as you typed it.
+- **A statement card** carries the tag "your statement", never "nothing found". Its provenance block reads Source (the person), How they know, About, Answers (the question it answers, if any), Marking and When, in place of the query lines. It has Cite, Keep and Discard, and no Pivot or Verify: there is no query to run again.
+
 ### 5.2 Keyboard
 
 | Where | Keys |
@@ -139,6 +144,8 @@ Behaviours:
 
 A "?" card lists all of this, grouped by area.
 
+Command bar words for the person: `state <what you know>` adds a statement (how you know: "did not say how"); `answer ask-1 <text>` answers a question the same way; `overrule f1` opens the Narrative lens on that finding's Overrule form, where the values are chosen. None of them passes a gate.
+
 ### 5.3 Lenses
 
 - **Agent:** see section 6.
@@ -148,6 +155,9 @@ A "?" card lists all of this, grouped by area.
 - **Graph:** observed values as nodes, the pivots that found one from another as edges, each with its cards; a node shows its cards, its links, its "does it belong?" verdict and Pivot…; nodes are clickable and keyboard-reachable. A tall layout when docked right. Past the 60-node cap, values that nothing drawn links to are listed under the header, each a button that focuses the graph on it; a detail lists 50 links and a button shows the rest.
 - **Notes:** typed notes (note, to-do, question, decision), on the case or on a card; external links (https only).
 - **Narrative:** Summary, Key findings, Gaps and limits, Assessment. "#" in a section opens a picker to cite a kept card; dragging a card into a section cites it. Drafts (from the agent or the workbench) arrive as proposals to accept, edit or discard. "Copy as Markdown" expands every citation into its provenance and adds the marking.
+  - *Questions box* (first in the lens): each question a stage put to you, with why it matters, the cards and values it is about and the stage that asked. Its tag says "the run waits on this" (blocking, unanswered, the run going), "answered", "went on without your answer" or "question". An unanswered one has an answer box, a "how you know" select and a detail; an answered one shows its answer card. Questions from an earlier run stay answerable. At the publish gate, a line names each question answered since the draft was written.
+  - *Overrule form* (under each finding, "Overrule"): a likelihood (the standard's terms), a confidence, whether it stays ("must stay", "drop it") and a note. It sends only when something is set and the note is written. An active overrule shows "You overruled: …", the overrules it replaced, and Withdraw (which also needs a note). Findings you dropped are listed with their overrule, so they can be withdrawn.
+  - *Ruling history:* a ruled conflict shows its ruling and each ruling it replaced ("Earlier: … (replaced)"). While the run is in progress, "Change the ruling" opens the rule form again; at the publish gate it says that a changed ruling sends the draft back.
 - **Worklog:** what the system did, in the order of record (human, agent, system); every entry one toggle away.
 - **Discarded:** everything discarded, restorable.
 - **Jobs:** every background job with status, source and duration.

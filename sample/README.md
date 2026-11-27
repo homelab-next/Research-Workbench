@@ -29,6 +29,14 @@ every row of the result and records on the card what was observed and when, whic
 
 Together they show "Does it belong?": a known address is a known asset; an address in neither list reads as proven not a known asset because the asset list is complete.
 
+## Asking the person
+
+Plan, Research and Assemble may put a question to the person with `ask_person` (their stage manifests list it), and the
+profile gives those three stages the skill `context/skills/ask-the-person.md`: when to ask, what to look at before asking
+what a device is, and never to conclude that something does not belong because the sources are silent. The reviewers
+may not ask. The scripted run asks nothing, so it publishes as it did before; `tests/sample/person-acceptance.test.ts`
+adds one scripted question to a copy of it.
+
 ## A demo run
 
 The sample carries a scripted investigation (`scripts/sample-run.yaml`): the models are the scripted one, so no real model

@@ -250,6 +250,38 @@ Two lenses show it, both built from the recorded entries alone: the Timeline (ke
 
 Editing a pivots file changes the hash of every pivot in it, including a `times` line, so a lookup answered before the edit is not reused after it.
 
+## The person
+
+You know things no source holds, and you can go and look. The workbench records what you say as yours, keeps it apart from what a source returned, and labels every finding that rests on it.
+
+### A statement
+
+"Add what you know" in the Incoming column (or `state <text>` in the command bar) records a statement: your text (at most 4000 characters), how you know it (saw it myself, did it myself, was told, or did not say how; the command bar records "did not say how"), an optional detail (at most 500 characters), up to 20 values it is about, and a marking no lower than the case's. It is a card made by you, with no query, no source and no rows. It is shown as "your statement", never as "nothing found".
+
+An agent is shown it as "Source: the person (…). A statement by the person running the investigation, not data from a source." and may cite it like any card. When a draft cites a statement, the workbench (not the analyst) writes a sources entry "the person" naming each statement, how you know it and which findings cite it. Each such finding in `product.md` gets a line "Rests on the person's statement: [c5] (did it myself). A statement, not data from a source.", and the provenance has a `person` block. Check 5 fails a finding that cites a statement when the sources do not say so.
+
+### Overruling a finding
+
+In the Narrative lens, each finding has an Overrule form: a likelihood, a confidence, whether it must stay or be dropped, and a note, which is required. Your latest overrule of a finding replaces the earlier one; setting nothing withdraws it. Overrules hold for the whole case, not one run.
+
+Code holds every draft to your overrule, not the analyst's prompt: Assemble's builder sets the likelihood (and words the statement again), the confidence, or restores or drops the finding in each draft it makes. Neither reviewer may move it back: a point that would do so is refused or not sent back, and a draft that does not hold an overrule cannot be published. An overrule at the publish gate sends the work back to Assemble, with your overrule as the reason, so the analyst rewrites the finding's confidence basis and reasoning to rest on your note.
+
+### Revising a ruling
+
+When Evaluate and Challenge disagree on a finding, the run waits for your ruling. You can change a ruling while its run is in progress ("Change the ruling" in the Narrative lens). The latest ruling is the one that holds; the earlier ones are kept and shown as replaced. A ruling changed at the publish gate sends the work back to Assemble with the new ruling as the reason. An overrule made after a ruling on the same finding takes the ruling's place.
+
+### Questions
+
+Plan, Research and Assemble may put a question to you with `ask_person` (the sample gives those three stages the skill `ask-the-person`; the reviewers may not ask). A question says why it matters and which cards and values it is about. It appears in the Narrative lens's question box, and the brief counts the questions waiting for you. Answer it there, or with `answer ask-1 <text>` in the command bar. The answer is a card, a statement that answers the question, marked at least as strictly as the case and as the model request that wrote the question. A question takes one answer; to correct one, add a statement.
+
+At most `questions.max_open` questions (default 3) may be unanswered in a run; `0` turns asking off:
+
+```yaml
+questions: { max_open: 3 }
+```
+
+A stage may mark its question blocking when its result would be wrong without the answer. The stage finishes its pass, and the run then pauses before the next stage, waiting for your answer. Answering resumes the run by itself. Resuming without an answer goes on without it: the question is recorded as gone on without, that stage's later questions do not block, and every draft names it under "Questions the person has not answered:" in its gaps and limits. Check 8 fails a draft whose gaps do not name an open question.
+
 ## Before a run
 
 ```bash
@@ -306,3 +338,6 @@ It prints the address and any `problem:` lines. Fix those first.
 - A step starts from the type its earlier step's pivot yields, not from a named column of its rows.
 - The fast model (`fast_model` in a stage manifest) has no dropdown; it is set in the manifest only.
 - Run one researcher at a time against a real lake (`research.parallel: 1`, which `new-root` sets).
+- A statement by the person is not drawn in the Timeline or the Graph: it observed nothing in a source. Its values show on its card.
+- An overrule sets a finding's likelihood, confidence or place in code, but leaves the analyst's confidence basis and reasoning as written until the analyst rewrites them.
+- A blocking question holds the run after its stage's pass, not inside it: that stage does not run again on resume, so it finished its work without the answer. The stages after it read the answer.
