@@ -15,9 +15,10 @@ import type { RunnerDeps, RunQueryResult } from "../modules/runner";
 import type { Seeker } from "../modules/seeker";
 import type { Pipeline, Role, StageManifest } from "./manifests";
 import { firstUnpassedReview, nextStep } from "./next";
+import type { Step } from "./next";
 import { acceptPlan, denyPlan, requestReplan, spendPlanBudget } from "./plans";
 import { answerChallenge, reviseDraft } from "./revise";
-import { gateSendBack, overrule } from "./overrule";
+import { gateSendBack, overrule, overruleSendBack } from "./overrule";
 import { waitingReason } from "./questions";
 import { assembleRunner } from "./stages/assemble";
 import { challengeRunner } from "./stages/challenge";
@@ -168,9 +169,9 @@ export class Engine {
   }
 
   /**
-   * A person overrules a finding: its likelihood, its confidence, or whether it stays, with a note. Code holds every later draft to it. Off the
-   * publish gate the same commit writes the person's revision that holds it (not while Assemble is working); at the gate the work goes back to
-   * Assemble with the overrule as the reason. Throws OverruleRefused; advances nothing.
+   * A person overrules a finding: its likelihood, its confidence, or whether it stays, with a note. Code holds every later draft to it. At the
+   * publish gate the work goes back to Assemble with the overrule as the reason; elsewhere in a run it goes back when the current stage ends.
+   * Throws OverruleRefused; advances nothing.
    */
   overrule(input: Parameters<typeof overrule>[2]): void {
     overrule(this.session, this.deps, input);
@@ -268,7 +269,8 @@ export class Engine {
     }
     const likelihood = this.likelihood();
     for (let i = 0; i < MAX_STEPS; i++) {
-      const step = nextStep(this.session.state, this.deps.pipeline, { allow_capped: allow, ...(likelihood === undefined ? {} : { likelihood }) });
+      const next = nextStep(this.session.state, this.deps.pipeline, { allow_capped: allow, ...(likelihood === undefined ? {} : { likelihood }) });
+      const step = this.overruled(next);
       allow = false;
       switch (step.kind) {
         case "idle": return this.summary();
@@ -281,6 +283,19 @@ export class Engine {
     }
     this.session.commit(() => [this.paused(ENGINE, "the run took more steps than expected and was paused")]);
     return this.summary();
+  }
+
+  /**
+   * The step an overrule made during the run takes in place of `step` once the current stage has ended (controller ruling on I4): the work goes
+   * back to Assemble with the overrule as the reason, as at the publish gate. A stage still working, and a run that finishes, are left as they are.
+   */
+  private overruled(step: Step): Step {
+    if (step.kind !== "start" && step.kind !== "gate" && step.kind !== "pause") return step;
+    const s = this.session.state;
+    const current = s.run.stages.find((x) => x.id === s.run.current);
+    if (current === undefined || (current.status !== "passed" && current.status !== "failed")) return step;
+    const back = overruleSendBack(s, this.session.entries(), this.deps.pipeline);
+    return back === null ? step : { kind: "start", ...back };
   }
 
   /** The pause, and the disagreements between reviewers that made it, in one commit: what the person rules on is there when the run stops. */

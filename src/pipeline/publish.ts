@@ -6,7 +6,8 @@ import type { Json } from "../core/canonical";
 import { canonical, isPlainObject, parseJson } from "../core/canonical";
 import { sha256Hex } from "../core/hash";
 import type { CaseSession } from "../core/session";
-import { BASIS_TEXT, blockers, latestDraft } from "../core/state";
+import { activeOverrules, BASIS_TEXT, blockers, holdsOverrule, latestDraft, overruleSays, overruleText } from "../core/state";
+import type { CaseState, Overrule, OverruleState } from "../core/state";
 import type { Actor, Draft, Entry, EntryInput, Marking, Observable, PersonBasis } from "../core/types";
 import { strictest } from "../core/types";
 import { logToStderr } from "../core/deliver";
@@ -97,14 +98,22 @@ function restsOn(cites: readonly string[], statements: ReadonlyMap<string, Perso
     : `Rests on the person's statements: ${list}. Statements, not data from a source.`];
 }
 
-/** `statements`: the cited cards that are the person's statements, with how the person knows each. */
-function productMarkdown(draft: Draft, title: string, statements: ReadonlyMap<string, PersonBasis>): string {
+/** The person's overrules a draft holds and is to say so for: each active one whose finding is in the draft, or that dropped one. */
+function heldOverrules(state: Readonly<CaseState>, draft: Draft): OverruleState[] {
+  return activeOverrules(state).filter((o) => holdsOverrule(draft.product, o) === true);
+}
+
+/** The line under a finding whose value the person set: "Set by the person (likelihood almost certain): <note>". */
+const setBy = (o: Overrule | undefined): string[] => (o === undefined || o.stays === false ? [] : [`Set by the person (${overruleSays(o)}): ${o.note.trim()}`]);
+
+/** `statements`: the cited cards that are the person's statements, with how the person knows each; `overrules`: the person's, by finding. */
+function productMarkdown(draft: Draft, title: string, statements: ReadonlyMap<string, PersonBasis>, overrules: ReadonlyMap<string, Overrule> = new Map()): string {
   const p = draft.product;
   const cites = (ids: string[]): string => (ids.length === 0 ? "none" : ids.map((c) => `[${c}]`).join(" "));
   const list = (items: string[]): string => (items.length === 0 ? "None." : items.map((x) => `- ${x}`).join("\n"));
   const findings = p.key_findings.map((f) => [
     `### ${f.id}. ${f.statement}`, "",
-    `Likelihood: ${f.likelihood}. Confidence: ${f.confidence} (${f.confidence_basis}).`, `Citations: ${cites(f.cites)}.`, ...restsOn(f.cites, statements),
+    `Likelihood: ${f.likelihood}. Confidence: ${f.confidence} (${f.confidence_basis}).`, `Citations: ${cites(f.cites)}.`, ...restsOn(f.cites, statements), ...setBy(overrules.get(f.id)),
     `Assumptions: ${f.assumptions.length === 0 ? "none" : f.assumptions.join("; ")}.`, `Reasoning: ${f.reasoning}`,
   ].join("\n"));
   return [
@@ -122,7 +131,7 @@ function productMarkdown(draft: Draft, title: string, statements: ReadonlyMap<st
   ].join("\n");
 }
 
-function provenanceMarkdown(rows: Provenance[], marking: Marking): string {
+function provenanceMarkdown(rows: Provenance[], marking: Marking, overrules: readonly Overrule[] = []): string {
   const text = (v: unknown): string => (v === null ? "none" : typeof v === "string" ? v : JSON.stringify(v));
   const cards = rows.map((r) => r.person !== undefined ? [
     // a statement has no query: how the person knows takes the query's lines
@@ -137,17 +146,20 @@ function provenanceMarkdown(rows: Provenance[], marking: Marking): string {
     `- Why: ${text(r.why)}`, `- By: ${text(r.by)}`, `- Issued: ${text(r.issued)}`, `- Marking: ${text(r.marking)}`, `- Coverage: ${text(r.coverage)}`, `- If empty, it means: ${text(r.empty)}`,
     `- Rows: ${text(r.rows)} (hash ${text(r.rows_hash)})`, `- Result bytes SHA-256: ${text(r.result_sha256)}`,
   ].join("\n"));
-  return [marking, "", "# Provenance of the cited cards", "", cards.length === 0 ? "No card is cited." : cards.join("\n\n"), "", marking, ""].join("\n");
+  const set = overrules.length === 0 ? [] : ["# Overrules by the person", "", ...overrules.map((o) => `- ${overruleText(o)} (by ${o.by})`), ""];
+  return [marking, "", "# Provenance of the cited cards", "", cards.length === 0 ? "No card is cited." : cards.join("\n\n"), "", ...set, marking, ""].join("\n");
 }
 
 /** The files of a bundle, and the manifest that lists them. Nothing here reads a clock. */
 export function buildBundle(session: CaseSession, draft: Draft, cover: { title: string; note: string }, head: { seq: number; hash: string }, n: number): Bundle {
   const prov = provenanceOf(session, draft);
+  // the values the person set: the product says so under each finding, and the provenance lists them (final review I4)
+  const held = heldOverrules(session.state, draft);
   const files: Record<string, string> = {
     "product.json": canonical(draft.product as unknown as Json),
-    "product.md": productMarkdown(draft, cover.title, new Map(prov.flatMap((r) => (r.person === undefined ? [] : [[r.card, r.person.basis] as const])))),
+    "product.md": productMarkdown(draft, cover.title, new Map(prov.flatMap((r) => (r.person === undefined ? [] : [[r.card, r.person.basis] as const]))), new Map(held.map((o) => [o.finding, o]))),
     "provenance.json": canonical(prov as unknown as Json),
-    "provenance.md": provenanceMarkdown(prov, draft.product.marking),
+    "provenance.md": provenanceMarkdown(prov, draft.product.marking, held),
   };
   const manifest: BundleManifest = {
     case: session.id, n, draft: draft.n, draft_hash: draft.hash, head: { seq: head.seq, hash: head.hash }, marking: draft.product.marking, title: cover.title, note: cover.note,

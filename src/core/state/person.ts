@@ -147,11 +147,20 @@ const CONFIDENCE = /\b(?:over|under|un)?confiden(?:ce|t)\b/i;
 const RESTORE = /restor|reinstat|missing|bring back/i;
 const DROP = /\b(?:drop|remov|delet|omit|withdraw)\w*/i;
 
-/** Whether a reviewer's point would move the overruled finding back: it names the finding and speaks to what was set. */
+// a point about how the finding is put (its reasoning, basis or wording), which the analyst rewrites to rest on the person's note
+const WORDING = /\b(?:reasoning|reasons?|confidence_basis|basis|wording|worded|statement|argu\w*|explain\w*|rationale|justif\w*)\b/i;
+// a point that asks for another value all the same
+const ANOTHER_VALUE = /\b(?:should be|must be|lower\w*|rais\w*|reduc\w*|increas\w*|downgrad\w*|upgrad\w*|revert\w*|instead|chang\w* (?:it|the likelihood|the confidence)|move\w* (?:it|back))\b/i;
+
+/**
+ * Whether a reviewer's point would move the overruled finding back: it names the finding and speaks to what was set. A point about the finding's
+ * reasoning, basis or wording that does not ask for another value is not (controller ruling on I4): it goes back to the analyst as usual.
+ */
 export function reopensOverrule(point: string, o: Overrule): boolean {
   if (!namesFinding(point, o.finding)) return false;
-  return (o.likelihood !== null && LIKELIHOOD.test(point))
-    || (o.confidence !== null && CONFIDENCE.test(point))
+  const aboutWording = WORDING.test(point) && !ANOTHER_VALUE.test(point);
+  return (o.likelihood !== null && LIKELIHOOD.test(point) && !aboutWording)
+    || (o.confidence !== null && CONFIDENCE.test(point) && !aboutWording)
     || (o.stays === false && RESTORE.test(point))
     || (o.stays !== false && !withdrawn(o) && DROP.test(point));
 }

@@ -214,24 +214,47 @@ function offGate(failed: boolean): void {
   ]);
 }
 
-test("an overrule off the gate, on a stopped review, writes finding.overruled and the person's revision in one commit, and review starts again", async () => {
-  const r = rig(FIRST);
+test("an overrule off the gate, on a stopped review, writes only finding.overruled; on resume the work goes back to Assemble with it as the reason (final review I4)", async () => {
+  // controller ruling on I4: while a run is active the overrule sends the work back to Assemble when the current stage ends, as at the gate
+  const r = rig([...FIRST, ...AGAIN]);
   await toGate(r);
   offGate(true);
   const head = f.s.head().seq;
-  const was = latest();
   r.engine.overrule(input());
-  expect(since(head)).toEqual(["finding.overruled", "draft.revised", "stage.started"]);
+  expect(since(head)).toEqual(["finding.overruled"]);
+  expect(await r.engine.resume(person)).toMatchObject({ status: "waiting", waiting: "publish" });
+  const reason = `the person overruled f1: likelihood almost certain. Note: ${NOTE} Code holds f1 to it; rewrite f1's confidence_basis and reasoning to rest on the person's note.`;
+  const back = ofType("stage.sent_back").filter((e) => e.seq > head);
+  expect(back.map((e) => e.payload)).toEqual([{ from: "publish", to: "assemble", reason, count: 1 }]);
   const d = latest();
-  expect(d).toMatchObject({ n: was.n + 1, author: person, reason: `overruled f1: likelihood almost certain. Note: ${NOTE}` });
+  expect(d).toMatchObject({ n: 2, author: { kind: "agent", id: "analyst" }, reason: `revised after Publish: ${reason}` });
   expect(d.product.key_findings[0]).toMatchObject({ id: "f1", likelihood: "almost certain", statement: "We assess it is almost certain that the device is idle." });
-  expect(d.product.key_findings.slice(1)).toEqual(was.product.key_findings.slice(1));
-  expect(ofType("stage.started").at(-1)!.payload.stage).toBe("checks");
-  expect(blockers(f.s.state, d.hash).filter((x) => x.includes("overrule"))).toEqual([]);
+  expect(ofType("draft.revised").filter((e) => e.actor.kind === "human")).toEqual([]);
+  expect(blockers(f.s.state, d.hash)).toEqual([]);
 });
 
-test("an overrule while Assemble is working writes only finding.overruled; the draft Assemble then builds holds it", async () => {
-  const r = rig([...FIRST, ...AGAIN]);
+test("an overrule while a review stage works: that stage ends, then the work goes to Assemble with the overrule as the reason (final review I4)", async () => {
+  let once = false;
+  const r: Rig = rig([...FIRST, ...AGAIN], {
+    checks: async () => {
+      if (!once && f.s.state.drafts.length === 1) { once = true; r.engine.overrule(input({ likelihood: null, confidence: "high" })); }
+      return { ...PASS, draft_hash: latestDraft(f.s.state)?.hash ?? null };
+    },
+  });
+  await toGate(r);
+  expect(once).toBe(true);
+  const back = ofType("stage.sent_back").filter((e) => e.payload.to === "assemble");
+  expect(back.map((e) => [e.payload.from, e.payload.reason.slice(0, 41)])).toEqual([["publish", "the person overruled f1: confidence high."]]);
+  // Checks finished on draft 1 before the send-back
+  const checksEnd = ofType("stage.finished").find((e) => e.payload.stage === "checks")!;
+  expect(checksEnd.seq).toBeLessThan(back[0]!.seq);
+  const d = latest();
+  expect(d).toMatchObject({ n: 2, author: { kind: "agent", id: "analyst" } });
+  expect(d.product.key_findings[0]).toMatchObject({ id: "f1", confidence: "high" });
+});
+
+test("an overrule while Assemble is working writes only finding.overruled; the draft Assemble then builds holds it, and Assemble is sent it once to rewrite the basis", async () => {
+  const r = rig([...FIRST, ...AGAIN, ...AGAIN]);
   await toGate(r);
   r.engine.reject({ actor: person, reason: "look again", stop: false });
   let head = 0;
@@ -246,6 +269,10 @@ test("an overrule while Assemble is working writes only finding.overruled; the d
   const d = latest();
   expect(d.author).toMatchObject({ kind: "agent", id: "analyst" });
   expect(d.product.key_findings[0]).toMatchObject({ id: "f1", likelihood: "roughly even chance", confidence: "high" });
+  // the draft that pass built held the values, but its basis and reasoning were written before the overrule: Assemble is sent it once (final review I4)
+  const back = ofType("stage.sent_back").filter((e) => e.seq > head);
+  expect(back.map((e) => [e.payload.from, e.payload.to, e.payload.reason.startsWith("the person overruled f1: confidence high. Note")])).toEqual([["publish", "assemble", true]]);
+  expect(f.s.state.drafts).toHaveLength(3);
 });
 
 test("an overrule with no run in progress writes only finding.overruled, and the next run's first Assemble draft holds it", async () => {

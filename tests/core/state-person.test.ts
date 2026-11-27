@@ -275,3 +275,17 @@ test("reopensOverrule: a point that names the finding and speaks to what was set
   expect(reopensOverrule("f1 should be dropped", overrule({ stays: true }))).toBe(true);
   expect(reopensOverrule("f1 should be dropped", overrule())).toBe(false);                      // withdrawn: nothing is settled
 });
+
+test("reopensOverrule: a point about an overruled finding's wording or reasoning is not reopening; one that asks for another value is (final review I4)", () => {
+  const o = overrule({ likelihood: "almost certain" });
+  expect(reopensOverrule("f1: the reasoning argues for a roughly even chance and does not support almost certain", o)).toBe(false);
+  expect(reopensOverrule("f1's confidence_basis does not explain why it is almost certain", o)).toBe(false);
+  expect(reopensOverrule("f1: the statement's wording overstates what c1 shows", o)).toBe(false);
+  expect(reopensOverrule("f1: the reasoning supports only a roughly even chance; the likelihood should be lowered", o)).toBe(true);
+  expect(reopensOverrule("f1 overstates the likelihood; change it to likely", o)).toBe(true);
+  const c = overrule({ confidence: "high" });
+  expect(reopensOverrule("f1's reasoning does not justify high confidence", c)).toBe(false);
+  expect(reopensOverrule("f1's reasoning does not justify high confidence; lower it to moderate", c)).toBe(true);
+  // a drop is never a point about wording
+  expect(reopensOverrule("f1's reasoning is weak and f1 should be dropped", o)).toBe(true);
+});

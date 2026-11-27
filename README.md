@@ -264,11 +264,11 @@ An agent is shown it as "Source: the person (…). A statement by the person run
 
 In the Narrative lens, each finding has an Overrule form: a likelihood, a confidence, whether it must stay or be dropped, and a note, which is required. Your latest overrule of a finding replaces the earlier one; setting nothing withdraws it. Overrules hold for the whole case, not one run.
 
-Code holds every draft to your overrule, not the analyst's prompt: Assemble's builder sets the likelihood (and words the statement again), the confidence, or restores or drops the finding in each draft it makes. Neither reviewer may move it back: a point that would do so is refused or not sent back, and a draft that does not hold an overrule cannot be published. An overrule at the publish gate sends the work back to Assemble, with your overrule as the reason, so the analyst rewrites the finding's confidence basis and reasoning to rest on your note.
+Code holds every draft to your overrule, not the analyst's prompt: Assemble's builder sets the likelihood (and words the statement again), the confidence, or restores or drops the finding in each draft it makes. Neither reviewer may move it back: a point that would do so is refused or not sent back, and a draft that does not hold an overrule cannot be published. An overrule made while a run is in progress sends the work back to Assemble, with your overrule as the reason, so the analyst rewrites the finding's confidence basis and reasoning to rest on your note: at once at the publish gate, otherwise when the current stage ends. A reviewer's point about the overruled finding's reasoning or wording still goes back to the analyst; only a point that asks for another value is held. The published product says under the finding which value you set, with your note, and the provenance lists your overrules.
 
 ### Revising a ruling
 
-When Evaluate and Challenge disagree on a finding, the run waits for your ruling. You can change a ruling while its run is in progress ("Change the ruling" in the Narrative lens). The latest ruling is the one that holds; the earlier ones are kept and shown as replaced. A ruling changed at the publish gate sends the work back to Assemble with the new ruling as the reason. An overrule made after a ruling on the same finding takes the ruling's place.
+When Evaluate and Challenge disagree on a finding, the run waits for your ruling. You can change a ruling while its run is in progress ("Change the ruling" in the Narrative lens). The latest ruling is the one that holds; the earlier ones are kept and shown as replaced. A ruling changed at the publish gate sends the work back to Assemble with the new ruling as the reason. Between a ruling and an overrule of the same finding, the later one holds: an overrule made after a ruling takes its place, and a ruling that keeps a value, made after an overrule, takes the overrule's place.
 
 ### Questions
 
@@ -339,5 +339,5 @@ It prints the address and any `problem:` lines. Fix those first.
 - The fast model (`fast_model` in a stage manifest) has no dropdown; it is set in the manifest only.
 - Run one researcher at a time against a real lake (`research.parallel: 1`, which `new-root` sets).
 - A statement by the person is not drawn in the Timeline or the Graph: it observed nothing in a source. Its values show on its card.
-- An overrule sets a finding's likelihood, confidence or place in code, but leaves the analyst's confidence basis and reasoning as written until the analyst rewrites them.
+- An overrule sets a finding's likelihood, confidence or place in code; the confidence basis and reasoning are the analyst's until its next Assemble pass rewrites them. An overrule made with no run in progress reaches the next run's drafts but is not sent to the analyst as a reason.
 - A blocking question holds the run after its stage's pass, not inside it: that stage does not run again on resume, so it finished its work without the answer. The stages after it read the answer.

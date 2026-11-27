@@ -604,3 +604,15 @@ test("a bundle of a draft that cites no statement is byte for byte what it was",
   expect((JSON.parse(after.files["provenance.json"]!) as Record<string, Json>[]).some((r) => "person" in r)).toBe(false);
   expect(after.files["product.md"]).not.toContain("Rests on");
 });
+
+test("the product says which value the person set, with their note, and the provenance lists the overrules (final review I4)", () => {
+  cards();
+  const d = draftOf(productFor(1), 1, human, "r");
+  f.s.commit(() => [{ type: "draft.revised", actor: human, payload: { draft: d } }]);
+  const f1 = d.product.key_findings[0]!;
+  f.s.commit(() => [{ type: "finding.overruled", actor: human, payload: { finding: f1.id, draft_hash: d.hash, likelihood: f1.likelihood, confidence: "high", stays: null, note: "It is the TV I installed." } }]);
+  const files = buildBundle(f.s, d, { title: "T", note: "n" }, { seq: 1, hash: "x" }, 1).files;
+  expect(files["product.md"]).toContain(`Set by the person (likelihood ${f1.likelihood}, confidence high): It is the TV I installed.\n`);
+  expect(files["product.md"]!.match(/Set by the person/g)).toHaveLength(1);
+  expect(files["provenance.md"]).toContain(`# Overrules by the person\n\n- ${f1.id}: likelihood ${f1.likelihood}, confidence high. Note: It is the TV I installed. (by analyst)`);
+});
