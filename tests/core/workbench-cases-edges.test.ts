@@ -314,3 +314,54 @@ test("the checked store listing shows such a file as unreadable, with the reason
   // a search applies to what is listed
   expect((await wb.checkedStore("benign")).cases).toEqual([]);
 });
+
+// ---------- I5: the tests the surviving mutants showed were missing ----------
+
+test("a data folder from before slice 11 (cases, no mark, no store) gives the next id, and its cases are untouched", () => {
+  const one = wb.createCase(sample, person);
+  note(one, "kept");
+  const two = wb.createCase(sample, person);
+  const heads = [one.head(), two.head()];
+  wb.close();
+  rmSync(join(cases(), ".high-water"));
+  wb = openWb();
+  expect(wb.createCase(sample, person).id).toBe("CASE-3");
+  expect([wb.session("CASE-1").head(), wb.session("CASE-2").head()]).toEqual(heads);
+  expect(wb.session("CASE-1").state.skipped).toEqual([]);
+});
+
+test("while a case is packed, session(id) is refused: nothing can write to the ledger being packed", async () => {
+  let during: unknown = null;
+  wb.close();
+  wb = openWb({ beforeUnloadStep: (step) => { if (step === "write") { try { wb.session("CASE-1"); } catch (e) { during = e; } } } });
+  wb.createCase(sample, person);
+  const r = await wb.unloadCase("CASE-1", { actor: person });
+  expect(r.ok).toBe(true);
+  expect(during).toBeInstanceOf(CaseRefused);
+  expect((during as CaseRefused).message).toBe("CASE-1 is being unloaded");
+  expect((await readManifest(join(dir, "store", FILE))).entries).toBe(2);
+});
+
+test("a special file (a FIFO) in the case folder fails the unload, named, and the case stays loaded", async () => {
+  const s = wb.createCase(sample, person);
+  const made = Bun.spawnSync(["mkfifo", join(s.dir, "blobs", "pipe")]);
+  expect(made.exitCode).toBe(0);
+  const r = await wb.unloadCase("CASE-1", { actor: person });
+  if (r.ok) throw new Error("unloaded without the FIFO");
+  expect(r.reason).toBe("the case file could not be written: blobs/pipe is not a regular file; a case file holds only regular files");
+  expect(ls(join(dir, "store"))).toEqual([]);
+  expect(wb.session("CASE-1").entries().map((e) => e.type)).toEqual(["case.created", "case.unloaded", "case.unload_failed"]);
+});
+
+test("a load whose case.loaded cannot be written leaves no cases/CASE-N and no .loading folder", async () => {
+  let broken = false;
+  wb.close();
+  wb = openWb({ now: () => { if (broken) throw new Error("the clock failed"); return now(); } });
+  const file = await unloadedFile();
+  broken = true;
+  const err = await refusalOf(wb.loadCase(file, { actor: person }));
+  expect((err as Error).message).toBe("the clock failed");
+  expect(ls(cases())).toEqual([".high-water"]);
+  broken = false;
+  expect((await wb.loadCase(file, { actor: person })).id).toBe("CASE-1");
+});
