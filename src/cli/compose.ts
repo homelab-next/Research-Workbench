@@ -129,29 +129,57 @@ function build(config: Config, wb: Workbench, opts: { refuse_hosts?: () => reado
  * there is no seeker; every manifest problem short of that is returned in `problems`.
  *
  * `reload()` loads the roots again and replaces, in place on the same deps object, the registry, the runner, the seeker, the providers, the
- * loops, the components, the pipeline and the profile; the old connector pool is closed
- * (a pool opens a connector again when it is next asked for one, so a run that holds the old runner can still query).
+ * loops, the components, the pipeline and the profile. The old connector pool is closed once nothing holds it: each run bound to the deps it
+ * replaced holds that pool (`deps.retain`, a count) until the run ends, so a query in flight across a reload completes; with no holder it is
+ * closed at once. `close()` closes every pool still open.
  * It returns the new problems. It throws ComposeError and changes nothing on deps when the default loop would not be usable. Copy on write:
  * nothing a reload replaces is changed, so whoever holds the old objects (a run's own copy of the deps it bound) goes on with them as they were.
  */
 export function compose(config: Config, wb: Workbench, opts: { refuse_hosts?: () => readonly string[] } = {}): { deps: EngineDeps; problems: string[]; close(): void; reload(): string[] } {
   const first = build(config, wb, opts);
-  let pool = first.pool;
+  /** A pool, how many runs hold it, and whether a reload has replaced it (then it is closed when the last holder lets go). */
+  interface Held { pool: ConnectorPool; holders: number; replaced: boolean; closed: boolean }
+  const shut = (h: Held): void => {
+    if (h.closed) return;
+    h.closed = true;
+    open.delete(h);
+    h.pool.closeAll();
+  };
+  const open = new Set<Held>();
+  const hold = (pool: ConnectorPool): { held: Held; retain: () => () => void } => {
+    const held: Held = { pool, holders: 0, replaced: false, closed: false };
+    open.add(held);
+    return {
+      held,
+      retain: () => {
+        held.holders++;
+        let done = false;
+        return () => {
+          if (done) return;
+          done = true;
+          held.holders--;
+          if (held.replaced && held.holders === 0) shut(held);
+        };
+      },
+    };
+  };
+  let current = hold(first.pool);
   const deps: EngineDeps = {
-    config, ...first.built, content: wb.chainBlobs,
+    config, ...first.built, content: wb.chainBlobs, retain: current.retain,
     anchor: (a) => {
       wb.chain.append({ type: "case.anchored", actor: { kind: "system", id: "engine" }, payload: { case: a.case, seq: a.seq, hash: a.hash, why: a.why } });
     },
   };
   return {
     deps, problems: first.problems,
-    close: () => pool.closeAll(),
+    close: () => { for (const h of [...open]) shut(h); },
     reload: () => {
       const next = build(config, wb, opts);
-      Object.assign(deps, next.built);
-      const old = pool;
-      pool = next.pool;
-      old.closeAll();
+      const old = current;
+      current = hold(next.pool);
+      Object.assign(deps, next.built, { retain: current.retain });
+      old.held.replaced = true;
+      if (old.held.holders === 0) shut(old.held);
       return next.problems;
     },
   };

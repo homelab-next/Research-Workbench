@@ -109,11 +109,15 @@ const CASE_MOVES = /\bunloadCase\b|\bloadCase\b|\bCaseStoreFolder\b|\/api\/store
 const noAgentMovesCases: Rule = (path, text) =>
   /^src\/(agents|pipeline)\//.test(path) && CASE_MOVES.test(text) ? [`${path} names ${text.match(CASE_MOVES)![0]}`] : [];
 const sampleNamesNoMove: Rule = (path, text) => (path.startsWith("sample/") && CASE_MOVES.test(text) ? [`${path} names ${text.match(CASE_MOVES)![0]}`] : []);
-/** The case file, the store and the tar code they share are server-side core: neither the browser's code nor the fold imports them. */
+/** The case file, the store, the tar code they share and the loop file are server-side core: neither the browser's code nor the fold imports them. */
 const SERVER_CORE = ["src/core/casefile", "src/core/store", "src/core/tar"].flatMap((d) => [d, `${d}.ts`]);
+/** Every file whose name starts with this is server-side core too: the loop file and anything beside it named for it. */
+const LOOPFILE = "src/core/loopfile";
+const reachesLoopFile = (path: string, spec: string): boolean =>
+  spec.startsWith(".") && relative(ROOT, resolve(ROOT, dirname(path), spec)).startsWith(LOOPFILE);
 const caseFileStaysOnServer: Rule = (path, text) =>
   /^src\/(web|core\/state)\//.test(path)
-    ? imports(text).filter((spec) => SERVER_CORE.some((d) => reaches(path, spec, d))).map((spec) => `${path} imports ${spec}`)
+    ? imports(text).filter((spec) => SERVER_CORE.some((d) => reaches(path, spec, d)) || reachesLoopFile(path, spec)).map((spec) => `${path} imports ${spec}`)
     : [];
 
 test("no agent tool and no stage runner can unload, load or delete a case", () => {
@@ -130,7 +134,7 @@ test("no agent tool and no stage runner can unload, load or delete a case", () =
   expect(sampleNamesNoMove("sample/context/personas/x.yaml", "tools: [list_cards, load_case]")).toHaveLength(1);
 });
 
-test("the case file, the store and the tar code are never imported by the browser's code or by the fold", () => {
+test("the case file, the store, the tar code and the loop file are never imported by the browser's code or by the fold", () => {
   expect(sources.some((f) => f.path === "src/core/casefile.ts") && sources.some((f) => f.path === "src/core/store.ts")).toBe(true);
   expect(sources.flatMap((f) => caseFileStaysOnServer(f.path, f.text))).toEqual([]);
   expect(caseFileStaysOnServer("src/web/views/x.ts", `import { checkCaseFile } from "../../core/casefile";`)).toHaveLength(1);
@@ -141,6 +145,12 @@ test("the case file, the store and the tar code are never imported by the browse
   expect(caseFileStaysOnServer("src/web/views/x.ts", `import { readTarGz } from "../../core/tar";`)).toHaveLength(1);
   expect(caseFileStaysOnServer("src/core/state/x.ts", `import type { TarMember } from "../tar.ts";`)).toHaveLength(1);
   expect(caseFileStaysOnServer("src/server/x.ts", `import { writeTarGz } from "../core/tar";`)).toEqual([]);
+  // the loop file is server-side core (slice 12): the browser and the fold never import it
+  expect(sources.some((f) => f.path === "src/core/loopfile.ts")).toBe(true);
+  expect(caseFileStaysOnServer("src/web/views/x.ts", `import { readLoopFile } from "../../core/loopfile";`)).toHaveLength(1);
+  expect(caseFileStaysOnServer("src/core/state/x.ts", `import type { LoopFileManifest } from "../loopfile.ts";`)).toHaveLength(1);
+  expect(caseFileStaysOnServer("src/web/x.ts", `import { x } from "../core/loopfile-parts.ts";`)).toHaveLength(1);
+  expect(caseFileStaysOnServer("src/server/x.ts", `import { writeLoopFile } from "../core/loopfile";`)).toEqual([]);
   expect(caseFileStaysOnServer("src/web/app.ts", `import { CaseStore } from "./store";`)).toEqual([]);
   expect(caseFileStaysOnServer("src/server/x.ts", `import { checkCaseFile } from "../core/casefile";`)).toEqual([]);
 });

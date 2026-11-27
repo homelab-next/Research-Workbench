@@ -171,16 +171,17 @@ test("a usage error exits 2", () => {
   expect(cli(env, ["status", "CASE-1", "--config", join(env.dir, "missing.yaml")], false).code).toBe(2);
 });
 
-test("a run a changed pipeline strands can be stopped, and stays stopped", () => {
+test("a run whose loop version is no longer in the workbench is stranded, can be stopped, and stays stopped", () => {
   const e = setup();
   expect(cli(e, START).code).toBe(0);
   expect(cli(e, ["replan", "CASE-1", "--note", "look at the leases too"]).code).toBe(1);
-  // the owner edits a stage manifest: the paused run can no longer go on
+  // the run is bound to its loop version, so an edit of a stage manifest does not reach it; a stage manifest gone from the content store does
   const stage = join(e.dir, "sample", "stages", "assemble.yaml");
+  rmSync(join(e.data, "blobs", new Bun.CryptoHasher("sha256").update(readFileSync(stage)).digest("hex")));
   writeFileSync(stage, readFileSync(stage, "utf8").replace("title: Assemble", "title: Assemble the draft"));
   const stuck = cli(e, ["resume", "CASE-1"]);
   expect(stuck.code).toBe(1);
-  expect(lines(stuck.out)[0]).toBe(`CASE-1 paused stage=plan reason="the pipeline has changed since this run started"`);
+  expect(lines(stuck.out)[0]).toBe(`CASE-1 paused stage=plan reason="this run's loop version is not in this workbench; import its loop file"`);
   expect(cli(e, ["stop", "CASE-1"], false).code).toBe(2);
   const stop = cli(e, ["stop", "CASE-1", "--reason", "the pipeline was changed"], false);
   expect(stop.err).toBe("");

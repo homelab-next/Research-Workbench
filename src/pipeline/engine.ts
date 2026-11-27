@@ -3,7 +3,7 @@ import type { Json } from "../core/canonical";
 import { canonical } from "../core/canonical";
 import type { CaseSession } from "../core/session";
 import type { CaseState, RunState } from "../core/state";
-import { gateChanges, latestDraft, waitingOn } from "../core/state";
+import { gateChanges, latestDraft, loopOf, waitingOn } from "../core/state";
 import type { Actor, Draft, EntryInput, Marking, ModelChoice, Product, RunHold } from "../core/types";
 import { termsOf } from "../agents/draft";
 import { mayGo, tooStrict } from "../agents/pack";
@@ -15,7 +15,8 @@ import type { RunnerDeps, RunQueryResult } from "../modules/runner";
 import type { Seeker } from "../modules/seeker";
 import type { Pipeline, Role, StageManifest } from "./manifests";
 import type { Components } from "./components";
-import type { LoopCatalog } from "./loops";
+import { IMPLICIT_NOTE } from "./loops";
+import type { LoopCatalog, ResolvedLoop } from "./loops";
 import type { BlobStore } from "../core/blobs";
 import { firstUnpassedReview, nextStep } from "./next";
 import type { Step } from "./next";
@@ -44,6 +45,13 @@ export interface EngineDeps {
   /** Where problems that do not stop the work are reported (a failed anchor, a leftover folder, a missing objective); stderr when absent. */
   onError?: (error: unknown) => void;
   anchor?: (a: { case: string; seq: number; hash: string; why: "published" | "closed" }) => void;
+  /** Called once when a run ends published or completed, with the outputs its loop declares (Task 7 supplies them; until then `{}`). */
+  onOutputs?: (o: { case: string; loop: string; run: string; head: { seq: number; hash: string }; outcome: "published" | "completed"; marking: Marking; outputs: Record<string, Json> }) => void;
+  /**
+   * Keeps what this deps' runner uses (its connector pool) open until the returned release is called, even after a reload has replaced it.
+   * Set by compose. A bound run holds it from the time it binds until it ends, so a query in flight across a reload completes.
+   */
+  retain?: () => () => void;
 }
 export interface StageEnv {
   session: CaseSession; deps: EngineDeps; stage: StageManifest; attempt: number;
@@ -75,6 +83,12 @@ const MAX_STEPS = 500;
 const recovered = new WeakSet<CaseSession>();
 
 const firstLine = (text: string): string => text.split("\n")[0]!.slice(0, 300);
+/** Why a bound run cannot be rebuilt here: its lock, or a hash the lock names, is not in this workbench's content store. */
+export const NOT_IN_WORKBENCH = "this run's loop version is not in this workbench; import its loop file";
+/** A run is in progress: started, and not finished. */
+const inProgress = (s: Readonly<CaseState>): boolean => s.run.id !== null && s.run.status !== "none" && s.run.status !== "finished";
+/** The first problem that stops a loop, for a refusal or a pause. */
+const firstProblem = (loops: LoopCatalog, id: string): string => loops.problems(id).filter((p) => p !== IMPLICIT_NOTE)[0] ?? `the loop "${id}" is not usable`;
 /** The most of a reason a stage.finished or run.paused keeps: a stage's reason can be a model's text, and an entry has a size limit. */
 export const REASON_CHARS = 4000;
 const clipReason = (reason: string): string => (reason.length > REASON_CHARS ? `${reason.slice(0, REASON_CHARS - 1)}…` : reason);
@@ -82,10 +96,95 @@ const clipReason = (reason: string): string => (reason.length > REASON_CHARS ? `
 export class Engine {
   private inflight: Promise<RunSummary> | null = null;
   private readonly runners: Partial<Record<Role, StageRunner>>;
+  /**
+   * The run in progress that bound a loop version, with its own copy of the deps taken when it bound: the pipeline, profile and components of
+   * its lock, and the registry, runner and the rest as they were then. A reload changes nothing here. `release` lets go of the connector pool.
+   */
+  private held: { run: string; deps: EngineDeps; loop: ResolvedLoop; release: (() => void) | null } | null = null;
+  /** The run in progress that bound a version this workbench cannot rebuild. */
+  private lost: { run: string; why: string } | null = null;
 
   /** Builds an engine and writes nothing: a read (a status, a replay) can use one. A command that acts opens it with Engine.open. */
   constructor(private readonly session: CaseSession, private readonly deps: EngineDeps, opts: { runners?: Partial<Record<Role, StageRunner>> } = {}) {
     this.runners = { frame: frameRunner, plan: planRunner, research: researchRunner, assemble: assembleRunner, checks: checksRunner, evaluate: evaluateRunner, challenge: challengeRunner, publish: publishRunner, feedback: feedbackRunner, ...opts.runners };
+    this.bind();
+  }
+
+  /**
+   * The deps this engine works with now: the given ones with pipeline, profile and components those of the case's run (its bound version, or
+   * the current version of its loop). A run that bound a version keeps the copy it bound with until it ends. A run from before slice 12 (no
+   * loop.bound) gets the current version's pipeline and profile and no components, so its stages read the registry as they did. With no
+   * `deps.loops`, the given deps.
+   */
+  get bound(): EngineDeps {
+    if (this.deps.loops === undefined) return this.deps;
+    this.bind();
+    if (this.held !== null) return this.held.deps;
+    if (this.lost !== null) return this.deps;
+    const loop = this.current();
+    if (loop === null) return this.deps;
+    if (inProgress(this.session.state)) {
+      const { components: _components, ...rest } = this.deps;
+      return { ...rest, pipeline: loop.pipeline, profile: loop.profile };
+    }
+    return { ...this.deps, pipeline: loop.pipeline, profile: loop.profile, components: loop.components };
+  }
+
+  /** Why the engine cannot use the case's loop (a lock whose content is missing, a loop that is not usable); null when it can. */
+  get unusable(): string | null {
+    const loops = this.deps.loops;
+    if (loops === undefined) return null;
+    this.bind();
+    if (this.held !== null) return null;
+    if (this.lost !== null) return this.lost.why;
+    const id = loopOf(this.session.state, this.deps.config.loops.default);
+    return loops.current(id) === null ? firstProblem(loops, id) : null;
+  }
+
+  /** The resolved loop behind `bound`: its manifest (inputs, outputs), its lock. Null when deps.loops is absent. */
+  get loop(): ResolvedLoop | null {
+    if (this.deps.loops === undefined) return null;
+    this.bind();
+    return this.held?.loop ?? (this.lost !== null ? null : this.current());
+  }
+
+  /** Lets go of what the bound run holds (its connector pool). The host calls it when it forgets this engine. */
+  close(): void {
+    this.held?.release?.();
+    this.held = null;
+    this.lost = null;
+  }
+
+  /** The current version of the case's loop, or null when it is not usable. */
+  private current(): ResolvedLoop | null {
+    return this.deps.loops?.current(loopOf(this.session.state, this.deps.config.loops.default)) ?? null;
+  }
+
+  /**
+   * Binds the run in progress to the version its loop.bound names, rebuilt from its lock and the content store, once per run; lets go of a run
+   * that has ended. A run with no loop.bound is legacy and binds nothing.
+   */
+  private bind(): void {
+    const loops = this.deps.loops;
+    if (loops === undefined) return;
+    const s = this.session.state;
+    const run = inProgress(s) ? s.run.id : null;
+    if (run !== null && (this.held?.run === run || this.lost?.run === run)) return;
+    this.close();
+    if (run === null || s.loop.bound === null) return;
+    let made: ResolvedLoop | string;
+    try {
+      const lock = loops.readLock(this.session.blobs.get(s.loop.bound.lock.blob));
+      made = lock === null ? NOT_IN_WORKBENCH : loops.fromLock(lock);
+    } catch {
+      made = NOT_IN_WORKBENCH;
+    }
+    if (typeof made === "string") {
+      this.lost = { run, why: NOT_IN_WORKBENCH };
+      return;
+    }
+    const deps: EngineDeps = { ...this.deps, pipeline: made.pipeline, profile: made.profile, components: made.components };
+    this.held = { run, deps, loop: made, release: this.deps.retain?.() ?? null };
   }
 
   /** An engine for a command that will act on the case: the case is recovered first (once per open session). */
@@ -106,14 +205,31 @@ export class Engine {
     removeTempBundles(this.session, (err) => (this.deps.onError ?? logToStderr("publish"))(err));
   }
 
+  /**
+   * Starts a run. With loops, it binds the current version of the case's loop: the lock goes in the case's blobs, and loop.bound and run.started
+   * are one commit. Throws RunRefused, writing nothing, when a run is in progress or the loop is not usable (its first problem).
+   */
   start(actor: Actor): void {
+    const loops = this.deps.loops;
     this.session.commit((state, ids) => {
       const { status } = state.run;
       if (status !== "none" && status !== "finished") throw new RunRefused(`a run is already ${status}; finish or stop it before starting another`);
-      const { pipeline } = this.deps;
-      const stages = pipeline.stages.map(({ id, title, phase, runs, gate, reviews, model }) => ({ id, title, phase, runs, gate, reviews, model }));
-      return [{ type: "run.started", actor, payload: { run: ids.next("run"), pipeline: pipeline.id, pipeline_hash: pipeline.hash, stages } }];
+      const stagesOf = (pipeline: Pipeline) => pipeline.stages.map(({ id, title, phase, runs, gate, reviews, model }) => ({ id, title, phase, runs, gate, reviews, model }));
+      if (loops === undefined) {
+        const { pipeline } = this.deps;
+        return [{ type: "run.started", actor, payload: { run: ids.next("run"), pipeline: pipeline.id, pipeline_hash: pipeline.hash, stages: stagesOf(pipeline) } }];
+      }
+      const id = loopOf(state, this.deps.config.loops.default);
+      const loop = loops.current(id);
+      if (loop === null) throw new RunRefused(firstProblem(loops, id));
+      const { pipeline } = loop;
+      const lock = this.session.blobs.put(canonical(loop.lock as unknown as Json));
+      return [
+        { type: "loop.bound", actor, payload: { loop: id, version: loop.manifest.version, hash: pipeline.hash, lock } },
+        { type: "run.started", actor, payload: { run: ids.next("run"), pipeline: id, pipeline_hash: pipeline.hash, stages: stagesOf(pipeline) } },
+      ];
     });
+    this.bind();
   }
 
   /** Carries the run as far as it goes without a person. A call made while another is in flight returns that one's promise. */
@@ -152,6 +268,7 @@ export class Engine {
       return [{ type: "run.finished", actor, run: state.run.id, payload: { outcome: "stopped", reason } }];
     });
     this.anchorCase("closed");
+    this.bind();
   }
 
   /** A person accepts the proposed plan, whole or in part, with budgets for its costly steps. Throws PlanRefused; advances nothing. */
@@ -161,6 +278,7 @@ export class Engine {
 
   denyPlan(input: { reason: string; actor: Actor }): void {
     denyPlan(this.session, input, () => this.anchorCase("closed"));
+    this.bind();
   }
 
   /** Asks the planner to plan again with the person's note. */
@@ -170,7 +288,7 @@ export class Engine {
 
   /** A person edits the draft: a new revision in their name, and review starts again. Throws ReviseRefused; advances nothing. */
   revise(input: { product: Product; reason: string; actor: Actor }): Draft {
-    return reviseDraft(this.session, this.deps.pipeline, input);
+    return reviseDraft(this.session, this.bound.pipeline, input);
   }
 
   /**
@@ -179,7 +297,7 @@ export class Engine {
    * Throws OverruleRefused; advances nothing.
    */
   overrule(input: Parameters<typeof overrule>[2]): void {
-    overrule(this.session, this.deps, input);
+    overrule(this.session, this.bound, input);
   }
 
   /** A person answers an open challenge. Throws ReviseRefused. */
@@ -221,7 +339,7 @@ export class Engine {
       if (d === null || d.hash !== draft_hash) throw new RunRefused("a newer draft arrived; look at it before sending it back");
       const changes = gateChanges(s, entries);
       if (changes.length === 0) throw new RunRefused(`there is no change of yours since draft ${d.n} was made: nothing to send back`);
-      const back = gateSendBack(s, this.deps.pipeline, changes.map((c) => c.reason).join("\n"), actor);
+      const back = gateSendBack(s, this.bound.pipeline, changes.map((c) => c.reason).join("\n"), actor);
       if (back.length === 0) throw new RunRefused("the publish gate sends work back nowhere");
       return back;
     });
@@ -232,18 +350,19 @@ export class Engine {
    * made here. `unload_after` is recorded, not acted on: the engine holds a session, not the workbench, so the host unloads once `unloadDue(state)`.
    */
   approve(input: { actor: Actor; unload_after?: boolean }): { n: number; dir: string; draft_hash: string } {
-    return approve(this.session, this.deps, input);
+    return approve(this.session, this.bound, input);
   }
 
   /** A person sends the draft back to the stage the pipeline names, or stops the run. Throws PublishRefused. */
   reject(input: { reason: string; stop: boolean; actor: Actor }): void {
-    reject(this.session, this.deps.pipeline, input);
+    reject(this.session, this.bound.pipeline, input);
     if (input.stop) this.anchorCase("closed");
+    this.bind();
   }
 
   /** A person's measure of effectiveness. Throws FeedbackRefused. */
   feedback(input: { measure: string; value: number | string; note: string; actor: Actor }): void {
-    recordFeedback(this.session, this.deps.registry, input);
+    recordFeedback(this.session, this.bound.registry, input);
   }
 
   setModel(stage: string, choice: ModelChoice, actor: Actor): void {
@@ -268,9 +387,9 @@ export class Engine {
   }
 
   /** The profile standard's likelihood terms, least likely first: what a disagreement between reviewers is described with. */
-  private likelihood(): readonly string[] | undefined {
-    const { profile, registry } = this.deps;
-    const standard = profile.standard === null ? null : registry.get("standard", profile.standard);
+  private likelihood(d: EngineDeps): readonly string[] | undefined {
+    const { profile, registry, components } = d;
+    const standard = profile.standard === null ? null : components !== undefined ? components.get("*", "standard", profile.standard) : registry.get("standard", profile.standard);
     return termsOf(standard?.body ?? null)?.likelihood;
   }
 
@@ -282,25 +401,35 @@ export class Engine {
 
   private async drive(allowCapped: boolean): Promise<RunSummary> {
     let allow = allowCapped;
+    const d = this.bound;
     const { status } = this.session.state.run;
-    // a run started before slice 12 recorded the old formula's hash of the same stages, which a loop keeps as legacy_hash
-    const started = this.startedWith();
-    if (status === "running" && started !== this.deps.pipeline.hash && (started === null || started !== this.deps.pipeline.legacy_hash)) {
-      this.session.commit(() => [this.paused(ENGINE, "the pipeline has changed since this run started")]);
-      return this.summary();
+    if (status === "running") {
+      // fail closed: a run whose loop cannot be used (a lock whose content is missing, a component that cannot load) does nothing
+      const why = this.unusable;
+      if (why !== null) {
+        this.session.commit(() => [this.paused(ENGINE, why)]);
+        return this.summary();
+      }
+      // a bound run reads its lock and never meets a changed pipeline. A run started before slice 12 recorded the old formula's hash of the
+      // same stages, which a loop keeps as legacy_hash, and is held to its loop as the root has it now
+      const started = this.startedWith();
+      if (this.held === null && (started === null || (started !== d.pipeline.hash && started !== d.pipeline.legacy_hash))) {
+        this.session.commit(() => [this.paused(ENGINE, "the pipeline has changed since this run started")]);
+        return this.summary();
+      }
     }
-    const likelihood = this.likelihood();
+    const likelihood = this.likelihood(d);
     for (let i = 0; i < MAX_STEPS; i++) {
-      const next = nextStep(this.session.state, this.deps.pipeline, { allow_capped: allow, ...(likelihood === undefined ? {} : { likelihood }) });
-      const step = this.overruled(next);
+      const next = nextStep(this.session.state, d.pipeline, { allow_capped: allow, ...(likelihood === undefined ? {} : { likelihood }) });
+      const step = this.overruled(next, d);
       allow = false;
       switch (step.kind) {
         case "idle": return this.summary();
-        case "start": this.begin(step); break;
-        case "exec": if (!(await this.exec(step.stage))) return this.summary(); break;
+        case "start": this.begin(step, d); break;
+        case "exec": if (!(await this.exec(step.stage, d))) return this.summary(); break;
         case "gate": this.session.commit((s) => [{ type: "gate.waiting", actor: ENGINE, payload: { gate: step.gate }, run: s.run.id }]); break;
         case "pause": this.pauseFor(step); break;
-        case "finish": this.finish(step.outcome); return this.summary();
+        case "finish": this.finish(step.outcome, d); return this.summary();
       }
     }
     this.session.commit(() => [this.paused(ENGINE, "the run took more steps than expected and was paused")]);
@@ -311,12 +440,12 @@ export class Engine {
    * The step an overrule made during the run takes in place of `step` once the current stage has ended (controller ruling on I4): the work goes
    * back to Assemble with the overrule as the reason, as at the publish gate. A stage still working, and a run that finishes, are left as they are.
    */
-  private overruled(step: Step): Step {
+  private overruled(step: Step, d: EngineDeps): Step {
     if (step.kind !== "start" && step.kind !== "gate" && step.kind !== "pause") return step;
     const s = this.session.state;
     const current = s.run.stages.find((x) => x.id === s.run.current);
     if (current === undefined || (current.status !== "passed" && current.status !== "failed")) return step;
-    const back = overruleSendBack(s, this.session.entries(), this.deps.pipeline);
+    const back = overruleSendBack(s, this.session.entries(), d.pipeline);
     return back === null ? step : { kind: "start", ...back };
   }
 
@@ -328,8 +457,8 @@ export class Engine {
     ]);
   }
 
-  private begin(step: Extract<ReturnType<typeof nextStep>, { kind: "start" }>): void {
-    const manifest = this.deps.pipeline.stages.find((s) => s.id === step.stage)!;
+  private begin(step: Extract<ReturnType<typeof nextStep>, { kind: "start" }>, d: EngineDeps): void {
+    const manifest = d.pipeline.stages.find((s) => s.id === step.stage)!;
     // one commit, so a stop between the send-back and the start cannot count the send-back twice
     this.session.commit((state) => {
       const link = { run: state.run.id, stage: step.stage };
@@ -342,8 +471,8 @@ export class Engine {
   }
 
   /** Runs the stage; false when a person stopped it mid-way, which ends the drive. */
-  private async exec(stageId: string): Promise<boolean> {
-    const manifest = this.deps.pipeline.stages.find((s) => s.id === stageId)!;
+  private async exec(stageId: string, d: EngineDeps): Promise<boolean> {
+    const manifest = d.pipeline.stages.find((s) => s.id === stageId)!;
     const state = this.session.state;
     const title = state.run.stages.find((s) => s.id === stageId)?.title ?? manifest.title;
     const attempt = state.run.stages.find((s) => s.id === stageId)?.attempts ?? 1;
@@ -351,7 +480,7 @@ export class Engine {
     let end: StageEnd;
     try {
       if (runner === undefined) end = { kind: "stalled", reason: `${title} has no runner for the role ${manifest.role}.` };
-      else end = await runner({ session: this.session, deps: this.deps, stage: manifest, attempt, onNeedsBudget: (p, s) => spendPlanBudget(this.session, this.deps.runner, p, s) });
+      else end = await runner({ session: this.session, deps: d, stage: manifest, attempt, onNeedsBudget: (p, s) => spendPlanBudget(this.session, d.runner, p, s) });
     } catch (err) {
       end = { kind: "stalled", reason: `${title} failed unexpectedly: ${firstLine(err instanceof Error ? err.message : String(err))}` };
     }
@@ -383,7 +512,7 @@ export class Engine {
           if (gone(s)) return [];
           const out = [finish(end.outcome, end.draft_hash, end.output, end.reason)];
           if (supersededBy !== null) {
-            const first = firstUnpassedReview(s, this.deps.pipeline);
+            const first = firstUnpassedReview(s, d.pipeline);
             if (first !== null) out.push({ type: "stage.started", actor: ENGINE, ...link, stage: first, payload: { stage: first, attempt: (s.run.stages.find((x) => x.id === first)?.attempts ?? 0) + 1 } });
           }
           // a pass with a blocking question of this stage unanswered stands, and the run waits for the answer before the next stage (controller
@@ -422,10 +551,25 @@ export class Engine {
     return `${title}: the chosen model may not receive data marked ${marking}. Choose an allowed model, or leave the stricter items out, and resume.`;
   }
 
-  private finish(outcome: "published" | "stopped"): void {
-    this.session.commit((s) => [{ type: "run.finished", actor: ENGINE, payload: { outcome }, run: s.run.id }]);
+  private finish(outcome: "published" | "completed" | "stopped", d: EngineDeps): void {
+    const before = this.session.state;
+    const loop = this.deps.loops === undefined ? d.pipeline.id : loopOf(before, this.deps.config.loops.default);
+    const written = this.session.commit((s) => [{ type: "run.finished", actor: ENGINE, payload: { outcome }, run: s.run.id }]);
     // a published run was anchored when the person approved the product; only a run that ends without one is anchored here
     if (outcome === "stopped") this.anchorCase("closed");
+    else if (written.length > 0) this.outputs(d, loop, written[0]!.run ?? before.run.id ?? "", outcome);
+    this.bind();
+  }
+
+  /** Tells the host what a run that ended published or completed gives, once. A failure of the host's is reported and changes nothing here. */
+  private outputs(d: EngineDeps, loop: string, run: string, outcome: "published" | "completed"): void {
+    const marking = this.session.state.meta?.marking;
+    if (d.onOutputs === undefined || marking === undefined) return;
+    try {
+      d.onOutputs({ case: this.session.id, loop, run, head: this.session.head(), outcome, marking, outputs: {} });
+    } catch (err) {
+      (d.onError ?? logToStderr("outputs"))(err);
+    }
   }
 
   private anchorCase(why: "published" | "closed"): void {

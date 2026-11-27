@@ -518,3 +518,52 @@ test("a send-back that names a statement card gets no cannot-be-cited note", () 
   // an empty card that is not the person's still gets the note
   expect(uncitableNote(s, ["f1 should cite c5 and c6"])).toStartWith("Note: c6 returned no rows");
 });
+
+// ---- loops without both gates (slice 12)
+
+/** The sample's shape without its publish gate and review stages: frame, plan, research, assemble, and the last stage ends it. */
+const noPublish: Pipeline = {
+  id: "short", hash: "sh",
+  stages: [
+    sm("frame", 1, { on_pass: "plan" }),
+    sm("plan", 2, { gate: "plan", on_pass: "research" }),
+    sm("research", 3, { on_pass: "assemble", on_fail: "plan" }),
+    sm("assemble", 4, { on_fail: "research" }),
+  ],
+};
+const noPlan: Pipeline = { id: "direct", hash: "dh", stages: [sm("frame", 1, { on_pass: "research" }), sm("research", 2, { on_pass: "assemble" }), sm("assemble", 3)] };
+function runOf(p: Pipeline, go: (b: EntryBuilder) => void): CaseState {
+  const b = new EntryBuilder();
+  b.add("case.created", { id: "case-1", title: "t", asked: "a", why: "w", starting: [], window: { from: null, to: null }, objective: null, marking: "TLP:GREEN" });
+  b.add("run.started", { run: "run-1", pipeline: p.id, pipeline_hash: p.hash, stages: p.stages.map(({ id, title, phase, runs, gate, reviews, model }) => ({ id, title, phase, runs, gate, reviews, model })) });
+  go(b);
+  return fold(b.entries);
+}
+
+test("a loop with no publish gate finishes as completed when its last stage passes", () => {
+  const state = runOf(noPublish, (b) => {
+    passed(b, "frame"); passed(b, "plan");
+    b.add("plan.proposed", { plan }); b.add("gate.waiting", { gate: "plan" }); b.add("plan.accepted", { plan: plan.id, steps: [], budgets: {} }); b.add("gate.passed", { gate: "plan" });
+    passed(b, "research"); passed(b, "assemble");
+  });
+  expect(state.skipped).toEqual([]);
+  expect(nextStep(state, noPublish)).toEqual({ kind: "finish", outcome: "completed" });
+});
+
+test("a loop with a publish gate and nothing published still finishes as stopped", () => {
+  expect(nextStep(run((b) => { passed(b, "feedback"); }), pipeline)).toEqual({ kind: "finish", outcome: "stopped" });
+});
+
+test("a loop with no plan gate never waits at one", () => {
+  const steps: string[] = [];
+  const b = new EntryBuilder();
+  b.add("case.created", { id: "case-1", title: "t", asked: "a", why: "w", starting: [], window: { from: null, to: null }, objective: null, marking: "TLP:GREEN" });
+  b.add("run.started", { run: "run-1", pipeline: noPlan.id, pipeline_hash: noPlan.hash, stages: noPlan.stages.map(({ id, title, phase, runs, gate, reviews, model }) => ({ id, title, phase, runs, gate, reviews, model })) });
+  for (let i = 0; i < 10; i++) {
+    const step = nextStep(fold(b.entries), noPlan);
+    steps.push(step.kind === "start" ? `start:${step.stage}` : step.kind === "finish" ? `finish:${step.outcome}` : step.kind);
+    if (step.kind === "start") { started(b, step.stage); finished(b, step.stage, "pass"); } else break;
+  }
+  expect(steps).toEqual(["start:frame", "start:research", "start:assemble", "finish:completed"]);
+  expect(fold(b.entries).skipped).toEqual([]);
+});

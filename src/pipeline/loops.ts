@@ -222,7 +222,8 @@ export function loadLoops(registry: Registry, ctx: ResolveContext, caps: LoopCap
     s.problems.push(IMPLICIT_NOTE);
   }
 
-  const checkIds = loadChecks(registry).checks.map((c) => c.id);
+  const foundChecks = loadChecks(registry);
+  const checkIds = foundChecks.checks.map((c) => c.id);
   const trustedStage = (m: LoadedManifest): boolean => registry.rootOf(m.path)?.trusted === true;
   /** The loop a stage of a parsed loop runs, from its inline body or its stage manifest. */
   const childOf = (s: string | Record<string, Json>): string | null => {
@@ -366,6 +367,8 @@ export function loadLoops(registry: Registry, ctx: ResolveContext, caps: LoopCap
     const want: [string, string, string][] = profileComponents(profile).map(([k, i]) => ["*", k, i]);
     for (const st of stages) {
       if (st.runs === "agent" && !Object.hasOwn(profile.stages, st.id)) problems.push(`stage "${st.id}" runs an agent, and profile "${profile.id}" has no entry for it`);
+      // fail closed: a check a trusted root declares that cannot load is never left out of a checks stage; the loop is not usable until it is repaired
+      if (st.role === "checks") for (const b of foundChecks.broken) problems.push(`stage "${st.id}": check "${b.id}" cannot be loaded: ${b.problem}`);
       for (const [k, i] of componentsOf(st, profile, checkIds)) want.push([st.id, k, i]);
     }
     // your agent is no stage of the loop, and reads its context through the loop's version as a stage does

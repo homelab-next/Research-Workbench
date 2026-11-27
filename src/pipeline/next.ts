@@ -19,9 +19,18 @@ export type Step =
   | { kind: "gate"; gate: "plan" | "publish" }
   /** `conflicts`: reviewers' disagreements found now, to be recorded with the pause; `hold`: what a person's resume of it does besides. */
   | { kind: "pause"; reason: string; conflicts?: ConflictFound[]; hold?: RunHold }
-  | { kind: "finish"; outcome: "published" | "stopped" };
+  | { kind: "finish"; outcome: "published" | "completed" | "stopped" };
 
 const IDLE: Step = { kind: "idle" };
+
+/**
+ * How a run ends when its last stage passes: published when it published; completed when its loop has no publish gate (it was never meant
+ * to publish); stopped when it had a publish gate and nothing was published.
+ */
+function finishOf(state: Readonly<CaseState>, pipeline: Pipeline): "published" | "completed" | "stopped" {
+  if (state.published.length > 0) return "published";
+  return pipeline.stages.some((s) => s.gate === "publish") ? "stopped" : "completed";
+}
 
 /** The first review stage, in pipeline order, that has not passed the latest draft; null when all have, or there is no draft. */
 export function firstUnpassedReview(state: Readonly<CaseState>, pipeline: Pipeline): string | null {
@@ -114,7 +123,7 @@ export function nextStep(state: Readonly<CaseState>, pipeline: Pipeline, opts: {
     // every review passed; a failed check, a failed evaluation or an open must-address challenge still stops it
     return publishable(state as CaseState, draft.hash) ? { kind: "gate", gate: "publish" } : { kind: "pause", reason: `${blockers(state as CaseState, draft.hash).join(". ")}.` };
   }
-  if (m.on_pass === null) return { kind: "finish", outcome: state.published.length > 0 ? "published" : "stopped" };
+  if (m.on_pass === null) return { kind: "finish", outcome: finishOf(state, pipeline) };
   const target = manifest(m.on_pass);
   if (target === null) return { kind: "pause", reason: `the stage after ${st.title} (${m.on_pass}) is not in the pipeline` };
   if (target.reviews || target.gate === "publish") {

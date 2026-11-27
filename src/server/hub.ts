@@ -36,6 +36,8 @@ export class CaseHub {
     const session = this.wb.session(id);
     const have = this.engines.get(id);
     if (have !== undefined && this.sessionOf.get(have) === session) return have;
+    // the engine of a session closed since lets go of what its bound run held
+    have?.close();
     const made = Engine.open(session, this.deps);
     this.engines.set(id, made);
     this.sessionOf.set(made, session);
@@ -131,7 +133,10 @@ export class CaseHub {
       } finally {
         // the session the engine held is closed, or the case was refused and the engine is still good
         const have = this.engines.get(id);
-        if (have !== undefined && this.sessionOf.get(have)?.open !== true) this.engines.delete(id);
+        if (have !== undefined && this.sessionOf.get(have)?.open !== true) {
+          have.close();
+          this.engines.delete(id);
+        }
       }
       // a stream of the case was on the session the unload closed: unloaded, it ends saying so; failed, it ends and the client comes back to the new session
       for (const end of [...(this.streams.get(id) ?? [])]) end(result.ok ? "unloaded" : undefined);
