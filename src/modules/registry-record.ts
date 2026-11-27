@@ -1,9 +1,10 @@
 import { readFileSync } from "node:fs";
+import { resolve, sep } from "node:path";
 import type { BlobStore } from "../core/blobs";
 import { sha256Hex } from "../core/hash";
 import type { Ledger } from "../core/ledger";
 import type { Actor } from "../core/types";
-import type { RootConfig } from "./config";
+import type { RootConfig, WorkbenchRoot } from "./config";
 import { Registry } from "./registry";
 
 const DEFAULT_ACTOR: Actor = { kind: "system", id: "registry" };
@@ -88,13 +89,33 @@ function storeManifests(registry: Registry, content: BlobStore): void {
   for (const bytes of read) content.put(bytes);
 }
 
+/** Why a manifest of a staged root (an imported folder not yet trusted) is not loaded. */
+export const stagedProblem = (kind: string): string => `a ${kind} manifest from an imported folder is used only once the folder is trusted`;
+
 /**
  * Loads the roots with the workbench's trusted-only kinds, holds its hashes to the workbench's own, puts every loaded manifest's bytes in
  * `content` when one is given, then records what loaded and what was refused when a chain is given: module.loaded is appended only for
- * bytes the content store holds.
+ * bytes the content store holds. A staged root (an imported folder the configuration does not list) supplies nothing: each of its
+ * manifests is a problem, so it can be looked at and is never in the registry, the route finder or a query.
  */
-export function loadRegistry(roots: RootConfig[], opts: { chain?: Ledger; actor?: Actor; content?: BlobStore } = {}): Registry {
-  const registry = Registry.load(roots, { trustedOnlyKinds: WORKBENCH_TRUSTED_ONLY });
+export function loadRegistry(roots: WorkbenchRoot[], opts: { chain?: Ledger; actor?: Actor; content?: BlobStore } = {}): Registry {
+  const live = roots.filter((r) => r.staged !== true).map(({ staged: _staged, ...r }) => r);
+  const staged = roots.filter((r) => r.staged === true).map(({ staged: _staged, ...r }) => ({ ...r, trusted: false }));
+  const load = (from: RootConfig[]): Registry => Registry.load(from, { trustedOnlyKinds: WORKBENCH_TRUSTED_ONLY });
+  const registry = load(live);
+  if (staged.length > 0) {
+    // looked at beside the live roots (whose types and sources its manifests may name); only what is in a staged root is reported
+    const looked = load([...live, ...staged]);
+    const inStaged = (path: string): boolean => staged.some((r) => resolve(path).startsWith(resolve(r.path) + sep));
+    registry.problems.push(...looked.problems.filter((p) => inStaged(p.path)));
+    const said = new Set<string>();
+    for (const m of looked.manifests()) {
+      if (!inStaged(m.path)) continue;
+      if (said.has(`${m.path}\0${m.kind}`)) continue;
+      said.add(`${m.path}\0${m.kind}`);
+      registry.problems.push({ root: m.root, path: m.path, error: stagedProblem(m.kind) });
+    }
+  }
   checkOwnHashes(registry);
   if (opts.content !== undefined) storeManifests(registry, opts.content);
   if (opts.chain !== undefined) recordRegistry(registry, opts.chain, opts.actor ?? DEFAULT_ACTOR);

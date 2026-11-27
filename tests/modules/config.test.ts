@@ -226,9 +226,9 @@ test("rootsOf adds each folder of loops.imports as an untrusted root with no cre
   writeFileSync(join(imports, "stray.yaml"), "kind: loop\n");
   expect(rootsOf(c)).toEqual([
     { path: own, trusted: true, credentials: ["lake"] },
-    { path: join(imports, "Zeta-cccccccccccc"), trusted: false, credentials: [] },
-    { path: join(imports, "alpha-aaaaaaaaaaaa"), trusted: false, credentials: [] },
-    { path: join(imports, "triage-bbbbbbbbbbbb"), trusted: false, credentials: [] },
+    { path: join(imports, "Zeta-cccccccccccc"), trusted: false, credentials: [], staged: true },
+    { path: join(imports, "alpha-aaaaaaaaaaaa"), trusted: false, credentials: [], staged: true },
+    { path: join(imports, "triage-bbbbbbbbbbbb"), trusted: false, credentials: [], staged: true },
   ]);
   // the configuration itself is not changed
   expect(c.roots).toEqual([{ path: own, trusted: true, credentials: ["lake"] }]);
@@ -242,6 +242,6 @@ test("a folder of loops.imports that config.roots lists is taken once, with the 
   const c = loadConfig({ path: p, env: {}, home: "/h", repoRoot: "/repo" });
   expect(rootsOf(c)).toEqual([
     { path: join(imports, "b-222222222222"), trusted: true, credentials: [] },
-    { path: join(imports, "a-111111111111"), trusted: false, credentials: [] },
+    { path: join(imports, "a-111111111111"), trusted: false, credentials: [], staged: true },
   ]);
 });

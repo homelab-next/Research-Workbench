@@ -207,12 +207,15 @@ export function loadConfig(opts: { path?: string; env?: Record<string, string | 
   };
 }
 
+/** A root as the workbench loads it: `staged` marks an imported folder the configuration does not list, which supplies nothing until it is trusted. */
+export type WorkbenchRoot = RootConfig & { staged?: true };
+
 /**
- * config.roots, then each folder of loops.imports that roots does not list, as a root that is not trusted and has no credentials; names
+ * config.roots, then each folder of loops.imports that roots does not list, as a staged root that is not trusted and has no credentials; names
  * sorted with `<`. A file there, a link and a folder whose name starts with "." are not roots. No imports folder is no imported root;
  * one that cannot be read is a ConfigError.
  */
-export function rootsOf(config: Config): RootConfig[] {
+export function rootsOf(config: Config): WorkbenchRoot[] {
   const listed = new Set(config.roots.map((r) => resolve(r.path)));
   let names: string[];
   try {
@@ -223,5 +226,5 @@ export function rootsOf(config: Config): RootConfig[] {
   }
   names.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   const imported = names.map((n) => join(config.loops.imports, n)).filter((p) => !listed.has(resolve(p)));
-  return [...config.roots, ...imported.map((path): RootConfig => ({ path, trusted: false, credentials: [] }))];
+  return [...config.roots, ...imported.map((path): WorkbenchRoot => ({ path, trusted: false, credentials: [], staged: true }))];
 }

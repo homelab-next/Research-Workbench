@@ -233,7 +233,7 @@ test("import into a workbench that has none of it writes every file under <impor
   expect(own).toBe(join(dir, "other", "own"));
   // the imported folder is a root that is not trusted
   const roots = rootsOf(config);
-  expect(roots).toEqual([{ path: own, trusted: true, credentials: [] }, { path: folder, trusted: false, credentials: [] }]);
+  expect(roots).toEqual([{ path: own, trusted: true, credentials: [] }, { path: folder, trusted: false, credentials: [], staged: true }]);
   const after = loadRegistry(roots);
   const problem = (rel: string): string | undefined => after.problems.find((p) => p.path === join(folder, rel))?.error;
   expect(problem("loops/investigation.yaml")).toBe("a loop manifest is accepted only from a trusted root");

@@ -2,7 +2,7 @@
 // names, a source as a shape), searches every byte for the workbench's secret values, and packs it. Import reads the file twice: a plan from
 // a first pass that writes nothing, then each new file written with "wx" under a new folder of the imports directory, a root that is not
 // trusted until the person says so.
-import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
+import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { canonical } from "../core/canonical";
 import type { Json } from "../core/canonical";
@@ -260,7 +260,31 @@ function idsOf(entry: LoopFileEntry, bytes: Uint8Array): { kind: string; id: str
     return (Array.isArray(list) ? list : []).filter(isMapping).map((x) => x.id).filter((x): x is string => typeof x === "string").map((id) => ({ kind: single, id }));
   }
   if (parsed.body.id !== entry.id) throw new LoopFileError(`${entry.path} is ${parsed.kind} "${String(parsed.body.id)}", and loop.json lists it as "${entry.id}"`);
+  // a source travels as a shape: it names no place, no credential and no user, and is not confirmed, so it reads nothing until the person says where
+  if (parsed.kind === "source" && !isShape(parsed.body)) throw new LoopFileError(`${entry.path} is not a source's shape: an imported source has location "unset", confirmed false, and no credential, user or tls_verify`);
   return [{ kind: parsed.kind, id: entry.id }];
+}
+
+/** Whether a source's body is a shape as an export writes one. */
+function isShape(body: Record<string, unknown>): boolean {
+  return body.location === "unset" && body.confirmed === false && !["credential", "user", "tls_verify"].some((k) => Object.hasOwn(body, k));
+}
+
+/** Refuses a check's script that no check of the same loop file names as a plain file beside it (a check script is the only member that is not a manifest). */
+function checkScriptsNamed(held: readonly { entry: LoopFileEntry; bytes: Uint8Array }[]): void {
+  const named = new Set<string>();
+  for (const { entry, bytes } of held) {
+    if (entry.kind !== "check" || !MANIFEST_FILE.test(entry.path)) continue;
+    let body: Record<string, unknown>;
+    try { body = parseManifestFile(entry.path, bytes).body; } catch { continue; }
+    const script = body.script;
+    if (typeof script !== "string" || script === "" || /[\\/]/.test(script) || script.startsWith(".")) continue;
+    const dir = entry.path.includes("/") ? entry.path.slice(0, entry.path.lastIndexOf("/") + 1) : "";
+    named.add(`${entry.id}\0${dir}${script}`);
+  }
+  for (const { entry } of held) {
+    if (entry.kind === CHECK_SCRIPT && !named.has(`${entry.id}\0${entry.path}`)) throw new LoopFileError(`${entry.path} is listed as a check's script, and no check of this loop file names it as its script`);
+  }
 }
 
 /** What an import would do, from checkLoopFile and the registry; writes nothing. */
@@ -297,6 +321,7 @@ export async function planImport(file: string, registry: Registry, importsDir: s
     if (anyConflict) continue;
     (anySame ? same : write).push(entry);
   }
+  checkScriptsNamed(held);
   return { manifest, root: folder.path, write, same, conflicts };
 }
 
@@ -355,4 +380,38 @@ export async function importLoop(file: string, registry: Registry, importsDir: s
     throw err instanceof LoopFileError ? err : new LoopFileError(`the loop could not be written: ${reasonOf(err)}`);
   }
   return { root: folder.path, written: plan.write, same: plan.same };
+}
+
+// ---------- trust ----------
+
+/** Every manifest file under `dir` (no link followed), root-relative with "/", sorted with `<`. */
+function manifestFiles(dir: string, rel = ""): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(join(dir, rel), { withFileTypes: true })) {
+    const at = rel === "" ? e.name : `${rel}/${e.name}`;
+    if (e.isDirectory()) out.push(...manifestFiles(dir, at));
+    else if (e.isFile() && MANIFEST_FILE.test(e.name)) out.push(at);
+  }
+  return out.sort(lt);
+}
+
+/**
+ * Why an imported folder may not be trusted now, from the live registry: each kind and id a manifest of the folder names that the registry already
+ * holds from another root (two roots that define one id unload both, so the person's own would vanish). Empty when it may. Writes nothing.
+ */
+export function trustProblems(folder: string, registry: Registry): string[] {
+  const out: string[] = [];
+  for (const path of manifestFiles(folder)) {
+    let parsed: ReturnType<typeof parseManifestFile>;
+    try { parsed = parseManifestFile(path, readFileSync(join(folder, path))); } catch { continue; }
+    const ids = parsed.kind === "pivots" || parsed.kind === "types"
+      ? (Array.isArray(parsed.body[parsed.kind]) ? (parsed.body[parsed.kind] as unknown[]) : []).filter(isMapping).map((x) => x.id).filter((x): x is string => typeof x === "string").map((id) => ({ kind: parsed.kind === "pivots" ? "pivot" : "type", id }))
+      : typeof parsed.body.id === "string" ? [{ kind: parsed.kind, id: parsed.body.id }] : [];
+    for (const { kind, id } of ids) {
+      const have = registry.get(kind, id);
+      if (have === null || resolve(have.root) === resolve(folder)) continue;
+      out.push(`${kind} "${id}" (${path}) is already loaded from another root; trusting this folder would unload both`);
+    }
+  }
+  return out;
 }

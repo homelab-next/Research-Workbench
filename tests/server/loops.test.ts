@@ -465,3 +465,77 @@ test("an export whose files would hold a secret value the workbench keeps is ref
   expect(text).not.toContain(secret);
   expect(existsSync(s.config.loops.store) ? readdirSync(s.config.loops.store).filter((f) => f.endsWith(".loop.tar.gz")) : []).toEqual([]);
 });
+
+// ---------- final review C2: an imported loop is staged until it is trusted ----------
+
+const enc = new TextEncoder();
+/** A sql source over a file of the import's own, and a pivot on it: what an imported loop file can carry beside its loop. */
+const giftSource = (over = ""): string => `kind: source\nid: gift-names\ntitle: Gift names\nconnector: sql\nlocation: "unset"\nconfirmed: false\nmarking: TLP:CLEAR\nwhere: machine\ncost: { weight: 0, unit: rows }\n${over}tables:\n  - name: names\n    about: names\n    columns:\n      - { name: answer, type: address }\n      - { name: name, type: domain }\n`;
+const giftPivots = `kind: pivots\npivots:\n  - id: zz_gift\n    title: Names for the address (gift)\n    from: address\n    to: domain\n    source: gift-names\n    query: "select name from names where answer = {value}"\n    empty_means: proven-negative\n    yields: { name: domain }\n`;
+async function giftFile(members: { path: string; kind: string; id: string; bytes: Uint8Array }[], tag = "cd"): Promise<string> {
+  const { writeLoopFile: pack } = await import("../../src/core/loopfile");
+  mkdirSync(s!.config.loops.store, { recursive: true });
+  const hash = tag.repeat(32);
+  const name = `gift.v1.${hash.slice(0, 12)}.loop.tar.gz`;
+  await pack(join(s!.config.loops.store, name), { loop: "gift", version: 1, title: "Gift", about: "", hash, legacy_hash: null, lock: {}, subloops: [] } as never, members.map((m) => ({ ...m, origin: null })));
+  return name;
+}
+const routePivots = async (): Promise<string[]> => (await getJson<{ hops: { pivot: string }[] }[]>("/api/routes?have=address&want=domain")).flatMap((r) => r.hops.map((h) => h.pivot));
+
+test("an imported source and pivot supply nothing before the folder is trusted: not in the registry, not in the route finder, not run by run_pivot; trusted, they load", async () => {
+  s = await served();
+  const name = await giftFile([
+    { path: "sources/gift-names.yaml", kind: "source", id: "gift-names", bytes: enc.encode(giftSource()) },
+    { path: "pivots.yaml", kind: "pivots", id: "zz_gift", bytes: enc.encode(giftPivots) },
+  ]);
+  const imp = await s.post(`/api/loop-files/${name}/import`, {});
+  expect(imp.status).toBe(200);
+  const { root } = (await imp.json()) as { root: string };
+  const reg = s.app.hub.deps.registry;
+  expect(reg.source("gift-names")).toBeNull();
+  expect(reg.pivot("zz_gift")).toBeNull();
+  expect(reg.problems.find((p) => p.path.endsWith(join(root, "pivots.yaml")))?.error).toBe("a pivot manifest from an imported folder is used only once the folder is trusted");
+  expect(await routePivots()).not.toContain("zz_gift");
+  const id = await s.newCase();
+  const r = await s.command(id, "run_pivot", { pivot: "zz_gift", value: "198.51.100.77", why: "x" });
+  await s.app.hub.idle();
+  expect(r.status).not.toBe(200);
+  expect(Object.keys(s.app.hub.read(id).state.queries)).toEqual([]);
+  // once trusted, they load, and the source is a shape that names no place
+  writeConfigFile();
+  expect((await s.post("/api/roots/trust", { root, typed: root })).status).toBe(200);
+  expect(s.app.hub.deps.registry.pivot("zz_gift")).not.toBeNull();
+  expect(s.app.hub.deps.registry.source("gift-names")).toMatchObject({ confirmed: false });
+});
+
+test("an import is refused, writing nothing, for a source that is not a shape or a check script no check of the file names", async () => {
+  s = await served();
+  const unshaped = await giftFile([{ path: "sources/gift-names.yaml", kind: "source", id: "gift-names", bytes: enc.encode(giftSource().replace('location: "unset"\nconfirmed: false\n', "location: names.sqlite\nconfirmed: true\n")) }], "ce");
+  const smuggled = await giftFile([{ path: "names.sqlite", kind: "check-script", id: "nope", bytes: enc.encode("SQLite format 3\u0000") }], "cf");
+  const dangling = await giftFile([
+    { path: "checks/zz.yaml", kind: "check", id: "zz", bytes: enc.encode("kind: check\nid: zz\ntitle: zz\nscript: zz.ts\n") },
+    { path: "checks/other.ts", kind: "check-script", id: "zz", bytes: enc.encode("export default () => [];\n") },
+  ], "c0");
+  for (const [file, said] of [[unshaped, "is not a source's shape"], [smuggled, "no check of this loop file names it"], [dangling, "no check of this loop file names it"]] as const) {
+    const res = await s.post(`/api/loop-files/${file}/import`, {});
+    expect(res.status).toBe(409);
+    expect((await refusedOf(res)).join(" ")).toContain(said);
+  }
+  expect(existsSync(s.config.loops.imports) ? readdirSync(s.config.loops.imports) : []).toEqual([]);
+});
+
+test("trusting an imported folder is re-validated: a folder that now holds a kind and id the registry already has is refused, and nothing is changed", async () => {
+  s = await served();
+  const name = await giftFile([{ path: "sources/gift-names.yaml", kind: "source", id: "gift-names", bytes: enc.encode(giftSource()) }]);
+  const { root } = (await (await s.post(`/api/loop-files/${name}/import`, {})).json()) as { root: string };
+  // the person writes a source of that id into their own root meanwhile
+  writeFileSync(rootFile("sources", "gift-names.yaml"), giftSource().replace("title: Gift names", "title: My names"));
+  s.reload();
+  expect(s.app.hub.deps.registry.source("gift-names")).toMatchObject({ title: "My names" });
+  const text = writeConfigFile();
+  const res = await s.post("/api/roots/trust", { root, typed: root });
+  expect(res.status).toBe(409);
+  expect((await refusedOf(res)).join(" ")).toContain('source "gift-names"');
+  expect(readFileSync(s.config.write_path, "utf8")).toBe(text);
+  expect(s.app.hub.deps.registry.source("gift-names")).toMatchObject({ title: "My names" });
+});

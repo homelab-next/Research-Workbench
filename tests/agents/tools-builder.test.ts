@@ -133,9 +133,8 @@ test("adapter_catalogue gives each adapter's purpose, each field's meaning, reve
   expect(cat.types.map((t) => t.id)).toContain("address");
   expect(cat.playbooks.length).toBeGreaterThan(0);
   expect(Array.isArray(cat.inventories)).toBe(true);
-  // the untrusted root's text is withheld: an order hidden in it never reaches the model
-  const notes = cat.adapters.find((a) => a.id === "notes")!;
-  expect(notes.purpose).toBe("");
+  // an imported root that is not trusted supplies nothing (final review C2): its source is not an adapter, and an order hidden in it never reaches the model
+  expect(cat.adapters.find((a) => a.id === "notes")).toBeUndefined();
   expect(JSON.stringify(r.view)).not.toContain(INJECTED);
 });
 

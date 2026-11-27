@@ -13,7 +13,7 @@ import type { Workbench } from "../core/workbench";
 import type { ItemView, LoopFileView, LoopStageView, LoopSummaryView, LoopView } from "../core/wire";
 import type { Config } from "../modules/config";
 import { saveTrustedRoot } from "../modules/config-write";
-import { exportLoop, importLoop, planImport } from "../modules/loop-import";
+import { exportLoop, importLoop, planImport, trustProblems } from "../modules/loop-import";
 import { checkChange, copyLoop, draftOf, loopText, saveLoop, writeRoot } from "../modules/loop-write";
 import type { LoopDraft, SaveDeps } from "../modules/loop-write";
 import { parseManifestFile } from "../modules/manifests";
@@ -374,6 +374,8 @@ export function loopRoutes(d: LoopRouteDeps): LoopRoute[] {
         try { isDir = statSync(at).isDirectory(); } catch { isDir = false; }
         if (!isDir) return ok(`there is no imported folder "${name}"`);
         if (d.config.roots.some((r) => resolve(r.path) === resolve(at))) return ok(`the root "${name}" is already in the configuration`);
+        const clash = trustProblems(resolve(at), d.deps.registry);
+        if (clash.length > 0) return ok(`the folder is not trusted: ${clash.join("; ")}`);
         return refusing(() => {
           saveTrustedRoot(d.config, resolve(at));
           d.reload();

@@ -361,7 +361,7 @@ test("exporting triage and importing it into a second workbench whose only root 
   expect(done.same).toEqual([]);
   expect(done.written.length).toBe(manifest.files.length);
   expect(readdirSync(own)).toEqual([]);
-  expect(rootsOf(config)).toEqual([{ path: own, trusted: true, credentials: [] }, { path: done.root, trusted: false, credentials: [] }]);
+  expect(rootsOf(config)).toEqual([{ path: own, trusted: true, credentials: [] }, { path: done.root, trusted: false, credentials: [], staged: true }]);
   const untrusted = loadRegistry(rootsOf(config));
   expect(untrusted.get("loop", "triage")).toBeNull();
   expect(untrusted.problems.find((p) => p.path === join(done.root, "loops", "triage.yaml"))?.error).toBe("a loop manifest is accepted only from a trusted root");

@@ -10,7 +10,7 @@ import { Workbench, WorkbenchLockedError } from "../core/workbench";
 import { ConfigError, loadConfig, rootsOf } from "../modules/config";
 import type { Config } from "../modules/config";
 import { saveTrustedRoot } from "../modules/config-write";
-import { exportLoop, importLoop } from "../modules/loop-import";
+import { exportLoop, importLoop, trustProblems } from "../modules/loop-import";
 import { loadRegistry } from "../modules/registry-record";
 import type { Registry } from "../modules/registry";
 import { Secrets } from "../modules/secrets";
@@ -202,6 +202,8 @@ export async function loops(argv: string[], io: LoopsIO): Promise<number> {
         return 0;
       }
       const folder = importedFolder(config, p.arg!);
+      const clash = trustProblems(folder, loadRegistry(rootsOf(config)));
+      if (clash.length > 0) throw new Refused(`${folder} is not trusted: ${clash.join("; ")}`);
       io.log(`this root will supply: ${supplyOf(folder)}`);
       saveTrustedRoot(config, folder);
       io.log(`trusted ${folder}; it is now in ${config.write_path}`);
