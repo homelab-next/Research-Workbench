@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ConfigError, loadConfig } from "../../src/modules/config";
+import { ConfigError, loadConfig, rootsOf } from "../../src/modules/config";
 
 const dirs: string[] = [];
 const tmp = (): string => {
@@ -176,4 +176,72 @@ test("write_path is the file the settings came from, or the home file when there
   const homeFile = file(home, ".config/research-workbench/config.yaml", "user: b\n");
   const c = loadConfig({ ...opts, env: {} });
   expect([c.path, c.write_path]).toEqual([homeFile, homeFile]);
+});
+
+// ---------- slice 12: the loops block and imported roots ----------
+
+test("loops defaults: default investigation, max_depth 2, max_children 8, store <data_dir>/loops, imports <data_dir>/imported", () => {
+  const c = loadConfig({ env: {}, home: "/h", repoRoot: "/repo" });
+  expect(c.loops).toEqual({ default: "investigation", max_depth: 2, max_children: 8, store: "/h/.local/share/research-workbench/loops", imports: "/h/.local/share/research-workbench/imported" });
+  const dir = tmp();
+  const p = file(dir, "conf/c.yaml", "data_dir: /d\nloops:\n  default: triage\n  max_children: 3\n  imports: ./in\n  store: ~/shelf\n");
+  expect(loadConfig({ path: p, env: {}, home: "/h", repoRoot: "/repo" }).loops)
+    .toEqual({ default: "triage", max_depth: 2, max_children: 3, store: "/h/shelf", imports: join(dir, "conf/in") });
+  const q = file(dir, "d.yaml", "data_dir: /d\nloops: {}\n");
+  expect(loadConfig({ path: q, env: {}, home: "/h", repoRoot: "/repo" }).loops).toEqual({ default: "investigation", max_depth: 2, max_children: 8, store: "/d/loops", imports: "/d/imported" });
+});
+
+test("loops.max_depth 0 is allowed (no sub-loops); a negative depth, max_children 0 and an unknown key under loops are refused", () => {
+  const dir = tmp();
+  const opts = { env: {}, home: "/h", repoRoot: "/repo" };
+  expect(loadConfig({ ...opts, path: file(dir, "z.yaml", "loops:\n  max_depth: 0\n") }).loops.max_depth).toBe(0);
+  for (const [name, text] of [
+    ["a.yaml", "loops:\n  max_depth: -1\n"],
+    ["b.yaml", "loops:\n  max_children: 0\n"],
+    ["c.yaml", "loops:\n  max_depth: 1.5\n"],
+    ["d.yaml", "loops:\n  depth: 2\n"],
+    ["e.yaml", "loops:\n  default: ''\n"],
+    ["f.yaml", "loops: investigation\n"],
+    ["g.yaml", "loops:\n  imports: ''\n"],
+  ] as const) {
+    let err: unknown;
+    try { loadConfig({ ...opts, path: file(dir, name, text) }); } catch (e) { err = e; }
+    expect({ name, refused: err instanceof ConfigError }).toEqual({ name, refused: true });
+  }
+  let err: unknown;
+  try { loadConfig({ ...opts, path: file(dir, "h.yaml", "loops:\n  depth: 2\n") }); } catch (e) { err = e; }
+  expect((err as Error).message).toContain("depth");
+});
+
+test("rootsOf adds each folder of loops.imports as an untrusted root with no credentials, sorted; a file there and a dot-folder are not roots", () => {
+  const dir = tmp();
+  const own = join(dir, "own");
+  mkdirSync(own);
+  const p = file(dir, "c.yaml", `data_dir: ${join(dir, "data")}\nroots:\n  - { path: ./own, trusted: true, credentials: [lake] }\n`);
+  const c = loadConfig({ path: p, env: {}, home: "/h", repoRoot: "/repo" });
+  // no imports folder yet: the configuration's roots alone
+  expect(rootsOf(c)).toEqual([{ path: own, trusted: true, credentials: ["lake"] }]);
+  const imports = join(dir, "data", "imported");
+  for (const name of ["triage-bbbbbbbbbbbb", "Zeta-cccccccccccc", "alpha-aaaaaaaaaaaa", ".hidden"]) mkdirSync(join(imports, name), { recursive: true });
+  writeFileSync(join(imports, "stray.yaml"), "kind: loop\n");
+  expect(rootsOf(c)).toEqual([
+    { path: own, trusted: true, credentials: ["lake"] },
+    { path: join(imports, "Zeta-cccccccccccc"), trusted: false, credentials: [] },
+    { path: join(imports, "alpha-aaaaaaaaaaaa"), trusted: false, credentials: [] },
+    { path: join(imports, "triage-bbbbbbbbbbbb"), trusted: false, credentials: [] },
+  ]);
+  // the configuration itself is not changed
+  expect(c.roots).toEqual([{ path: own, trusted: true, credentials: ["lake"] }]);
+});
+
+test("a folder of loops.imports that config.roots lists is taken once, with the trust the configuration gives it", () => {
+  const dir = tmp();
+  const imports = join(dir, "in");
+  for (const name of ["a-111111111111", "b-222222222222"]) mkdirSync(join(imports, name), { recursive: true });
+  const p = file(dir, "c.yaml", "loops:\n  imports: ./in\nroots:\n  - { path: ./in/b-222222222222/, trusted: true }\n");
+  const c = loadConfig({ path: p, env: {}, home: "/h", repoRoot: "/repo" });
+  expect(rootsOf(c)).toEqual([
+    { path: join(imports, "b-222222222222"), trusted: true, credentials: [] },
+    { path: join(imports, "a-111111111111"), trusted: false, credentials: [] },
+  ]);
 });

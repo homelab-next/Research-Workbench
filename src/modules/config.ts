@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -49,6 +49,18 @@ export interface Config {
     /** The largest case a load accepts, in bytes. */
     max_bytes: number;
   };
+  loops: {
+    /** The loop a case is for when nothing names one. */
+    default: string;
+    /** The most levels of sub-loop below a case no case started; 0 means no sub-loops. */
+    max_depth: number;
+    /** The most sub-loops one case may start, over all its runs. */
+    max_children: number;
+    /** The folder loop files are exported into, listed from and imported from by name. */
+    store: string;
+    /** The folder imports land in, one folder each; every folder there is a root that is not trusted unless `roots` lists it. */
+    imports: string;
+  };
 }
 
 const whereList: Schema = { type: "array", items: { type: "string", enum: [...WHERES] } };
@@ -91,6 +103,17 @@ const CONFIG_SCHEMA: Schema = {
         max_bytes: { type: "integer", minimum: 1 },
       },
     },
+    loops: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        default: { type: "string", minLength: 1 },
+        max_depth: { type: "integer", minimum: 0 },
+        max_children: { type: "integer", minimum: 1 },
+        store: { type: "string", minLength: 1 },
+        imports: { type: "string", minLength: 1 },
+      },
+    },
   },
 };
 
@@ -103,6 +126,8 @@ const DEFAULT_MAX_OPEN_QUESTIONS = 3;
 const DEFAULT_GLEAN_SENDBACKS = 2;
 /** The default of cases.max_bytes (the same number as the case file's DEFAULT_MAX_CASE_BYTES). */
 const DEFAULT_MAX_CASE_BYTES = 2147483648;
+/** The default of loops.default: today's pipeline, as a loop. */
+const DEFAULT_LOOP = "investigation";
 
 const expandHome = (p: string, home: string): string => (p === "~" ? home : p.startsWith("~/") ? join(home, p.slice(2)) : p);
 
@@ -141,6 +166,7 @@ export function loadConfig(opts: { path?: string; env?: Record<string, string | 
     secrets_file?: string; seeker?: string; marking_policy?: Partial<Record<Marking, Where[]>>;
     server?: { port?: number }; research?: { parallel?: number }; questions?: { max_open?: number }; glean?: { max_sendbacks?: number };
     cases?: { store?: string; on_complete?: "keep" | "unload"; max_bytes?: number };
+    loops?: { default?: string; max_depth?: number; max_children?: number; store?: string; imports?: string };
   };
 
   const base = path === null ? process.cwd() : dirname(path);
@@ -171,5 +197,31 @@ export function loadConfig(opts: { path?: string; env?: Record<string, string | 
       on_complete: given.cases?.on_complete ?? "keep",
       max_bytes: given.cases?.max_bytes ?? DEFAULT_MAX_CASE_BYTES,
     },
+    loops: {
+      default: given.loops?.default ?? DEFAULT_LOOP,
+      max_depth: given.loops?.max_depth ?? 2,
+      max_children: given.loops?.max_children ?? 8,
+      store: given.loops?.store !== undefined ? place(given.loops.store) : join(data_dir, "loops"),
+      imports: given.loops?.imports !== undefined ? place(given.loops.imports) : join(data_dir, "imported"),
+    },
   };
+}
+
+/**
+ * config.roots, then each folder of loops.imports that roots does not list, as a root that is not trusted and has no credentials; names
+ * sorted with `<`. A file there, a link and a folder whose name starts with "." are not roots. No imports folder is no imported root;
+ * one that cannot be read is a ConfigError.
+ */
+export function rootsOf(config: Config): RootConfig[] {
+  const listed = new Set(config.roots.map((r) => resolve(r.path)));
+  let names: string[];
+  try {
+    names = readdirSync(config.loops.imports, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith(".")).map((e) => e.name);
+  } catch (err) {
+    if ((err as { code?: unknown }).code !== "ENOENT") throw new ConfigError(`${config.loops.imports}: the loops imports folder cannot be read: ${(err as Error).message.split("\n")[0]}`);
+    names = [];
+  }
+  names.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const imported = names.map((n) => join(config.loops.imports, n)).filter((p) => !listed.has(resolve(p)));
+  return [...config.roots, ...imported.map((path): RootConfig => ({ path, trusted: false, credentials: [] }))];
 }

@@ -19,7 +19,7 @@ export interface CaseSummaryView { id: string; title: string; marking: Marking; 
 /** A case file in the store, as its case.json describes it. */
 export interface StoredCaseView {
   file: string; bytes: number; id: string; title: string; asked: string; marking: Marking; starting: Observable[]; status: string;
-  outcome: "published" | "stopped" | null; published: number; head: string; entries: number; unloaded_ts: string; workbench: string;
+  outcome: "published" | "completed" | "stopped" | null; published: number; head: string; entries: number; unloaded_ts: string; workbench: string;
   /** This case is in the working set now. */
   loaded: boolean;
 }

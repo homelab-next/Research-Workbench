@@ -138,9 +138,11 @@ test("a manifest hash that is not the workbench's own refuses the load and recor
 });
 
 // ---------- task 13 fix M2: the workbench's own trusted-only list, whatever pivot's default becomes ----------
-const KEPT_TO_TRUSTED = ["model", "script", "check", "stage", "profile", "rules", "persona", "procedure", "skill", "gate", "playbook", "inventory", "reference", "objective", "framework", "standard", "schema"];
+const PIVOT_KEPT = ["model", "script", "check", "stage", "profile", "rules", "persona", "procedure", "skill", "gate", "playbook", "inventory", "reference", "objective", "framework", "standard", "schema"];
+/** pivot's seventeen, and from slice 12 a loop (which names every component a run is given). */
+const KEPT_TO_TRUSTED = [...PIVOT_KEPT, "loop"];
 
-test("the workbench keeps its seventeen kinds to trusted roots itself", () => {
+test("the workbench keeps its eighteen kinds to trusted roots itself", () => {
   expect([...WORKBENCH_TRUSTED_ONLY]).toEqual(KEPT_TO_TRUSTED);
   const files = Object.fromEntries(KEPT_TO_TRUSTED.map((k) => [`${k}.yaml`, `kind: ${k}\nid: x-${k}\ntitle: T\n`]));
   const untrusted = root(files, { trusted: false });
@@ -153,12 +155,26 @@ test("the workbench keeps its seventeen kinds to trusted roots itself", () => {
   } finally {
     (TRUSTED_ONLY_KINDS as string[]).splice(0, TRUSTED_ONLY_KINDS.length, ...pivotDefault);
   }
-  expect([...TRUSTED_ONLY_KINDS]).toEqual(KEPT_TO_TRUSTED);
+  expect([...TRUSTED_ONLY_KINDS]).toEqual(PIVOT_KEPT);
   expect(r.manifests()).toEqual([]);
   expect(r.problems.map((p) => [p.path.slice(untrusted.path.length + 1), p.error]).sort()).toEqual(
     KEPT_TO_TRUSTED.map((k) => [`${k}.yaml`, `${/^[aeiou]/.test(k) ? "an" : "a"} ${k} manifest is accepted only from a trusted root`]).sort(),
   );
-  expect(c.read().filter((e) => e.type === "module.rejected")).toHaveLength(17);
+  expect(c.read().filter((e) => e.type === "module.rejected")).toHaveLength(18);
+});
+
+const LOOP = `kind: loop\nid: triage\ntitle: Triage\nversion: 1\nstages: [plan]\n`;
+
+test("a loop manifest in an untrusted root is refused: a loop manifest is accepted only from a trusted root", () => {
+  const untrusted = root({ "sources/s.yaml": sourceWith("s"), "loops/triage.yaml": LOOP }, { trusted: false });
+  const r = loadRegistry([untrusted]);
+  expect(r.get("loop", "triage")).toBeNull();
+  expect(r.problems.map((p) => [p.path.slice(untrusted.path.length + 1), p.error])).toEqual([["loops/triage.yaml", "a loop manifest is accepted only from a trusted root"]]);
+  // the untrusted root's other manifests load, and the same file from a trusted root loads
+  expect(r.source("s")).not.toBeNull();
+  const trusted = loadRegistry([root({ "loops/triage.yaml": LOOP })]);
+  expect(trusted.get("loop", "triage")?.kind).toBe("loop");
+  expect(trusted.problems).toEqual([]);
 });
 
 const withFile = (file: string): string => sourceWith("s", `tables:\n  - { name: t, file: "${file}", format: csv }\n`);

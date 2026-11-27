@@ -57,6 +57,11 @@ test("isCaseManifest accepts a written manifest and refuses a wrong format, a mi
   expect(isCaseManifest(null)).toBe(false);
 });
 
+test("a manifest's outcome may be completed, the outcome of a loop with no publish gate; another word is refused", () => {
+  for (const outcome of ["published", "stopped", "completed", null]) expect({ outcome, ok: isCaseManifest({ ...manifest(), outcome }) }).toEqual({ outcome, ok: true });
+  for (const outcome of ["finished", "", 1]) expect({ outcome, ok: isCaseManifest({ ...manifest(), outcome }) }).toEqual({ outcome, ok: false });
+});
+
 // ---------- write, read and check ----------
 
 let root: string;
@@ -121,7 +126,7 @@ async function packed(): Promise<{ file: string; m: CaseManifest }> {
 test("writeCaseFile packs every file of the folder with case.json first, and its manifest lists each with its sha256 and size", async () => {
   const { file, m } = await packed();
   expect(m.files.map((f) => f.path)).toEqual(["blobs/" + blobHashes[0], "blobs/" + blobHashes[1], "ledger.sqlite", "published/1/manifest.json", "published/1/product.md"].sort((a, b) => (a < b ? -1 : 1)));
-  expect(m).toMatchObject({ format: 1, workbench: "0.11.0", id: "CASE-1", chain: "CASE-1" });
+  expect(m).toMatchObject({ format: 1, workbench: "0.12.0", id: "CASE-1", chain: "CASE-1" });
   for (const f of m.files) expect(f.bytes).toBe(statSync(join(caseDir, f.path)).size);
   expect(m.files.find((f) => f.path === "blobs/" + blobHashes[1])!.sha256).toBe(blobHashes[1]!);
   const tar = gunzipSync(readFileSync(file));

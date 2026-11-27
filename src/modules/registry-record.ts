@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import type { BlobStore } from "../core/blobs";
 import { sha256Hex } from "../core/hash";
 import type { Ledger } from "../core/ledger";
 import type { Actor } from "../core/types";
@@ -9,10 +10,12 @@ const DEFAULT_ACTOR: Actor = { kind: "system", id: "registry" };
 
 /**
  * Kinds whose text or schema is put in front of a model or decides what a run does; an untrusted root may not supply them.
- * The workbench's full list, passed to pivot's Registry.load (whose own default holds every one: pivot's tests/catalogue/trusted-only.test.ts).
+ * The workbench's full list, passed to pivot's Registry.load (whose own default holds every one but `loop`: pivot's
+ * tests/catalogue/trusted-only.test.ts; Registry.load adds the caller's list to its own). A loop names every component its runs are given.
  */
 export const WORKBENCH_TRUSTED_ONLY: readonly string[] = [
   "model", "script", "check", "stage", "profile", "rules", "persona", "procedure", "skill", "gate", "playbook", "inventory", "reference", "objective", "framework", "standard", "schema",
+  "loop",
 ];
 
 const key = (kind: string, id: string): string => `${kind}\0${id}`;
@@ -70,10 +73,40 @@ export function checkOwnHashes(registry: Registry): void {
   }
 }
 
-/** Loads the roots with the workbench's trusted-only kinds, holds its hashes to the workbench's own, then records what loaded and what was refused when a chain is given. */
-export function loadRegistry(roots: RootConfig[], opts: { chain?: Ledger; actor?: Actor } = {}): Registry {
+/**
+ * Puts every loaded manifest's bytes in `content` under the manifest's hash: each file is read once more and its sha256 held to the
+ * manifest's hash before the put, so a file changed since the load throws (as checkOwnHashes does) and nothing else of it is stored.
+ */
+function storeManifests(registry: Registry, content: BlobStore): void {
+  const read = registry.manifests().map((m) => {
+    const bytes = new Uint8Array(readFileSync(m.path));
+    if (sha256Hex(bytes) !== m.hash) {
+      throw new Error(`the hash of ${m.kind} "${m.id}" (${m.path}) is not the workbench's own sha256 of the file; it changed while loading, or pivot's hash differs. Nothing was recorded.`);
+    }
+    return bytes;
+  });
+  for (const bytes of read) content.put(bytes);
+}
+
+/**
+ * Loads the roots with the workbench's trusted-only kinds, holds its hashes to the workbench's own, puts every loaded manifest's bytes in
+ * `content` when one is given, then records what loaded and what was refused when a chain is given: module.loaded is appended only for
+ * bytes the content store holds.
+ */
+export function loadRegistry(roots: RootConfig[], opts: { chain?: Ledger; actor?: Actor; content?: BlobStore } = {}): Registry {
   const registry = Registry.load(roots, { trustedOnlyKinds: WORKBENCH_TRUSTED_ONLY });
   checkOwnHashes(registry);
+  if (opts.content !== undefined) storeManifests(registry, opts.content);
   if (opts.chain !== undefined) recordRegistry(registry, opts.chain, opts.actor ?? DEFAULT_ACTOR);
   return registry;
+}
+
+/** Whether the chain holds a module.loaded of this hash, kind and id from a root in `trusted`. */
+export function recordedAs(chain: Ledger, hash: string, kind: string, id: string, trusted: readonly string[]): boolean {
+  for (const e of chain.read()) {
+    if (e.type !== "module.loaded") continue;
+    const p = e.payload;
+    if (p.hash === hash && p.kind === kind && p.id === id && trusted.includes(p.root)) return true;
+  }
+  return false;
 }
