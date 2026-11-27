@@ -1,11 +1,11 @@
 import { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { BlobStore } from "./blobs";
 import { canonical } from "./canonical";
 import type { Json } from "./canonical";
-import { CaseFileError, caseFileName, checkCaseFile, DEFAULT_MAX_CASE_BYTES, extractCaseFile, writeCaseFile } from "./casefile";
+import { CaseFileError, caseFileName, checkCaseFile, DEFAULT_MAX_CASE_BYTES, extractCaseFile, readManifest, writeCaseFile } from "./casefile";
 import type { CaseManifest, ManifestHeader } from "./casefile";
 import { ignoreThrow, logToStderr } from "./deliver";
 import { Ledger } from "./ledger";
@@ -103,6 +103,64 @@ function syncDir(dir: string): void {
   } finally {
     closeSync(fd);
   }
+}
+
+/** The hash of entry `seq` of the ledger at `path`, read without writing; null when there is none or it cannot be read. */
+function hashAt(path: string, seq: number): string | null {
+  try {
+    const db = new Database(path, { readonly: true });
+    try {
+      return (db.query("SELECT hash FROM entries WHERE seq = ?").get(seq) as { hash: string } | null)?.hash ?? null;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Why an unload may not put its file at `dest`, which may already hold a file; null when it may. Only a file of the same case (the same
+ * origin) whose record is an earlier part of this one (its head is an entry of this ledger) is replaced: anything else is another case's,
+ * or a later or diverging copy of this one, and may be the only copy there is.
+ */
+async function replaceProblem(dest: string, store: CaseStoreFolder, id: string, origin: string, ledger: string): Promise<string | null> {
+  const file = basename(dest);
+  const holds = `the folder ${store.name} already holds ${file}`;
+  try {
+    if (!lstatSync(dest).isFile()) return `${holds}, which is not a case file; it is not replaced`;
+  } catch (err) {
+    // nothing there, or no folder for it to be in (the write then says why)
+    const code = (err as { code?: unknown }).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
+    return `${holds}, which cannot be read (${firstLine(err)}); it is not replaced`;
+  }
+  let m: CaseManifest;
+  try {
+    m = await readManifest(dest);
+  } catch (err) {
+    return `${holds}, which cannot be read as a case file (${firstLine(err)}); it is not replaced`;
+  }
+  if (m.origin !== origin) return `${holds}, which is another case with the id ${id}; it is not replaced`;
+  if (hashAt(ledger, m.head.seq) !== m.head.hash) return `${holds}, whose record of ${id} is not an earlier part of this one; it is not replaced`;
+  return null;
+}
+
+/** Puts `part` at `dest`. When `dest` was free, a link is made, so a file put there meanwhile is never replaced; when it held an earlier copy, a rename replaces it. */
+function putInPlace(part: string, dest: string, replacing: boolean): void {
+  if (!replacing) {
+    try {
+      linkSync(part, dest);
+      rmSync(part, { force: true });
+      return;
+    } catch (err) {
+      const code = (err as { code?: unknown }).code;
+      if (code === "EEXIST") throw new CaseRefused(`${basename(dest)} was put in the folder while the case was packed; it is not replaced`);
+      // a file system with no hard links: the rename below
+      if (code !== "EPERM" && code !== "ENOTSUP" && code !== "EOPNOTSUPP" && code !== "EXDEV" && code !== "ENOSYS") throw err;
+    }
+  }
+  renameSync(part, dest);
 }
 
 /** Why the case may not be unloaded now; null when it may. Pure. */
@@ -489,6 +547,13 @@ export class Workbench {
     const store = opts.to === undefined ? this.store : new CaseStoreFolder(opts.to);
     const session = this.session(id);
     const meta = session.state.meta;
+    // a file already there is replaced only when it is an earlier copy of this case; nothing is written otherwise
+    const origin = session.entries(0, 1)[0]?.hash;
+    if (meta !== null && origin !== undefined) {
+      const problem = await replaceProblem(join(store.dir, caseFileName(id, meta.marking)), store, id, origin, join(session.dir, "ledger.sqlite"));
+      this.open();
+      if (problem !== null) throw new CaseRefused(problem);
+    }
     const [entry] = session.commit((state) => {
       const problem = unloadProblem(state);
       if (problem !== null) throw new CaseRefused(problem);
@@ -525,7 +590,11 @@ export class Workbench {
       if (canonical(back as unknown as Json) !== canonical(written as unknown as Json)) throw new CaseFileError("its case.json is not the one written");
       doing = "the case file could not be put in the store";
       step("store");
-      renameSync(part, dest);
+      // looked at again: another workbench sharing the folder may have put a file there since
+      const there = existsSync(dest);
+      const problem = await replaceProblem(dest, store, id, first.hash, join(session.dir, "ledger.sqlite"));
+      if (problem !== null) throw new CaseRefused(problem);
+      putInPlace(part, dest, there);
       syncDir(store.dir);
       doing = "the id mark could not be written";
       step("mark");
