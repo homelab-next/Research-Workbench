@@ -9,6 +9,7 @@ import { LIMITS } from "../../src/server/views";
 import { startStandin } from "../helpers/http-standin";
 import { served, writeLocalModel } from "../helpers/served";
 import type { Served } from "../helpers/served";
+import { writeTriage } from "../helpers/loop-files";
 
 let s: Served;
 let standin: ReturnType<typeof startStandin> | undefined;
@@ -422,4 +423,20 @@ test("a requester may not rule on a conflict", async () => {
   s = await served({ role: "requester" });
   const id = s.app.hub.create({ title: "T", asked: "A", why: "W", starting: [], window: { from: "2026-11-17T00:00:00.000Z", to: "2026-11-24T00:00:00.000Z" }, objective: null, marking: "TLP:GREEN" }, { kind: "human", id: "x" }).id;
   expect(await s.command(id, "rule_conflict", { conflict: "k1", follow: null, note: "n" })).toEqual({ status: 403, body: { ok: false, refused: ["the requester view may not do rule conflict"] } });
+});
+
+test("a command reads the case's own loop: set_model and set_pack_limit name the stages of that case's loop, not the default's", async () => {
+  s = await served({ before: writeTriage });
+  const triage = await s.newCase({ loop: "triage" });
+  const plain = await s.newCase();
+  const models = (await (await s.get(`/api/cases/${plain}/models`)).json()) as { provider: string; model: string; allowed: boolean }[];
+  const m = models.find((x) => x.allowed)!;
+  const pick = { provider: m.provider, model: m.model, effort: null };
+  expect(await s.command(triage, "set_model", { stage: "research", ...pick })).toEqual({ status: 409, body: { ok: false, refused: ["there is no stage research"] } });
+  expect(await s.command(triage, "set_pack_limit", { stage: "research", max_marking: null })).toEqual({ status: 409, body: { ok: false, refused: ["there is no stage research"] } });
+  expect((await s.command(triage, "set_model", { stage: "frame", ...pick })).status).toBe(200);
+  expect((await s.command(plain, "set_model", { stage: "research", ...pick })).status).toBe(200);
+  expect((await s.command(plain, "set_pack_limit", { stage: "research", max_marking: null })).status).toBe(200);
+  expect(s.app.hub.depsFor(triage).pipeline.stages.map((x) => x.id)).toEqual(["frame", "investigate"]);
+  expect(s.app.hub.depsFor(plain).pipeline.stages.length).toBe(9);
 });

@@ -11,7 +11,7 @@ import type { LoadedManifest } from "../../src/modules/manifests";
 import type { Registry } from "../../src/modules/registry";
 import { loadRegistry } from "../../src/modules/registry-record";
 import type { ResolveContext } from "../../src/pipeline/components";
-import { compose, ComposeError } from "../../src/cli/compose";
+import { compose } from "../../src/cli/compose";
 import { Workbench } from "../../src/core/workbench";
 import { loadConfig } from "../../src/modules/config";
 import type { Config } from "../../src/modules/config";
@@ -490,16 +490,18 @@ test("compose gives the default loop's pipeline and profile, sets loops, compone
   } finally { wb.close(); }
 });
 
-test("compose fails with ComposeError when the default loop is not usable, naming its problems", () => {
+test("compose does not fail when the default loop is not usable: the problem names it, the deps run no stage, and a run on it is refused (controller ruling)", () => {
   writeLoop("mini", mini({ stages: [inline("frame", { schema: "no-such-schema" })] }));
   for (const [over, why] of [[{ default: "nope" }, 'the default loop "nope" is not usable: there is no loop "nope"'], [{ default: "mini" }, 'the default loop "mini" is not usable: stage "frame": schema "no-such-schema" is not loaded']] as const) {
     const config = configFor(over);
     const wb = Workbench.open(config.data_dir, { onError: () => {} });
     try {
-      let err: unknown = null;
-      try { compose(config, wb).close(); } catch (e) { err = e; }
-      expect(err).toBeInstanceOf(ComposeError);
-      expect((err as Error).message).toBe(why);
+      const made = compose(config, wb);
+      try {
+        expect(made.problems).toContain(why);
+        expect(made.deps.pipeline.stages).toEqual([]);
+        expect(made.deps.loops!.current(over.default)).toBeNull();
+      } finally { made.close(); }
     } finally { wb.close(); }
   }
 });

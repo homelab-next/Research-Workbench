@@ -26,18 +26,20 @@ export interface Served {
   dir: string; app: App; origin: string; config: Config; wb: Workbench; problems: string[];
   get(path: string, headers?: Record<string, string>): Promise<Response>;
   post(path: string, body: unknown, headers?: Record<string, string>): Promise<Response>;
-  newCase(over?: Partial<NewCase>): Promise<string>;
+  newCase(over?: Partial<NewCase> & { loop?: string }): Promise<string>;
   entries(id: string): Entry[];
   command(id: string, name: string, args?: Record<string, unknown>): Promise<{ status: number; body: CommandResult }>;
   /** start_run, then wait for the server to drive the run to the plan gate. */
   toPlanGate(id: string): Promise<void>;
   /** toPlanGate, accept_plan with a budget for the costly step, then wait for the run to reach the publish gate. */
   toPublishGate(id: string): Promise<void>;
+  /** Loads the roots again, as the server does after a save (compose's reload); returns the new problems. */
+  reload(): string[];
   close(): Promise<void>;
 }
 
 /** The sample as a trusted root, a workbench, compose and an app, all in process; requests go straight to app.handle with the right Host and Origin. */
-export async function served(opts: { role?: Role; listen?: boolean; credential?: { name: string; value: string }; before?: (root: string) => void; config?: Partial<Omit<Config, "cases">> & { cases?: Partial<Config["cases"]> } } = {}): Promise<Served> {
+export async function served(opts: { role?: Role; listen?: boolean; onError?: (error: unknown) => void; credential?: { name: string; value: string }; before?: (root: string) => void; config?: Partial<Omit<Config, "cases">> & { cases?: Partial<Config["cases"]> } } = {}): Promise<Served> {
   const dir = mkdtempSync(join(tmpdir(), "served-"));
   const sample = sampleRoot(dir);
   const cred = opts.credential;
@@ -53,6 +55,8 @@ export async function served(opts: { role?: Role; listen?: boolean; credential?:
     data_dir: join(dir, "wb"), role: opts.role ?? "analyst",
     roots: [{ path: sample.root, trusted: true, credentials: cred === undefined ? [] : [cred.name] }],
     ...rest,
+    // the loop store and the imports folder follow this data folder unless the test names them
+    loops: { ...loaded.loops, store: join(rest.data_dir ?? join(dir, "wb"), "loops"), imports: join(rest.data_dir ?? join(dir, "wb"), "imported"), ...rest.loops },
     // the store follows this data folder unless the test names one
     cases: { ...loaded.cases, store: join(rest.data_dir ?? join(dir, "wb"), "store"), ...casesGiven },
   };
@@ -64,7 +68,11 @@ export async function served(opts: { role?: Role; listen?: boolean; credential?:
   let origin = `http://${host}`;
   try {
     composed = compose(config, wb, { refuse_hosts: () => [host] });
-    const base = { config, wb, deps: composed.deps, problems: composed.problems, assets: await interfaceAssets(), onError: () => {} };
+    const made = composed;
+    const base = {
+      config, wb, deps: composed.deps, problems: composed.problems, assets: await interfaceAssets(), onError: opts.onError ?? (() => {}),
+      reload: () => made.reload(), secrets: () => made.secrets(),
+    };
     if (opts.listen === true) {
       running = startServer(base, 0);
       app = running.app;
@@ -90,7 +98,7 @@ export async function served(opts: { role?: Role; listen?: boolean; credential?:
     post: (path, body, headers = {}) =>
       send(path, { method: "POST", body: typeof body === "string" ? body : JSON.stringify(body) }, { origin, "content-type": "application/json", ...headers }),
     async newCase(over = {}) {
-      const input: NewCase = { title: "Sample", asked: "Who is behind the traffic to 198.51.100.77?", why: "test", starting: [SAMPLE_START], window: SAMPLE_WINDOW, objective: "sample-objective", marking: "TLP:GREEN", ...over };
+      const input: NewCase & { loop?: string } = { title: "Sample", asked: "Who is behind the traffic to 198.51.100.77?", why: "test", starting: [SAMPLE_START], window: SAMPLE_WINDOW, objective: "sample-objective", marking: "TLP:GREEN", ...over };
       const res = await s.post("/api/cases", input);
       if (res.status !== 200) throw new Error(`creating the case failed: ${res.status} ${await res.text()}`);
       return ((await res.json()) as { id: string }).id;
@@ -118,6 +126,7 @@ export async function served(opts: { role?: Role; listen?: boolean; credential?:
       if (r.status !== 200) throw new Error(`accept_plan failed: ${JSON.stringify(r)}`);
       await app.hub.idle();
     },
+    reload: () => composed!.reload(),
     async close() {
       if (closed) return;
       closed = true;

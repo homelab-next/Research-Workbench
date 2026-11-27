@@ -4,7 +4,7 @@ import { isMarking, MARKINGS } from "../core/types";
 import type { Actor, Observable } from "../core/types";
 import { CaseNotFoundError, CaseRefused } from "../core/workbench";
 import type { NewCase, Workbench } from "../core/workbench";
-import type { CommandResult, Me, Preview } from "../core/wire";
+import type { CaseSummaryView, CommandResult, Me, Preview } from "../core/wire";
 import type { Config } from "../modules/config";
 import type { EngineDeps } from "../pipeline/engine";
 import { previewBundle } from "../pipeline/publish";
@@ -25,17 +25,23 @@ import { mayDo, mayRead } from "./roles";
 import type { Reading } from "./roles";
 import { entryStream } from "./stream";
 import { deleteRoute, loadRoute, settingsRoute, storeRoute, unloadRoute } from "./store-routes";
+import { loopRoutes } from "./loop-routes";
 import type { StoreRouteDeps } from "./store-routes";
 import { agentView } from "./converse";
 import { routesFor } from "./seek";
 import { difference } from "../modules/revalidate";
 import { modelsFor, referenceOf, shown } from "./views";
+import { IMPLICIT_NOTE } from "../pipeline/loops";
 
 export interface Assets { html: string; js: string; css: string }
 export interface AppOptions {
   config: Config; wb: Workbench; deps: EngineDeps; problems: string[]; assets: Assets;
   origin: string;
   onError?: (error: unknown) => void;
+  /** Loads the roots again, in place on `deps` (compose's reload), after a save, a copy, an import or a trust; returns the new problems. */
+  reload?: () => string[];
+  /** The value of every secret the workbench holds (compose's secrets), searched for in what a save or an export would write. */
+  secrets?: () => readonly string[];
 }
 export interface App { readonly hub: CaseHub; handle(req: Request): Promise<Response>; close(): Promise<void> }
 export interface Running { port: number; origin: string; app: App; stop(): Promise<void> }
@@ -90,8 +96,18 @@ async function readText(req: Request): Promise<string> {
 const UTC_MS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const isUtcMs = (x: unknown): x is string => typeof x === "string" && UTC_MS.test(x) && Number.isFinite(Date.parse(x)) && new Date(x).toISOString() === x;
 
+/** Why a new case may not be made for `loop` (a loop that is not, or is not usable), or null. */
+function loopProblem(deps: EngineDeps, loop: string): string | null {
+  const loops = deps.loops;
+  if (loops === undefined || loops.current(loop) !== null) return null;
+  const known = loops.list().some((x) => x.id === loop);
+  if (!known) return `there is no loop "${loop.slice(0, 64)}"`;
+  const first = loops.problems(loop).find((p) => p !== IMPLICIT_NOTE);
+  return `loop "${loop}" is not usable${first === undefined ? "" : `: ${first}`}`;
+}
+
 /** A new case from a request body, or the reasons it is refused. The server names the actor, so a body that names one is refused. */
-function newCaseFrom(deps: EngineDeps, body: unknown): NewCase | string[] {
+function newCaseFrom(deps: EngineDeps, body: unknown): (NewCase & { loop?: string }) | string[] {
   if (!isPlainObject(body)) return ["the body must be a JSON object"];
   if (Object.hasOwn(body, "actor")) return ["the server names the actor"];
   const reasons: string[] = [];
@@ -112,11 +128,18 @@ function newCaseFrom(deps: EngineDeps, body: unknown): NewCase | string[] {
   }
   const objective = body.objective;
   if (objective !== null && (typeof objective !== "string" || deps.runner.registry.get("objective", objective) === null)) reasons.push("unknown objective");
+  // a new case is for a usable loop: the one named, else the default
+  const loop = body.loop;
+  if (loop !== undefined && typeof loop !== "string") reasons.push("loop must be a loop's id");
+  else {
+    const problem = loopProblem(deps, loop ?? deps.config.loops.default);
+    if (problem !== null) reasons.push(problem);
+  }
   if (reasons.length > 0) return reasons;
   const window = w as { from: string; to: string };
   return {
     title: body.title as string, asked: body.asked as string, why: body.why as string, starting, window: { from: window.from, to: window.to },
-    objective: objective as string | null, marking: body.marking as NewCase["marking"],
+    objective: objective as string | null, marking: body.marking as NewCase["marking"], ...(loop === undefined ? {} : { loop: loop as string }),
   };
 }
 
@@ -143,6 +166,16 @@ export function createApp(opts: AppOptions): App {
   };
   const text = (body: string, type: string): Response => new Response(body, { headers: { "content-type": type } });
   const store: StoreRouteDeps = { config, wb, hub, human: () => ({ kind: "human", id: config.user }), shown: (r) => shown(deps, r) };
+  const reloadRoots = (): void => {
+    // the problems /api/me shows are the reload's from now on
+    if (opts.reload === undefined) return;
+    const next = opts.reload();
+    opts.problems.splice(0, opts.problems.length, ...next);
+  };
+  const loopsTable = loopRoutes({
+    config, wb, hub, deps, human: () => ({ kind: "human", id: config.user }), shown: (r) => problemView(r),
+    reload: () => { reloadRoots(); return opts.problems; }, secrets: () => opts.secrets?.() ?? [],
+  });
 
   const routes: Route[] = [
     { method: "GET", path: /^\/$/, needs: { read: "page" }, kind: "page", handle: () => text(assets.html, "text/html; charset=utf-8") },
@@ -156,15 +189,19 @@ export function createApp(opts: AppOptions): App {
         cases: { store: config.role === "analyst" ? wb.store.dir : wb.store.name, on_complete: config.cases.on_complete },
       } satisfies Me),
     },
-    { method: "GET", path: /^\/api\/cases$/, needs: { read: "cases" }, kind: "api", handle: () => json(200, wb.listCases()) },
+    {
+      method: "GET", path: /^\/api\/cases$/, needs: { read: "cases" }, kind: "api",
+      // a ledger that names no loop is a case of the default loop
+      handle: () => json(200, wb.listCases().map((c): CaseSummaryView & { jobs_running: number } => ({ ...c, loop: c.loop ?? config.loops.default }))),
+    },
     { method: "GET", path: /^\/api\/reference$/, needs: { read: "reference" }, kind: "api", handle: () => json(200, referenceOf(deps)) },
     {
       method: "GET", path: /^\/api\/cases\/([^/]+)\/models$/, needs: { read: "models" }, kind: "api",
-      handle: async ({ params }) => json(200, await modelsFor(deps, hub.read(params[0]!).state.meta?.marking ?? "TLP:RED")),
+      handle: async ({ params }) => json(200, await modelsFor(hub.depsFor(params[0]!), hub.read(params[0]!).state.meta?.marking ?? "TLP:RED")),
     },
     {
       method: "GET", path: /^\/api\/cases\/([^/]+)\/agent$/, needs: { read: "agent" }, kind: "api",
-      handle: async ({ params }) => json(200, await agentView(hub.read(params[0]!), deps)),
+      handle: async ({ params }) => json(200, await agentView(hub.read(params[0]!), hub.depsFor(params[0]!))),
     },
     {
       method: "GET", path: /^\/api\/routes$/, needs: { read: "routes" }, kind: "api",
@@ -215,7 +252,7 @@ export function createApp(opts: AppOptions): App {
     {
       method: "GET", path: /^\/api\/cases\/([^/]+)\/preview$/, needs: { read: "preview" }, kind: "api",
       handle: ({ params }) => {
-        const made = previewBundle(hub.read(params[0]!), deps);
+        const made = previewBundle(hub.read(params[0]!), hub.depsFor(params[0]!));
         if ("reasons" in made) return json(200, { reasons: made.reasons.map((r) => shown(deps, r)) } satisfies Preview);
         const m = made.manifest;
         return json(200, { manifest: { n: m.n, draft: m.draft, draft_hash: m.draft_hash, marking: m.marking, title: m.title, note: m.note, files: m.files }, files: made.files } satisfies Preview);
@@ -238,7 +275,8 @@ export function createApp(opts: AppOptions): App {
       handle: async ({ body }) => {
         const input = newCaseFrom(deps, await body());
         if (Array.isArray(input)) return refused(400, ...input);
-        const session = hub.create(input, human());
+        const { loop, ...fields } = input;
+        const session = hub.create(fields, human(), loop === undefined ? {} : { loop });
         return json(200, { id: session.id });
       },
     },
@@ -264,12 +302,13 @@ export function createApp(opts: AppOptions): App {
         const known = hub.read(id); // an unknown case is 404 before anything is recovered
         try {
           // slow checks happen here, outside the case's queue
-          const prepared = def.prepare === undefined ? undefined : await def.prepare({ case: id, session: known, deps, hub }, args as Record<string, never>);
+          const prepared = def.prepare === undefined ? undefined : await def.prepare({ case: id, session: known, deps: hub.depsFor(id), hub }, args as Record<string, never>);
           // one at a time per case: a command never interleaves with another, and the drive it asks for starts after it has written
           const result = await hub.serial(id, async (): Promise<CommandResult> => {
             const engine = hub.engine(id);
             const session = hub.read(id);
-            const ctx: CommandContext = { hub, case: id, session, engine, deps, actor: { kind: "human", id: config.user } };
+            // the case's own loop version: the one its run bound, else the one a new run would bind
+            const ctx: CommandContext = { hub, case: id, session, engine, deps: engine.bound, actor: { kind: "human", id: config.user } };
             await def.perform(ctx, args as Record<string, never>, prepared);
             if (def.then === "advance") hub.drive(id);
             return { ok: true, seq: session.head().seq };
@@ -281,6 +320,7 @@ export function createApp(opts: AppOptions): App {
         }
       },
     },
+    ...loopsTable,
   ];
 
   async function route(req: Request): Promise<{ res: Response; kind: Kind }> {

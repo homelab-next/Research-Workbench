@@ -3,7 +3,7 @@
  */
 import type { Json } from "./canonical";
 import type { RunState } from "./state";
-import type { EmptyMeans, Marking, ModelChoice, Observable, TimeWindow, Where } from "./types";
+import type { EmptyMeans, Marking, ModelChoice, Observable, StageDef, TimeWindow, Where } from "./types";
 
 /** The id of the playbook the server makes on the spot for "does it belong?"; no manifest may take it. pivot owns the name. */
 export { BELONGS_ID } from "pivot/types";
@@ -15,7 +15,9 @@ export interface Me {
 }
 export interface CaseSummaryView { id: string; title: string; marking: Marking; created_ts: string; run_status: RunState["status"]; phase: string | null; incoming: number; kept: number;
   /** Why the last unload of this case failed, or that one did not finish; null when none did. */
-  unload_failed: string | null }
+  unload_failed: string | null;
+  /** The loop the case is for (the default loop when its ledger names none); the case that made it, for a child; the child its paused run waits on. */
+  loop: string; parent: string | null; waiting_on: string | null }
 /** A case file in the store, as its case.json describes it. */
 export interface StoredCaseView {
   file: string; bytes: number; id: string; title: string; asked: string; marking: Marking; starting: Observable[]; status: string;
@@ -25,7 +27,30 @@ export interface StoredCaseView {
 }
 /** The case store: its folder, the files in it newest first, the files named like case files that could not be read, and how many temporary files a stopped unload left. */
 export interface StoreView { store: string; cases: StoredCaseView[]; unreadable: { file: string; reason: string }[]; leftovers: number }
-export interface NewCaseInput { title: string; asked: string; why: string; starting: Observable[]; window: TimeWindow; objective: string | null; marking: Marking }
+export interface NewCaseInput { title: string; asked: string; why: string; starting: Observable[]; window: TimeWindow; objective: string | null; marking: Marking;
+  /** A usable loop's id; omitted: the default loop. */
+  loop?: string }
+
+/** One component, check or built-in rule of a loop's stage: where it comes from and its hash (null for what is built in). */
+export interface ItemView { kind: string; id: string; title: string; source: "root" | "pinned" | "loop-output" | "inline" | "built-in"; hash: string | null }
+export interface LoopStageView {
+  id: string; title: string; runs: StageDef["runs"]; role: string; gate: StageDef["gate"]; reviews: boolean; on_pass: string | null; on_fail: string | null; hash: string; inline: boolean;
+  /** persona, rules, goal, procedure, skills, references, gate guides, schema, framework, standard, memory sources (none in this slice) */
+  context: ItemView[];
+  /** checks and their scripts; built in: the query guard, the marking policy, the citation check of a review stage */
+  middleware: ItemView[];
+  orchestration: { tools: string[]; model: ModelChoice | null; fast_model: ModelChoice | null; max_turns: number | null; send_back_cap: number; subloop: { loop: string; hash: string | null; inputs: Record<string, string>; returns: Record<string, string> } | null };
+}
+/** A loop as the Loops page lists it. `root` is the folder name of the root it comes from; `problems` say why it is not usable. */
+export interface LoopSummaryView { id: string; title: string; about: string; version: number | null; hash: string | null; stages: string[]; usable: boolean; problems: string[]; implicit: boolean; trusted: boolean; root: string }
+export interface LoopView extends LoopSummaryView {
+  entry: string | null; profile: string | null; inputs: Record<string, { type: string; required: boolean }>; outputs: Record<string, { from: string }>; stage_views: LoopStageView[];
+  caps: { max_depth: number; max_children: number };
+  /** The loop as the forms edit it (every stage inline); null when it is not usable. */
+  draft: Json | null;
+}
+/** A loop file in the loop store, and what importing it would do now (null with `problem` when it cannot be imported). */
+export interface LoopFileView { file: string; loop: string; version: number; title: string; hash: string; files: number; bytes: number; plan: { write: number; same: number; conflicts: string[] } | null; problem: string | null }
 export interface SourceView { id: string; title: string; connector: string; marking: Marking; where: Where; confirmed: boolean; adhoc: boolean; cost: { weight: number; unit: string }; quality: string }
 export interface PivotView { id: string; title: string; from: string; to: string; source: string; free: boolean; weight: number; needs_window: boolean; empty_means: EmptyMeans; inventory: string | null }
 /** A list a source keeps, and whether it is declared complete for its scope (only then is an empty answer from it a proven negative). */

@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SAMPLE_START, SAMPLE_WINDOW } from "../../scripts/make-sample-data";
-import { compose, ComposeError } from "../../src/cli/compose";
+import { compose } from "../../src/cli/compose";
 import type { Actor } from "../../src/core/types";
 import { Workbench } from "../../src/core/workbench";
 import { loadConfig } from "../../src/modules/config";
@@ -99,15 +99,19 @@ test("a run that holds the deps it started with goes on unchanged after a save a
   expect(second.state.skipped).toEqual([]);
 });
 
-test("reload that would leave the default loop unusable throws and leaves deps as it was", () => {
+test("reload that would leave the default loop unusable marks it so, and a run that holds the deps it started with keeps them (controller ruling)", () => {
   const deps = composed.deps;
   const was = { ...deps };
   const at = join(sample.root, "stages", "research.yaml");
   writeFileSync(at, readFileSync(at, "utf8").replace("on_fail: plan", "on_fail: nowhere"));
-  expect(() => composed.reload()).toThrow(ComposeError);
-  expect(() => composed.reload()).toThrow(`the default loop "investigation" is not usable: stage "research": on_fail names "nowhere"`);
-  expect({ ...deps }).toEqual(was);
-  for (const k of Object.keys(was) as (keyof EngineDeps)[]) expect(deps[k]).toBe(was[k] as never);
+  const problems = composed.reload();
+  expect(problems).toContain('the default loop "investigation" is not usable: stage "research": on_fail names "nowhere", which is not a stage of this loop');
+  expect(deps.pipeline.stages).toEqual([]);
+  expect(deps.loops!.current("investigation")).toBeNull();
+  // copy on write: what a run took before the reload is as it was
+  expect(was.pipeline.stages.length).toBe(9);
+  expect(was.loops!.current("investigation")).not.toBeNull();
+  // nothing new is recorded for a loop that is not usable
   expect(wb.chain.read().filter((e) => e.type === "loop.recorded").length).toBe(1);
 });
 

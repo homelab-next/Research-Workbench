@@ -14,7 +14,10 @@ import { Secrets } from "../modules/secrets";
 import { SEEKERS } from "../modules/seeker";
 import type { BlobStore } from "../core/blobs";
 import type { ResolveContext } from "../pipeline/components";
+import type { Profile } from "../agents/context";
+import { rootComponents } from "../pipeline/components";
 import type { EngineDeps } from "../pipeline/engine";
+import type { Pipeline } from "../pipeline/manifests";
 import { IMPLICIT_NOTE, loadLoops } from "../pipeline/loops";
 import type { LoopCatalog } from "../pipeline/loops";
 
@@ -84,6 +87,36 @@ export function guardProblems(registry: Registry, which: (pv: PivotManifest) => 
   return out;
 }
 
+/** The problem compose reports when the default loop is not usable. */
+export const defaultLoopProblem = (id: string, loops: LoopCatalog): string => `the default loop "${id}" is not usable: ${loops.problems(id).filter((p) => p !== IMPLICIT_NOTE).join("; ")}`;
+/** The pipeline deps carry while the default loop is not usable: no stage, so nothing runs on it; Engine.start refuses with the loop's problem. */
+const unusablePipeline = (id: string): Pipeline => ({ id, hash: "", stages: [], legacy_hash: null });
+const UNUSABLE_PROFILE: Profile = { id: "", title: "no usable loop", hash: "", marking: null, rules: "", framework: null, standard: null, stages: {} };
+
+/**
+ * The value of every credential the configuration grants a root or a loaded source names, from the environment and the secrets file, so an
+ * export, a save or a proposal can be searched for them. A credential that is not set, or that is refused, holds nothing to find.
+ */
+export function secretValues(config: Config, registry: Registry): string[] {
+  const names = new Set<string>();
+  for (const r of config.roots) for (const n of r.credentials) names.add(n);
+  for (const src of registry.sources()) if (typeof src.credential === "string" && src.credential !== "") names.add(src.credential);
+  let secrets: Secrets;
+  try {
+    secrets = new Secrets(process.env, config.secrets_file);
+  } catch {
+    secrets = new Secrets(process.env, null);
+  }
+  const out: string[] = [];
+  for (const n of [...names].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
+    try {
+      const v = secrets.get(n);
+      if (v !== null) out.push(v);
+    } catch { /* a value the workbench refuses is never used */ }
+  }
+  return out;
+}
+
 /** What compose builds from the roots, and reload builds again. */
 type Built = Pick<EngineDeps, "registry" | "runner" | "seeker" | "providers" | "loops" | "components" | "pipeline" | "profile">;
 
@@ -106,12 +139,13 @@ function build(config: Config, wb: Workbench, opts: { refuse_hosts?: () => reado
     const loops = loadLoops(registry, ctx, { max_depth: config.loops.max_depth, max_children: config.loops.max_children });
     const id = config.loops.default;
     const loop = loops.current(id);
-    if (loop === null) throw new ComposeError(`the default loop "${id}" is not usable: ${loops.problems(id).join("; ")}`);
+    // an unusable default loop does not stop the workbench: it is a problem, new cases of it are refused, and everything else works
+    if (loop === null) problems.push(defaultLoopProblem(id, loops));
     for (const x of loops.list()) problems.push(...x.problems.filter((p) => p !== IMPLICIT_NOTE).map((p) => `loop "${x.id}": ${p}`));
     recordLoops(loops, wb.chain, wb.chainBlobs);
     const built: Built = {
-      registry, runner: { registry, pool, observables }, seeker: makeSeeker(registry), providers: loaded.providers, pipeline: loop.pipeline, profile: loop.profile,
-      loops, components: loop.components,
+      registry, runner: { registry, pool, observables }, seeker: makeSeeker(registry), providers: loaded.providers,
+      pipeline: loop?.pipeline ?? unusablePipeline(id), profile: loop?.profile ?? UNUSABLE_PROFILE, loops, components: loop?.components ?? rootComponents(registry),
     };
     return { built, pool, problems };
   } catch (err) {
@@ -125,17 +159,18 @@ function build(config: Config, wb: Workbench, opts: { refuse_hosts?: () => reado
  * on the workbench chain, every manifest's bytes in the content store), the observable types, the secrets, the connector pool, the seeker
  * the configuration names, the providers, every loop, and the pipeline and profile of the default loop. `opts.refuse_hosts` names the
  * hosts (the server's own) no source or model endpoint may point at. `deps.anchor` appends `case.anchored` to the workbench chain. Each
- * usable loop whose version is new to the chain is recorded as loop.recorded. Throws ComposeError when the default loop is not usable or
- * there is no seeker; every manifest problem short of that is returned in `problems`.
+ * usable loop whose version is new to the chain is recorded as loop.recorded. Throws ComposeError when there is no seeker; every manifest
+ * problem short of that is returned in `problems`. A default loop that is not usable is one of them (`defaultLoopProblem`): the deps then carry
+ * a pipeline with no stage, so a run on it is refused with the loop's problem, while reads, loads, unloads and fixing the loop all work.
  *
  * `reload()` loads the roots again and replaces, in place on the same deps object, the registry, the runner, the seeker, the providers, the
  * loops, the components, the pipeline and the profile. The old connector pool is closed once nothing holds it: each run bound to the deps it
  * replaced holds that pool (`deps.retain`, a count) until the run ends, so a query in flight across a reload completes; with no holder it is
  * closed at once. `close()` closes every pool still open.
- * It returns the new problems. It throws ComposeError and changes nothing on deps when the default loop would not be usable. Copy on write:
+ * It returns the new problems; a default loop that is not usable after it is one. Copy on write:
  * nothing a reload replaces is changed, so whoever holds the old objects (a run's own copy of the deps it bound) goes on with them as they were.
  */
-export function compose(config: Config, wb: Workbench, opts: { refuse_hosts?: () => readonly string[] } = {}): { deps: EngineDeps; problems: string[]; close(): void; reload(): string[] } {
+export function compose(config: Config, wb: Workbench, opts: { refuse_hosts?: () => readonly string[] } = {}): { deps: EngineDeps; problems: string[]; close(): void; reload(): string[]; secrets(): string[] } {
   const first = build(config, wb, opts);
   /** A pool, how many runs hold it, and whether a reload has replaced it (then it is closed when the last holder lets go). */
   interface Held { pool: ConnectorPool; holders: number; replaced: boolean; closed: boolean }
@@ -173,6 +208,7 @@ export function compose(config: Config, wb: Workbench, opts: { refuse_hosts?: ()
   return {
     deps, problems: first.problems,
     close: () => { for (const h of [...open]) shut(h); },
+    secrets: () => secretValues(config, deps.registry),
     reload: () => {
       const next = build(config, wb, opts);
       const old = current;

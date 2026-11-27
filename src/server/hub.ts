@@ -1,13 +1,31 @@
+import { canonical } from "../core/canonical";
+import type { Json } from "../core/canonical";
+import { sha256Hex } from "../core/hash";
 import type { CaseSession } from "../core/session";
 import { unloadDue } from "../core/state";
-import type { Actor } from "../core/types";
+import { isMarking, strictest } from "../core/types";
+import type { Actor, Card, Marking } from "../core/types";
 import { CaseNotFoundError, CaseRefused, unloadProblem } from "../core/workbench";
-import type { NewCase, UnloadResult, Workbench } from "../core/workbench";
+import type { ChildLink, NewCase, UnloadResult, Workbench } from "../core/workbench";
 import { Engine } from "../pipeline/engine";
-import type { EngineDeps } from "../pipeline/engine";
+import type { EngineDeps, RunSummary } from "../pipeline/engine";
+import type { ChildCases } from "../pipeline/subloop";
 
 /** Who unloads a case after publishing: the person chose it at approve; the workbench does it. */
 const WORKBENCH: Actor = { kind: "system", id: "workbench" };
+/** Who makes a child case, starts its run and records what a loop's run gave: code, never a person, and it passes no gate. */
+const ENGINE: Actor = { kind: "system", id: "engine" };
+const gone = (error: unknown): boolean => error instanceof CaseNotFoundError || error instanceof CaseRefused;
+
+/** The marking of one output value: a product's or findings' own; a list of cards, the strictest of theirs; else the case's. */
+function markingOf(value: Json, fallback: Marking): Marking {
+  if (typeof value === "object" && value !== null && !Array.isArray(value) && isMarking(value.marking)) return value.marking;
+  if (Array.isArray(value)) {
+    const marks = value.flatMap((c) => (typeof c === "object" && c !== null && !Array.isArray(c) && isMarking(c.marking) ? [c.marking] : []));
+    if (marks.length > 0) return marks.reduce((a, b) => strictest(a, b));
+  }
+  return fallback;
+}
 /** The queue store work runs in; no case id looks like it. */
 const STORE_LINE = "store";
 
@@ -24,7 +42,69 @@ export class CaseHub {
   /** Proposals being run now, as "case:proposal", so a second press cannot start a second run while the first is still pricing. */
   readonly running = new Set<string>();
 
-  constructor(private readonly wb: Workbench, readonly deps: EngineDeps, private readonly onError: (error: unknown) => void) {}
+  /**
+   * The deps are the server's own (compose's, which a reload changes in place). The hub gives them the way a sub-loop stage reaches its
+   * child cases (`children`) and the way a run's outputs reach the workbench chain (`onOutputs`, as loop.output).
+   */
+  constructor(private readonly wb: Workbench, readonly deps: EngineDeps, private readonly onError: (error: unknown) => void) {
+    deps.children = this.children;
+    deps.onOutputs = (o) => {
+      const inputs: Parameters<Workbench["chain"]["appendMany"]>[0] = [];
+      for (const output of Object.keys(o.outputs).sort()) {
+        const value = o.outputs[output]!;
+        const text = canonical(value);
+        inputs.push({
+          type: "loop.output", actor: ENGINE,
+          payload: { loop: o.loop, output, case: o.case, run: o.run, head: o.head, outcome: o.outcome, marking: markingOf(value, o.marking), hash: sha256Hex(text), value: wb.chainBlobs.put(text) },
+        });
+      }
+      if (inputs.length > 0) wb.chain.appendMany(inputs);
+    };
+  }
+
+  /**
+   * The child cases of a sub-loop stage, over this workbench and the hub's own engines: a child is an ordinary case, made by the engine, whose
+   * run is started by the engine and carried as far as it goes without a person. Nothing here passes a gate.
+   */
+  readonly children: ChildCases = {
+    find: (link: ChildLink) => this.wb.findChild(link),
+    create: (input: NewCase, link: ChildLink, cards: Card[]) => this.wb.createCase(input, ENGINE, { loop: link.loop, link, cards }).id,
+    drive: async (child: string): Promise<RunSummary> => {
+      const engine = this.engine(child);
+      if (this.wb.session(child).state.run.status === "none") engine.start(ENGINE);
+      return engine.advance();
+    },
+    read: (child: string) => {
+      let session: CaseSession;
+      try {
+        session = this.wb.session(child);
+      } catch (error) {
+        if (gone(error)) return null;
+        throw error;
+      }
+      const stopped = session.entries().findLast((e) => e.type === "run.finished");
+      return {
+        state: session.state, head: session.head(), outputs: this.engine(child).loop?.manifest.outputs ?? {},
+        stop_reason: stopped !== undefined && stopped.type === "run.finished" ? stopped.payload.reason ?? null : null,
+      };
+    },
+  };
+
+  /**
+   * The deps a case's reads use: Engine.bound of its engine when it has one, else what a new engine would bind (made, read and let go here:
+   * nothing is written and nothing is recovered). Throws CaseNotFoundError.
+   */
+  depsFor(id: string): EngineDeps {
+    const session = this.wb.session(id);
+    const have = this.engines.get(id);
+    if (have !== undefined && this.sessionOf.get(have) === session) return have.bound;
+    const looking = new Engine(session, this.deps);
+    try {
+      return looking.bound;
+    } finally {
+      looking.close();
+    }
+  }
 
   /** For reads: the session, with no engine and no recovery. Throws CaseNotFoundError. */
   read(id: string): CaseSession {
@@ -55,8 +135,8 @@ export class CaseHub {
     return mine;
   }
 
-  create(input: NewCase, actor: Actor): CaseSession {
-    return this.wb.createCase(input, actor);
+  create(input: NewCase, actor: Actor, opts: { loop?: string } = {}): CaseSession {
+    return this.wb.createCase(input, actor, opts.loop === undefined ? {} : { loop: opts.loop });
   }
 
   /** Calls engine.advance() without waiting; a failure goes to onError. */
@@ -101,6 +181,36 @@ export class CaseHub {
         if (!(error instanceof CaseNotFoundError || error instanceof CaseRefused)) throw error;
       }
       if (due) this.background(this.unloadAfterPublishing(id));
+      this.settled(id);
+    }));
+  }
+
+  /**
+   * A drive of `child` has settled: when it is a child whose parent is loaded, the parent's engine is told, in the parent's queue, as background
+   * work (Engine.childSettled lifts only a pause that waits on this child, and passes no gate). A parent that is not loaded is left alone: it
+   * looks again when it is loaded and resumed.
+   */
+  private settled(child: string): void {
+    let parent: string | null;
+    try {
+      parent = this.wb.session(child).state.loop.parent?.case ?? null;
+      if (parent !== null) this.wb.session(parent);
+    } catch (error) {
+      if (gone(error)) return;
+      throw error;
+    }
+    if (parent === null) return;
+    const id = parent;
+    this.background(this.serial(id, () => {
+      // the commit is made in the queue; the drive it starts goes on after it, as a command's does
+      let engine: Engine;
+      try {
+        engine = this.engine(id);
+      } catch (error) {
+        if (gone(error)) return; // unloaded since
+        throw error;
+      }
+      this.follow(id, engine.childSettled(child));
     }));
   }
 

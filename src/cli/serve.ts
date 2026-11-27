@@ -70,7 +70,8 @@ export async function afterSignal(stop: () => Promise<void>, out: { error(line: 
 }
 
 /**
- * Resolves once the server is listening. Throws UsageError, ConfigError, WorkbenchLockedError or ComposeError, with nothing left open.
+ * Resolves once the server is listening. Throws UsageError, ConfigError, WorkbenchLockedError or ComposeError, with nothing left open. A default
+ * loop that is not usable does not stop it: it is printed as a problem, and the Loops page shows it.
  * `stop()` (and SIGINT or SIGTERM) stops the server, then closes the connector pool, the workbench and the fixture, each even if the one before failed;
  * several failures are thrown together as an AggregateError. On a signal, a failed shutdown prints every error and exits 1.
  */
@@ -112,7 +113,12 @@ export async function serve(argv: string[], out: { log(line: string): void; erro
     composed = compose(config, wb, { refuse_hosts: () => (host === null ? [] : [host]) });
     for (const problem of composed.problems) out.error(`problem: ${problem}`);
     const assets = await buildInterface();
-    running = startServer({ config, wb, deps: composed.deps, problems: composed.problems, assets, onError: (e) => out.error(`server: ${reason(e)}`) }, p.port ?? config.server.port);
+    const made = composed;
+    // a save, a copy, an import or a trust on the Loops page loads the roots again in place; an export and a save are searched for every secret held
+    running = startServer({
+      config, wb, deps: composed.deps, problems: composed.problems, assets, onError: (e) => out.error(`server: ${reason(e)}`),
+      reload: () => made.reload(), secrets: () => made.secrets(),
+    }, p.port ?? config.server.port);
     host = new URL(running.origin).host;
   } catch (err) {
     try { await stop(); } catch { /* the first failure is the one to report */ }

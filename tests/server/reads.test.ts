@@ -6,6 +6,7 @@ import type { Me, ModelView, Reference, CaseSummaryView } from "../../src/core/w
 import { startStandin } from "../helpers/http-standin";
 import { served, writeLocalModel } from "../helpers/served";
 import type { Served } from "../helpers/served";
+import { writeTriage } from "../helpers/loop-files";
 
 let s: Served;
 let standin: ReturnType<typeof startStandin> | undefined;
@@ -207,4 +208,17 @@ test("an unexpected failure is 500 with a scrubbed first line, and goes to onErr
   expect(text).toContain("the server failed: ");
   expect(text).not.toContain(s.dir);
   expect(text).not.toContain("stack line");
+});
+
+test("a case's reads take its own loop: the agent of a triage case has no Assemble model, and reading writes nothing", async () => {
+  s = await served({ before: writeTriage });
+  const triage = await s.newCase({ loop: "triage" });
+  const plain = await s.newCase();
+  const head = s.app.hub.read(triage).head();
+  const agent = async (id: string): Promise<{ model: unknown }> => (await (await s.get(`/api/cases/${id}/agent`)).json()) as { model: unknown };
+  expect((await agent(triage)).model).toBeNull();
+  expect((await agent(plain)).model).toMatchObject({ provider: "scripted", model: "sample-run" });
+  expect((await s.get(`/api/cases/${triage}/models`)).status).toBe(200);
+  expect((await s.get(`/api/cases/${triage}/preview`)).status).toBe(200);
+  expect(s.app.hub.read(triage).head()).toEqual(head);
 });

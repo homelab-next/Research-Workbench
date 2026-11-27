@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SAMPLE_START, SAMPLE_WINDOW } from "../../scripts/make-sample-data";
-import { compose, ComposeError } from "../../src/cli/compose";
+import { compose } from "../../src/cli/compose";
 import { canonical } from "../../src/core/canonical";
 import type { Json } from "../../src/core/canonical";
 import type { CaseSession } from "../../src/core/session";
@@ -333,7 +333,9 @@ test("Engine.bound on a case with no run is the current version of its loop, and
 
 test("a loop whose checks stage names a check that cannot load is not usable: compose and reload refuse it, start refuses naming the check, and writes nothing", () => {
   editFile("checks/01-schema.yaml", "script:", "scripted:");
-  expect(() => composed.reload()).toThrow(ComposeError);
+  // reload does not throw (controller ruling): it marks the default loop unusable, naming the check
+  expect(composed.reload().join(" | ")).toMatch(/the default loop "investigation" is not usable: .*check "?schema/);
+  expect(composed.deps.pipeline.stages).toEqual([]);
   const loops = catalogNow();
   expect(loops.current("investigation")).toBeNull();
   const problems = loops.problems("investigation").join(" | ");

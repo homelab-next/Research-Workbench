@@ -156,11 +156,15 @@ test("no command, an unknown command, a missing argument and an unknown flag exi
 test("import and trust work in a workbench whose only root is empty, where compose would fail", async () => {
   const file = await exported();
   const b = emptyWorkbench();
-  const { compose, ComposeError } = await import("../../src/cli/compose");
+  const { compose } = await import("../../src/cli/compose");
   const { Workbench } = await import("../../src/core/workbench");
   const { loadConfig } = await import("../../src/modules/config");
   const wb = Workbench.open(b.data, { onError: () => {} });
-  try { expect(() => compose(loadConfig({ path: b.config }), wb)).toThrow(ComposeError); } finally { wb.close(); }
+  // an unusable default loop no longer stops compose (controller ruling): it is a problem, and no case can run on it
+  try {
+    const composed = compose(loadConfig({ path: b.config }), wb);
+    try { expect(composed.problems.join(" | ")).toContain('the default loop "investigation" is not usable'); } finally { composed.close(); }
+  } finally { wb.close(); }
   expect(await run(b, "import", file)).toBe(0);
   const folder = join(b.data, "imported", readdirSync(join(b.data, "imported"))[0]!);
   expect(await run(b, "trust", folder)).toBe(0);
