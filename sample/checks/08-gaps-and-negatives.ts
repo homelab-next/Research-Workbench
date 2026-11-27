@@ -66,7 +66,7 @@ const OPENS = /^[\s"'(]*(?:(?:and|or|but|although|though|while|whereas|yet|howev
 const CONTRAST = /\b(?:but|though|although|however|whereas|while|(?<!\b(?:not|as)\s)yet)\b|;(?!\s*(?:therefore|thus|hence|so|consequently|accordingly)\b)/gi;
 const SOFT = /,\s+(?:and|or)\b/gi;
 /** A sentence that reasons from the one before it. */
-const FOLLOWS = /^(?:therefore|thus|hence|so|consequently|accordingly|this\s+(?:suggests|means|makes|indicates|implies|points|supports|favou?rs))\b/i;
+const FOLLOWS = /^(?:therefore|thus|hence|so|consequently|accordingly|(?:this|that|which)\s+(?:(?:strongly|clearly|likely|probably|further|also|in\s+turn)\s+)?(?:suggests|means|makes|indicates|implies|points|supports|favou?rs))\b/i;
 const JUDGE = /\b(?:likely|unlikely|likelihood|probabl[ey]|probable|improbable|almost\s+certain(?:ly)?|remote\s+chance|roughly\s+even|chances?|belong(?:s|ing|ed)?|part\s+of|owned\s+by|(?:is|was|are|were|be)\s+(?:not\s+)?an?\b(?!\s+(?:gap|limit|limitation)\b))/i;
 /** What a judgment part may say first without drawing a judgment from the silence: confidence, a limit, the unknown, or that it cannot be told. */
 const NOT_JUDGED = /\b(?:(?:cannot|can\s?not|can't|could\s+not|unable\s+to|not\s+possible\s+to|impossible\s+to|no\s+way\s+to)\s+(?:\w+\s+){0,2}?(?:say|tell|determine|confirm|establish|know|assess|judge|rule\s+out|be\s+sure|decide|conclude)|confidence|unknown|unclear|rests?\s+on|(?:was|were|is|are)\s+used|limits?|limiting|insufficient|not\s+enough)\b/i;

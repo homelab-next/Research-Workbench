@@ -373,6 +373,8 @@ const SILENCE_TABLE: [string, "pass" | "fail"][] = [
   ["Without any DNS or flow data, the device is unlikely to belong to the homelab.", "fail"],
   ["It is unlikely to belong to the homelab: no DNS or flow data was observed.", "fail"],
   ["No DNS or flow data was observed; therefore it is unlikely to belong to the homelab.", "fail"],
+  // dev CASE-11: an adverb between "This" and the reasoning verb
+  ["The device made a single, transient connection on November 24, followed by no observed network activity. This strongly suggests that the device is almost certainly no longer on the network.", "fail"],
   ["No DNS or flow data was observed. Therefore it is unlikely to belong to the homelab.", "fail"],
   ["No DNS or flow data was observed, which makes it unlikely to belong to the homelab.", "fail"],
   ["No DNS or flow data was observed, meaning it is unlikely to belong to the homelab.", "fail"],
