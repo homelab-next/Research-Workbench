@@ -35,6 +35,8 @@ export interface Config {
   marking_policy: Record<Marking, Where[]>;
   server: { port: number };
   research: { parallel: number };
+  /** At most this many unanswered questions to the person in a run; 0 turns asking off. */
+  questions: { max_open: number };
 }
 
 const whereList: Schema = { type: "array", items: { type: "string", enum: [...WHERES] } };
@@ -66,11 +68,15 @@ const CONFIG_SCHEMA: Schema = {
     },
     server: { type: "object", additionalProperties: false, properties: { port: { type: "integer", minimum: 0, maximum: 65535 } } },
     research: { type: "object", additionalProperties: false, properties: { parallel: { type: "integer", minimum: 1 } } },
+    questions: { type: "object", additionalProperties: false, properties: { max_open: { type: "integer", minimum: 0 } } },
   },
 };
 
 /** Least restrictive two markings may go anywhere; the next two stay off hosted models; the most restrictive stays on this machine. */
 const DEFAULT_POLICY = Object.fromEntries(MARKINGS.map((m, i): [Marking, Where[]] => [m, i < 2 ? ["machine", "network", "hosted"] : i < 4 ? ["machine", "network"] : ["machine"]])) as Record<Marking, Where[]>;
+
+/** The default of questions.max_open (the same number as the tools' DEFAULT_MAX_OPEN; modules do not import the agents). */
+const DEFAULT_MAX_OPEN_QUESTIONS = 3;
 
 const expandHome = (p: string, home: string): string => (p === "~" ? home : p.startsWith("~/") ? join(home, p.slice(2)) : p);
 
@@ -107,7 +113,7 @@ export function loadConfig(opts: { path?: string; env?: Record<string, string | 
   const given = raw as {
     data_dir?: string; user?: string; role?: Config["role"]; roots?: { path: string; trusted?: boolean; credentials?: string[] }[];
     secrets_file?: string; seeker?: string; marking_policy?: Partial<Record<Marking, Where[]>>;
-    server?: { port?: number }; research?: { parallel?: number };
+    server?: { port?: number }; research?: { parallel?: number }; questions?: { max_open?: number };
   };
 
   const base = path === null ? process.cwd() : dirname(path);
@@ -128,5 +134,6 @@ export function loadConfig(opts: { path?: string; env?: Record<string, string | 
     marking_policy: { ...DEFAULT_POLICY, ...given.marking_policy },
     server: { port: given.server?.port ?? 4747 },
     research: { parallel: given.research?.parallel ?? 3 },
+    questions: { max_open: given.questions?.max_open ?? DEFAULT_MAX_OPEN_QUESTIONS },
   };
 }

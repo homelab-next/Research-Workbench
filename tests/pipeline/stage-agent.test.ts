@@ -345,3 +345,26 @@ test("with a fast model the pack budget is the smaller context's", async () => {
   expect((ofType("model.request")[0] as Req).payload.left_out.map((i) => i.id)).toEqual(["c1"]);
   expect((ofType("model.request")[0] as Req).payload.provider).toBe("quick");
 });
+
+test("every agent stage's pack holds the questions part once a question is asked, and its tools take the cap from the config", async () => {
+  const askIt = (question: string): ScriptReply => ({ tool_calls: [{ tool: "ask_person", args: { why: "w", question, blocking: false } }] });
+  const r = rig(script(askIt("Where is AP-7?"), askIt("Who owns the laptop?"), say(FRAME), say(FRAME)), { questions: { max_open: 1 } });
+  r.engine.start(person);
+  const base = r.env();
+  // the sample's Frame does not ask; this copy of it may
+  const env: StageEnv = { ...base, stage: { ...base.stage, tools: [...base.stage.tools, "ask_person"] } };
+  expect(await stageAgent(env, { actor_id: "orchestrator", task: "frame it", extras: [] })).toMatchObject({ kind: "output" });
+  const returned = ofType("tool.returned") as Extract<Entry, { type: "tool.returned" }>[];
+  expect(returned.map((e) => [e.payload.ok, e.payload.summary])).toEqual([
+    [true, "asked ask-1"],
+    [false, "1 question to the person is already open (ask-1); go on without asking another"],
+  ]);
+  const ids = (e: Entry): string[] => (e as Extract<Entry, { type: "model.request" }>).payload.pack.map((i) => `${i.kind}:${i.id}`);
+  expect(ids(ofType("model.request")[0]!)).not.toContain("note:questions");
+  await stageAgent(r.env(), { actor_id: "orchestrator", task: "frame it", extras: [] });
+  const last = ofType("model.request").at(-1)!;
+  const pack = ids(last);
+  expect(pack).toContain("note:questions");
+  // after the case
+  expect(pack.indexOf("note:questions")).toBe(pack.indexOf("case:" + f.s.state.meta!.id) + 1);
+});

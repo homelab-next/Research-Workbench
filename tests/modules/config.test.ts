@@ -114,3 +114,15 @@ test("a partial marking_policy keeps the defaults for markings it omits", () => 
   expect(c.marking_policy["TLP:GREEN"]).toEqual(["machine", "network", "hosted"]);
   expect(c.marking_policy["TLP:RED"]).toEqual(["machine"]);
 });
+
+test("questions.max_open defaults to 3, is read from the file, and a negative or fractional one is refused", () => {
+  const opts = { env: {}, home: "/h", repoRoot: "/repo" };
+  expect(loadConfig(opts).questions).toEqual({ max_open: 3 });
+  const dir = tmp();
+  expect(loadConfig({ ...opts, path: file(dir, "a.yaml", "questions:\n  max_open: 5\n") }).questions).toEqual({ max_open: 5 });
+  expect(loadConfig({ ...opts, path: file(dir, "b.yaml", "questions:\n  max_open: 0\n") }).questions).toEqual({ max_open: 0 });
+  expect(loadConfig({ ...opts, path: file(dir, "c.yaml", "questions: {}\n") }).questions).toEqual({ max_open: 3 });
+  expect(() => loadConfig({ ...opts, path: file(dir, "d.yaml", "questions:\n  max_open: -1\n") })).toThrow(ConfigError);
+  expect(() => loadConfig({ ...opts, path: file(dir, "e.yaml", "questions:\n  max_open: 1.5\n") })).toThrow(ConfigError);
+  expect(() => loadConfig({ ...opts, path: file(dir, "f.yaml", "questions:\n  most: 2\n") })).toThrow(ConfigError);
+});

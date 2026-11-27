@@ -19,6 +19,7 @@ import { DEFAULT_LIMITS } from "../../modules/seeker";
 import type { StageEnd, StageEnv } from "../engine";
 import type { Role } from "../manifests";
 import type { Registry } from "../../modules/registry";
+import { questionsPart } from "../questions";
 
 export type AgentStageEnd = { kind: "output"; output: Json; calls: CallRecord[] } | Exclude<StageEnd, { kind: "finished" }>;
 
@@ -99,7 +100,8 @@ export async function stageAgent(env: StageEnv, opts: {
   let pack: ReturnType<typeof assemblePack>;
   let schema: ReturnType<typeof schemaOf> | null = null;
   try {
-    const parts = [...stageParts(deps.registry, deps.profile, stage.id, { schema: stage.schema, objective: state.meta?.objective ?? null, ...(opts.narrow === undefined ? {} : { narrow: opts.narrow }) }), casePart(state), ...opts.extras];
+    const asked = questionsPart(session, deps.registry);
+    const parts = [...stageParts(deps.registry, deps.profile, stage.id, { schema: stage.schema, objective: state.meta?.objective ?? null, ...(opts.narrow === undefined ? {} : { narrow: opts.narrow }) }), casePart(state), ...(asked === null ? [] : [asked]), ...opts.extras];
     if (stage.schema !== null) schema = opts.narrow === undefined ? schemaOf(deps.registry, stage.schema) : opts.narrow(schemaOf(deps.registry, stage.schema));
     pack = assemblePack(parts, { budget: packBudget(fast === null ? who.context : Math.min(who.context, fast.context)), case_marking: state.meta!.marking, max_marking: Object.hasOwn(state.pack_limits, stage.id) ? state.pack_limits[stage.id]! : null });
   } catch (err) {
@@ -128,6 +130,7 @@ export async function stageAgent(env: StageEnv, opts: {
       session, deps: deps.runner, seeker: deps.seeker, actor: who.actor, link: { run: state.run.id, stage: stage.id, job: opts.job ?? null },
       draft: opts.draft ?? null, draft_hash: opts.draft_hash ?? null, subgoal: opts.subgoal ?? null, window, limits,
       ...(opts.onNeedsBudget === undefined ? {} : { onNeedsBudget: opts.onNeedsBudget }),
+      max_open_questions: deps.config.questions.max_open,
     },
   });
   switch (end.kind) {
