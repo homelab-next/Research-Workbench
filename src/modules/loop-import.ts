@@ -13,6 +13,7 @@ import { writeAll } from "../core/tar";
 import { CHECK_SCRIPT, rootRelative } from "../pipeline/components";
 import type { LoopCatalog, LoopLock, ResolvedLoop } from "../pipeline/loops";
 import { parseManifestFile } from "./manifests";
+import { toYaml } from "./yaml-write";
 import type { Registry } from "./registry";
 
 export type ExportFile = { path: string; kind: string; id: string; bytes: Uint8Array; origin: string | null };
@@ -32,33 +33,6 @@ const enc = new TextEncoder();
 
 // ---------- a source's shape ----------
 
-/** The YAML of a source mapping with its place keys taken out and `location: "unset"`, `confirmed: false` put in; line by line. */
-function shapeLines(yaml: string): string {
-  const lines = yaml.split("\n");
-  const out: string[] = [];
-  let skipping = false;
-  let placed = false;
-  for (const line of lines) {
-    const top = /^([A-Za-z_][A-Za-z0-9_]*)\s*:/.exec(line);
-    if (skipping && top === null && (line.startsWith(" ") || line.startsWith("\t") || line.startsWith("-") || line.trim() === "")) {
-      if (line.trim() === "") { skipping = false; out.push(line); }
-      continue;
-    }
-    skipping = false;
-    if (top !== null && PLACE_KEYS.includes(top[1]!)) {
-      skipping = true;
-      if (!placed) { out.push('location: "unset"', "confirmed: false"); placed = true; }
-      continue;
-    }
-    out.push(line);
-  }
-  if (!placed) {
-    const end = out.length > 0 && out[out.length - 1] === "" ? out.length - 1 : out.length;
-    out.splice(end, 0, 'location: "unset"', "confirmed: false");
-  }
-  return out.join("\n");
-}
-
 /** What the shape of `body` is: its place keys taken out, location "unset" and confirmed false. */
 function shapedBody(body: Record<string, Json>): Record<string, Json> {
   const out: Record<string, Json> = {};
@@ -73,24 +47,30 @@ const sameJson = (a: unknown, b: unknown): boolean => {
 };
 const isMapping = (x: unknown): x is Record<string, Json> => typeof x === "object" && x !== null && !Array.isArray(x);
 
-/** A source manifest's text as a shape: location "unset", no credential, user or tls_verify, confirmed false; everything else as written. */
+/**
+ * A source manifest's text as a shape: location "unset", no credential, user or tls_verify, confirmed false; everything else written again from its
+ * parsed content with the workbench's own YAML writer, so no comment, anchor or layout of the person's file travels. Throws LoopFileError for a source
+ * that repeats one of its place values in another field (a title made from an anchor on its location, say).
+ */
 export function sourceShape(text: string): string {
-  const fm = FRONT_MATTER.exec(text.replace(/^﻿/, ""));
-  const plain = text.replace(/^﻿/, "");
+  const plain = text.replace(/^\uFEFF/, "");
+  const fm = FRONT_MATTER.exec(plain);
   const yaml = fm === null ? plain : (fm[2] ?? "");
   const parsed: unknown = Bun.YAML.parse(yaml);
   if (!isMapping(parsed)) throw new LoopFileError("a source manifest is a mapping");
   const want = shapedBody(parsed);
-  // the lines as written, when they read back as the shape; else the shape as JSON, which is YAML too
-  const lined = shapeLines(yaml);
-  let shaped: string;
-  try {
-    shaped = sameJson(Bun.YAML.parse(lined), want) ? lined : `${JSON.stringify(want, null, 2)}\n`;
-  } catch {
-    shaped = `${JSON.stringify(want, null, 2)}\n`;
-  }
+  const placed = PLACE_KEYS.flatMap((k) => (typeof parsed[k] === "string" && (parsed[k] as string).length >= 4 && parsed[k] !== "unset" ? [[k, parsed[k] as string] as const] : []));
+  const rest = canonical(want as Json);
+  for (const [k, v] of placed) if (rest.includes(JSON.stringify(v).slice(1, -1))) throw new LoopFileError(`a source repeats its ${k} in another field; it is not exported as a shape`);
+  const shaped = toYaml(want as Json);
   if (fm === null) return shaped;
-  return `${fm[1]}${shaped.endsWith("\n") ? shaped : `${shaped}\n`}${fm[3]}${plain.slice(fm[0].length)}`;
+  return `${fm[1]}${shaped}${fm[3]}${plain.slice(fm[0].length)}`;
+}
+
+/** Whether a manifest the registry holds has the content of a file of a loop file: the same body (and text), or for a source the same shape. */
+export function sameContent(m: { kind: string; body: Record<string, Json>; text?: string | null }, parsed: { kind: string; body: Record<string, Json>; text: string | null }): boolean {
+  if (m.kind === "source" && parsed.kind === "source") return sameJson(shapedBody(m.body), parsed.body);
+  return sameJson(m.body, parsed.body) && (m.text ?? null) === parsed.text;
 }
 
 // ---------- export ----------
@@ -296,9 +276,13 @@ export async function planImport(file: string, registry: Registry, importsDir: s
   const write: LoopFileEntry[] = [];
   const same: LoopFileEntry[] = [];
   const conflicts: ImportPlan["conflicts"] = [];
-  const matches = (have: string, entry: LoopFileEntry): boolean => have === entry.sha256 || (entry.origin !== null && have === entry.origin);
+  // identical: the same bytes, the bytes the shape was made from, or the same parsed content (a comment or a layout is not a difference)
+  const matches = (m: NonNullable<ReturnType<Registry["get"]>>, entry: LoopFileEntry, parsed: ReturnType<typeof parseManifestFile> | null): boolean =>
+    m.hash === entry.sha256 || (entry.origin !== null && m.hash === entry.origin) || (parsed !== null && m.kind !== "pivot" && m.kind !== "type" && sameContent(m, parsed));
   for (const { entry, bytes } of held.sort((a, b) => lt(a.entry.path, b.entry.path))) {
     const ids = idsOf(entry, bytes);
+    let parsed: ReturnType<typeof parseManifestFile> | null = null;
+    if (entry.kind !== CHECK_SCRIPT) { try { parsed = parseManifestFile(entry.path, bytes); } catch { parsed = null; } }
     if (entry.kind === CHECK_SCRIPT) {
       // a check's script goes with its check: the person's check with this id keeps its own script
       const check = registry.get("check", entry.id);
@@ -315,7 +299,7 @@ export async function planImport(file: string, registry: Registry, importsDir: s
     for (const { kind, id } of ids) {
       const m = registry.get(kind, id);
       if (m === null) continue;
-      if (matches(m.hash, entry)) anySame = true;
+      if (matches(m, entry, parsed)) anySame = true;
       else { anyConflict = true; conflicts.push({ kind, id, have: m.hash, file: entry.path }); }
     }
     if (anyConflict) continue;

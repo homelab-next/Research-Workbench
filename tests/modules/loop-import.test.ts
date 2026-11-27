@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { BlobStore } from "../../src/core/blobs";
+import type { Json } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
 import { Ledger } from "../../src/core/ledger";
 import { checkLoopFile, LoopFileError, loopFileName } from "../../src/core/loopfile";
@@ -12,7 +13,7 @@ import type { LoopFileManifest } from "../../src/core/loopfile";
 import { Refused } from "../../src/core/refused";
 import { loadConfig, rootsOf } from "../../src/modules/config";
 import type { Config, RootConfig } from "../../src/modules/config";
-import { exportFiles, exportLoop, importLoop, planImport, sourceShape } from "../../src/modules/loop-import";
+import { exportFiles, exportLoop, importLoop, planImport, sameContent, sourceShape } from "../../src/modules/loop-import";
 import type { Registry } from "../../src/modules/registry";
 import { loadRegistry } from "../../src/modules/registry-record";
 import { Secrets } from "../../src/modules/secrets";
@@ -141,8 +142,9 @@ test("an exported source is a shape: location unset, no credential, user or tls_
   const text = new TextDecoder().decode(got.get("sources/warehouse.yaml")!);
   const body = Bun.YAML.parse(text) as Record<string, unknown>;
   expect(body).toEqual({ kind: "source", id: "warehouse", title: "Event warehouse", connector: "trino", location: "unset", marking: "TLP:GREEN", where: "network", cost: { weight: 1, unit: "rows" }, confirmed: false });
-  // everything else as written: the lines that stay are the root's own lines
-  expect(text).toContain('marking: "TLP:GREEN"\nwhere: network\ncost: { weight: 1, unit: rows }\n');
+  // written again from its parsed content by the workbench's own writer (final review I6): nothing of the root's layout or comments travels
+  expect(text).toContain('marking: "TLP:GREEN"\nwhere: "network"\ncost:\n  weight: 1\n  unit: "rows"\n');
+  expect(text).not.toContain("#");
   const entry = manifest.files.find((f) => f.path === "sources/warehouse.yaml")!;
   expect(entry.origin).toBe(sha256Hex(readFileSync(join(root, "sources", "warehouse.yaml"))));
   const rep = Bun.YAML.parse(new TextDecoder().decode(got.get("sources/reputation.yaml")!)) as Record<string, unknown>;
@@ -371,4 +373,27 @@ test("a loop file whose members are not what loop.json says they are is refused 
   expect(await refused(planImport(model, registry, config.loops.imports))).toBe("models/m.yaml: a loop file holds no model manifest");
   expect(existsSync(config.loops.imports)).toBe(false);
   expect(LoopFileError).toBeDefined();
+});
+
+test("a source's shape carries none of its comments: a comment that names a host or a user beside location is not exported", () => {
+  const text = `kind: source\nid: lake\n# moved from https://old-lake.internal.example:8443 (user svc_reader) in March\nlocation: https://lake.internal.example:8443\ncredential: LAKE_PW\nuser: svc_reader # the reader account\nmarking: TLP:GREEN\ntitle: Lake # the big one\n`;
+  const out = sourceShape(text);
+  for (const leak of ["old-lake", "lake.internal.example", "svc_reader", "LAKE_PW", "#", "reader account", "big one"]) expect(out).not.toContain(leak);
+  expect(Bun.YAML.parse(out)).toEqual({ kind: "source", id: "lake", marking: "TLP:GREEN", title: "Lake", location: "unset", confirmed: false });
+  // front matter keeps its body text, and the shape is written again in it
+  const md = sourceShape(`---\nkind: source\nid: s\n# at 192.0.2.10\nlocation: http://192.0.2.10\ntitle: S\n---\nNotes.\n`);
+  expect(md).not.toContain("192.0.2.10");
+  expect(md.endsWith("---\nNotes.\n")).toBe(true);
+});
+
+test("a source whose place value is repeated in another field (an anchor on location reused by title) is refused, not exported with it", () => {
+  expect(() => sourceShape(`kind: source\nid: lake\nlocation: &l https://lake.internal.example:8443\ntitle: *l\nmarking: TLP:GREEN\n`)).toThrow(/repeats its location/);
+});
+
+test("a source the person holds is the same as the shape in a loop file when their parsed content is, whatever comments either has", () => {
+  const mine = { kind: "source", id: "s", title: "S", location: "http://192.0.2.10", user: "u", confirmed: true } as Record<string, Json>;
+  expect(sameContent({ kind: "source", body: mine, text: null }, { kind: "source", body: { kind: "source", id: "s", title: "S", location: "unset", confirmed: false }, text: null })).toBe(true);
+  expect(sameContent({ kind: "source", body: mine, text: null }, { kind: "source", body: { kind: "source", id: "s", title: "T", location: "unset", confirmed: false }, text: null })).toBe(false);
+  expect(sameContent({ kind: "skill", body: { kind: "skill", id: "k", title: "K" }, text: "Be brief.\n" }, { kind: "skill", body: { kind: "skill", id: "k", title: "K" }, text: "Be brief.\n" })).toBe(true);
+  expect(sameContent({ kind: "skill", body: { kind: "skill", id: "k", title: "K" }, text: "Be brief.\n" }, { kind: "skill", body: { kind: "skill", id: "k", title: "K" }, text: "Be long.\n" })).toBe(false);
 });
