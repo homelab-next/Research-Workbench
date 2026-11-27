@@ -1,5 +1,5 @@
-import { BASIS_TEXT, blockers, CARD_REF, keepText, latestDraft, notedExceptions, proposalMarking, publishable, rulingText, runConflicts, runQuestions } from "../../core/state";
-import type { CaseState, ConflictState, QuestionState } from "../../core/state";
+import { activeOverrules, BASIS_TEXT, blockers, CARD_REF, keepText, latestDraft, notedExceptions, overruleSays, proposalMarking, publishable, rulingText, runConflicts, runQuestions } from "../../core/state";
+import type { CaseState, ConflictState, Overrule, QuestionState } from "../../core/state";
 import { CONFIDENCES, PERSON_BASES } from "../../core/types";
 import type { Actor, Draft, Finding, PersonBasis, Product } from "../../core/types";
 import type { Preview } from "../../core/wire";
@@ -22,6 +22,11 @@ const isText = (x: string): x is TextSection => (TEXT_SECTIONS as string[]).incl
 const byId = (a: string, b: string): number => a.localeCompare(b, "en", { numeric: true });
 const lines = (text: string): string[] => text.split("\n").map((l) => l.trim()).filter((l) => l !== "");
 const names = (a: Actor): string => a.id;
+const OVERRULE_ARG = "overrule:";
+const LEAVE = "leave as it is";
+const STAYS: readonly [string, string][] = [["", LEAVE], ["stay", "must stay"], ["drop", "drop it"]];
+/** What a person's overrule set, in the words of the lens. */
+const overruleLine = (o: Overrule): string => `${overruleSays(o)}. Note: ${o.note.trim()}`;
 
 interface EditForm {
   base: string;
@@ -45,6 +50,7 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
   const kept = (id: string): boolean => owns(state().cards, id) && state().cards[id]!.place === "lane";
   /** A draft can be edited while a run is going on: before the gate too (spec §9.5). */
   const canEdit = (s: CaseState): boolean => latestDraft(s) !== null && s.run.status !== "none" && s.run.status !== "finished";
+  const runGoing = (s: CaseState): boolean => s.run.status !== "none" && s.run.status !== "finished";
 
   let destroyed = false;
   let edit: EditForm | null = null;
@@ -56,6 +62,8 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
   let rejectStop = false;
   const answers = new Map<string, string>();
   const ruleNotes = new Map<string, string>();
+  /** Conflicts whose "Change the ruling" the person has opened. */
+  const changing = new Set<string>();
   const kinds = new Map<string, string>();
   const proposalText = new Map<string, string>();
   const proposalEdit = new Set<string>();
@@ -71,6 +79,8 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
   // a one-shot: the person asked to be taken to the gate (Shift+Enter, the brief's button, the command bar), from where focus was then
   let armed = arg === AT_GATE;
   const armedFrom = armed ? ui.doc.activeElement : null;
+  /** `overrule:<finding>` (the command bar's `overrule f1`): that finding's form is opened, and focus put in its note, once. */
+  let focusOverrule: string | null = arg !== null && arg.startsWith(OVERRULE_ARG) ? arg.slice(OVERRULE_ARG.length) : null;
   /** The draft the one-shot was armed for: it is for the gate waiting when the person asked, not a later one. */
   let armedFor: string | null | undefined;
   /** Commands sent and not yet seen: the answer's seq once it has come (the press stays off until that entry is here), null while the answer is awaited. */
@@ -158,20 +168,93 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
   const paragraphs = (text: string): HTMLElement[] =>
     text.trim() === "" ? [h("p", { class: "empty" }, "Nothing written.")] : text.split(/\n{2,}/).map((t) => h("p", null, withChips(t)));
 
+  // ---------- overrules ----------
+  interface OverruleFields { likelihood: string; confidence: string; stays: string; note: string }
+  const overruleVals = new Map<string, OverruleFields>();
+  const overruleOpen = new Set<string>(focusOverrule === null ? [] : [focusOverrule]);
+  const fieldsOf = (id: string): OverruleFields => {
+    let v = overruleVals.get(id);
+    if (v === undefined) { v = { likelihood: "", confidence: "", stays: "", note: "" }; overruleVals.set(id, v); }
+    return v;
+  };
+  /** What the person overruled on this finding, the overrules it replaced, and the form to overrule it again or withdraw it. */
+  const overruleView = (s: CaseState, d: Draft, id: string): Child[] => {
+    const o = owns(s.overrules, id) ? s.overrules[id]! : null;
+    const active = activeOverrules(s).some((x) => x.finding === id);
+    const past: Overrule[] = o === null ? [] : active ? o.earlier : [...o.earlier, o];
+    const v = fieldsOf(id);
+    const key = `overrule:${id}`;
+    const busy = (): boolean => inflight.has(key);
+    const noted = (): boolean => v.note.trim() !== "";
+    const nothingSet = (): boolean => v.likelihood === "" && v.confidence === "" && v.stays === "";
+    const send = (withdraw: boolean): void => {
+      if (ro() || busy() || !noted() || (!withdraw && nothingSet())) return;
+      const args = withdraw
+        ? { finding: id, draft_hash: d.hash, likelihood: null, confidence: null, stays: null, note: v.note.trim() }
+        : { finding: id, draft_hash: d.hash, likelihood: v.likelihood === "" ? null : v.likelihood, confidence: v.confidence === "" ? null : v.confidence, stays: v.stays === "stay" ? true : v.stays === "drop" ? false : null, note: v.note.trim() };
+      guarded(key, "overrule_finding", args, () => { overruleVals.delete(id); overruleOpen.delete(id); });
+    };
+    const select = (name: string, options: readonly [string, string][], value: string, set: (x: string) => void): HTMLSelectElement => {
+      const el2 = h("select", { name, disabled: ro(), on: { change: (e) => { set((e.target as HTMLSelectElement).value); sync(); } } }, options.map(([val, text]) => h("option", { value: val }, text))) as HTMLSelectElement;
+      el2.value = value;
+      return el2;
+    };
+    const likelihood = select(`Likelihood of ${id}`, [["", LEAVE], ...ui.ref.likelihood.map((t): [string, string] => [t, t])], v.likelihood, (x) => { v.likelihood = x; });
+    const confidence = select(`Confidence of ${id}`, [["", LEAVE], ...CONFIDENCES.map((c): [string, string] => [c, c])], v.confidence, (x) => { v.confidence = x; });
+    const stays = select(`Whether ${id} stays`, STAYS, v.stays, (x) => { v.stays = x; if (x === "drop") { v.likelihood = ""; v.confidence = ""; } });
+    const note = h("textarea", {
+      name: `Note on overruling ${id}`, value: v.note, disabled: ro(), placeholder: "Why (needed): what you know that the draft does not",
+      on: { input: (e) => { v.note = (e.target as HTMLTextAreaElement).value; sync(); } },
+    }) as HTMLTextAreaElement;
+    const go = h("button", { type: "button", class: "primary", data: { action: "overrule" }, on: { click: () => { send(false); } } }, "Overrule") as HTMLButtonElement;
+    const withdraw = active ? h("button", { type: "button", data: { action: "withdraw-overrule" }, on: { click: () => { send(true); } } }, "Withdraw the overrule") as HTMLButtonElement : null;
+    function sync(): void {
+      const dropped = v.stays === "drop";
+      if (dropped) { likelihood.value = ""; confidence.value = ""; }
+      likelihood.disabled = ro() || dropped; confidence.disabled = ro() || dropped;
+      go.disabled = ro() || busy() || nothingSet() || !noted();
+      go.title = ro() ? REPLAY_REFUSAL : nothingSet() ? "Choose what to set" : !noted() ? "An overrule needs a note" : `Overrule ${id}: code holds every draft to it`;
+      if (withdraw !== null) {
+        withdraw.disabled = ro() || busy() || !noted();
+        withdraw.title = ro() ? REPLAY_REFUSAL : !noted() ? "Withdrawing needs a note" : `Withdraw your overrule of ${id}: the analyst assesses it again`;
+      }
+    }
+    sync();
+    const form = h("details", { class: "overrule-form", on: { toggle: () => { if (form.open) overruleOpen.add(id); else overruleOpen.delete(id); } } },
+      h("summary", null, "Overrule"),
+      h("div", { class: "overrule-body" },
+        h("label", null, "Likelihood ", likelihood), h("label", null, "Confidence ", confidence), h("label", null, "Stays ", stays),
+        note, h("div", { class: "actions" }, go, withdraw),
+        h("p", { class: "note" }, "Code holds every draft to your overrule, and neither reviewer may move it back."))) as HTMLDetailsElement;
+    form.open = overruleOpen.has(id);
+    return [
+      active && o !== null ? h("p", { class: "overrule-now" }, `You overruled: ${overruleLine(o)}`) : null,
+      past.map((x) => h("p", { class: "overrule-earlier" }, `Earlier: ${overruleLine(x)}`)),
+      form,
+    ];
+  };
+  /** Findings the person dropped that the draft no longer holds: listed so that the overrule can be withdrawn. */
+  const droppedView = (s: CaseState, d: Draft): HTMLElement | null => {
+    const gone = activeOverrules(s).filter((o) => o.stays === false && !d.product.key_findings.some((f) => f.id === o.finding));
+    return gone.length === 0 ? null : h("div", { class: "dropped-findings" }, h("p", { class: "label" }, "Findings you dropped"),
+      gone.map((o) => h("div", { class: "finding dropped", data: { finding: o.finding } }, h("p", { class: "statement" }, o.finding), overruleView(s, d, o.finding))));
+  };
+
   // ---------- the draft, read ----------
-  const finding = (f: Finding): HTMLElement =>
+  const finding = (s: CaseState, d: Draft, f: Finding): HTMLElement =>
     h("div", { class: "finding", data: { finding: f.id } },
       h("p", { class: "statement" }, f.statement),
       h("p", { class: "likelihood" }, `Likelihood: ${f.likelihood}`),
       h("p", { class: "confidence" }, `Confidence: ${f.confidence} — ${f.confidence_basis}`),
       h("div", { class: "evidence" }, h("span", { class: "label" }, "Evidence "), f.cites.length === 0 ? "No card cited." : f.cites.map((c) => [chipFor(c), " "])),
       h("div", { class: "assumptions" }, h("span", { class: "label" }, "Assumptions"), f.assumptions.length === 0 ? h("p", { class: "empty" }, "None stated.") : h("ul", null, f.assumptions.map((a) => h("li", null, a)))),
-      h("div", { class: "reasoning" }, h("span", { class: "label" }, "Reasoning "), tag(ui, "agent", "judgment", "Reasoning is a judgment, not evidence"), " ", f.reasoning));
+      h("div", { class: "reasoning" }, h("span", { class: "label" }, "Reasoning "), tag(ui, "agent", "judgment", "Reasoning is a judgment, not evidence"), " ", f.reasoning),
+      overruleView(s, d, f.id));
 
-  const readBody = (d: Draft): Node[] =>
+  const readBody = (s: CaseState, d: Draft): Node[] =>
     SECTION_TITLES.map(({ id, title }) => {
       const kids: Child[] = [h("h3", { class: "section-title" }, title)];
-      if (id === "key_findings") kids.push(d.product.key_findings.length === 0 ? h("p", { class: "empty" }, "No findings.") : d.product.key_findings.map(finding));
+      if (id === "key_findings") kids.push(d.product.key_findings.length === 0 ? h("p", { class: "empty" }, "No findings.") : d.product.key_findings.map((f) => finding(s, d, f)), droppedView(s, d));
       else kids.push(paragraphs(d.product[id]));
       return h("section", { class: "narr-section", data: id === "key_findings" ? { section: id } : { section: id, drop: "cite" } }, kids);
     });
@@ -360,7 +443,7 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
   };
   /**
    * Reviewers who disagree: both positions and the points behind them, and the person's three ways to rule (follow one reviewer, follow the other, or a
-   * note of their own). A ruling is shown in place of the buttons once it is recorded.
+   * note of their own). Once ruled, the ruling and the ones it replaced are shown, and while the conflict's run is in progress the ruling can be changed.
    */
   const conflictView = (s: CaseState, c: ConflictState): HTMLElement => {
     const title = (id: string): string => s.run.stages.find((x) => x.id === id)?.title ?? id;
@@ -369,28 +452,41 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
       h("p", { class: "text" }, c.reason),
       c.points.length === 0 ? null : h("ul", { class: "points" }, c.points.map((x) => h("li", null, x))),
     ];
-    if (c.ruling !== null) {
-      kids.push(h("p", { class: "ruling" }, `Ruled: ${rulingText(s, c)}`));
-    } else {
+    const changeable = " The ruling holds until you change it; you can change it while the run is in progress";
+    const ruleForm = (): HTMLElement => {
       const busy = inflight.has(`rule:${c.id}`);
       const rule = (follow: string | null): void => { guarded(`rule:${c.id}`, "rule_conflict", { conflict: c.id, follow, note: (ruleNotes.get(c.id) ?? "").trim() }, () => { ruleNotes.delete(c.id); }); };
       const noted = (): boolean => (ruleNotes.get(c.id) ?? "").trim() !== "";
       const byNote = h("button", {
-        type: "button", data: { action: "rule-note" }, disabled: ro() || busy || !noted(), title: ro() ? REPLAY_REFUSAL : "Rule with your note alone; it is fixed for the rest of the run",
+        type: "button", data: { action: "rule-note" }, disabled: ro() || busy || !noted(), title: ro() ? REPLAY_REFUSAL : `Rule with your note alone.${changeable}`,
         on: { click: () => { if (noted()) rule(null); } },
       }, "Rule with this note") as HTMLButtonElement;
       const follow = (stage: string, says: string): HTMLElement => h("button", {
         type: "button", class: "primary", data: { action: `follow-${stage}` }, disabled: ro() || busy,
-        title: ro() ? REPLAY_REFUSAL : `Follow ${title(stage)} (${says}); with your note if you wrote one. The ruling is fixed for the rest of the run`,
+        title: ro() ? REPLAY_REFUSAL : `Follow ${title(stage)} (${says}); with your note if you wrote one.${changeable}`,
         on: { click: () => { rule(stage); } },
       }, `Follow ${title(stage)}: ${says}`);
-      kids.push(h("div", { class: "rule-form" },
+      return h("div", { class: "rule-form" },
         follow(c.raised_by, c.asks), follow(c.changed_for, keepText(c)),
         h("textarea", {
           name: `Ruling note on ${c.id}`, value: ruleNotes.get(c.id) ?? "", disabled: ro(), placeholder: "Your note (optional with a reviewer, enough on its own)",
           on: { input: (e) => { ruleNotes.set(c.id, (e.target as HTMLTextAreaElement).value); byNote.disabled = ro() || busy || !noted(); } },
         }),
-        byNote));
+        byNote);
+    };
+    if (c.ruling !== null) {
+      kids.push(h("p", { class: "ruling" }, `Ruled: ${rulingText(s, c)}`));
+      for (const r of [...(c.earlier_rulings ?? [])].reverse()) kids.push(h("p", { class: "ruling-earlier" }, `Earlier: ${rulingText(s, { ...c, ruling: r })} (replaced)`));
+      if (c.run !== null && c.run === s.run.id && runGoing(s)) {
+        const more = h("details", { class: "change-ruling", on: { toggle: () => { if (more.open) changing.add(c.id); else changing.delete(c.id); } } },
+          h("summary", null, "Change the ruling"),
+          s.run.waiting === "publish" ? h("p", { class: "note" }, "A changed ruling sends the draft back to the analyst with it as the reason.") : null,
+          ruleForm()) as HTMLDetailsElement;
+        more.open = changing.has(c.id);
+        kids.push(more);
+      }
+    } else {
+      kids.push(ruleForm());
     }
     return h("div", { class: `conflict${c.ruling === null ? " open" : ""}`, data: { conflict: c.id } }, kids);
   };
@@ -516,7 +612,6 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
     const now = new Set(runQuestions(s).map((q) => q.id));
     return Object.values(s.questions).filter((q) => now.has(q.id) || q.answer === null).sort((a, b) => a.seq - b.seq);
   };
-  const runGoing = (s: CaseState): boolean => s.run.status !== "none" && s.run.status !== "finished";
   const questionTag = (s: CaseState, q: QuestionState): HTMLElement =>
     q.answer !== null ? tag(ui, "done", "answered")
       : q.waived !== null ? tag(ui, "human", "went on without your answer", "The run went on without the answer; you can still give it")
@@ -620,7 +715,14 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
     draftBox.hidden = d === null;
     paint(questionsBox, [s.questions, s.run, s.cards, ro(), inflightVersion], () => questionsView(s));
     paint(headBox, [d, s.published, store.id, bundlesVersion], () => (d === null ? [] : headView(s, d)));
-    paint(bodyBox, edit !== null ? [edit] : [d, s.cards], () => (d === null ? [h("p", { class: "empty" }, "No draft yet.")] : edit !== null ? [edit.el] : readBody(d)));
+    paint(bodyBox, edit !== null ? [edit] : [d, s.cards, s.overrules, ro(), inflightVersion, ui.ref.likelihood], () => (d === null ? [h("p", { class: "empty" }, "No draft yet.")] : edit !== null ? [edit.el] : readBody(s, d)));
+    if (focusOverrule !== null && d !== null && edit === null) {
+      const at = focusOverrule;
+      const box = [...bodyBox.querySelectorAll("[data-finding]")].find((n) => n.getAttribute("data-finding") === at);
+      const noteBox = box?.querySelector("details.overrule-form textarea") as HTMLTextAreaElement | null | undefined;
+      if (noteBox !== null && noteBox !== undefined && el.isConnected) { focusOverrule = null; noteBox.focus(); }
+      else if (box === undefined) { focusOverrule = null; ui.toast(`There is no finding ${at} in draft ${d.n}`); }
+    }
     if (d === null) {
       paint(toolsBox, [null], () => []); paint(gateBox, [null], () => []); paint(reviewBox, [null], () => []); paint(previewBox, [null], () => []);
       if (el.querySelector(".no-draft") === null) el.insertBefore(h("p", { class: "empty no-draft" }, "No draft yet."), questionsBox.nextSibling);

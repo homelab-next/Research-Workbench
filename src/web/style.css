@@ -224,6 +224,13 @@ kbd { font-family: var(--mono); font-size: 12px; background: var(--panel-2); bor
 .lens-narrative .question p { margin: 2px 0; }
 .lens-narrative .question .why, .lens-narrative .question .asked-by, .lens-narrative .question .about { color: var(--muted); }
 .lens-narrative .answered-since { display: block; margin-top: 6px; }
+.lens-narrative .overrule-form { margin-top: 4px; }
+.lens-narrative .overrule-form summary, .lens-narrative .change-ruling summary { cursor: pointer; color: var(--accent); }
+.lens-narrative .overrule-body { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; }
+.lens-narrative .overrule-now { margin: 4px 0; font-weight: 600; color: var(--accent); }
+.lens-narrative .overrule-earlier, .lens-narrative .ruling-earlier { margin: 2px 0; color: var(--muted); text-decoration: line-through; }
+.lens-narrative .dropped-findings { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 4px; }
+.lens-narrative .finding.dropped .statement { color: var(--muted); }
 
 /* ---------- Agent lens ---------- */
 .lens-agent .agent-head { margin: 0 0 6px; }

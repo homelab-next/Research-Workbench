@@ -630,12 +630,15 @@ test("when reviewers conflict the lens shows both positions and the person follo
   const buttons = (): string[] => [...box().querySelectorAll("button")].map((b) => b.textContent ?? "");
   expect(buttons()).toEqual(["Follow Evaluate: almost certain", "Follow Challenge: keep likely", "Rule with this note"]);
   const log = sent();
+  const passed = (): number => p.s.entries("CASE-1").filter((e) => e.type === "gate.passed").length;
+  const gates = passed();
   p.click(box().querySelector("[data-action=follow-challenge]") as HTMLElement);
   await settled();
   expect(log.filter((c) => c.command === "rule_conflict")).toEqual([{ command: "rule_conflict", args: { conflict: id, follow: "challenge", note: "" } }]);
   expect(state().conflicts[id]!.ruling).toMatchObject({ follow: "challenge", by: p.s.config.user });
   expect(box().textContent).toContain("Ruled: follow Challenge: keep likely");
-  expect(box().querySelectorAll("button").length).toBe(0);
+  // the buttons left are the ones to change the ruling, folded away
+  expect([...box().querySelectorAll("button")].every((b) => b.closest("details.change-ruling") !== null)).toBe(true);
 });
 
 test("a ruling may be a note alone; with no note the note button does nothing", async () => {
@@ -772,4 +775,154 @@ test("an answer given after the latest draft was made is noted at the gate", asy
   // the answer passes no gate
   expect(state().run.waiting).toBe("publish");
   expect(state().published.length).toBe(0);
+});
+
+// ---------- overrules and revised rulings (slice 8) ----------
+const human: Actor = { kind: "human", id: "analyst" };
+/** Records an overrule by the person, by hand, as the command writes it. */
+function overruled(finding: string, set: { likelihood?: string | null; confidence?: "low" | "moderate" | "high" | null; stays?: boolean | null }, note: string): void {
+  p.s.app.hub.read("CASE-1").commit(() => [{ type: "finding.overruled", actor: human, payload: {
+    finding, draft_hash: latest().hash, likelihood: set.likelihood ?? null, confidence: set.confidence ?? null, stays: set.stays ?? null, note,
+  } }]);
+}
+const options = (sel: string): string[] => [...p.q(sel).querySelectorAll("option")].map((o) => o.textContent ?? "");
+const choose = (sel: string, label: string): void => {
+  const el = p.q(sel) as HTMLSelectElement;
+  el.value = [...el.options].find((o) => o.textContent === label)!.value;
+  el.dispatchEvent(new p.win.Event("change", { bubbles: true }) as unknown as Event);
+};
+
+test("each finding has Overrule: the likelihood terms of the standard, the three confidences, whether it stays, and a note", async () => {
+  await atGate();
+  const ref = p.ui.ref;
+  expect(ref.likelihood.length).toBe(7);
+  expect(p.q('[data-finding="f1"] details.overrule-form summary').textContent).toBe("Overrule");
+  expect([...p.all('[data-finding="f1"] select[aria-label="Likelihood of f1"] option')].map((o) => o.textContent)).toEqual(["leave as it is", ...ref.likelihood]);
+  expect(options('[data-finding="f1"] [aria-label="Confidence of f1"]')).toEqual(["leave as it is", "low", "moderate", "high"]);
+  expect(options('[data-finding="f1"] [aria-label="Whether f1 stays"]')).toEqual(["leave as it is", "must stay", "drop it"]);
+  expect(p.q('[data-finding="f1"] [aria-label="Note on overruling f1"]').tagName).toBe("TEXTAREA");
+  expect(p.all("details.overrule-form").length).toBe(latest().product.key_findings.length);
+  // choosing "drop it" clears and disables the two values
+  choose('[aria-label="Likelihood of f1"]', "likely");
+  choose('[aria-label="Whether f1 stays"]', "drop it");
+  const lik = p.q('[aria-label="Likelihood of f1"]') as HTMLSelectElement;
+  const conf = p.q('[aria-label="Confidence of f1"]') as HTMLSelectElement;
+  expect([lik.value, lik.disabled, conf.value, conf.disabled]).toEqual(["", true, "", true]);
+});
+
+test("Overrule is off without a note, and sends overrule_finding for the draft on screen, once", async () => {
+  await atGate();
+  const log = sent();
+  const go = (): HTMLButtonElement => p.q('[data-finding="f1"] [data-action=overrule]') as HTMLButtonElement;
+  expect(go().disabled).toBe(true);                         // nothing set, no note
+  choose('[aria-label="Likelihood of f1"]', "almost certain");
+  expect(go().disabled).toBe(true);                         // no note
+  p.fill('[aria-label="Note on overruling f1"]', "   ");
+  expect(go().disabled).toBe(true);
+  p.fill('[aria-label="Note on overruling f1"]', "It is the TV I installed.");
+  expect(go().disabled).toBe(false);
+  const hash = latest().hash;
+  p.click(go());
+  p.click(go());
+  await settled();
+  expect(log.filter((c) => c.command === "overrule_finding").map((c) => [c.command, c.args])).toEqual([["overrule_finding", { finding: "f1", draft_hash: hash, likelihood: "almost certain", confidence: null, stays: null, note: "It is the TV I installed." }]]);
+  expect(state().overrules.f1).toMatchObject({ likelihood: "almost certain", note: "It is the TV I installed." });
+  // the overrule passes no gate
+  expect(state().published.length).toBe(0);
+});
+
+test("an overruled finding says what you set and why, with the earlier overrules under it, and offers Withdraw", async () => {
+  await atGate();
+  overruled("f1", { confidence: "high" }, "I checked it.");
+  overruled("f1", { likelihood: "almost certain" }, "It is the TV I installed.");
+  await settled();
+  expect(p.q('[data-finding="f1"] .overrule-now').textContent).toBe("You overruled: likelihood almost certain. Note: It is the TV I installed.");
+  expect(p.all('[data-finding="f1"] .overrule-earlier').map((e) => e.textContent)).toEqual(["Earlier: confidence high. Note: I checked it."]);
+  const log = sent();
+  const withdraw = (): HTMLButtonElement => p.q('[data-finding="f1"] [data-action=withdraw-overrule]') as HTMLButtonElement;
+  expect(withdraw().disabled).toBe(true);
+  p.fill('[aria-label="Note on overruling f1"]', "I was wrong about the room.");
+  expect(withdraw().disabled).toBe(false);
+  const hash = latest().hash;
+  p.click(withdraw());
+  await settled();
+  expect(log.filter((c) => c.command === "overrule_finding").map((c) => c.args)).toEqual([{ finding: "f1", draft_hash: hash, likelihood: null, confidence: null, stays: null, note: "I was wrong about the room." }]);
+  expect(state().overrules.f1).toMatchObject({ likelihood: null, confidence: null, stays: null });
+  expect(p.all('[data-finding="f1"] .overrule-now').length).toBe(0);
+  expect(p.all('[data-finding="f1"] [data-action=withdraw-overrule]').length).toBe(0);
+});
+
+test("a finding you dropped is listed under the findings with its overrule, so that it can be withdrawn", async () => {
+  await atGate();
+  const d = latest();
+  expect(d.product.key_findings.map((f) => f.id)).toContain("f2");
+  expect((await p.s.command("CASE-1", "revise", { product: { ...d.product, key_findings: d.product.key_findings.filter((f) => f.id !== "f2") }, reason: "f2 is not needed" })).status).toBe(200);
+  await settled();
+  overruled("f2", { stays: false }, "It was a test device.");
+  await settled();
+  expect(p.all("[data-section=key_findings] > .finding").map((e) => e.dataset.finding)).not.toContain("f2");
+  const box = p.q(".dropped-findings [data-finding=f2]");
+  expect(box.querySelector(".overrule-now")!.textContent).toBe("You overruled: dropped. Note: It was a test device.");
+  expect(box.querySelector("[data-action=withdraw-overrule]")).not.toBeNull();
+});
+
+test("opened with overrule:f1, the lens opens that finding's form and puts focus in its note, once", async () => {
+  await atGate();
+  const bar = p.q("[aria-label=Command]") as HTMLInputElement;
+  bar.focus();
+  p.fill(bar, "overrule f1");
+  p.press("Enter");
+  await settled();
+  expect((p.q('[data-finding="f1"] details.overrule-form') as HTMLDetailsElement).open).toBe(true);
+  expect((p.q('[data-finding="f2"] details.overrule-form') as HTMLDetailsElement).open).toBe(false);
+  expect(p.doc.activeElement).toBe(p.q('[aria-label="Note on overruling f1"]'));
+  expect(p.toasts().concat(p.text()).some((t) => t.includes("Overrule f1 from the Narrative lens"))).toBe(true);
+  // once: a later repaint does not take focus back
+  bar.focus();
+  overruled("f2", { confidence: "low" }, "Not sure.");
+  await settled();
+  expect(p.doc.activeElement).toBe(bar);
+});
+
+test("a ruled conflict shows the ruling, the rulings it replaced, and Change the ruling while its run is in progress", async () => {
+  await atGate();
+  const id = await conflictRecorded();
+  const s = p.s.app.hub.read("CASE-1");
+  s.commit((st) => [{ type: "review.ruled", actor: human, run: st.run.id, payload: { conflict: id, follow: "challenge", note: "" } }]);
+  s.commit((st) => [{ type: "review.ruled", actor: human, run: st.run.id, payload: { conflict: id, follow: "evaluate", note: "" } }]);
+  await settled();
+  const box = (): HTMLElement => p.q(`[data-conflict=${id}]`);
+  expect(box().querySelector(".ruling")!.textContent).toBe("Ruled: follow Evaluate: almost certain");
+  expect([...box().querySelectorAll(".ruling-earlier")].map((e) => e.textContent)).toEqual(["Earlier: follow Challenge: keep likely (replaced)"]);
+  expect(box().querySelector("details.change-ruling summary")!.textContent).toBe("Change the ruling");
+  expect([...box().querySelectorAll("details.change-ruling button")].map((b) => b.textContent)).toEqual(["Follow Evaluate: almost certain", "Follow Challenge: keep likely", "Rule with this note"]);
+  // a revised ruling at the gate is the person's instruction: it sends the work back, and passes no gate
+  const log = sent();
+  const passed = (): number => p.s.entries("CASE-1").filter((e) => e.type === "gate.passed").length;
+  const gates = passed();
+  p.click(box().querySelector("[data-action=follow-challenge]") as HTMLElement);
+  await settled();
+  expect(log.filter((c) => c.command === "rule_conflict").map((c) => c.args)).toEqual([{ conflict: id, follow: "challenge", note: "" }]);
+  expect(state().conflicts[id]!.ruling).toMatchObject({ follow: "challenge" });
+  expect(state().published.length).toBe(0);
+  expect(passed()).toBe(gates);
+  // once the run is over, the ruling stands and cannot be changed here
+  expect((await p.s.command("CASE-1", "stop", { reason: "done" })).status).toBe(200);
+  await settled();
+  expect(state().run.status).toBe("finished");
+  expect(box().querySelector("details.change-ruling")).toBeNull();
+  expect(box().querySelectorAll(".ruling-earlier").length).toBe(2);
+});
+
+test("no ruling control says a ruling is fixed for the rest of the run", async () => {
+  await atGate();
+  const id = await conflictRecorded();
+  const titles = (): string[] => p.all(`[data-conflict=${id}] [title]`).map((e) => e.getAttribute("title") ?? "");
+  expect(titles().length).toBeGreaterThan(0);
+  expect(titles().some((t) => t.includes("fixed for the rest of the run"))).toBe(false);
+  expect(titles().filter((t) => t.includes("you can change it while the run is in progress")).length).toBe(3);
+  p.s.app.hub.read("CASE-1").commit((st) => [{ type: "review.ruled", actor: human, run: st.run.id, payload: { conflict: id, follow: null, note: "Say likely." } }]);
+  await settled();
+  expect(titles().some((t) => t.includes("fixed for the rest of the run"))).toBe(false);
+  expect(p.text()).not.toContain("fixed for the rest of the run");
 });
