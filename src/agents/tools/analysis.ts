@@ -1,5 +1,5 @@
 import type { Json } from "../../core/canonical";
-import { isPersonCard, namesFinding, ruledFindings, rulingText } from "../../core/state";
+import { activeOverrules, isPersonCard, namesFinding, overruleSays, reopensOverrule, ruledFindings, rulingText } from "../../core/state";
 import { ANSWER_ACTIONS, CONFIDENCES, SECTIONS, SEVERITIES } from "../../core/types";
 import type { Schema } from "../../core/schema";
 import { composeStatement, likelihoodMatches } from "../draft";
@@ -105,6 +105,10 @@ async function raiseChallenge(ctx: ToolContext, a: Record<string, Json>): Promis
   const said = str(a.text);
   for (const [finding, c] of ruledFindings(ctx.session.state)) {
     if (namesFinding(said, finding)) throw new ToolError(`the person has ruled on ${finding} (${rulingText(ctx.session.state, c)}): it may not be reopened`);
+  }
+  // an overrule settles only what it set: a point that would move the finding back is refused, any other point on it is taken
+  for (const o of activeOverrules(ctx.session.state)) {
+    if (reopensOverrule(said, o)) throw new ToolError(`the person has overruled ${o.finding} (${overruleSays(o)}): that may not be reopened; any other point on ${o.finding} may be raised`);
   }
   let id = "";
   ctx.session.commit((_s, ids) => {

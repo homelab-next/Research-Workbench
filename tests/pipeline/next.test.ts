@@ -367,6 +367,69 @@ test("a ruling settles only what it was about: another point on the same finding
   expect((step as { sent_back: { reason: string } }).sent_back.reason).toStartWith(`the draft does not hold the person's ruling on f25 (${CONFLICT_REASON}): follow Challenge: keep likely`);
 });
 
+// ---- the person's overrules and the reviewers (slice 8) ----
+
+const TV = "It is the TV I installed.";
+const overruled = (b: EntryBuilder, finding: string, over: Record<string, unknown> = {}) =>
+  b.add("finding.overruled", { finding, draft_hash: "h", likelihood: null, confidence: null, stays: null, note: TV, ...over }, { actor: { kind: "human", id: "analyst" } });
+/** Draft 1 holds f1 (likely) and f2; the person overrules f1 as `over` says; Evaluate fails draft 1 with `evFindings`. */
+function overruledReview(evFindings: { check: string; where: string; message: string }[], over: Record<string, unknown> = { likelihood: "likely" }, findings = [fnd("f1", "likely"), fnd("f2", "likely")]): CaseState {
+  const d = draftWith(1, findings);
+  return run((b) => {
+    passed(b, "assemble"); b.add("draft.revised", { draft: d }, { stage: "assemble" });
+    overruled(b, "f1", over);
+    started(b, "checks"); finished(b, "checks", "pass", null, d.hash);
+    started(b, "evaluate");
+    b.add("evaluation.made", { draft_hash: d.hash, pass: false, findings: evFindings });
+    finished(b, "evaluate", "fail", evFindings[0]!.message, d.hash);
+  });
+}
+const UNDERSTATES_F1 = { check: "support", where: "f1", message: "c19 shows the address directly, so likely understates it" };
+
+test("a failed review whose only point would move an overruled finding back pauses instead of sending back", () => {
+  const step = nextStep(overruledReview([UNDERSTATES_F1]), roled, { likelihood: LIKELIHOOD });
+  expect(step).toMatchObject({ kind: "pause", hold: { kind: "ruled", stage: "evaluate" } });
+  expect((step as { reason: string }).reason).toBe("Evaluate objects only to f1, which the person has ruled on or overruled; a settled point is not sent back. Edit the draft, or resume for Evaluate to review it again.");
+});
+
+test("another point on an overruled finding goes back to the analyst as usual", () => {
+  const empty = { check: "citation support", where: "f1", message: "f1 cites c2, which is empty" };
+  expect(nextStep(overruledReview([empty]), roled, { likelihood: LIKELIHOOD })).toMatchObject({ kind: "start", stage: "assemble", sent_back: { from: "evaluate", reason: empty.message } });
+});
+
+test("an overruled finding is not made a conflict between the reviewers again", () => {
+  // CASE-1's disagreement on f25, where the person has overruled f25 to the likely the analyst moved it to
+  const state = disagreement([EV_F25], (b) => overruled(b, "f25", { likelihood: "likely" }));
+  const step = nextStep(state, roled, { likelihood: LIKELIHOOD });
+  expect(step).toEqual({ kind: "pause", reason: "Evaluate objects only to f25, which the person has ruled on or overruled; a settled point is not sent back. Edit the draft, or resume for Evaluate to review it again.", hold: { kind: "ruled", stage: "evaluate" } });
+});
+
+test("a draft that does not hold an overrule goes back with the overrule, beside the reviewer's other points", () => {
+  const other = { check: "support", where: "f2", message: "f2 cites too little" };
+  const step = nextStep(overruledReview([UNDERSTATES_F1, other], { likelihood: "almost certain" }), roled, { likelihood: LIKELIHOOD });
+  expect(step).toMatchObject({ kind: "start", stage: "assemble", sent_back: { from: "evaluate" } });
+  const reason = (step as { sent_back: { reason: string } }).sent_back!.reason;
+  expect(reason).toStartWith(`the draft does not hold the person's overrule of f1: likelihood almost certain. Note: ${TV}`);
+  // the point that would move f1 back is not sent; the other one is
+  expect(reason).toEndWith(". Also: f2: f2 cites too little");
+});
+
+test("with rulings only, the pause says what it said before", () => {
+  const D17 = draftWith(3, [fnd("f25", "likely"), fnd("f26", "very likely")]);
+  const state = disagreement([EV_F25], (b) => {
+    b.add("review.conflict", { conflict: conflictOf() });
+    b.add("review.ruled", { conflict: "k1", follow: "challenge", note: "" }, { actor: { kind: "human", id: "analyst" } });
+    b.add("stage.sent_back", { from: "evaluate", to: "assemble", reason: "ruled", count: 1 });
+    started(b, "assemble", 3); b.add("draft.revised", { draft: D17 }, { stage: "assemble" }); finished(b, "assemble", "pass", null, D17.hash, 3);
+    started(b, "checks", 3); finished(b, "checks", "pass", null, D17.hash, 3);
+    started(b, "evaluate", 3); b.add("evaluation.made", { draft_hash: D17.hash, pass: false, findings: [EV_F25] }); finished(b, "evaluate", "fail", EV_F25.message, D17.hash, 3);
+  });
+  expect(nextStep(state, roled, { likelihood: LIKELIHOOD })).toEqual({
+    kind: "pause", hold: { kind: "ruled", stage: "evaluate" },
+    reason: "Evaluate objects only to f25, which the person has ruled on; a ruled point is not sent back. Edit the draft, or resume for Evaluate to review it again.",
+  });
+});
+
 // ---- caps per draft, and a fresh allowance on a person's resume (task 17 item 3) ----
 
 const person = { actor: { kind: "human", id: "analyst" } as const };

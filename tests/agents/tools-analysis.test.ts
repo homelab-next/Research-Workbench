@@ -407,3 +407,14 @@ test("a narrative section may name a statement card", async () => {
   expect(r.ok).toBe(true);
   expect(f.ctx.draft.narrativeCites.summary).toEqual([id]);
 });
+
+test("raise_challenge refuses a challenge that would move an overruled finding back, and takes another point on it", async () => {
+  const hash = reviewable();
+  f.ctx.draft_hash = hash;
+  f.s.commit(() => [{ type: "finding.overruled", actor: person, payload: { finding: "f1", draft_hash: hash, likelihood: "almost certain", confidence: null, stays: null, note: "It is the TV I installed." } }]);
+  const r = await f.call("raise_challenge", { why: "w", severity: "must_address", text: "F1 overclaims: one event is not almost certain", cites: ["c1"] });
+  expect(view(r).error).toBe("the person has overruled f1 (likelihood almost certain): that may not be reopened; any other point on f1 may be raised");
+  expect(Object.keys(f.s.state.challenges)).toEqual([]);
+  // another point on f1 (its cards) is taken
+  expect((await f.call("raise_challenge", { why: "w", severity: "consider", text: "f1 cites only c1; c2 would say more", cites: ["c1"] })).ok).toBe(true);
+});

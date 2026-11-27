@@ -1,4 +1,4 @@
-import { holds, isPersonCard, latestDraft, namesFinding, ruledFindings, rulingText, runConflicts } from "../core/state";
+import { activeOverrules, holds, holdsOverrule, isPersonCard, latestDraft, namesFinding, overruleText, reopensOverrule, ruledFindings, rulingText, runConflicts } from "../core/state";
 import type { CaseState, ConflictState } from "../core/state";
 import { CONFIDENCES } from "../core/types";
 import type { ReviewConflict } from "../core/types";
@@ -14,7 +14,7 @@ export type ConflictFound = Omit<ReviewConflict, "id">;
  * - conflict: the failing reviewer's point would reverse a change the analyst made for the other reviewer. The run pauses for the person; `fresh`
  *   are the conflicts not yet recorded.
  * - ruled: the person has ruled on this draft's conflict; the work goes back to the analyst with the ruling as the reason.
- * - only_ruled: every point the reviewer raised is on a finding the person has ruled on; it is not sent back.
+ * - only_ruled: every point the reviewer raised would move back a finding the person has ruled on or overruled; it is not sent back.
  */
 export type ConflictStep =
   | { kind: "conflict"; fresh: ConflictFound[]; reason: string }
@@ -51,7 +51,7 @@ function direction(scale: readonly string[] | null, from: string, to: string, un
  * Whether the failure of review stage `stage` on the latest draft is a disagreement between the reviewers, from the state alone (nextStep calls it).
  * A conflict: the latest draft was made for the other reviewer's send-back, it moved a finding (likelihood or confidence changed, the finding dropped
  * or added), and this reviewer's point names that same finding, so following it would move the finding back. A finding the person has ruled on is
- * not a conflict again. `likelihood` is the standard's terms, least likely first, to say which way a likelihood moved.
+ * not a conflict again, nor is one they have overruled. `likelihood` is the standard's terms, least likely first, to say which way a likelihood moved.
  */
 export function reviewConflict(state: Readonly<CaseState>, pipeline: Pipeline, stage: string, likelihood: readonly string[] | null): ConflictStep | null {
   const m = pipeline.stages.find((s) => s.id === stage);
@@ -68,7 +68,9 @@ export function reviewConflict(state: Readonly<CaseState>, pipeline: Pipeline, s
   if (ruledHere.length > 0) {
     return { kind: "ruled", reason: ruledHere.map((c) => `the person ruled on ${c.finding} (${c.reason}): ${rulingText(state, c)}`).join("; ") };
   }
-  const ruled = new Set(ruledFindings(state).keys());
+  // a finding the person has ruled on or overruled is settled: it is not made a conflict again
+  const overrules = activeOverrules(state);
+  const ruled = new Set([...ruledFindings(state).keys(), ...overrules.map((o) => o.finding)]);
 
   const madeFor = Object.hasOwn(state.made_for, d.hash) ? state.made_for[d.hash]! : null;
   const other = madeFor === null ? undefined : pipeline.stages.find((s) => s.id === madeFor);
@@ -97,19 +99,26 @@ export function reviewConflict(state: Readonly<CaseState>, pipeline: Pipeline, s
     if (fresh.length > 0) return { kind: "conflict", fresh, reason: pauseReason(fresh.map((c) => c.reason)) };
   }
   const rulings = [...ruledFindings(state).values()];
-  // a draft that does not hold a ruling goes back with the ruling, beside the reviewer's other points
-  const unheld = rulings.filter((c) => holds(d.product, c) === false);
+  const settles = (p: string): boolean => rulings.some((c) => reopens(p, c)) || overrules.some((o) => reopensOverrule(p, o));
+  // a draft that does not hold a ruling or an overrule goes back with it, beside the reviewer's other points
+  const unheld = [
+    ...rulings.filter((c) => holds(d.product, c) === false).map((c) => `the draft does not hold the person's ruling on ${c.finding} (${c.reason}): ${rulingText(state, c)}`),
+    ...overrules.filter((o) => holdsOverrule(d.product, o) === false).map((o) => `the draft does not hold the person's overrule of ${overruleText(o)}`),
+  ];
   if (unheld.length > 0) {
-    const said = unheld.map((c) => `the draft does not hold the person's ruling on ${c.finding} (${c.reason}): ${rulingText(state, c)}`).join("; ");
-    const rest = points.filter((p) => !rulings.some((c) => reopens(p, c)));
+    const said = unheld.join("; ");
+    const rest = points.filter((p) => !settles(p));
     return { kind: "ruled", reason: rest.length === 0 ? said : `${said}. Also: ${rest.join("; ")}` };
   }
-  // a point that would move a ruled finding back is not sent back: when that is all the reviewer raised, the run waits for the person.
-  // a ruling settles only what it was about: another point on the same finding (its cards, its wording) goes back as usual
+  // a point that would move a ruled or overruled finding back is not sent back: when that is all the reviewer raised, the run waits for the person.
+  // a ruling or an overrule settles only what it was about: another point on the same finding (its cards, its wording) goes back as usual
   const onRuled = rulings.filter((c) => points.some((p) => reopens(p, c))).map((c) => c.finding);
-  if (onRuled.length > 0 && points.every((p) => rulings.some((c) => reopens(p, c)))) {
+  const onOverruled = overrules.filter((o) => points.some((p) => reopensOverrule(p, o))).map((o) => o.finding);
+  const onSettled = [...new Set([...onRuled, ...onOverruled])];
+  if (onSettled.length > 0 && points.every(settles)) {
     const R = titleOf(state, pipeline, stage);
-    return { kind: "only_ruled", reason: `${R} objects only to ${onRuled.join(", ")}, which the person has ruled on; a ruled point is not sent back. Edit the draft, or resume for ${R} to review it again.` };
+    const what = onOverruled.length === 0 ? "which the person has ruled on; a ruled point is not sent back" : "which the person has ruled on or overruled; a settled point is not sent back";
+    return { kind: "only_ruled", reason: `${R} objects only to ${onSettled.join(", ")}, ${what}. Edit the draft, or resume for ${R} to review it again.` };
   }
   return null;
 }
