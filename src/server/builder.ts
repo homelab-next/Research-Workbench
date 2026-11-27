@@ -2,8 +2,9 @@
 // proposed, and the person's decision on each probe it asked for. The builder agent never decides: builder.decided and builder.probe_decided
 // are written here only, by the person the server names. A file is written only by saveManifests, as that person, after the save's own check of
 // the root as it is now. A probe runs only through runQuery, the one custody point, in the builder session and in the person's name.
-// No secret value reaches the ledger or the model: what the person types and what the model writes are searched for every secret value the
-// workbench holds before anything is written, and each one found is redacted; every part of the pack and every tool view is scrubbed.
+// No secret value reaches the ledger or the model: what the person types, what the model writes and what a probe's source answers (its entries
+// and blobs) are searched for every secret value the workbench holds before anything is written, and each one found is redacted; every part of
+// the pack and every tool view is scrubbed.
 import { basename, join, resolve, sep } from "node:path";
 import { lstatSync, readFileSync } from "node:fs";
 import { isPlainObject } from "../core/canonical";
@@ -114,6 +115,41 @@ function redactBytes(raw: Uint8Array, secrets: readonly string[]): Uint8Array {
   const text = dec.decode(raw);
   const out = redactJsonText(text, secrets);
   return out === text ? raw : enc.encode(out);
+}
+
+/** Every string of a JSON value (keys too) with each secret value redacted; the same value when none was found. */
+function redactJson<T>(value: T, secrets: readonly string[]): T {
+  const walk = (v: unknown): unknown => {
+    if (typeof v === "string") return redactSecrets(v, secrets);
+    if (Array.isArray(v)) return v.map(walk);
+    if (isPlainObject(v)) return Object.fromEntries(Object.entries(v).map(([k, w]) => [redactSecrets(k, secrets), walk(w)]));
+    return v;
+  };
+  return walk(value) as T;
+}
+
+/**
+ * The builder session as a probe's runQuery writes to it: every entry's payload and every blob put is searched for each secret value the workbench
+ * holds, and each one found is redacted before it is committed or stored. The runner is unchanged; what it records here holds no secret value.
+ */
+function redactingSession(session: CaseSession, secrets: readonly string[]): CaseSession {
+  const blobs = new Proxy(session.blobs, {
+    get(target, key) {
+      if (key === "put") return (bytes: Uint8Array | string, media?: string) => target.put(redactBytes(typeof bytes === "string" ? enc.encode(bytes) : bytes, secrets), media);
+      const v: unknown = Reflect.get(target, key, target);
+      return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+    },
+  });
+  return new Proxy(session, {
+    get(target, key) {
+      if (key === "blobs") return blobs;
+      if (key === "commit") {
+        return (fn: Parameters<CaseSession["commit"]>[0]) => target.commit((state, ids) => fn(state, ids).map((e) => ({ ...e, payload: redactJson(e.payload, secrets) }) as typeof e));
+      }
+      const v: unknown = Reflect.get(target, key, target);
+      return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+    },
+  });
 }
 
 /** A model's turn with every secret value it wrote redacted: its text, its reasoning, each tool call's arguments and the raw reply, before the agent loop records any of them. */
@@ -561,6 +597,8 @@ export async function builderProbe(ctx: BuilderContext, probe: string, approve: 
   running.add(key);
   const deps = { ...ctx.deps };
   const release = deps.retain?.() ?? (() => undefined);
+  // what the source answers is data: a secret value in its rows is redacted before the session's ledger or blobs hold it
+  const recording = redactingSession(session, ctx.secrets());
   try {
     const why = p.why === "" ? `a probe the loop builder asked for (${probe})` : p.why;
     const window = { from: p.window.from, to: p.window.to };
@@ -576,10 +614,10 @@ export async function builderProbe(ctx: BuilderContext, probe: string, approve: 
           if (!(err instanceof PivotError)) throw err;
           result = { status: "refused", reasons: [err.message] };
         }
-        result = bound === null ? result! : await runQuery(session, deps.runner, { source: pivot.source, text: bound.text, bound: bound.bound, window, why, actor: ctx.actor, pivot, make_card: true, budget });
+        result = bound === null ? result! : await runQuery(recording, deps.runner, { source: pivot.source, text: bound.text, bound: bound.bound, window, why, actor: ctx.actor, pivot, make_card: true, budget });
       }
     } else {
-      result = await runQuery(session, deps.runner, { source: p.source, text: p.text ?? "", bound: {}, window, why, actor: ctx.actor, make_card: true, budget });
+      result = await runQuery(recording, deps.runner, { source: p.source, text: p.text ?? "", bound: {}, window, why, actor: ctx.actor, make_card: true, budget });
     }
     const got = outcomeOf(deps, result);
     session.commit((s) => {

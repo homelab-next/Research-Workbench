@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Json } from "../../src/core/canonical";
 import type { CaseState } from "../../src/core/state";
@@ -29,9 +29,10 @@ afterEach(async () => {
   }
 });
 
-async function start(turns: Reply[], opts: { before?: (root: string) => void; policy?: Record<Marking, Where[]> } = {}): Promise<void> {
+async function start(turns: Reply[], opts: { before?: (root: string) => void; policy?: Record<Marking, Where[]>; credential?: { name: string; value: string } } = {}): Promise<void> {
   s = await served({
     ...(opts.policy === undefined ? {} : { config: { marking_policy: opts.policy } }),
+    ...(opts.credential === undefined ? {} : { credential: opts.credential }),
     before: (root) => {
       writeFileSync(join(root, "scripts", `${SCRIPT}.yaml`), JSON.stringify({ kind: "script", id: SCRIPT, title: "Builder test", turns: turns.map((reply) => ({ actor: "builder", reply })) }));
       opts.before?.(root);
@@ -237,4 +238,23 @@ test("the probe a person approves goes through runQuery only: the server's build
   const text = readFileSync(join(import.meta.dir, "..", "..", "src", "server", "builder.ts"), "utf8");
   expect(text).toContain("runQuery(");
   for (const other of ["runPivot(", "runPlaybook(", "runProposal(", "ConnectorPool", "pool.for(", ".run("]) expect(text).not.toContain(other);
+});
+
+test("a secret value in a probe's rows is redacted before the builder's ledger or a blob of the session holds it, and the card the person sees is redacted too", async () => {
+  const SECRET = "s3cr3t-value-12345678";
+  await start([probe({ kind: "query", source: "flows", text: "select 's3cr3t-' || 'value-12345678' as v from flows limit 1" }), WAITING], { credential: { name: "REP_KEY", value: SECRET } });
+  const id = await newBuilder();
+  await ask(id);
+  expect((await decideProbe(id, "probe-1", true)).status).toBe(200);
+  expect(ofType(id, "builder.probe_decided")[0]!.payload).toMatchObject({ approved: true, outcome: "ran" });
+  const card = ofType(id, "card.created")[0]!.payload.card;
+  expect(card.rows).toEqual([["[redacted secret]"]]);
+  expect(JSON.stringify(entries(id))).not.toContain(SECRET);
+  const blobs = join(s.wb.builder(id).dir, "blobs");
+  const held: string[] = [];
+  const walk = (d: string): void => { for (const n of readdirSync(d)) { const f = join(d, n); if (statSync(f).isDirectory()) walk(f); else if (readFileSync(f).includes(SECRET)) held.push(n); } };
+  walk(blobs);
+  expect(held).toEqual([]);
+  expect(JSON.stringify(await view(id))).not.toContain(SECRET);
+  expect(verifyCase(s.wb.builder(id).dir).ok).toBe(true);
 });
