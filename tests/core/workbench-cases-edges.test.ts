@@ -1,7 +1,7 @@
 // The edges of unload and load the final review of slice 11 found: what an unload may replace, where it may write, how large an id may be,
 // and what an untrusted ledger.sqlite or case.json can still say after the checks.
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readManifest } from "../../src/core/casefile";
@@ -139,5 +139,35 @@ test("the file of an unload that stopped after the store, one entry behind, is s
   if (!r.ok) throw new Error(r.reason);
   // created, unloaded, unload_failed, unloaded
   expect((await readManifest(r.path)).entries).toBe(4);
+});
+
+// ---------- I1: where an unload may write ----------
+
+test("an unload to a folder inside the case's own folder, or anywhere in cases/, is refused and writes nothing", async () => {
+  const s = wb.createCase(sample, person);
+  const head = s.head();
+  for (const to of [join(cases(), "CASE-1"), join(cases(), "CASE-1", "published"), join(cases(), "CASE-1", "blobs", "new"), cases(), join(cases(), "elsewhere")]) {
+    const err = await refusalOf(wb.unloadCase("CASE-1", { actor: person, to }));
+    expect(err).toBeInstanceOf(CaseRefused);
+    expect((err as CaseRefused).message).toBe("a case file may not be written inside the data folder's cases folder; choose a folder outside it");
+  }
+  expect(wb.session("CASE-1").head()).toEqual(head);
+  expect(ls(join(cases(), "CASE-1"))).toEqual(["blobs", "ledger.sqlite", "published"]);
+  expect(ls(join(cases(), "CASE-1", "published"))).toEqual([]);
+  expect(ls(cases())).toEqual([".high-water", "CASE-1"]);
+});
+
+test("a case store configured inside cases/, or reached there through a link, is refused the same way", async () => {
+  wb.close();
+  wb = openWb({ store: join(cases(), "CASE-1", "published") });
+  wb.createCase(sample, person);
+  expect(await refusalOf(wb.unloadCase("CASE-1", { actor: person }))).toBeInstanceOf(CaseRefused);
+  symlinkSync(join(cases(), "CASE-1"), join(dir, "through"));
+  const err = await refusalOf(wb.unloadCase("CASE-1", { actor: person, to: join(dir, "through", "x") }));
+  expect(err).toBeInstanceOf(CaseRefused);
+  expect(wb.session("CASE-1").entries().map((e) => e.type)).toEqual(["case.created"]);
+  // a folder beside cases/ in the data folder is not inside it
+  const r = await wb.unloadCase("CASE-1", { actor: person, to: join(dir, "wb", "cases-out") });
+  expect(r.ok).toBe(true);
 });
 

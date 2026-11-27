@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { BlobStore } from "./blobs";
 import { canonical } from "./canonical";
 import type { Json } from "./canonical";
@@ -103,6 +103,27 @@ function syncDir(dir: string): void {
   } finally {
     closeSync(fd);
   }
+}
+
+/** Where a path really is: the real path of its deepest folder that exists, with the rest of it after. */
+function realOf(path: string): string {
+  const rest: string[] = [];
+  for (let at = resolve(path); ; ) {
+    try {
+      return join(realpathSync(at), ...rest.reverse());
+    } catch {
+      const up = dirname(at);
+      if (up === at) return resolve(path);
+      rest.push(basename(at));
+      at = up;
+    }
+  }
+}
+
+/** True when `path` is `folder` or inside it. */
+function within(path: string, folder: string): boolean {
+  const rel = relative(folder, path);
+  return !(rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel));
 }
 
 /** The hash of entry `seq` of the ledger at `path`, read without writing; null when there is none or it cannot be read. */
@@ -546,6 +567,8 @@ export class Workbench {
     if (opts.to !== undefined && (typeof opts.to !== "string" || opts.to === "")) throw new CaseRefused("to must name a folder");
     const store = opts.to === undefined ? this.store : new CaseStoreFolder(opts.to);
     const session = this.session(id);
+    // the file would be inside what step 7 takes away, or beside the cases themselves
+    if (within(realOf(store.dir), realOf(join(this.dataDir, "cases")))) throw new CaseRefused("a case file may not be written inside the data folder's cases folder; choose a folder outside it");
     const meta = session.state.meta;
     // a file already there is replaced only when it is an earlier copy of this case; nothing is written otherwise
     const origin = session.entries(0, 1)[0]?.hash;
