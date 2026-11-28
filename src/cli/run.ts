@@ -17,6 +17,7 @@ import { notTheChild, readChild } from "../pipeline/subloop";
 import type { ChildCases, ChildRef } from "../pipeline/subloop";
 import { FeedbackRefused } from "../pipeline/feedback";
 import { PlanRefused } from "../pipeline/plans";
+import { loopCaseType } from "../pipeline/memory";
 import { PublishRefused } from "../pipeline/publish";
 import { ReviseRefused } from "../pipeline/revise";
 import { ensureSampleData } from "../../scripts/make-sample-data";
@@ -25,7 +26,7 @@ import { compose, ComposeError } from "./compose";
 
 const USAGE = [
   "usage:",
-  "  bun run src/cli/run.ts start  --title T --asked Q --why W --start type=value [--start ...] --from TS --to TS [--objective ID] [--marking M] [--loop ID]",
+  "  bun run src/cli/run.ts start  --title T --asked Q --why W --start type=value [--start ...] --from TS --to TS [--objective ID] [--marking M] [--loop ID] [--type ID]",
   "  bun run src/cli/run.ts accept-plan <case> [--steps s1,s2] [--budget step=amount ...]",
   "  bun run src/cli/run.ts replan      <case> --note N",
   "  bun run src/cli/run.ts approve     <case> [--unload | --keep]",
@@ -46,7 +47,7 @@ const DEFAULT_PORT = 4801;
 type Command = "start" | "accept-plan" | "replan" | "approve" | "reject" | "resume" | "stop" | "feedback" | "status";
 interface Spec { values: string[]; repeated: string[]; flags: string[]; required: string[]; case: boolean }
 const SPECS: Record<Command, Spec> = {
-  start: { values: ["title", "asked", "why", "from", "to", "objective", "marking", "loop"], repeated: ["start"], flags: [], required: ["title", "asked", "why", "start", "from", "to"], case: false },
+  start: { values: ["title", "asked", "why", "from", "to", "objective", "marking", "loop", "type"], repeated: ["start"], flags: [], required: ["title", "asked", "why", "start", "from", "to"], case: false },
   "accept-plan": { values: ["steps"], repeated: ["budget"], flags: [], required: [], case: true },
   replan: { values: ["note"], repeated: [], flags: [], required: ["note"], case: true },
   approve: { values: [], repeated: [], flags: ["unload", "keep"], required: [], case: true },
@@ -165,6 +166,8 @@ function report(session: CaseSession, asked: boolean): { lines: string[]; code: 
   if (run.status === "finished" && run.outcome === "published" && published !== undefined) parts.push(`published=${published.dir}`);
   if (run.status === "paused" && run.pause_reason !== null) parts.push(`reason="${oneLine(run.pause_reason)}"`);
   const lines = [parts.join(" ")];
+  if (state.memory.type !== null) lines.push(`type ${state.memory.type}`);
+  if (state.memory.bound !== null) lines.push(`memory: ${state.memory.bound.lessons.length} ${state.memory.bound.lessons.length === 1 ? "lesson" : "lessons"}`);
   if (waiting === "plan" && state.plan.current !== null) {
     for (const s of state.plan.current.steps) lines.push(`${s.id} ${s.free ? "free" : "costly"} ${s.source} ${s.pivot} ${s.from.value === "" ? "(from an earlier step)" : s.from.value}`);
   }
@@ -221,7 +224,11 @@ class Host implements ChildCases {
     return id === null || origin === null ? null : { id, origin };
   }
   create(input: Parameters<ChildCases["create"]>[0], link: ChildLink, cards: Card[]): ReturnType<ChildCases["create"]> {
-    const made = this.wb.createCase(input, { kind: "system", id: "engine" }, { loop: link.loop, link, cards });
+    // a child's type is its own loop's default, else its parent's
+    let parentType: string | null = null;
+    try { parentType = this.wb.session(link.parent).state.memory.type; } catch { /* the parent is not loaded: the child has none */ }
+    const type = loopCaseType(this.deps().loops, link.loop) ?? parentType;
+    const made = this.wb.createCase(input, { kind: "system", id: "engine" }, { loop: link.loop, link, cards, ...(type === null ? {} : { type }) });
     return { id: made.id, origin: made.entries(0, 1)[0]!.hash };
   }
   async drive(ref: ChildRef, opts: { loop: ResolvedLoop }): Promise<ReturnType<Engine["summary"]>> {
@@ -278,7 +285,7 @@ async function main(argv: string[]): Promise<number> {
       ensureSampleData(root.path);
       fixture = startReputationFixture(join(root.path, "data"), p.fixture);
     }
-    wb = Workbench.open(config.data_dir, { store: config.cases.store, max_case_bytes: config.cases.max_bytes, onError: (e) => console.error(`workbench: ${e instanceof Error ? e.message : String(e)}`) });
+    wb = Workbench.open(config.data_dir, { store: config.cases.store, max_case_bytes: config.cases.max_bytes, memory: config.memory.store, onError: (e) => console.error(`workbench: ${e instanceof Error ? e.message : String(e)}`) });
     // status only reads: no registry is loaded (that records on the workbench chain), no engine, no recovery, no anchor
     if (p.command === "status") {
       const shown = wb.session(p.case!);
@@ -306,6 +313,12 @@ async function main(argv: string[]): Promise<number> {
         return 2;
       }
       const loopId = p.one.loop;
+      const named = p.one.type;
+      if (named !== undefined && !(deps.case_types ?? []).some((t) => t.id === named)) {
+        const known = (deps.case_types ?? []).map((t) => t.id);
+        console.error(`"${named}" is not a case type${known.length === 0 ? "; none is loaded" : `; one of ${known.join(", ")}`}\n${USAGE}`);
+        return 2;
+      }
       if (loopId !== undefined) {
         const catalog = deps.loops;
         if (catalog === undefined || !catalog.list().some((x) => x.id === loopId)) {
@@ -317,7 +330,9 @@ async function main(argv: string[]): Promise<number> {
           return 1;
         }
       }
-      session = wb.createCase({ ...input }, human, loopId === undefined ? { default_loop: deps.config.loops.default } : { loop: loopId });
+      // the type a person names, else the loop's default
+      const type = named ?? loopCaseType(deps.loops, loopId ?? deps.config.loops.default);
+      session = wb.createCase({ ...input }, human, { ...(loopId === undefined ? { default_loop: deps.config.loops.default } : { loop: loopId }), ...(type === null ? {} : { type }) });
     } else {
       session = wb.session(p.case!);
     }

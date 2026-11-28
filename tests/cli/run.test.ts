@@ -386,3 +386,40 @@ test("status of a child names its parent and the stage that made it", () => {
   expect(r.code).toBe(0);
   expect(r.out).toContain("parent CASE-1 stage investigate");
 });
+
+// ---- memory: a case's type at start (its own workbench) ----
+
+const TYPES = "kind: case-types\nid: sample-types\ntypes:\n  - { id: unknown-device, title: Unknown device, about: A device on the network that no inventory names. }\n";
+/** The sample with a case type, and a loop `typed` (the investigation's stages) whose default case type it is. */
+function writeTyped(e: Env): void {
+  writeFileSync(join(e.dir, "sample", "context", "case-types.yaml"), TYPES);
+  const body = readFileSync(join(e.dir, "sample", "loops", "investigation.yaml"), "utf8");
+  writeFileSync(join(e.dir, "sample", "loops", "typed.yaml"), body.replace("id: investigation", "id: typed").replace("version: 1\n", "version: 1\ncase_type: unknown-device\n"));
+}
+
+test("start --type unknown-device records the type; --type of no case type is a usage error; without it a loop's default is taken", () => {
+  const e = setup();
+  writeTyped(e);
+  const named = cli(e, [...START, "--type", "unknown-device"]);
+  expect(named.err).toBe("");
+  expect(named.code).toBe(0);
+  expect(entriesOf(e, "CASE-1", "case.type_set")).toEqual([{ type: "unknown-device" }]);
+  expect(lines(named.out)).toContain("type unknown-device");
+  expect(lines(cli(e, ["status", "CASE-1"], false).out)).toContain("type unknown-device");
+  const unknown = cli(e, [...START, "--type", "no-such-type"]);
+  expect(unknown.code).toBe(2);
+  expect(unknown.err).toContain('"no-such-type" is not a case type');
+  expect(unknown.err).toContain("usage:");
+  expect(existsSync(join(e.data, "cases", "CASE-2"))).toBe(false);
+  // a loop's default is taken when none is named; the plain investigation loop has none
+  const byLoop = cli(e, [...START, "--loop", "typed"]);
+  expect(byLoop.err).toBe("");
+  expect(entriesOf(e, "CASE-2", "case.type_set")).toEqual([{ type: "unknown-device" }]);
+  const plain = cli(e, START);
+  expect(plain.code).toBe(0);
+  expect(entriesOf(e, "CASE-3", "case.type_set")).toEqual([]);
+  expect(lines(plain.out).some((l) => l.startsWith("type "))).toBe(false);
+  // a person's --type wins over the loop's default
+  const over = cli(e, [...START, "--loop", "typed", "--type", "unknown-device"]);
+  expect(over.code).toBe(0);
+});
