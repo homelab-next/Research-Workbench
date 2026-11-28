@@ -1,5 +1,5 @@
 import type { Entry, Marking, ModelChoice, Trigger } from "../core/types";
-import type { AgentView, BuilderSummaryView, BuilderView, CaseMemoryView, CaseSummaryView, CommandResult, Custody, Difference, LoopFileView, LoopSummaryView, LoopView, Me, MemoryView, ModelView, NewCaseInput, Preview, Reference, RouteView, StoreView } from "../core/wire";
+import type { AgentView, BuilderSummaryView, BuilderView, CaseMemoryView, CaseSummaryView, CommandResult, Custody, Difference, LoopFileView, LoopSummaryView, LoopView, Me, MemoryView, ModelView, NewCaseInput, NewImproveInput, Preview, Reference, RouteView, StoreView } from "../core/wire";
 
 export type Fetcher = (req: Request) => Promise<Response>;
 /**
@@ -81,6 +81,8 @@ export interface Api {
    * binding in force after that entry (Replay).
    */
   caseMemory(caseId: string, at?: number): Promise<CaseMemoryView>;
+  /** Makes an improve case for a loop (slice 14); the server names the person, and the run is started by start_run as any case's is. */
+  createImprove(input: NewImproveInput): Promise<{ id: string } | { refused: string[] }>;
   entries: EntrySource;
 }
 
@@ -191,6 +193,7 @@ export function makeApi(fetcher: Fetcher, origin: string, entries: EntrySource):
     loadMemory: (file, typed) => answered<{ lessons: number }>("/api/memory/load", { file, typed }),
     memoryFilePath: (file) => `/api/memory/files/${seg(file)}`,
     caseMemory: (id, at) => read<CaseMemoryView>(`/api/cases/${seg(id)}/memory${at === undefined ? "" : `?at=${at}`}`),
+    createImprove: (input) => answered<{ id: string }>("/api/improve", input),
     entries,
   };
 }

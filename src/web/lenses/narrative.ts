@@ -12,6 +12,7 @@ import type { TextSection } from "../markdown";
 import { AT_GATE, REPLAY_REFUSAL, typingIn } from "../ui";
 import type { Ui, View } from "../ui";
 import { refusalLine } from "../refusal";
+import { answerPanel } from "../panels/answer";
 import { makeQuestions, shownQuestions } from "../views/questions";
 
 export interface NarrativeView extends View {
@@ -107,7 +108,10 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
   const proposalsBox = h("div", { class: "proposals-box" });
   const questions = makeQuestions(ui, open);
   const questionsBox = questions.el;
-  draftBox.append(headBox, bodyBox);
+  /** The known answer of the published product shown (slice 14), under its head: one panel per product, so what is typed survives a repaint. */
+  const answerBox = h("div", { class: "answer-box" });
+  const answerPanels = new Map<number, View>();
+  draftBox.append(headBox, answerBox, bodyBox);
   el.append(questionsBox, draftBox, toolsBox, gateBox, reviewBox, previewBox, copyBox, proposalsBox);
 
   // ---------- repainting a part only when what it shows has changed ----------
@@ -712,6 +716,14 @@ export function makeNarrative(ui: Ui, open: Open, arg: string | null = null): Na
     draftBox.hidden = d === null;
     questions.update();
     paint(headBox, [d, s.published, store.id, bundlesVersion, store.live.archive.pending, store.live.archive.failed?.seq], () => (d === null ? [] : headView(s, d)));
+    const pubN = published ? s.published[s.published.length - 1]!.n : null;
+    paint(answerBox, [pubN], () => {
+      if (pubN === null) return [];
+      let panel = answerPanels.get(pubN);
+      if (panel === undefined) { panel = answerPanel({ ui, store }, pubN); answerPanels.set(pubN, panel); }
+      return [panel.el];
+    });
+    if (pubN !== null) answerPanels.get(pubN)?.update();
     paint(bodyBox, edit !== null ? [edit] : [d, s.cards, s.overrules, s.conflicts, ro(), inflightVersion, ui.ref.likelihood, overruleVersion], () => (d === null ? [h("p", { class: "empty" }, "No draft yet.")] : edit !== null ? [edit.el] : readBody(s, d)));
     if (focusOverrule !== null && d !== null && edit === null) {
       const at = focusOverrule;

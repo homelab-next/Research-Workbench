@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import type { Api } from "../../src/web/api";
-import type { ItemView, LoopFileView, LoopStageView, LoopSummaryView, LoopView, Me, NewCaseInput } from "../../src/core/wire";
+import type { ItemView, LoopFileView, LoopStageView, LoopSummaryView, LoopView, Me, NewCaseInput, NewImproveInput } from "../../src/core/wire";
 import { parseRoute, routeHash, startApp } from "../../src/web/app";
 import { testUi } from "../helpers/dom";
 
@@ -60,7 +60,7 @@ let open: Stub | null = null;
 afterEach(async () => { await open?.close(); open = null; });
 
 /** startApp over a stub Api: every call is recorded; `over` replaces what a method answers. */
-async function stub(opts: { role?: Me["role"]; hash?: string; over?: Partial<Api>; defaultLoop?: string } = {}): Promise<Stub> {
+async function stub(opts: { role?: Me["role"]; hash?: string; over?: Partial<Api>; defaultLoop?: string; caseTypes?: { id: string; title: string; about: string }[] } = {}): Promise<Stub> {
   const win = new Window({ url: `http://127.0.0.1:1/${opts.hash ?? ""}` });
   const doc = win.document as unknown as Document;
   const calls: unknown[][] = [];
@@ -79,6 +79,7 @@ async function stub(opts: { role?: Me["role"]; hash?: string; over?: Partial<Api
     ...opts.over,
   } as unknown as Api;
   const ui = testUi(win, { api, me: { user: "analyst", role: opts.role ?? "analyst", origin: "http://127.0.0.1:1", markings: ["TLP:GREEN"], policy: {} as never, problems: [], cases: { store: "<data>/cases", on_complete: "keep" }, loops: { default: opts.defaultLoop ?? "investigation" } } });
+  if (opts.caseTypes !== undefined) ui.ref = { ...ui.ref, case_types: opts.caseTypes };
   const root = doc.createElement("div");
   doc.body.append(root);
   const app = startApp(ui, root);
@@ -370,4 +371,66 @@ test("Export names the file with a link that downloads it, and each file of the 
   const odd = await stub({ hash: "#/loops", over: { loopFiles: () => Promise.resolve([{ ...files()[0]!, file: "../evil.v1.bbbbbbbbbbbb.loop.tar.gz" }]) } });
   expect(odd.all(".loop-file a")).toEqual([]);
   expect(text(odd.q(".loop-file .download"))).toBe("Download");
+});
+
+// ---------- Improve this loop (slice 14, Task 19) ----------
+
+const TYPES = [{ id: "unknown-device", title: "Unknown device", about: "A device nobody recognises." }, { id: "phishing", title: "Phishing", about: "A message that asks for a credential." }];
+const improveForm = (s: Stub): HTMLElement => s.q("[data-screen=loop] .improve-form");
+const improveField = <T extends HTMLElement = HTMLInputElement>(s: Stub, label: string): T => s.q(`.improve-form [aria-label='${label}']`) as T;
+const pick = (s: Stub, label: string, value: string): void => {
+  const el = improveField<HTMLSelectElement>(s, label);
+  el.value = value;
+  el.dispatchEvent(new s.win.Event("change", { bubbles: true }) as unknown as Event);
+};
+
+test("Improve this loop sends the loop, the case type, the two counts and the marking, and opens the new case", async () => {
+  const s = await stub({ hash: "#/loops/investigation", caseTypes: TYPES, over: {
+    createImprove: (input: NewImproveInput) => { s.calls.push(["createImprove", input]); return Promise.resolve({ id: "CASE-9" }); },
+    // the case screen it opens asks for these; none answers here
+    ...Object.fromEntries(["custody", "agent", "models", "caseMemory", "preview", "store", "builders"].map((k) => [k, () => new Promise(() => {})])),
+  } as Partial<Api> });
+  await s.settle();
+  expect(improveForm(s).querySelector("h2")!.textContent).toBe("Improve this loop");
+  expect([...improveField<HTMLSelectElement>(s, "Case type to improve for").options].map((o) => o.value)).toEqual(["unknown-device", "phishing"]);
+  expect(improveField(s, "Tasks").value).toBe("3");
+  expect(improveField(s, "Candidates").value).toBe("3");
+  pick(s, "Case type to improve for", "phishing");
+  s.fill(".improve-form [aria-label='Tasks']", "2");
+  s.fill(".improve-form [aria-label='Candidates']", "1");
+  pick(s, "Improve case marking", "TLP:GREEN");
+  s.click(".improve-form [data-action=improve]");
+  await s.settle();
+  expect(s.calls.filter((c) => c[0] === "createImprove")).toEqual([["createImprove", { loop: "investigation", case_type: "phishing", tasks: 2, candidates: 1, marking: "TLP:GREEN" }]]);
+  expect(s.win.location.hash).toBe("#/case/CASE-9");
+});
+
+test("the server's refusal is shown in the form and nothing navigates", async () => {
+  const s = await stub({ hash: "#/loops/investigation", caseTypes: TYPES, over: {
+    createImprove: () => Promise.resolve({ refused: ["an improve run takes 1 to 3 tasks", "<b>not markup</b>"] }),
+  } as Partial<Api> });
+  await s.settle();
+  s.fill(".improve-form [aria-label='Tasks']", "7");
+  s.click(".improve-form [data-action=improve]");
+  await s.settle();
+  expect(s.all(".improve-form .refusal").map((r) => r.textContent)).toEqual(["Refused: an improve run takes 1 to 3 tasks; <b>not markup</b>"]);
+  expect(improveForm(s).querySelector("b")).toBeNull();
+  expect(s.win.location.hash).toBe("#/loops/investigation");
+  expect((s.q(".improve-form [data-action=improve]") as HTMLButtonElement).disabled).toBe(false);
+});
+
+test("Improve this loop is offered only for a usable loop an improve run may take", async () => {
+  const improve = viewOf({ ...summaries()[0]!, id: "improve", title: "Improve" }, ["select", "propose", "probe", "compose", "judge", "reflect", "adopt"].map((r) => stage(r, r)));
+  const broken = viewOf(summaries()[2]!, [stage("frame", "Frame")]);
+  const s = await stub({ hash: "#/loops/triage", caseTypes: TYPES, over: {
+    loop: (id: string) => Promise.resolve(id === "triage" ? triage() : id === "improve" ? improve : id === "broken" ? broken : investigation()),
+  } as Partial<Api> });
+  await s.settle();
+  expect(s.all(".improve-form").length).toBe(0);        // runs a sub-loop
+  for (const id of ["improve", "broken"]) {
+    await go(s, `#/loops/${id}`);
+    expect([id, s.all(".improve-form").length]).toEqual([id, 0]);
+  }
+  await go(s, "#/loops/investigation");
+  expect(s.all(".improve-form").length).toBe(1);
 });

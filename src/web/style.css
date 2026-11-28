@@ -564,3 +564,19 @@ details.lesson ul.history { color: var(--muted); font-size: 12px; }
 .lens-memory .dropped-notes > summary { cursor: pointer; color: var(--muted); }
 .lens-memory .dropped-note { color: var(--muted); overflow-wrap: anywhere; }
 .loop-head .case-type-line { margin: 2px 0; }
+
+/* the known answer on a published product, and Improve this loop (slice 14) */
+.known-answer { margin: 8px 0; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; background: var(--panel); overflow-wrap: anywhere; }
+.known-answer h3 { margin: 0; font-size: 1em; }
+.known-answer-text { white-space: pre-wrap; margin: 0; }
+.known-answer-by { margin: 0; }
+.known-answer-form summary { cursor: pointer; }
+.known-answer-form .form-body { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.known-answer-form textarea { min-height: 4em; resize: vertical; }
+.known-answer .answer-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.known-answer .answer-row input { flex: 1; min-width: 12em; }
+.known-answer .save-row, .known-answer-withdraw { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.improve-form { margin: 16px 0; display: flex; flex-direction: column; gap: 8px; }
+.improve-form h2 { margin: 0; font-size: 1.1em; }
+.improve-form .improve-fields, .improve-form .improve-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.improve-form input[type=number] { width: 5em; }

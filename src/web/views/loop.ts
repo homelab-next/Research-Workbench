@@ -1,5 +1,5 @@
 import type { ItemView, LoopStageView, LoopView } from "../../core/wire";
-import type { ModelChoice } from "../../core/types";
+import type { Marking, ModelChoice } from "../../core/types";
 import { clear } from "../dom";
 import { loopFileLink } from "../links";
 import { refusalLine } from "../refusal";
@@ -12,6 +12,13 @@ export let editButton: ((shell: Shell, loop: LoopView) => HTMLElement[]) | null 
 export function setEditButton(make: typeof editButton): void { editButton = make; }
 
 const SOURCE_WORDS: Record<ItemView["source"], string> = { root: "root", pinned: "pinned", "loop-output": "loop output", inline: "inline", memory: "memory", "built-in": "built in" };
+/** The roles of an improve loop's stages: such a loop is not improved by an improve run (the server's targetProblem says the same). */
+const IMPROVE_ROLES: readonly string[] = ["select", "propose", "probe", "compose", "judge", "reflect", "adopt"];
+/** Whether an improve run may take this loop: usable, no stage of an improve role, and no sub-loop (refused in this version). */
+const improvable = (l: LoopView): boolean => l.usable && l.stage_views.length > 0
+  && !l.stage_views.some((s) => IMPROVE_ROLES.includes(s.role) || s.runs === "loop" || s.orchestration.subloop !== null);
+/** What an improve request asks for when the person changes nothing: the configuration's maxima, which the server checks. */
+const IMPROVE_DEFAULTS = { tasks: 3, candidates: 3 };
 const modelWords = (m: ModelChoice): string => `${m.provider} ${m.model} · effort ${m.effort ?? "default"}`;
 
 /**
@@ -106,6 +113,54 @@ export function loopView(shell: Shell, id: string): Screen {
     (exportRow.querySelector("[data-action=export]") as HTMLElement | null)?.focus();
   };
 
+  // ---------- Improve this loop (slice 14) ----------
+  const improveBox = h("section", { class: "improve-form", data: { section: "improve" } });
+  let improving = false;
+  let improveWhy: string | undefined;
+  const paintImprove = (l: LoopView): void => {
+    clear(improveBox);
+    const types = ui.ref.case_types ?? [];
+    const caseType = h("select", { name: "Case type to improve for" }, types.map((t) => h("option", { value: t.id }, t.title))) as HTMLSelectElement;
+    if (l.case_type !== null && types.some((t) => t.id === l.case_type)) caseType.value = l.case_type;
+    const count = (name: string, value: number, max: number): HTMLInputElement => {
+      const input = h("input", { type: "number", name, value: String(value) }) as HTMLInputElement;
+      input.min = "1"; input.max = String(max); input.step = "1";
+      return input;
+    };
+    const tasks = count("Tasks", IMPROVE_DEFAULTS.tasks, 8);
+    const candidates = count("Candidates", IMPROVE_DEFAULTS.candidates, 4);
+    const marking = h("select", { name: "Improve case marking" }, ui.me.markings.map((m) => h("option", { value: m }, m))) as HTMLSelectElement;
+    marking.value = ui.me.markings.includes("TLP:AMBER") ? "TLP:AMBER" : (ui.me.markings[0] ?? "");
+    const go = h("button", {
+      type: "button", class: "primary", data: { action: "improve" }, disabled: improving || types.length === 0,
+      title: types.length === 0 ? "There is no case type here to improve for" : "Make an improve case for this loop and start its run",
+      on: { click: () => void doImprove(l, { case_type: caseType.value, tasks: Number(tasks.value), candidates: Number(candidates.value), marking: marking.value as Marking }) },
+    }, "Improve this loop");
+    improveBox.append(
+      h("h2", null, "Improve this loop"),
+      h("p", { class: "muted" }, "Runs changed versions of this loop against cases of the type that hold a known answer, scores them in code, and offers the best for you to adopt."),
+      h("div", { class: "improve-fields" },
+        h("label", null, "Case type ", caseType), h("label", null, "Tasks ", tasks), h("label", null, "Candidates ", candidates), h("label", null, "Marking ", marking)),
+      h("div", { class: "improve-row" }, go));
+    const line = refusalLine(h, improveWhy, `improve:${l.id}`);
+    if (line !== null) improveBox.querySelector(".improve-row")!.appendChild(line);
+  };
+  const doImprove = async (l: LoopView, input: { case_type: string; tasks: number; candidates: number; marking: Marking }): Promise<void> => {
+    if (improving) return;
+    improving = true; improveWhy = undefined;
+    const pressed = improveBox.querySelector("[data-action=improve]") as HTMLButtonElement | null;
+    if (pressed !== null) pressed.disabled = true;
+    const r = await ui.api.createImprove({ loop: l.id, ...input }).catch((err: unknown) => ({ refused: [`The improve case could not be made: ${err instanceof Error ? err.message : String(err)}`] }));
+    improving = false;
+    if (destroyed) return;
+    if ("refused" in r) { improveWhy = r.refused.join("; "); paintImprove(l); (improveBox.querySelector("[data-action=improve]") as HTMLElement | null)?.focus(); return; }
+    // the case exists from here: the person goes to it and is told if its run did not start, never back to a form that would make a second one
+    nav.go({ screen: "case", id: r.id });
+    let reason = "";
+    try { if (!(await ui.act("start_run"))) reason = "see the message shown"; } catch (err) { reason = err instanceof Error ? err.message : String(err); }
+    if (reason !== "") ui.toast(`The improve case was made; its run did not start: ${reason}`);
+  };
+
   const render = (): void => {
     clear(body);
     if (failed) { body.appendChild(h("p", { class: "load-error say", role: "alert" }, `The loop ${id} could not be loaded`)); return; }
@@ -124,6 +179,7 @@ export function loopView(shell: Shell, id: string): Screen {
         h("p", { class: "about" }, l.about)),
       actions,
       l.usable ? null : problemList(h, l.problems),
+      improvable(l) && ui.me.role === "analyst" ? (paintImprove(l), improveBox) : null,
       l.stage_views.length === 0 ? null : h("ol", { class: "loop-stages", role: "list" }, l.stage_views.map((s, i) => stageRow(l, s, i + 1)))));
   };
 
