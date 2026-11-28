@@ -43,7 +43,7 @@ async function theLens(path: string): Promise<void> {
 
   // answered: typed, how you know chosen, sent once; the card replaces the form
   await tab.click("[aria-label='Answer to ask-1']");
-  await tab.type("In the gym. A TV is expected there.");
+  await tab.type("In the lobby. A TV is expected there.");
   await choose("[aria-label='How you know the answer to ask-1']", "saw");
   await tab.click('[data-question="ask-1"] [data-action=answer-question]');
   await tab.waitFor(`document.querySelector('[data-question="ask-1"] .answer .card-chip') !== null`);

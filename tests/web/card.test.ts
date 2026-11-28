@@ -219,7 +219,7 @@ test("a statement card is tagged as the person's statement, and its record says 
 
 test("an answer card names the question it answers", async () => {
   const q = await open();
-  const id = await plantStatement(q, "It is the gym TV.", { answers: "ask-1" });
+  const id = await plantStatement(q, "It is the lobby TV.", { answers: "ask-1" });
   q.click(`[data-card=${id}] .card-head`);
   await q.settle();
   expect(dlOf(q, id).get("Answers")).toBe("ask-1");
@@ -234,7 +234,7 @@ test("a statement that looks like markup is drawn as text", async () => {
 
 test("a statement card has no Verify and no Pivot from rows; Keep and Discard work as for any card", async () => {
   const q = await open();
-  const id = await plantStatement(q, "The TV is in the gym.");
+  const id = await plantStatement(q, "The TV is in the lobby.");
   q.click(`[data-card=${id}] .card-head`);
   await q.settle();
   expect(q.all(`[data-card=${id}] [data-action=verify]`).length).toBe(0);

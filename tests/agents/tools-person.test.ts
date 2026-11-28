@@ -116,8 +116,8 @@ test("a waived question still counts toward the cap: going on without an answer 
 });
 
 test("a statement by the person may be named among the cards a question is about", async () => {
-  const c = addStatement(f.s, f.sample.deps, { actor: person, statement: "AP-7 is in the gym.", basis: "saw", detail: "", about: [], marking: null });
-  expect((await ask("Is a TV expected in the gym?", { cards: [c] })).ok).toBe(true);
+  const c = addStatement(f.s, f.sample.deps, { actor: person, statement: "AP-7 is in the lobby.", basis: "saw", detail: "", about: [], marking: null });
+  expect((await ask("Is a TV expected in the lobby?", { cards: [c] })).ok).toBe(true);
 });
 
 test("every tool has a definition: none is 'Not available yet'", () => {

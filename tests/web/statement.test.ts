@@ -33,7 +33,7 @@ test("Add what you know opens the form; Add is off until there is text", async (
   expect(add(q).disabled).toBe(true);
   q.fill(field(q, "What you know"), "   ");
   expect(add(q).disabled).toBe(true);
-  q.fill(field(q, "What you know"), "The TV is in the gym");
+  q.fill(field(q, "What you know"), "The TV is in the lobby");
   expect(add(q).disabled).toBe(false);
   expect([...(field(q, "How you know") as unknown as HTMLSelectElement).options].map((o) => o.textContent)).toEqual(["saw it myself", "did it myself", "was told", "did not say how"]);
 });

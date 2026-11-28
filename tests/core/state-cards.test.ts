@@ -510,8 +510,8 @@ test("the fold does not share or change the card's observed", () => {
 // ---------- slice 8: a person's statement ----------
 const PERSON = { kind: "human", id: "analyst" } as const;
 const statement = (id: string, over: Partial<Card> = {}): Card => card(id, {
-  kind: "note", made_by: "human", columns: [], column_types: [], rows: [], row_count: 0, coverage: null, title: "The TV", body: "It is the gym TV.",
-  person: { basis: "saw", detail: "in the gym on Tuesday", about: [{ type: "address", value: "192.0.2.17" }], answers: null }, ...over,
+  kind: "note", made_by: "human", columns: [], column_types: [], rows: [], row_count: 0, coverage: null, title: "The TV", body: "It is the lobby TV.",
+  person: { basis: "saw", detail: "in the lobby on Tuesday", about: [{ type: "address", value: "192.0.2.17" }], answers: null }, ...over,
 });
 
 test("a card with person is kept as written when a person made it as a note with no query, source or rows", () => {
@@ -519,7 +519,7 @@ test("a card with person is kept as written when a person made it as a note with
   const b = new EntryBuilder();
   b.add("card.created", payload, { actor: PERSON });
   const s = fold(b.entries);
-  expect(s.cards.c1!.person).toEqual({ basis: "saw", detail: "in the gym on Tuesday", about: [{ type: "address", value: "192.0.2.17" }], answers: null });
+  expect(s.cards.c1!.person).toEqual({ basis: "saw", detail: "in the lobby on Tuesday", about: [{ type: "address", value: "192.0.2.17" }], answers: null });
   expect(s.cards.c1!.person).not.toBe(payload.card.person);           // the state shares nothing with the payload
   expect(s.cards.c1!.person!.about).not.toBe(payload.card.person!.about);
   expect(s.cards.c1!.person!.about[0]).not.toBe(payload.card.person!.about[0]);

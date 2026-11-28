@@ -553,7 +553,7 @@ test("a check is told the run's unanswered questions; with none the input is wha
       s.commit((st, ids) => [{ type: "question.asked", actor: researcher, run: st.run.id, stage: "research", payload: { question: { id: ids.next("question"), text, why: "w", cards: [], about: [], blocking: false } } }]);
     };
     ask("Who owns the laptop?");
-    ask("Is the TV in the gym?");
+    ask("Is the TV in the lobby?");
     s.commit((_s, ids) => [{ type: "card.created", actor: person, payload: { card: personCard(ids.next("card"), { title: "Answer to ask-2", statement: "yes", basis: "saw", detail: "", about: [], answers: "ask-2", marking: "TLP:GREEN" }) } }]);
     s.commit(() => [{ type: "question.answered", actor: person, payload: { question: "ask-2", card: "c2" } }]);
     const input = checkInput("x", s.state, d, env.deps.registry, env.deps.profile);

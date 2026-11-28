@@ -40,7 +40,7 @@ function ask(text: string, opts: { by?: Extract<Actor, { kind: "agent" }>; marki
   return id;
 }
 const answer = (question: string, extra: Partial<Parameters<typeof answerQuestion>[2]> = {}): string =>
-  answerQuestion(f.s, f.sample.deps, { actor: person, question, answer: "In the gym. A TV is expected there.", basis: "saw", detail: "", about: null, marking: null, ...extra });
+  answerQuestion(f.s, f.sample.deps, { actor: person, question, answer: "In the lobby. A TV is expected there.", basis: "saw", detail: "", about: null, marking: null, ...extra });
 const refusal = (fn: () => unknown): string => {
   try { fn(); } catch (err) { expect(err).toBeInstanceOf(PersonRefused); return (err as Error).message; }
   throw new Error("not refused");
@@ -57,7 +57,7 @@ test("answerQuestion writes the person's statement card and question.answered in
   expect(written[0]!.cause).toBe(f.s.state.questions[q]!.seq);
   const card = f.s.state.cards[id]!;
   expect(card).toMatchObject({
-    title: `Answer to ask-1: ${Q1}`, body: "In the gym. A TV is expected there.", kind: "note", made_by: "human", place: "incoming",
+    title: `Answer to ask-1: ${Q1}`, body: "In the lobby. A TV is expected there.", kind: "note", made_by: "human", place: "incoming",
     person: { basis: "saw", detail: "", about: [{ type: "address", value: "192.0.2.17" }], answers: "ask-1" },
   });
   expect(f.s.state.questions[q]!.answer).toMatchObject({ card: id, by: "analyst" });
@@ -116,7 +116,7 @@ test("questionsPart lists the run's questions with who asked and what came of ea
   const part = questionsPart(f.s, f.sample.registry);
   expect(part!.text).toBe([
     "Questions put to the person in this run. An answer is a card: cite it like any card, and say the finding rests on the person's word.",
-    `- ask-1 (asked by Research; blocking): Where is the access point AP-7? Answered in card ${c}: In the gym. A TV is expected there.`,
+    `- ask-1 (asked by Research; blocking): Where is the access point AP-7? Answered in card ${c}: In the lobby. A TV is expected there.`,
     "- ask-2 (asked by Assemble): Who owns the laptop? Not answered yet.",
     "- ask-3 (asked by Research; blocking): Is the printer new? Not answered; the person went on without answering: name this under gaps_and_limits.",
   ].join("\n"));

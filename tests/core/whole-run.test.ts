@@ -252,7 +252,7 @@ test("a ledger holding a statement, a question, its answer, an overrule and a re
     one({ type: "stage.finished", payload: { stage: id, attempt: 1, outcome, draft_hash, output: null, reason: null }, actor: system, stage: id });
   const statement = (id: string, answers: string | null) => card(id, {
     kind: "note", made_by: "human", columns: [], column_types: [], rows: [], row_count: 0, coverage: null, title: "The TV",
-    body: "It is the TV I installed in the gym.", person: { basis: "did", detail: "installed it in March", about: [{ type: "ip", value: "192.0.2.10" }], answers },
+    body: "It is the TV I installed in the lobby.", person: { basis: "did", detail: "installed it in March", about: [{ type: "ip", value: "192.0.2.10" }], answers },
   });
 
   s.commit((_st, ids) => [{ type: "run.started", payload: { run: ids.next("run"), pipeline: "investigate", pipeline_hash: "a".repeat(64), stages }, actor: system }]);

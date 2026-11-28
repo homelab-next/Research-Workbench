@@ -945,7 +945,7 @@ test("the analyst's and both reviewers' packs list the overrules as fixed", asyn
 
 const researcher = { kind: "agent", id: "researcher", stage: "research", profile: "investigation", model: "m", effort: null, where: "machine" } as const;
 /** Research asks the person (not blocking, so the run is not held) while answering a request marked `marking`. */
-const asksAtResearch = (marking: "TLP:GREEN" | "TLP:AMBER" = "TLP:GREEN", text = "Is c2 the TV in the gym?"): StageRunner => async () => {
+const asksAtResearch = (marking: "TLP:GREEN" | "TLP:AMBER" = "TLP:GREEN", text = "Is c2 the TV in the lobby?"): StageRunner => async () => {
   f.s.commit((st, ids) => [
     { type: "model.request", actor: researcher, run: st.run.id, stage: "research", payload: { request: ids.next("request"), provider: "scripted", model: "m", effort: null, where: "machine", marking, pack: [], left_out: [], messages: f.s.blobs.put("[]"), tools: [] } },
     { type: "question.asked", actor: researcher, run: st.run.id, stage: "research", payload: { question: { id: ids.next("question"), text, why: "it decides f1", cards: [], about: [], blocking: false } } },
@@ -973,7 +973,7 @@ test("a draft assembled while a question is open names it in gaps_and_limits, an
   };
   await go(r);
   const [d1, d2] = f.s.state.drafts;
-  expect(d1!.product.gaps_and_limits).toBe("stated\n\nQuestions the person has not answered:\n- ask-1: Is card 2 the TV in the gym?");
+  expect(d1!.product.gaps_and_limits).toBe("stated\n\nQuestions the person has not answered:\n- ask-1: Is card 2 the TV in the lobby?");
   // a card id in the question does not make the draft cite that card
   expect(d1!.cited).not.toContain("c2");
   expect(d2!.product.gaps_and_limits).toBe("stated");

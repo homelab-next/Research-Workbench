@@ -74,7 +74,7 @@ test("Answer in the panel sends answer_question as the Narrative lens does, once
   const log = sent();
   const panel = (): HTMLElement => p.q(".stage-col .questions-panel");
   expect(panel().querySelector(".section-title")!.textContent).toBe("Questions for you (2)");
-  p.fill(".questions-panel [aria-label='Answer to ask-1']", "In the gym. A TV is expected there.");
+  p.fill(".questions-panel [aria-label='Answer to ask-1']", "In the lobby. A TV is expected there.");
   const basis = p.q(".questions-panel [aria-label='How you know the answer to ask-1']") as HTMLSelectElement;
   basis.value = "saw";
   basis.dispatchEvent(new p.win.Event("change", { bubbles: true }) as unknown as Event);
@@ -82,7 +82,7 @@ test("Answer in the panel sends answer_question as the Narrative lens does, once
   p.click(button);
   p.click(button);
   await settled();
-  expect(log.filter((c) => c.command === "answer_question").map((c) => c.args)).toEqual([{ question: "ask-1", answer: "In the gym. A TV is expected there.", basis: "saw", detail: "" }]);
+  expect(log.filter((c) => c.command === "answer_question").map((c) => c.args)).toEqual([{ question: "ask-1", answer: "In the lobby. A TV is expected there.", basis: "saw", detail: "" }]);
   const card = state().questions["ask-1"]!.answer!.card;
   const row = panel().querySelector('[data-question="ask-1"]') as HTMLElement;
   expect(row.classList.contains("answered")).toBe(true);
@@ -183,7 +183,7 @@ test("the gate box lists Your changes since the draft, each with its finding id,
   overruled("f1", "almost certain", "It is the TV I installed.");
   ask(AP7);
   await settled();
-  expect((await p.s.command("CASE-1", "answer_question", { question: "ask-1", answer: "In the gym." })).status).toBe(200);
+  expect((await p.s.command("CASE-1", "answer_question", { question: "ask-1", answer: "In the lobby." })).status).toBe(200);
   await settled();
   const card = state().questions["ask-1"]!.answer!.card;
   const items = p.all(".gate-box .your-changes li");
@@ -211,7 +211,7 @@ test("with changes not sent, Approve says plainly that it publishes the draft wi
   await narrativeAtGate();
   ask(AP7);
   await settled();
-  expect((await p.s.command("CASE-1", "answer_question", { question: "ask-1", answer: "In the gym." })).status).toBe(200);
+  expect((await p.s.command("CASE-1", "answer_question", { question: "ask-1", answer: "In the lobby." })).status).toBe(200);
   await settled();
   const d = latest();
   expect(p.q("[data-action=approve]").textContent).toBe(`Approve without my changes: publish draft ${d.n}`);
@@ -246,15 +246,15 @@ test("refused answers, rulings, statements and send-backs each show the refusal 
   await settled();
   // the panel under the brief
   refuse("answer_question", "question ask-1 is already answered");
-  p.fill(".questions-panel [aria-label='Answer to ask-1']", "In the gym.");
+  p.fill(".questions-panel [aria-label='Answer to ask-1']", "In the lobby.");
   p.click('.questions-panel [data-question="ask-1"] [data-action=answer-question]');
   await settled();
   expect(p.q('.questions-panel [data-question="ask-1"] .refusal').textContent).toBe("Refused: question ask-1 is already answered");
-  expect((p.q(".questions-panel [aria-label='Answer to ask-1']") as HTMLTextAreaElement).value).toBe("In the gym.");
+  expect((p.q(".questions-panel [aria-label='Answer to ask-1']") as HTMLTextAreaElement).value).toBe("In the lobby.");
   // the statement form in Incoming
   refuse("add_statement", "a statement is at most 4000 characters");
   p.click(".statement-form summary");
-  p.fill("[aria-label='What you know']", "The TV is in the gym.");
+  p.fill("[aria-label='What you know']", "The TV is in the lobby.");
   p.click("[data-action=add-statement]");
   await settled();
   expect(p.q(".statement-form .refusal").textContent).toBe("Refused: a statement is at most 4000 characters");

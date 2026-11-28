@@ -730,7 +730,7 @@ test("Answer sends answer_question with the text and how you know, once, and the
   const log = sent();
   const button = (): HTMLButtonElement => p.q('[data-question="ask-1"] [data-action=answer-question]') as HTMLButtonElement;
   expect(button().disabled).toBe(true);
-  p.fill("[aria-label='Answer to ask-1']", "In the gym. A TV is expected there.");
+  p.fill("[aria-label='Answer to ask-1']", "In the lobby. A TV is expected there.");
   const basis = p.q("[aria-label='How you know the answer to ask-1']") as HTMLSelectElement;
   basis.value = "saw";
   basis.dispatchEvent(new p.win.Event("change", { bubbles: true }) as unknown as Event);
@@ -738,7 +738,7 @@ test("Answer sends answer_question with the text and how you know, once, and the
   p.click(button());
   p.click(button());
   await settled();
-  expect(log.filter((c) => c.command === "answer_question").map((c) => [c.command, c.args])).toEqual([["answer_question", { question: "ask-1", answer: "In the gym. A TV is expected there.", basis: "saw", detail: "" }]]);
+  expect(log.filter((c) => c.command === "answer_question").map((c) => [c.command, c.args])).toEqual([["answer_question", { question: "ask-1", answer: "In the lobby. A TV is expected there.", basis: "saw", detail: "" }]]);
   const card = state().questions["ask-1"]!.answer!.card;
   expect(p.q('[data-question="ask-1"] .card-chip').textContent).toContain("c");
   expect(p.q('[data-question="ask-1"] .card-chip').textContent).toBe(card);
@@ -780,7 +780,7 @@ test("an answer given after the latest draft was made is one of Your changes at 
   ask(AP7);
   await settled();
   expect(p.all(".gate-box .answered-since").length).toBe(0);
-  expect((await p.s.command("CASE-1", "answer_question", { question: "ask-1", answer: "In the gym." })).status).toBe(200);
+  expect((await p.s.command("CASE-1", "answer_question", { question: "ask-1", answer: "In the lobby." })).status).toBe(200);
   await settled();
   const card = state().questions["ask-1"]!.answer!.card;
   expect(p.all(".gate-box .answered-since").length).toBe(0);

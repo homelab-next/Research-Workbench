@@ -47,7 +47,7 @@ async function atTheGate(path: string): Promise<void> {
 
   // answered from the panel: the question folds to one line with its card
   await tab.click(".questions-panel [aria-label='Answer to ask-1']");
-  await tab.type("In the gym. A TV is expected there.");
+  await tab.type("In the lobby. A TV is expected there.");
   await tab.click(".questions-panel [data-question='ask-1'] [data-action=answer-question]");
   await tab.waitFor(`document.querySelector(".questions-panel [data-question='ask-1'].answered .card-chip") !== null`);
   expect(types().filter((t) => t === "question.answered").length).toBe(1);

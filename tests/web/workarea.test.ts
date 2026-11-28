@@ -72,7 +72,7 @@ test("the brief says how many questions wait for you, and the count opens the Na
   expect(q.q("[data-status=questions]").textContent).toBe("2 questions for you");
   q.click("[data-status=questions]");
   expect(q.navCalls).toContainEqual(["openLens", "narrative"]);
-  expect((await q.s.command("CASE-1", "answer_question", { question: "ask-1", answer: "In the gym." })).status).toBe(200);
+  expect((await q.s.command("CASE-1", "answer_question", { question: "ask-1", answer: "In the lobby." })).status).toBe(200);
   await q.settle();
   expect(q.q("[data-status=questions]").textContent).toBe("1 question for you");
 });
@@ -438,13 +438,13 @@ test("the phase strip says which draft was sent back and by which stage", async 
 test("a statement added from the Incoming bar arrives as a card in Incoming and is listed with the others", async () => {
   const q = await open("none");
   const before = st(q).incoming.length;
-  const r = await q.s.command("CASE-1", "add_statement", { statement: "The TV is in the gym", basis: "told" });
+  const r = await q.s.command("CASE-1", "add_statement", { statement: "The TV is in the lobby", basis: "told" });
   expect(r.status).toBe(200);
   await q.settle();
   expect(q.all("[data-area=incoming] [data-card]").length).toBe(before + 1);
   expect(q.all("[data-area=incoming] .incoming-bar details.statement-form").length).toBe(1);
   const id = st(q).incoming.at(-1)!;
-  expect(q.q(`[data-area=incoming] [data-card=${id}] .title`).textContent).toBe("Statement: The TV is in the gym");
+  expect(q.q(`[data-area=incoming] [data-card=${id}] .title`).textContent).toBe("Statement: The TV is in the lobby");
 });
 
 test("reads refused while the case was packed (409) are not kept as failed: once the unload has failed, the chip and the file list are read again", async () => {

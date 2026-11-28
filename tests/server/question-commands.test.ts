@@ -28,7 +28,7 @@ test("answer_question answers in the server's name with basis 'unstated' when no
   const session = s.app.hub.read(id);
   ask(session, "Where is the access point AP-7?", false);
   const before = s.entries(id).length;
-  const r = await s.command(id, "answer_question", { question: "ask-1", answer: "In the gym." });
+  const r = await s.command(id, "answer_question", { question: "ask-1", answer: "In the lobby." });
   expect(r.status).toBe(200);
   await s.app.hub.idle();
   const written = s.entries(id).slice(before);
@@ -36,7 +36,7 @@ test("answer_question answers in the server's name with basis 'unstated' when no
   expect(written.every((e) => e.actor.kind === "human" && e.actor.id === s!.config.user)).toBe(true);
   const state = s.app.hub.read(id).state;
   const card = state.cards[state.questions["ask-1"]!.answer!.card]!;
-  expect(card).toMatchObject({ body: "In the gym.", why: "did not say how", marking: "TLP:GREEN", person: { basis: "unstated", detail: "", answers: "ask-1" } });
+  expect(card).toMatchObject({ body: "In the lobby.", why: "did not say how", marking: "TLP:GREEN", person: { basis: "unstated", detail: "", answers: "ask-1" } });
   expect(state.skipped).toEqual([]);
   expect(await s.command(id, "answer_question", { question: "ask-1", answer: "again" })).toEqual({ status: 409, body: { ok: false, refused: [`ask-1 is already answered (card ${card.id}); add a statement to correct it`] } });
   await s.close();
@@ -58,7 +58,7 @@ test("answering the question a run is held for resumes the run; answering anothe
   session.commit((st) => [{ type: "run.paused", actor: engine, run: st.run.id, payload: { reason: "waiting for the person's answers to ask-1 and ask-2", hold: { kind: "question", stage: "research" } } }]);
   const resumes = (): number => s!.entries(id).filter((e) => e.type === "run.resumed").length;
   const r0 = resumes();
-  expect((await s.command(id, "answer_question", { question: "ask-1", answer: "In the gym.", basis: "saw" })).status).toBe(200);
+  expect((await s.command(id, "answer_question", { question: "ask-1", answer: "In the lobby.", basis: "saw" })).status).toBe(200);
   await s.app.hub.idle();
   expect(s.app.hub.read(id).state.run.status).toBe("paused");
   expect(resumes()).toBe(r0);

@@ -31,7 +31,7 @@ function run(id = "run-1"): EntryBuilder {
 const ask = (b: EntryBuilder, q: Question, by: Actor = researcher) => b.add("question.asked", { question: q }, { actor: by, stage: by.kind === "agent" ? by.stage : null });
 const personCard = (id: string, answers: string | null) => card(id, {
   kind: "note", made_by: "human", columns: [], column_types: [], rows: [], row_count: 0, coverage: null, marking: "TLP:AMBER",
-  person: { basis: "saw", detail: "in the gym", about: [], answers },
+  person: { basis: "saw", detail: "in the lobby", about: [], answers },
 });
 /** The state less what every entry moves: seq, head_ts, and the counters (which count creating entries, kept or not). */
 const still = (s: CaseState) => { const { seq: _a, head_ts: _b, counters: _c, skipped: _d, ...rest } = s; return rest; };

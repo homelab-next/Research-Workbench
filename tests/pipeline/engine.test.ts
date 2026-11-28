@@ -794,7 +794,7 @@ const ask = (s: CaseSession, stage: string, blocking = true, text = "Who owns th
   }]);
 };
 const answerIt = (s: CaseSession, question: string): void => {
-  answerQuestion(s, f.sample.deps, { actor: person, question, answer: "Pat in the gym.", basis: "saw", detail: "", about: null, marking: null });
+  answerQuestion(s, f.sample.deps, { actor: person, question, answer: "Pat in the lobby.", basis: "saw", detail: "", about: null, marking: null });
 };
 const stageOf = (s: CaseSession, id: string) => s.state.run.stages.find((x) => x.id === id)!;
 const WAITING_ASK1 = "waiting for the person's answer to ask-1. Answer it in the Narrative lens, or resume to go on without it.";

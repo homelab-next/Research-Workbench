@@ -193,7 +193,7 @@ test("runQuestions holds only the current run's questions", () => { /* ask-1 in 
 
 ```ts
 test("a card with person is kept as written when a person made it as a note with no query, source or rows", () => {
-  expect(s.cards.c1!.person).toEqual({ basis: "saw", detail: "in the gym on Tuesday", about: [{ type: "address", value: "192.0.2.17" }], answers: null });
+  expect(s.cards.c1!.person).toEqual({ basis: "saw", detail: "in the lobby on Tuesday", about: [{ type: "address", value: "192.0.2.17" }], answers: null });
   expect(s.cards.c1!.person).not.toBe(payload.card.person);           // the state shares nothing with the payload
 });
 test("a card with person that an agent made, or that has rows, a query or a source, is skipped: a person's statement is a person's", () => {
@@ -546,7 +546,7 @@ test("a question from an earlier run can still be answered", () => {});
 test("questionsPart lists the run's questions with who asked and what came of each, and carries the questions' and answers' markings", () => {
   expect(part!.text).toBe([
     "Questions put to the person in this run. An answer is a card: cite it like any card, and say the finding rests on the person's word.",
-    "- ask-1 (asked by Research; blocking): Where is the access point AP-7? Answered in card c3: In the gym. A TV is expected there.",
+    "- ask-1 (asked by Research; blocking): Where is the access point AP-7? Answered in card c3: In the lobby. A TV is expected there.",
     "- ask-2 (asked by Assemble): Who owns the laptop? Not answered yet.",
     "- ask-3 (asked by Research; blocking): Is the printer new? Not answered; the person went on without answering: name this under gaps_and_limits.",
   ].join("\n"));
@@ -680,7 +680,7 @@ test("the marking list offers the case's marking and stricter ones only; the typ
 test("a refusal leaves the form as typed; while replaying the form's controls are off", async () => {});
 // tests/web/commands.test.ts
 test("state <text> adds a statement, keeping the text's case; outside a case it says to open one", () => {
-  expect(parseCommand("state The TV is in the gym", inCase)).toEqual({ kind: "state", text: "The TV is in the gym" });
+  expect(parseCommand("state The TV is in the lobby", inCase)).toEqual({ kind: "state", text: "The TV is in the lobby" });
 });
 // tests/web/markdown.test.ts
 test("the copied provenance of a statement says it is the person's word and how they know", () => {});
@@ -715,7 +715,7 @@ test("an open question is shown above the draft with why it matters, what it is 
 });
 test("the question box is there before any draft exists", async () => { /* a case paused in Research with ask-1 open: the lens shows the box and its 'no draft yet' line */ });
 test("Answer sends answer_question with the text and how you know, once, and the answer's card replaces the form", async () => {
-  expect(sent).toEqual(["answer_question", { question: "ask-1", answer: "In the gym. A TV is expected there.", basis: "saw", detail: "" }]);
+  expect(sent).toEqual(["answer_question", { question: "ask-1", answer: "In the lobby. A TV is expected there.", basis: "saw", detail: "" }]);
   expect(p.q('[data-question="ask-1"] .card-chip').textContent).toContain("c");
 });
 test("a question the person went on without answering says so and can still be answered", async () => { /* tag "went on without your answer"; the form is there */ });
@@ -750,7 +750,7 @@ test("no ruling control says a ruling is fixed for the rest of the run", async (
 and in `tests/server/reads.test.ts`: `test("the reference lists the standard's likelihood terms, least likely first", …)`; in `tests/web/commands.test.ts`:
 ```ts
 test("answer ask-1 <text> answers that question; overrule f1 opens the Narrative lens on that finding", () => {
-  expect(parseCommand("answer ask-1 In the gym", inCase)).toEqual({ kind: "answer", question: "ask-1", text: "In the gym" });
+  expect(parseCommand("answer ask-1 In the lobby", inCase)).toEqual({ kind: "answer", question: "ask-1", text: "In the lobby" });
   expect(parseCommand("overrule f1", inCase)).toEqual({ kind: "overrule", finding: "f1" });
 });
 ```
