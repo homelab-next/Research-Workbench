@@ -15,6 +15,7 @@
     "serve": "bun run src/cli/serve.ts",
     "preflight": "bun run src/cli/preflight.ts",
     "new-root": "bun run scripts/new-root.ts",
+    "synth": "bun run src/cli/synth.ts",
     "sample:data": "bun run scripts/make-sample-data.ts",
     "sample:fixture": "bun run sample/fixture/reputation-server.ts"
   },

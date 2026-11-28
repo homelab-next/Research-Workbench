@@ -44,7 +44,7 @@ const STAGE_SETTINGS: Record<string, { max_output_tokens: number; max_turns: num
 };
 
 /** Rewrites the one `model:` line of a stage whose parsed model is not null, and checks nothing else changed. */
-function pointStage(file: string, text: string, model: { provider: string; model: string }): string {
+export function pointStage(file: string, text: string, model: { provider: string; model: string }): string {
   const parsed = Bun.YAML.parse(text) as Record<string, unknown> | null;
   if (parsed === null || typeof parsed !== "object" || parsed.model === null || parsed.model === undefined) return text;
   const lines = text.split("\n");
@@ -62,6 +62,36 @@ function pointStage(file: string, text: string, model: { provider: string; model
   const expected = { ...parsed, model: { provider: model.provider, model: model.model, effort: null }, ...(settings === null ? {} : settings) };
   const sorted = (v: unknown): string => JSON.stringify(v, (_k, x) => (x !== null && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.entries(x as object).sort(([a], [b]) => a.localeCompare(b))) : x));
   if (sorted(again) !== sorted(expected)) throw new Error(`${file}: the model line cannot be rewritten in place (write it on the one line "model: ...")`);
+  return out;
+}
+
+const SCRIPTED_LINE = /^(\s*(?:- )?)model:\s*\{\s*provider:\s*scripted\s*,.*\}\s*$/;
+
+/** Every `model` value in a parsed manifest whose provider is scripted, replaced with `to`; anything else as it was. */
+function repointed(x: unknown, to: Record<string, unknown>): unknown {
+  if (Array.isArray(x)) return x.map((v) => repointed(v, to));
+  if (x === null || typeof x !== "object") return x;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(x as Record<string, unknown>)) {
+    const scripted = k === "model" && v !== null && typeof v === "object" && !Array.isArray(v) && (v as Record<string, unknown>).provider === "scripted";
+    out[k] = scripted ? to : repointed(v, to);
+  }
+  return out;
+}
+
+/** A loop file's inline stages pointed at the model: each `model: { provider: scripted, ... }` line, at any indent, rewritten and checked by parsing again. */
+export function pointLoop(file: string, text: string, model: { provider: string; model: string }): string {
+  const parsed = Bun.YAML.parse(text) as unknown;
+  const out = text.split("\n").map((l) => {
+    const m = SCRIPTED_LINE.exec(l);
+    return m === null ? l : `${m[1]}model: { provider: ${model.provider}, model: ${JSON.stringify(model.model)}, effort: null }`;
+  }).join("\n");
+  let again: unknown;
+  try { again = Bun.YAML.parse(out) as unknown; } catch { again = undefined; }
+  const sorted = (v: unknown): string => JSON.stringify(v, (_k, x) => (x !== null && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.entries(x as object).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : x));
+  if (sorted(again) !== sorted(repointed(parsed, { provider: model.provider, model: model.model, effort: null }))) {
+    throw new Error(`${file}: a scripted model of the loop cannot be rewritten in place (write each on one line "model: { provider: scripted, ... }")`);
+  }
   return out;
 }
 

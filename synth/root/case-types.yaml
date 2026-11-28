@@ -1,0 +1,20 @@
+# The case types of a synthetic setup (synthetic: every storyline of the fake company is one of them).
+kind: case-types
+id: synth-case-types
+title: Synthetic case types
+types:
+  - id: suspicious-signin
+    title: Suspicious sign-in
+    about: "Sign-ins that do not look like the account's own"
+  - id: suspicious-process
+    title: Suspicious process
+    about: "A process or a script that should not be running there"
+  - id: large-transfer
+    title: Large transfer
+    about: "An unusual amount of data leaving a host"
+  - id: unknown-device
+    title: Unknown device
+    about: "A device nobody recognises is on the network"
+  - id: cloud-activity
+    title: Cloud activity
+    about: "A cloud identity doing what it does not usually do"
