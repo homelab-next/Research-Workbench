@@ -11,6 +11,7 @@
     "cases": "bun run src/cli/cases.ts",
     "loops": "bun run src/cli/loops.ts",
     "memory": "bun run src/cli/memory.ts",
+    "improve": "bun run src/cli/improve.ts",
     "serve": "bun run src/cli/serve.ts",
     "preflight": "bun run src/cli/preflight.ts",
     "new-root": "bun run scripts/new-root.ts",

@@ -23,6 +23,7 @@ import { ReviseRefused } from "../pipeline/revise";
 import { ensureSampleData } from "../../scripts/make-sample-data";
 import { startReputationFixture } from "../../sample/fixture/reputation-server";
 import { compose, ComposeError } from "./compose";
+import { Host, hostsFor } from "./improve";
 
 const USAGE = [
   "usage:",
@@ -205,52 +206,6 @@ function linkLines(wb: Workbench, session: CaseSession): string[] {
   return lines;
 }
 
-/** The host's ChildCases: a child is a case of this workbench, driven by an engine of this process. Never passes a gate. */
-class Host implements ChildCases {
-  private readonly engines = new Map<string, Engine>();
-  constructor(private readonly wb: Workbench, private readonly deps: () => EngineDeps) {}
-  engine(id: string): Engine {
-    let e = this.engines.get(id);
-    if (e === undefined) {
-      // an engine on a session this process did not create closes what a stopped process left half done
-      e = Engine.open(this.wb.session(id), this.deps());
-      this.engines.set(id, e);
-    }
-    return e;
-  }
-  find(link: ChildLink): ReturnType<ChildCases["find"]> {
-    const id = this.wb.findChild(link);
-    const origin = id === null ? null : this.wb.loadedOrigin(id);
-    return id === null || origin === null ? null : { id, origin };
-  }
-  create(input: Parameters<ChildCases["create"]>[0], link: ChildLink, cards: Card[]): ReturnType<ChildCases["create"]> {
-    // a child's type is its own loop's default, else its parent's
-    let parentType: string | null = null;
-    try { parentType = this.wb.session(link.parent).state.memory.type; } catch { /* the parent is not loaded: the child has none */ }
-    const own = loopCaseType(this.deps().loops, link.loop);
-    const type = own ?? parentType;
-    const type_by: Actor = { kind: "system", id: own === null ? "parent" : "loop-default" };
-    const made = this.wb.createCase(input, { kind: "system", id: "engine" }, { loop: link.loop, link, cards, ...(type === null ? {} : { type, type_by }) });
-    return { id: made.id, origin: made.entries(0, 1)[0]!.hash };
-  }
-  async drive(ref: ChildRef, opts: { loop: ResolvedLoop }): Promise<ReturnType<Engine["summary"]>> {
-    // never a run on a case that is not this child: ids repeat across workbenches
-    if (this.read(ref) === null) throw new RunRefused(notTheChild(ref));
-    const e = this.engine(ref.id);
-    if (this.wb.session(ref.id).state.run.status === "none") e.start({ kind: "system", id: "engine" }, { loop: opts.loop });
-    return e.advance();
-  }
-  read(ref: ChildRef): ReturnType<ChildCases["read"]> {
-    let s: CaseSession;
-    try { s = this.wb.session(ref.id); } catch { return null; }
-    return readChild(s, ref);
-  }
-  close(): void {
-    for (const e of this.engines.values()) { try { e.close(); } catch { /* closed */ } }
-    this.engines.clear();
-  }
-}
-
 const REFUSALS = [PlanRefused, ReviseRefused, PublishRefused, FeedbackRefused, RunRefused, CaseNotFoundError, WorkbenchLockedError, ComposeError];
 
 async function main(argv: string[]): Promise<number> {
@@ -302,8 +257,8 @@ async function main(argv: string[]): Promise<number> {
     const anchoredAt = new Map<string, number>();
     const deps: EngineDeps = { ...base, anchor: (a: Parameters<NonNullable<typeof base.anchor>>[0]) => { base.anchor?.(a); anchoredAt.set(a.case, a.seq); } };
     // a stage that runs a loop makes a child case of this workbench, which this process drives
-    host = new Host(wb, () => deps);
-    deps.children = host;
+    // and an improve run reaches its tasks, staging stores and probe children through the improve host
+    host = hostsFor(wb, deps, (e) => console.error(`improve: ${e instanceof Error ? e.message : String(e)}`));
 
     if (p.command === "start") {
       let input;
