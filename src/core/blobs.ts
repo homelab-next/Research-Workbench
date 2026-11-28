@@ -80,6 +80,11 @@ export class BlobStore {
     return new TextDecoder().decode(this.get(hash));
   }
 
+  /** The folder a store keeps its files in, for a store that reads through another and has none of its own. */
+  protected static folderOf(store: BlobStore): string {
+    return store.dir;
+  }
+
   has(hash: string): boolean {
     return HASH.test(hash) && existsSync(join(this.dir, hash));
   }
@@ -95,6 +100,48 @@ export class BlobStore {
       return "corrupt"; // present but unreadable
     }
   }
+}
+
+/** A content store that reads `base` and keeps what is put in it apart, in its own folder: a check, or a staged candidate, puts nothing in the base. */
+export class OverlayBlobs extends BlobStore {
+  constructor(dir: string, private readonly base: BlobStore) {
+    super(dir);
+  }
+  override has(hash: string): boolean {
+    return super.has(hash) || this.base.has(hash);
+  }
+  override check(hash: string): "ok" | "missing" | "corrupt" {
+    const own = super.check(hash);
+    return own === "ok" || this.base.check(hash) !== "ok" ? own : "ok";
+  }
+  override get(hash: string): Uint8Array {
+    return super.has(hash) ? super.get(hash) : this.base.get(hash);
+  }
+}
+
+/** Reads `over` and then `base`, and puts into `over`: it names `over`'s folder and writes nothing through its own. */
+class ReadingOver extends BlobStore {
+  constructor(private readonly over: BlobStore, private readonly base: BlobStore) {
+    super(BlobStore.folderOf(over));
+  }
+  override put(data: Uint8Array | string, media?: string): BlobRef {
+    return this.over.put(data, media);
+  }
+  override has(hash: string): boolean {
+    return this.over.has(hash) || this.base.has(hash);
+  }
+  override check(hash: string): "ok" | "missing" | "corrupt" {
+    const own = this.over.check(hash);
+    return own === "ok" || this.base.check(hash) !== "ok" ? own : "ok";
+  }
+  override get(hash: string): Uint8Array {
+    return this.over.has(hash) ? this.over.get(hash) : this.base.get(hash);
+  }
+}
+
+/** Reads `over` first and then `base`; puts go to `over`. No folder of its own. */
+export function readingOver(over: BlobStore, base: BlobStore): BlobStore {
+  return new ReadingOver(over, base);
 }
 
 /** Flushes a directory entry (a rename into it). Not every platform can open a directory for this; there it is skipped. */

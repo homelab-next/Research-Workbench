@@ -486,3 +486,17 @@ test("copyOf keeps the case type and the memory components", () => {
   expect(memoryItems(copied)).toEqual(memoryItems(source));
   expect(copied.components.items()).toEqual(source.components.items());
 });
+
+test("checkChange and saveManifests behave as they did (tests/modules/loop-write.test.ts unchanged)", () => {
+  // slice 14 moved the check's content store to core as OverlayBlobs: loop-write.ts keeps no store class of its own
+  const source = readFileSync(join(import.meta.dir, "..", "..", "src", "modules", "loop-write.ts"), "utf8");
+  expect(/class \w+ extends BlobStore/.test(source)).toBe(false);
+  expect(/import \{[^}]*\bOverlayBlobs\b[^}]*\} from "\.\.\/core\/blobs";/.test(source)).toBe(true);
+  // a check puts nothing in the workbench's content store; a save by a person does, as before
+  const text = loopText(copyOf(investigation(), "triage", "Triage"), 1);
+  const blobs = snapshot(join(config.data_dir, "blobs"));
+  expect(checkChange(deps(), root, [{ path: "loops/triage.yaml", text }]).ok).toBe(true);
+  expect(snapshot(join(config.data_dir, "blobs"))).toEqual(blobs);
+  expect(saveManifests(deps(), root, [{ path: "loops/triage.yaml", text }], { actor: human, why: "save", session: null }).ok).toBe(true);
+  expect(load().loops.current("triage")).not.toBeNull();
+});

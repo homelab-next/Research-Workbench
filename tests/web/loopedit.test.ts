@@ -409,3 +409,17 @@ test("a stage title that looks like markup is the value of an input and a text n
   expect(s.root.querySelectorAll("img").length).toBe(0);
   expect(s.root.querySelectorAll("[onerror]").length).toBe(0);
 });
+
+test("the gate select offers adopt only on a stage of role adopt (slice 14)", async () => {
+  const draft = mineDraft();
+  stagesOf(draft).push(body("adopt", "Adopt", 4, { runs: "human", role: "adopt", gate: "adopt", tools: [], model: null }));
+  stagesOf(draft)[2]!.on_pass = "adopt";
+  const view = mine(draft);
+  view.stages = [...view.stages, "adopt"];
+  view.stage_views = [...view.stage_views, stageView("adopt", "Adopt", { runs: "human", role: "adopt", gate: "adopt" })];
+  const s = await stub({ hash: "#/loops/mine/edit", views: { mine: view } });
+  const options = (stage: string): string[] => [...(field(s, stage, "gate") as HTMLSelectElement).options].map((o) => o.value);
+  for (const id of ["frame", "research", "review"]) expect(options(id)).toEqual(["", "plan", "publish"]);
+  expect(options("adopt")).toEqual(["", "plan", "publish", "adopt"]);
+  expect((field(s, "adopt", "gate") as HTMLSelectElement).value).toBe("adopt");
+});

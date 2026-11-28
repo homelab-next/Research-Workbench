@@ -18,8 +18,14 @@ import type { Sampling } from "../agents/providers/types";
 import { requestExtraProblem } from "../agents/providers/extra";
 import type { RequestExtra } from "../agents/providers/extra";
 
-export const ROLES = ["frame", "plan", "research", "assemble", "checks", "evaluate", "challenge", "publish", "feedback", "subloop"] as const;
+/** The improve loop's seven roles, in the order its stages run. */
+export const IMPROVE_ROLES = ["select", "propose", "probe", "compose", "judge", "reflect", "adopt"] as const;
+export type ImproveRole = (typeof IMPROVE_ROLES)[number];
+export const ROLES = ["frame", "plan", "research", "assemble", "checks", "evaluate", "challenge", "publish", "feedback", "subloop", ...IMPROVE_ROLES] as const;
 export type Role = (typeof ROLES)[number];
+const isImproveRole = (role: string): role is ImproveRole => (IMPROVE_ROLES as readonly string[]).includes(role);
+/** The builder tools a stage of role propose may list. */
+export const PROPOSE_TOOL_NAMES = ["loop_catalogue", "adapter_catalogue", "validate_manifest", "propose_change"] as const;
 
 /** What a sub-loop stage may hand its child: a fixed list, each giving one type of loop input. */
 export type InputSelector = "case.question" | "case.observables" | "case.window" | "cards.kept" | "findings.latest" | "product.latest";
@@ -40,6 +46,8 @@ export interface StageManifest extends StageDef { hash: string; order: number; r
   fast_model?: { provider: string; model: string; effort: string | null } | null;
   /** The child loop, what it is given and what comes back: set exactly when runs is "loop". */
   subloop?: SubloopSpec | null;
+  /** Set exactly on a stage of role probe. */
+  probe?: { plan_gate: "accept" } | null;
   /** True for a stage written in the loop manifest. */
   inline?: boolean }
 export interface Pipeline { id: string; hash: string; stages: StageManifest[];
@@ -89,6 +97,7 @@ const STAGE_SCHEMA: Schema = {
     loop: { type: "string", minLength: 1 },
     inputs: { type: "object", additionalProperties: { type: "string" } },
     returns: { type: "object", additionalProperties: { type: "object" } },
+    probe: { anyOf: [{ type: "null" }, { type: "object", additionalProperties: false, properties: { plan_gate: { type: "string" } } }] },
   },
 };
 
@@ -98,7 +107,19 @@ type Body = {
   sampling?: Sampling | null; max_output_tokens?: number | null; max_turns?: number | null; request_extra?: RequestExtra | null;
   fast_model?: { provider: string; model: string; effort?: string | null } | null;
   loop?: string; inputs?: Record<string, string>; returns?: Record<string, Record<string, Json>>;
+  probe?: { plan_gate?: string } | null;
 };
+
+/** Why a stage of an improve role cannot run as it says, or null: Select, Probe and Adopt are code or a person's; Propose, Compose and Reflect an agent; Judge either code or an agent. */
+function improveRunsProblem(b: Body): string | null {
+  if (!isImproveRole(b.role)) return null;
+  if (b.role === "select" || b.role === "probe" || b.role === "adopt") {
+    if ((b.runs !== "script" && b.runs !== "human") || b.model != null) return `a stage of role ${b.role} runs a script or a person, with no model`;
+  } else if (b.role === "judge") {
+    if (b.runs !== "script" && b.runs !== "agent") return "a stage of role judge runs a script or an agent";
+  } else if (b.runs !== "agent") return `a stage of role ${b.role} runs an agent`;
+  return null;
+}
 
 /** A sub-loop stage's returns, or why they cannot be used. */
 function returnsOf(raw: Record<string, Record<string, Json>>): Record<string, ReturnSpec> | string {
@@ -136,11 +157,26 @@ export function stageFrom(body: Record<string, Json>, hash: string, title: strin
     if (b.role === "subloop") return "a stage of role subloop runs a loop";
     if (b.loop !== undefined || b.inputs !== undefined || b.returns !== undefined) return "only a stage that runs a loop has loop, inputs or returns";
   }
+  let probe: { plan_gate: "accept" } | null = null;
+  if (b.role === "probe") {
+    if (b.probe == null || b.probe.plan_gate === undefined) return "a probe stage says how its children's plan gate is passed: probe: { plan_gate: accept }";
+    if (b.probe.plan_gate !== "accept") return "a probe's plan gate is accept in this version";
+    probe = { plan_gate: "accept" };
+  } else if (b.probe != null) return "only a probe stage has probe";
+  if (b.gate === "adopt" && b.role !== "adopt") return "only an adopt stage has gate adopt";
+  if (b.role === "adopt" && b.gate !== "adopt") return "an adopt stage has gate: adopt";
+  const runsProblem = improveRunsProblem(b);
+  if (runsProblem !== null) return runsProblem;
   const tools = b.tools ?? [];
-  const builders = tools.find((t) => (BUILDER_TOOL_NAMES as readonly string[]).includes(t));
-  if (builders !== undefined) return `"${builders}" is the loop builder's, not a stage's`;
-  const unknown = tools.find((t) => !(STAGE_TOOL_NAMES as readonly string[]).includes(t));
-  if (unknown !== undefined) return `tool "${unknown}" is not in the fixed tool list`;
+  if (b.role === "propose") {
+    const other = tools.find((t) => !(PROPOSE_TOOL_NAMES as readonly string[]).includes(t));
+    if (other !== undefined) return `"${other}" is not one of a propose stage's tools: ${PROPOSE_TOOL_NAMES.join(", ")}`;
+  } else {
+    const builders = tools.find((t) => (BUILDER_TOOL_NAMES as readonly string[]).includes(t));
+    if (builders !== undefined) return `"${builders}" is the loop builder's, not a stage's`;
+    const unknown = tools.find((t) => !(STAGE_TOOL_NAMES as readonly string[]).includes(t));
+    if (unknown !== undefined) return `tool "${unknown}" is not in the fixed tool list`;
+  }
   const model = b.model == null ? null : { provider: b.model.provider, model: b.model.model, effort: b.model.effort ?? null };
   if (b.runs === "agent" && model === null) return "a stage that runs an agent needs a model";
   if (b.request_extra !== undefined && b.request_extra !== null) {
@@ -155,6 +191,7 @@ export function stageFrom(body: Record<string, Json>, hash: string, title: strin
     fast_model: b.fast_model == null ? null : { provider: b.fast_model.provider, model: b.fast_model.model, effort: b.fast_model.effort ?? null },
   };
   if (subloop !== null) stage.subloop = subloop;
+  if (probe !== null) stage.probe = probe;
   return stage;
 }
 
@@ -201,6 +238,30 @@ export function pipelineProblem(stages: StageManifest[]): string | null {
     const late = reviewing.find((x) => x.i > at);
     if (late !== undefined) return `the publish stage "${stages[at]!.id}" comes before the review stage "${late.s.id}"`;
   }
+  return null;
+}
+
+/** Why these stages are not an improve loop's; null when they are, or when none of them has an improve role. */
+export function improveProblem(stages: readonly StageManifest[]): string | null {
+  if (!stages.some((s) => isImproveRole(s.role))) return null;
+  const other = stages.find((s) => !isImproveRole(s.role));
+  if (other !== undefined) return `an improve loop has only the seven improve roles; stage "${other.id}" has role ${other.role}`;
+  const ROLE_LIST = "an improve loop has one stage of each of select, propose, probe, compose, judge, reflect and adopt";
+  const byRole = new Map<string, StageManifest>();
+  for (const role of IMPROVE_ROLES) {
+    const of = stages.filter((s) => s.role === role);
+    if (of.length === 0) return `${ROLE_LIST}; it has no ${role}`;
+    if (of.length > 1) return `${ROLE_LIST}; it has ${of.length === 2 ? "two" : of.length} ${role}`;
+    byRole.set(role, of[0]!);
+  }
+  const inOrder = stages[0]!.role === "select" && IMPROVE_ROLES.every((role, i) => byRole.get(role)!.on_pass === (i + 1 < IMPROVE_ROLES.length ? byRole.get(IMPROVE_ROLES[i + 1]!)!.id : null));
+  if (!inOrder) return "an improve loop runs select, propose, probe, compose, judge, reflect, adopt in that order";
+  const failing = stages.find((s) => s.on_fail !== null);
+  if (failing !== undefined) return `an improve loop has no on_fail; stage "${failing.id}" has one`;
+  const reviewing = stages.find((s) => s.reviews);
+  if (reviewing !== undefined) return `an improve loop has no review stage; stage "${reviewing.id}" has reviews: true`;
+  const gated = stages.find((s) => s.gate === "plan" || s.gate === "publish");
+  if (gated !== undefined) return `an improve loop has no plan or publish gate; stage "${gated.id}" has gate ${gated.gate}`;
   return null;
 }
 

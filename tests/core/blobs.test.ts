@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Json } from "../../src/core/canonical";
-import { BlobCorruptError, BlobMissingError, BlobStore, collectBlobRefs } from "../../src/core/blobs";
+import { BlobCorruptError, BlobMissingError, BlobStore, collectBlobRefs, OverlayBlobs, readingOver } from "../../src/core/blobs";
 
 let dir: string;
 let store: BlobStore;
@@ -94,4 +94,50 @@ test("put flushes the new file before renaming it, and the directory after", () 
     fsync.mockRestore();
     rename.mockRestore();
   }
+});
+
+// ---------- slice 14: a store over another, for a check and for a staged candidate ----------
+test("OverlayBlobs and readingOver read their own store first and then the base, and put nothing in the base", () => {
+  const inBase = store.put("only in the base");
+  const both = store.put("in both");
+  const before = readdirSync(join(dir, "blobs")).sort();
+  const missing = "e".repeat(64);
+
+  const overlay = new OverlayBlobs(join(dir, "overlay"), store);
+  expect(overlay).toBeInstanceOf(BlobStore);
+  const mine = overlay.put("only in the overlay");
+  // what the base holds already is not copied
+  expect(overlay.put("in both")).toEqual(both);
+  expect(readdirSync(join(dir, "overlay"))).toEqual([mine.blob]);
+  expect(overlay.text(inBase.blob)).toBe("only in the base");
+  expect(overlay.text(mine.blob)).toBe("only in the overlay");
+  expect(overlay.has(inBase.blob) && overlay.has(mine.blob)).toBe(true);
+  expect([overlay.check(inBase.blob), overlay.check(mine.blob), overlay.check(missing)]).toEqual(["ok", "ok", "missing"]);
+  expect(() => overlay.get(missing)).toThrow(BlobMissingError);
+  // its own copy is read first
+  writeFileSync(join(dir, "overlay", both.blob), "in both");
+  writeFileSync(join(dir, "blobs", both.blob), "the base's copy, damaged");
+  expect(overlay.text(both.blob)).toBe("in both");
+  writeFileSync(join(dir, "blobs", both.blob), "in both");
+
+  const own = new BlobStore(join(dir, "own"));
+  const ownOnly = own.put("only in over");
+  const reading = readingOver(own, store);
+  expect(reading).toBeInstanceOf(BlobStore);
+  const put = reading.put("put through reading");
+  expect(own.text(put.blob)).toBe("put through reading");
+  expect(reading.text(ownOnly.blob)).toBe("only in over");
+  expect(reading.text(inBase.blob)).toBe("only in the base");
+  expect(reading.has(ownOnly.blob) && reading.has(inBase.blob) && !reading.has(missing)).toBe(true);
+  expect([reading.check(ownOnly.blob), reading.check(inBase.blob), reading.check(missing)]).toEqual(["ok", "ok", "missing"]);
+  expect(() => reading.get(missing)).toThrow(BlobMissingError);
+  writeFileSync(join(dir, "own", both.blob), "in both");
+  writeFileSync(join(dir, "blobs", both.blob), "damaged");
+  expect(reading.text(both.blob)).toBe("in both");
+  writeFileSync(join(dir, "blobs", both.blob), "in both");
+  // no folder of its own: the parent holds only the stores made here
+  expect(readdirSync(dir).sort()).toEqual(["blobs", "overlay", "own"]);
+
+  // the base holds what it held
+  expect(readdirSync(join(dir, "blobs")).sort()).toEqual(before);
 });

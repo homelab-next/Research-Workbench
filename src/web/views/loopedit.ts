@@ -293,7 +293,9 @@ export function loopEditView(shell: Shell, id: string): Screen {
 
     const titleBox = h("input", { type: "text", data: { field: "title" }, name: `Title of ${sid}`, value: typeof st.title === "string" ? st.title : "" }) as HTMLInputElement;
     titleBox.addEventListener("input", () => { st.title = titleBox.value; name.textContent = `${n}. ${titleBox.value}`; changed(); });
-    const gate = select(h, { data: { field: "gate" }, name: `Gate of ${sid}` }, [["", "none"], ...GATES.map((g): [string, string] => [g, g])], typeof st.gate === "string" ? st.gate : "");
+    // the adopt gate is an adopt stage's alone (slice 14), so no other stage is offered it
+    const gates = GATES.filter((g) => g !== "adopt" || st.role === "adopt");
+    const gate = select(h, { data: { field: "gate" }, name: `Gate of ${sid}` }, [["", "none"], ...gates.map((g): [string, string] => [g, g])], typeof st.gate === "string" ? st.gate : "");
     gate.addEventListener("change", () => { st.gate = gate.value === "" ? null : gate.value; changed(); });
     const reviews = h("input", { type: "checkbox", data: { field: "reviews" }, name: `${sid} reviews`, checked: st.reviews === true }) as HTMLInputElement;
     reviews.addEventListener("change", () => { st.reviews = reviews.checked; changed(); });

@@ -2,6 +2,8 @@
 import { readFileSync } from "node:fs";
 import type { Json } from "../core/canonical";
 import { canonical, isPlainObject } from "../core/canonical";
+import { readingOver } from "../core/blobs";
+import type { BlobStore } from "../core/blobs";
 import { sha256Hex } from "../core/hash";
 import type { Schema } from "../core/schema";
 import { validate } from "../core/schema";
@@ -14,7 +16,7 @@ import type { LoadedManifest } from "../modules/manifests";
 import type { Registry } from "../modules/registry";
 import { CHECK_SCRIPT, ComponentError, ItemComponents, MEMORY_SOURCE, manifestFromBytes, memoryManifest, parseSource, resolveComponent, rootRelative, scriptManifest } from "./components";
 import type { Components, ResolveContext, ResolvedItem, SourceSpec } from "./components";
-import { INPUT_SELECTORS, legacyHash, loadChecks, loadPipeline, pipelineProblem, stageFrom } from "./manifests";
+import { IMPROVE_ROLES, improveProblem, INPUT_SELECTORS, legacyHash, loadChecks, loadPipeline, pipelineProblem, stageFrom } from "./manifests";
 import type { Pipeline, StageManifest } from "./manifests";
 
 export const DEFAULT_LOOP = "investigation";
@@ -41,8 +43,11 @@ export interface LoopCatalog {
   list(): { id: string; manifest: LoopManifest | null; loop: ResolvedLoop | null; problems: string[] }[];
   current(id: string): ResolvedLoop | null;
   problems(id: string): string[];
-  /** The loop a lock describes, built from the content store alone; the reason when a hash it names is not there. */
-  fromLock(lock: LoopLock): ResolvedLoop | string;
+  /**
+   * The loop a lock describes, built from the content store alone; the reason when a hash it names is not there. With `over` (a probe child's
+   * staging store), every hash is read from it first, then from the content store; nothing is put in either.
+   */
+  fromLock(lock: LoopLock, over?: BlobStore): ResolvedLoop | string;
   /** The lock a blob holds; null when it is not one. */
   readLock(bytes: Uint8Array): LoopLock | null;
   /**
@@ -51,6 +56,9 @@ export interface LoopCatalog {
    */
   atHash(id: string, hash: string): ResolvedLoop | string;
 }
+
+/** True for a loop one of whose stages has an improve role. */
+export const isImproveLoop = (loop: Pick<ResolvedLoop, "pipeline">): boolean => loop.pipeline.stages.some((s) => (IMPROVE_ROLES as readonly string[]).includes(s.role));
 
 /** The note an implicit loop carries: it is usable, and says where it came from. */
 export const IMPLICIT_NOTE = "no loop manifest: every stage manifest is the investigation loop";
@@ -340,6 +348,8 @@ export function loadLoops(registry: Registry, ctx: ResolveContext, caps: LoopCap
       const problem = pipelineProblem(stages);
       if (problem !== null) return [problem];
     }
+    const improve = improveProblem(stages);
+    if (improve !== null) return [improve];
     for (const [i, st] of stages.entries()) {
       const raw = man.implicit ? st.id : man.stages[i]!;
       if (typeof raw === "string") {
@@ -444,7 +454,7 @@ export function loadLoops(registry: Registry, ctx: ResolveContext, caps: LoopCap
     list: () => ids.map((id) => { const s = slots.get(id)!; return { id, manifest: s.manifest, loop: s.loop, problems: [...s.problems] }; }),
     current: (id) => slots.get(id)?.loop ?? null,
     problems: (id) => (slots.has(id) ? [...slots.get(id)!.problems] : [`there is no loop "${id}"`]),
-    fromLock: (lock) => fromLock(ctx, lock),
+    fromLock: (lock, over) => fromLock(ctx, lock, over),
     readLock,
     atHash: (id, hash) => {
       const now = slots.get(id)?.loop ?? null;
@@ -464,11 +474,12 @@ export function loadLoops(registry: Registry, ctx: ResolveContext, caps: LoopCap
 
 class Missing extends Error {}
 
-/** The loop a lock describes, from the content store alone. */
-function fromLock(ctx: ResolveContext, lock: LoopLock): ResolvedLoop | string {
+/** The loop a lock describes, from the content store alone, or read through `over` first. */
+function fromLock(ctx: ResolveContext, lock: LoopLock, over?: BlobStore): ResolvedLoop | string {
+  const store = over === undefined ? ctx.content : readingOver(over, ctx.content);
   const bytesOf = (hash: string, what: string): Uint8Array => {
-    if (ctx.content.check(hash) !== "ok") throw new Missing(`the content store does not hold ${what} (${hash})`);
-    return ctx.content.get(hash);
+    if (store.check(hash) !== "ok") throw new Missing(`the content store does not hold ${what} (${hash})`);
+    return store.get(hash);
   };
   try {
     const stageItem = new Map(lock.items.filter((i) => i.kind === "stage").map((i) => [i.id, i]));

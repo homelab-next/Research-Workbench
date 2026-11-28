@@ -2,7 +2,8 @@
 import { randomUUID } from "node:crypto";
 import { closeSync, copyFileSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
-import { BlobStore } from "../core/blobs";
+import { OverlayBlobs } from "../core/blobs";
+import type { BlobStore } from "../core/blobs";
 import { canonical } from "../core/canonical";
 import type { Json } from "../core/canonical";
 import { sha256Hex } from "../core/hash";
@@ -71,23 +72,6 @@ function pathProblem(path: string): string | null {
   if (segments.slice(0, -1).includes("data")) return "the registry does not read a folder named data";
   if (!MANIFEST_FILE.test(segments.at(-1)!)) return "the registry reads .yaml, .yml and .md files only";
   return null;
-}
-
-/** A content store that reads the workbench's and keeps what is put in it apart, in its own folder: a check puts nothing in the real one. */
-class Overlay extends BlobStore {
-  constructor(dir: string, private readonly base: BlobStore) {
-    super(dir);
-  }
-  override has(hash: string): boolean {
-    return super.has(hash) || this.base.has(hash);
-  }
-  override check(hash: string): "ok" | "missing" | "corrupt" {
-    const own = super.check(hash);
-    return own === "ok" || this.base.check(hash) !== "ok" ? own : "ok";
-  }
-  override get(hash: string): Uint8Array {
-    return super.has(hash) ? super.get(hash) : this.base.get(hash);
-  }
 }
 
 /** Every regular manifest file of a root, as the registry walks it (no dot-file, no link, no folder named data), and every check's script in the root. */
@@ -202,7 +186,7 @@ function plan(deps: SaveDeps, root: string, files: ManifestFile[]): { check: Cha
   mkdirSync(join(deps.config.data_dir, "tmp"), { recursive: true });
   const scratch = mkdtempSync(join(deps.config.data_dir, "tmp", "check-"));
   try {
-    const content = new Overlay(join(scratch, "blobs"), deps.content);
+    const content = new OverlayBlobs(join(scratch, "blobs"), deps.content);
     const ctx = (registry: Registry): ResolveContext => ({
       registry, content, chain: deps.chain, trusted, output: (loop, output) => latestOutput(deps.chain, deps.content, loop, output),
       caseTypes: loadCaseTypes(registry).types.map((t) => t.id),

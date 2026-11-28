@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BlobStore } from "../../src/core/blobs";
@@ -15,7 +15,7 @@ import { compose } from "../../src/cli/compose";
 import { Workbench } from "../../src/core/workbench";
 import { loadConfig } from "../../src/modules/config";
 import type { Config } from "../../src/modules/config";
-import { IMPLICIT_NOTE, loadLoops, memoryUses, parseLoop, readLock } from "../../src/pipeline/loops";
+import { IMPLICIT_NOTE, isImproveLoop, loadLoops, memoryUses, parseLoop, readLock } from "../../src/pipeline/loops";
 import { memoryItemHash, memorySpecOf } from "../../src/pipeline/components";
 import { loadCaseTypes } from "../../src/modules/case-types";
 import { loadPipeline } from "../../src/pipeline/manifests";
@@ -115,8 +115,8 @@ test("a loop needs kind, id, title, version, profile, entry and stages; an unkno
 test("an inline stage is a stage body without kind; it is validated as a stage manifest is", () => {
   const ok = parseLoop(manifestOf(mini())) as LoopManifest;
   expect(ok.stages).toEqual([inline("frame") as Record<string, Json>]);
-  const bad = parseLoop(manifestOf(mini({ stages: [inline("frame", { role: "judge" })] })));
-  expect(bad).toContain('role "judge" is not one of');
+  const bad = parseLoop(manifestOf(mini({ stages: [inline("frame", { role: "oracle" })] })));
+  expect(bad).toContain('role "oracle" is not one of');
   expect(parseLoop(manifestOf(mini({ stages: [inline("frame", { tools: ["delete_everything"] })] })))).toContain("delete_everything");
   expect(parseLoop(manifestOf(mini({ stages: [inline("frame", { model: null })] })))).toContain("needs a model");
   expect(parseLoop(manifestOf(mini({ stages: [inline("frame", { kind: "persona" })] })))).toContain("kind");
@@ -698,4 +698,52 @@ test("compose resolves loops against the loaded case types, and a case-types pro
       expect(made.deps.pipeline.hash).toBe(SAMPLE_INVESTIGATION_HASH);
     } finally { made.close(); }
   } finally { wb.close(); }
+});
+
+// ---- slice 14: the improve loop's shape, and a lock rebuilt over a staging store
+
+test("a loop whose stages break improveProblem is listed, not usable, with that problem", () => {
+  const select = { id: "select", title: "Select", order: 1, runs: "script", role: "select", on_pass: "frame", on_fail: null };
+  writeLoop("half", mini({ id: "half", entry: "select", stages: [select, inline("frame", { order: 2 })] }));
+  const { loops } = catalog();
+  const listed = loops.list().find((x) => x.id === "half")!;
+  expect(listed.manifest).not.toBeNull();
+  expect(listed.loop).toBeNull();
+  expect(listed.problems).toEqual(['an improve loop has only the seven improve roles; stage "frame" has role frame']);
+  expect(loops.current("half")).toBeNull();
+  expect(isImproveLoop(loops.current("investigation")!)).toBe(false);
+  expect(isImproveLoop({ pipeline: { id: "x", hash: "0".repeat(64), stages: [{ ...loops.current("investigation")!.pipeline.stages[0]!, role: "judge" }] } })).toBe(true);
+});
+
+test("fromLock(lock, over) rebuilds a loop one of whose items is only in `over`; fromLock(lock) says the content store does not hold it", () => {
+  const { loops, registry } = catalog();
+  const first = loops.current("investigation")!;
+  const hash = registry.get("persona", "researcher")!.hash;
+  const over = new BlobStore(join(dir, "staged"));
+  over.put(content.get(hash));
+  rmSync(join(dir, "blobs", hash));
+  expect(loops.fromLock(first.lock)).toBe(`the content store does not hold persona "researcher" (${hash})`);
+  const back = loops.fromLock(first.lock, over);
+  if (typeof back === "string") throw new Error(back);
+  expect(back.pipeline).toEqual(first.pipeline);
+  expect(back.lock).toEqual(first.lock);
+  expect(back.components.get("research", "persona", "researcher")!.text).toContain("You are the researcher.");
+  // what `over` lacks is read from the content store
+  expect(back.components.get("checks", "check-script", "schema")!.hash).toBe(first.components.get("checks", "check-script", "schema")!.hash);
+});
+
+test("fromLock with `over` puts nothing in the content store and appends nothing to the chain", () => {
+  const { loops, registry } = catalog();
+  const first = loops.current("investigation")!;
+  const hash = registry.get("persona", "researcher")!.hash;
+  const over = new BlobStore(join(dir, "staged"));
+  over.put(content.get(hash));
+  rmSync(join(dir, "blobs", hash));
+  const files = readdirSync(join(dir, "blobs")).sort();
+  const overFiles = readdirSync(join(dir, "staged")).sort();
+  const head = chain.read().length;
+  expect(typeof loops.fromLock(first.lock, over)).toBe("object");
+  expect(readdirSync(join(dir, "blobs")).sort()).toEqual(files);
+  expect(readdirSync(join(dir, "staged")).sort()).toEqual(overFiles);
+  expect(chain.read().length).toBe(head);
 });
