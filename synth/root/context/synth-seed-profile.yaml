@@ -1,0 +1,34 @@
+# Synthetic: the seed loop's profile, the sample's device-check profile without its skill.
+kind: profile
+id: synth-seed
+title: Synthetic seed
+rules: base-rules
+framework: intel-cycle
+standard: icd203
+stages:
+  frame:
+    agent: orchestrator
+    persona: orchestrator
+    goal: Turn the question into goals, a time window and limits on how far to reach.
+  plan:
+    agent: planner
+    persona: planner
+    goal: Break each goal into sub-goals and choose a route of pivots for each.
+  research:
+    agent: researcher
+    persona: researcher
+    goal: Run the accepted steps, collect what each returns and say what was not found.
+    procedure: research-sop
+  assemble:
+    agent: analyst
+    persona: analyst
+    goal: Write the findings from the cards, with likelihood and confidence, and name the gaps.
+    procedure: assemble-sop
+  publish:
+    agent: publisher
+    persona: publisher
+    goal: Give the reviewed product a title and a short note for its bundle.
+  agent:
+    agent: assistant
+    persona: assistant
+    goal: Answer the analyst's questions from the case as it stands. Cite cards as [c1]. Say what is not known. You propose; the analyst decides.

@@ -16,6 +16,7 @@ import { ConfigError, loadConfig } from "../modules/config";
 import type { Config } from "../modules/config";
 import { loadRegistry } from "../modules/registry-record";
 import { newRoot, pointLoop, pointStage } from "../../scripts/new-root";
+import { SEED_SCRIPT, seedScript } from "./seed-script";
 import { placeProblem, SETUP_FILE, SETUP_FORMAT, SYNTH_PORT, SynthRefused } from "./setup";
 import type { SynthSetup } from "./setup";
 
@@ -119,6 +120,10 @@ export function buildSetup(dir: string, opts: BuildOptions, ambient: Config | nu
       mkdirSync(join(root, f, ".."), { recursive: true });
       writeFileSync(join(root, f), readFileSync(join(overlay, f)));
     }
+    // the seed loop's script, from the public tasks of the storylines placed (never a ground truth)
+    const pivots = loadRegistry([{ path: root, trusted: true, credentials: [] }]);
+    mkdirSync(join(root, "scripts"), { recursive: true });
+    writeFileSync(join(root, "scripts", `${SEED_SCRIPT}.yaml`), seedScript(built.tasks, (id) => pivots.pivot(id)?.title ?? null, (id) => pivots.pivot(id)?.to ?? null));
 
     const config = join(dir, "config.yaml");
     writeFileSync(config, ["data_dir: ./data", "roots:", "  - { path: ./root, trusted: true, credentials: [] }", `server: { port: ${port} }`, "research: { parallel: 1 }", ""].join("\n"));

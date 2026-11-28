@@ -1,0 +1,14 @@
+# Synthetic: the objective of a synthetic setup's cases (the fake company is invented).
+kind: objective
+id: synth-objective
+title: Synthetic practice
+chain:
+  strategic: Practise and measure investigations on an invented company whose answers are known.
+  operational: Work each synthetic task as a real one would be worked.
+  tactical: Answer one storyline's question from the fake lake.
+  task: Say what happened and how sure the product is.
+measures:
+  - { id: queries_run, kind: mop, title: Queries run, target: 20 }
+  - { id: query_cost, kind: mop, title: Query cost spent, target: 5 }
+  - { id: checks_failed, kind: mop, title: Checks failed, target: 0 }
+  - { id: answered_the_question, kind: moe, title: The product answered the question, target: true }

@@ -117,16 +117,17 @@ test("the root loads with no problem: thirteen fakeathena sources, the pivots, t
   expect(registry.types().length).toBe(10);
   expect(loadCaseTypes(registry)).toEqual({ types: expect.any(Array), problems: [] });
   expect(loadCaseTypes(registry).types.map((t) => t.id)).toEqual(CASE_TYPES);
-  expect(registry.all("loop").map((m) => m.id).sort()).toEqual(["improve", "investigation"]);
+  expect(registry.all("loop").map((m) => m.id).sort()).toEqual(["improve", "investigation", "synth-seed"]);
 });
 
 test("with --scripted every stage names the scripted model synth-run, and the only problems say that script is missing", () => {
   const root = join(scripted.dir, "root");
   const models = modelsOf(root);
   expect(models.length).toBeGreaterThan(5);
-  for (const m of models) expect({ file: m.file, model: m.model }).toEqual({ file: m.file, model: { provider: "scripted", model: "synth-run", effort: null } });
+  // the seed loop is on its own scripted model, whatever the setup's other loops use; its script is the only one in the root
+  for (const m of models) expect({ file: m.file, model: m.model }).toEqual({ file: m.file, model: { provider: "scripted", model: m.file === "loops/synth-seed.yaml" ? "synth-seed" : "synth-run", effort: null } });
   expect(readdirSync(join(root, "models"))).toEqual(["scripted.yaml"]);
-  expect(existsSync(join(root, "scripts"))).toBe(false);
+  expect(readdirSync(join(root, "scripts"))).toEqual(["synth-seed.yaml"]);
   for (const p of composeProblems(scripted)) expect(p).toMatch(/synth-run/);
 });
 
@@ -134,7 +135,7 @@ test("with a model every stage and every inline stage of the improve loop names 
   const root = join(modelled.dir, "root");
   const models = modelsOf(root);
   expect(models.filter((m) => m.file === "loops/improve.yaml").length).toBe(3);
-  for (const m of models) expect({ file: m.file, model: m.model }).toEqual({ file: m.file, model: { provider: "local", model: "example/model-a", effort: null } });
+  for (const m of models) expect({ file: m.file, model: m.model }).toEqual({ file: m.file, model: m.file === "loops/synth-seed.yaml" ? { provider: "scripted", model: "synth-seed", effort: null } : { provider: "local", model: "example/model-a", effort: null } });
   expect(readdirSync(join(root, "models")).sort()).toEqual(["local.yaml", "scripted.yaml"]);
   expect(composeProblems(modelled)).toEqual([]);
 });
@@ -170,8 +171,9 @@ test("the sample's own files are untouched and none of its sources, scripts or d
   for (const b of [scripted, modelled]) {
     const root = join(b.dir, "root");
     for (const [f, h] of hashes(root)) expect({ f, sample: own.has(h) }).toEqual({ f, sample: false });
-    for (const d of ["scripts", "data", "fixture", "memory"]) expect(existsSync(join(root, d))).toBe(false);
-    expect(readdirSync(join(root, "loops")).sort()).toEqual(["improve.yaml", "investigation.yaml"]);
+    for (const d of ["data", "fixture", "memory"]) expect(existsSync(join(root, d))).toBe(false);
+    expect(readdirSync(join(root, "scripts"))).toEqual(["synth-seed.yaml"]);
+    expect(readdirSync(join(root, "loops")).sort()).toEqual(["improve.yaml", "investigation.yaml", "synth-seed.yaml"]);
   }
 });
 
