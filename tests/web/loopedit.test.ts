@@ -31,7 +31,7 @@ const mineDraft = (title = "Research"): Body => ({
   inputs: { question: { type: "question", required: true } }, outputs: { product: { from: "product" } }, components: {}, uses: {},
 });
 const summary = (id: string, title: string, over: Partial<LoopSummaryView> = {}): LoopSummaryView => ({
-  id, title, about: "", version: 3, hash: A, stages: [], usable: true, problems: [], implicit: false, trusted: true, root: "sample", ...over,
+  id, title, about: "", version: 3, hash: A, stages: [], usable: true, problems: [], implicit: false, trusted: true, root: "sample", case_type: null, ...over,
 });
 const item = (kind: string, id: string, title: string, source: ItemView["source"], hash: string | null): ItemView => ({ kind, id, title, source, hash });
 const stageView = (id: string, title: string, over: Partial<LoopStageView> = {}): LoopStageView => ({
@@ -97,7 +97,7 @@ async function stub(opts: { hash: string; over?: Partial<Api>; views?: Record<st
   } as unknown as Api;
   const ref: Reference = {
     types: [], sources: [], pivots: [], objectives: [], phases: [], profile: { id: "investigation", title: "Investigation" }, send_back_cap: 3, playbooks: [], inventories: [], likelihood: [],
-    stage_tools: REF_TOOLS, stage_models: [SCRIPTED, LOCAL],
+    stage_tools: REF_TOOLS, stage_models: [SCRIPTED, LOCAL], case_types: [],
   };
   const ui = testUi(win, { api, ref, me: { user: "analyst", role: "analyst", origin: "http://127.0.0.1:1", markings: ["TLP:GREEN"], policy: {} as never, problems: [], cases: { store: "<data>/cases", on_complete: "keep" }, loops: { default: "investigation" } } });
   const root = doc.createElement("div");

@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
-import { copyFileSync, readdirSync } from "node:fs";
+import { copyFileSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Entry } from "../../src/core/types";
 import type { AgentView, LoopView, ModelView, Preview } from "../../src/core/wire";
-import { served } from "../helpers/served";
+import { CASE_TYPES, served } from "../helpers/served";
 import type { Served } from "../helpers/served";
 import { writeTriage } from "../helpers/loop-files";
 import { inputsOf } from "../../src/pipeline/subloop";
@@ -236,4 +236,31 @@ test("a card given to a child holds no query of the parent, and verify_card on i
   expect(r.status).toBe(409);
   expect(JSON.stringify(r.body)).toContain(`verify it in ${a}`);
   expect(s.entries(child.id).length).toBe(before);
+});
+
+test("a child case takes its own loop's case type, else its parent's", async () => {
+  const types = (root: string): void => { writeTriage(root); writeFileSync(join(root, "context", "case-types.yaml"), CASE_TYPES); };
+  // the child's loop names no case type: the child takes its parent's, by the engine
+  s = await served({ before: types, onError: (e) => { errors.push(e); } });
+  let parent = await s.newCase({ loop: "triage", type: "phishing" });
+  expect((await s.command(parent, "start_run")).status).toBe(200);
+  await s.app.hub.idle();
+  let child = (ofType(parent, "subloop.started")[0]!.payload as { child: string }).child;
+  expect(s.app.hub.read(child).state.memory.type).toBe("phishing");
+  expect(ofType(child, "case.type_set").map((e) => [e.payload, e.actor])).toEqual([[{ type: "phishing" }, { kind: "system", id: "engine" }]]);
+  await s.close();
+  // the child's loop names one: the child takes its loop's
+  s = await served({
+    before: (root) => {
+      types(root);
+      const at = join(root, "loops", "investigation.yaml");
+      writeFileSync(at, `${readFileSync(at, "utf8").trimEnd()}\ncase_type: unknown-device\n`);
+    },
+    onError: (e) => { errors.push(e); },
+  });
+  parent = await s.newCase({ loop: "triage", type: "phishing" });
+  expect((await s.command(parent, "start_run")).status).toBe(200);
+  await s.app.hub.idle();
+  child = (ofType(parent, "subloop.started")[0]!.payload as { child: string }).child;
+  expect(s.app.hub.read(child).state.memory.type).toBe("unknown-device");
 });

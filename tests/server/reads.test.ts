@@ -238,3 +238,11 @@ test("the reference lists the tool names a stage may give and the models the loo
   expect(ref.stage_models).toContainEqual({ provider: "scripted", model: "sample-run", effort: null });
   expect(new Set(ref.stage_models.map((m) => JSON.stringify(m))).size).toBe(ref.stage_models.length);
 });
+
+test("the reference lists no case type when no root loads one, and the case list says a case with none has type null", async () => {
+  s = await served();
+  const ref = (await (await s.get("/api/reference")).json()) as Reference;
+  expect(ref.case_types).toEqual([]);
+  await s.newCase();
+  expect(((await (await s.get("/api/cases")).json()) as CaseSummaryView[]).map((c) => c.type)).toEqual([null]);
+});

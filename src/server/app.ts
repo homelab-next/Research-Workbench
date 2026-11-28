@@ -18,6 +18,7 @@ import "./playbook-commands";
 import "./statement-commands";
 import "./overrule-commands";
 import "./question-commands";
+import "./memory-commands";
 import type { CommandContext } from "./commands";
 import { blobResponse, bundleFile, custodyOf } from "./evidence";
 import { CaseHub } from "./hub";
@@ -27,6 +28,7 @@ import { entryStream } from "./stream";
 import { deleteRoute, loadRoute, settingsRoute, storeRoute, unloadRoute } from "./store-routes";
 import { loopRoutes } from "./loop-routes";
 import { builderRoutes } from "./builder-routes";
+import { memoryRoutes } from "./memory-routes";
 import type { StoreRouteDeps } from "./store-routes";
 import { agentView } from "./converse";
 import { routesFor } from "./seek";
@@ -108,7 +110,7 @@ function loopProblem(deps: EngineDeps, loop: string): string | null {
 }
 
 /** A new case from a request body, or the reasons it is refused. The server names the actor, so a body that names one is refused. */
-function newCaseFrom(deps: EngineDeps, body: unknown): (NewCase & { loop?: string }) | string[] {
+function newCaseFrom(deps: EngineDeps, body: unknown): (NewCase & { loop?: string; type?: string }) | string[] {
   if (!isPlainObject(body)) return ["the body must be a JSON object"];
   if (Object.hasOwn(body, "actor")) return ["the server names the actor"];
   const reasons: string[] = [];
@@ -136,11 +138,17 @@ function newCaseFrom(deps: EngineDeps, body: unknown): (NewCase & { loop?: strin
     const problem = loopProblem(deps, loop ?? deps.config.loops.default);
     if (problem !== null) reasons.push(problem);
   }
+  // a case type is one of the loaded case types; none named: the loop's, if it has one
+  const type = body.type;
+  if (type !== undefined && (typeof type !== "string" || !(deps.case_types ?? []).some((t) => t.id === type))) {
+    reasons.push(`there is no case type "${typeof type === "string" ? type.slice(0, 64) : String(type).slice(0, 64)}"`);
+  }
   if (reasons.length > 0) return reasons;
   const window = w as { from: string; to: string };
   return {
     title: body.title as string, asked: body.asked as string, why: body.why as string, starting, window: { from: window.from, to: window.to },
     objective: objective as string | null, marking: body.marking as NewCase["marking"], ...(loop === undefined ? {} : { loop: loop as string }),
+    ...(type === undefined ? {} : { type: type as string }),
   };
 }
 
@@ -183,6 +191,10 @@ export function createApp(opts: AppOptions): App {
     reload: () => { reloadRoots(); return opts.problems; }, secrets: () => opts.secrets?.() ?? [],
     // ended by the app when it closes
     track: (close) => { open.add(close); return () => { open.delete(close); }; },
+  });
+
+  const memoryTable = memoryRoutes({
+    config, wb, hub, deps, human: () => ({ kind: "human", id: config.user }), shown: (r) => shown(deps, r), secrets: () => opts.secrets?.() ?? [],
   });
 
   const routes: Route[] = [
@@ -284,8 +296,8 @@ export function createApp(opts: AppOptions): App {
       handle: async ({ body }) => {
         const input = newCaseFrom(deps, await body());
         if (Array.isArray(input)) return refused(400, ...input);
-        const { loop, ...fields } = input;
-        const session = hub.create(fields, human(), loop === undefined ? {} : { loop });
+        const { loop, type, ...fields } = input;
+        const session = hub.create(fields, human(), { ...(loop === undefined ? {} : { loop }), ...(type === undefined ? {} : { type }) });
         return json(200, { id: session.id });
       },
     },
@@ -331,6 +343,7 @@ export function createApp(opts: AppOptions): App {
     },
     ...loopsTable,
     ...buildersTable,
+    ...memoryTable,
   ];
 
   async function route(req: Request): Promise<{ res: Response; kind: Kind }> {

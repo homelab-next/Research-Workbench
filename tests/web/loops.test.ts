@@ -14,9 +14,9 @@ const INVESTIGATION_STAGES: [string, string][] = [
   ["evaluate", "Evaluate"], ["challenge", "Challenge"], ["publish", "Publish"], ["feedback", "Feedback"],
 ];
 const summaries = (): LoopSummaryView[] => [
-  { id: "investigation", title: "Investigation", about: "Frame a question, plan and run the research.", version: 1, hash: A, stages: INVESTIGATION_STAGES.map(([id]) => id), usable: true, problems: [], implicit: false, trusted: true, root: "sample" },
-  { id: "triage", title: "Triage", about: "Frame the question, then run an investigation as a child case.", version: 2, hash: B, stages: ["frame", "investigate"], usable: true, problems: [], implicit: false, trusted: true, root: "sample" },
-  { id: "broken", title: "Broken", about: "An imported loop.", version: 1, hash: null, stages: ["frame"], usable: false, problems: ["a loop manifest is accepted only from a trusted root"], implicit: false, trusted: false, root: "broken-0123456789ab" },
+  { id: "investigation", title: "Investigation", about: "Frame a question, plan and run the research.", version: 1, hash: A, stages: INVESTIGATION_STAGES.map(([id]) => id), usable: true, problems: [], implicit: false, trusted: true, root: "sample", case_type: null },
+  { id: "triage", title: "Triage", about: "Frame the question, then run an investigation as a child case.", version: 2, hash: B, stages: ["frame", "investigate"], usable: true, problems: [], implicit: false, trusted: true, root: "sample", case_type: null },
+  { id: "broken", title: "Broken", about: "An imported loop.", version: 1, hash: null, stages: ["frame"], usable: false, problems: ["a loop manifest is accepted only from a trusted root"], implicit: false, trusted: false, root: "broken-0123456789ab", case_type: null },
 ];
 const item = (kind: string, id: string, title: string, source: ItemView["source"], hash: string | null): ItemView => ({ kind, id, title, source, hash });
 const stage = (id: string, title: string, over: Partial<LoopStageView> = {}): LoopStageView => ({
@@ -342,7 +342,7 @@ test("Escape on a loop screen goes to the Loops list, and on the list goes home"
 // ---- Task 13's follow-ups to Task 12
 
 test("the case list takes the default loop from the server: with triage the default, a triage case names no loop and an investigation case does", async () => {
-  const at = { title: "t", marking: "TLP:GREEN", created_ts: "2026-11-27T10:00:00.000Z", run_status: "none", phase: null, incoming: 0, kept: 0, unload_failed: null, parent: null, waiting_on: null } as const;
+  const at = { title: "t", marking: "TLP:GREEN", created_ts: "2026-11-27T10:00:00.000Z", run_status: "none", phase: null, incoming: 0, kept: 0, unload_failed: null, parent: null, waiting_on: null, type: null } as const;
   const s = await stub({
     hash: "#/investigate", defaultLoop: "triage",
     over: { cases: () => Promise.resolve([{ ...at, id: "CASE-1", title: "Of triage", loop: "triage" }, { ...at, id: "CASE-2", title: "Of investigation", loop: "investigation" }]) },

@@ -10,6 +10,7 @@ import type { ChildLink, NewCase, UnloadResult, Workbench } from "../core/workbe
 import { Engine } from "../pipeline/engine";
 import type { EngineDeps, RunSummary } from "../pipeline/engine";
 import type { ResolvedLoop } from "../pipeline/loops";
+import { loopCaseType } from "../pipeline/memory";
 import { notTheChild, readChild } from "../pipeline/subloop";
 import type { ChildCases, ChildRef } from "../pipeline/subloop";
 
@@ -75,7 +76,9 @@ export class CaseHub {
       return id === null || origin === null ? null : { id, origin };
     },
     create: (input: NewCase, link: ChildLink, cards: Card[]) => {
-      const made = this.wb.createCase(input, ENGINE, { loop: link.loop, link, cards });
+      // a child takes its own loop's case type, else its parent's
+      const type = loopCaseType(this.deps.loops, link.loop) ?? this.parentType(link.parent);
+      const made = this.wb.createCase(input, ENGINE, { loop: link.loop, link, cards, ...(type === null ? {} : { type }) });
       return { id: made.id, origin: made.entries(0, 1)[0]!.hash };
     },
     drive: async (ref: ChildRef, opts: { loop: ResolvedLoop }): Promise<RunSummary> => {
@@ -142,8 +145,24 @@ export class CaseHub {
     return mine;
   }
 
-  create(input: NewCase, actor: Actor, opts: { loop?: string } = {}): CaseSession {
-    return this.wb.createCase(input, actor, opts.loop === undefined ? { default_loop: this.deps.config.loops.default } : { loop: opts.loop });
+  /**
+   * A new case of the loop named, else of the default loop. Its type is the one named, else the loop's case type (none when the loop has
+   * none); the caller has checked that a type named is a loaded one.
+   */
+  create(input: NewCase, actor: Actor, opts: { loop?: string; type?: string } = {}): CaseSession {
+    const type = opts.type ?? loopCaseType(this.deps.loops, opts.loop ?? this.deps.config.loops.default);
+    const where = opts.loop === undefined ? { default_loop: this.deps.config.loops.default } : { loop: opts.loop };
+    return this.wb.createCase(input, actor, { ...where, ...(type === null ? {} : { type }) });
+  }
+
+  /** The type of a loaded case, for its child; null when it has none or is not loaded. */
+  private parentType(id: string): string | null {
+    try {
+      return this.wb.session(id).state.memory.type;
+    } catch (error) {
+      if (gone(error)) return null;
+      throw error;
+    }
   }
 
   /** Calls engine.advance() without waiting; a failure goes to onError. */

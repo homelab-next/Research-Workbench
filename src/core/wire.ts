@@ -3,7 +3,7 @@
  */
 import type { Json } from "./canonical";
 import type { RunState } from "./state";
-import type { EmptyMeans, Marking, ModelChoice, Observable, StageDef, TimeWindow, Where } from "./types";
+import type { EmptyMeans, Marking, ModelChoice, Observable, StageDef, TimeWindow, Trigger, Where } from "./types";
 
 /** The id of the playbook the server makes on the spot for "does it belong?"; no manifest may take it. pivot owns the name. */
 export { BELONGS_ID } from "pivot/types";
@@ -19,7 +19,9 @@ export interface CaseSummaryView { id: string; title: string; marking: Marking; 
   /** Why the last unload of this case failed, or that one did not finish; null when none did. */
   unload_failed: string | null;
   /** The loop the case is for (the default loop when its ledger names none); the case that made it, for a child; the child its paused run waits on. */
-  loop: string; parent: string | null; waiting_on: string | null }
+  loop: string; parent: string | null; waiting_on: string | null;
+  /** The case's type; null for a case with none. */
+  type: string | null }
 /** A case file in the store, as its case.json describes it. */
 export interface StoredCaseView {
   file: string; bytes: number; id: string; title: string; asked: string; marking: Marking; starting: Observable[]; status: string;
@@ -31,20 +33,26 @@ export interface StoredCaseView {
 export interface StoreView { store: string; cases: StoredCaseView[]; unreadable: { file: string; reason: string }[]; leftovers: number }
 export interface NewCaseInput { title: string; asked: string; why: string; starting: Observable[]; window: TimeWindow; objective: string | null; marking: Marking;
   /** A usable loop's id; omitted: the default loop. */
-  loop?: string }
+  loop?: string;
+  /** A loaded case type's id; omitted: the loop's case type, if it has one. */
+  type?: string }
 
 /** One component, check or built-in rule of a loop's stage: where it comes from and its hash (null for what is built in). */
-export interface ItemView { kind: string; id: string; title: string; source: "root" | "pinned" | "loop-output" | "inline" | "memory" | "built-in"; hash: string | null }
+export interface ItemView { kind: string; id: string; title: string; source: "root" | "pinned" | "loop-output" | "inline" | "built-in" | "memory"; hash: string | null;
+  /** The selector, for a memory item: shared/<case-type>, shared/* or case/notes. */
+  memory?: string }
 export interface LoopStageView {
   id: string; title: string; runs: StageDef["runs"]; role: string; gate: StageDef["gate"]; reviews: boolean; on_pass: string | null; on_fail: string | null; hash: string; inline: boolean;
-  /** persona, rules, goal, procedure, skills, references, gate guides, schema, framework, standard, memory sources (none in this slice) */
+  /** persona, rules, goal, procedure, skills, references (a memory source among them, with its selector), gate guides, schema, framework, standard */
   context: ItemView[];
   /** checks and their scripts; built in: the query guard, the marking policy, the citation check of a review stage */
   middleware: ItemView[];
   orchestration: { tools: string[]; model: ModelChoice | null; fast_model: ModelChoice | null; max_turns: number | null; send_back_cap: number; subloop: { loop: string; hash: string | null; inputs: Record<string, string>; returns: Record<string, string> } | null };
 }
 /** A loop as the Loops page lists it. `root` is the folder name of the root it comes from; `problems` say why it is not usable. */
-export interface LoopSummaryView { id: string; title: string; about: string; version: number | null; hash: string | null; stages: string[]; usable: boolean; problems: string[]; implicit: boolean; trusted: boolean; root: string }
+export interface LoopSummaryView { id: string; title: string; about: string; version: number | null; hash: string | null; stages: string[]; usable: boolean; problems: string[]; implicit: boolean; trusted: boolean; root: string;
+  /** The case type a new case of this loop takes when it names none; null when the loop has none. */
+  case_type: string | null }
 export interface LoopView extends LoopSummaryView {
   entry: string | null; profile: string | null; inputs: Record<string, { type: string; required: boolean }>; outputs: Record<string, { from: string }>; stage_views: LoopStageView[];
   caps: { max_depth: number; max_children: number };
@@ -64,6 +72,32 @@ export interface BuilderSummaryView { id: string; title: string; loop: string | 
 /** A builder session as its page shows it: what it proposed, file by file, and the probes it asked for with what the person decided. */
 export interface BuilderView { id: string; loop: string | null; marking: Marking; model: ModelChoice | null; changes: { id: string; title: string; why: string; files: BuilderFileView[] }[];
   probes: { id: string; kind: "pivot" | "query"; source: string; pivot: string | null; value: Observable | null; text: string | null; why: string; costly: boolean; decided: null | { approved: boolean; outcome: string; detail: string; card: string | null } }[] }
+// ---------- memory (slice 13) ----------
+/** A lesson of the shared store, as the Memory page shows it. Every text is shown scrubbed. */
+export interface LessonView {
+  id: string; case_type: string; title: string; text: string; triggers: Trigger[]; trigger_words: string[]; marking: Marking; proposed_marking: Marking;
+  status: "proposed" | "accepted" | "rejected" | "retired" | "superseded"; hash: string; supersedes: string | null; superseded_by: string | null;
+  /** Where it came from, in words, and the case to open when it is loaded here. */
+  from: { words: string; case: string | null; kind: "case" | "person" | "seed"; model: boolean };
+  proposed: { by: string; ts: string }; decided: { by: string; ts: string; reason: string | null } | null;
+  history: { seq: number; ts: string; what: string; by: string }[];
+}
+export interface MemoryView {
+  store: { origin: string | null; head: { seq: number; hash: string }; lessons: number; skipped: number };
+  /** One group per loaded case type, by id, then one for lessons whose type is not loaded now (`type` null). Within a group: proposals first, then shared, then the rest, each newest first. */
+  groups: { type: { id: string; title: string; about: string } | null; lessons: LessonView[] }[];
+  files: { file: string; bytes: number; marking: string; lessons: number; head: string; problem: string | null }[];
+}
+export interface CaseMemoryView {
+  type: string | null; type_title: string | null; proposed_type: { type: string; title: string; why: string } | null;
+  /** Whether the case's loop reads shared memory, and the case's notebook. */
+  reads: { shared: boolean; notes: boolean };
+  /** What the run in progress (or the last run) was given, and why; null when no run bound memory. */
+  bound: null | { seq: number; store_head: number; lessons: { id: string; title: string; text: string; marking: Marking; matched: string[]; stages: string[]; from: string; still_shared: boolean }[]; left_out: { marking: number; trigger: number; cap: number } };
+  /** Lessons proposed from this case. */
+  proposed: { id: string; title: string; status: LessonView["status"] }[];
+}
+
 export interface SourceView { id: string; title: string; connector: string; marking: Marking; where: Where; confirmed: boolean; adhoc: boolean; cost: { weight: number; unit: string }; quality: string }
 export interface PivotView { id: string; title: string; from: string; to: string; source: string; free: boolean; weight: number; needs_window: boolean; empty_means: EmptyMeans; inventory: string | null }
 /** A list a source keeps, and whether it is declared complete for its scope (only then is an empty answer from it a proven negative). */
@@ -82,6 +116,8 @@ export interface Reference {
   stage_tools: string[];
   /** Every model a stage of a loaded loop names, as model or fast model, once each (the loop forms' choice of model). */
   stage_models: ModelChoice[];
+  /** The loaded case types, by id. */
+  case_types: { id: string; title: string; about: string }[];
 }
 export interface PlaybookView {
   id: string; title: string; about: string; inputs: { name: string; type: string }[];

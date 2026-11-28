@@ -33,7 +33,7 @@ function rig(cards: [string, Partial<Card>][], window: Payloads["case.created"][
   const ui = testUi(win, { ref: { types: [{ id: "address", title: "Address" }, { id: "domain", title: "Domain" }], sources: [], pivots: [
     { id: "address_to_domains", title: "Names that resolved to the address", from: "address", to: "domain", source: "s", free: true, weight: 0, needs_window: false, empty_means: "not-seen", inventory: null },
     { id: "domain_to_clients", title: "Clients that looked the name up", from: "domain", to: "address", source: "s", free: true, weight: 0, needs_window: false, empty_means: "not-seen", inventory: null }],
-  objectives: [], phases: [], profile: { id: "p", title: "p" }, send_back_cap: 3, playbooks: [], inventories: [], likelihood: [], stage_tools: [], stage_models: [] }, ...ref });
+  objectives: [], phases: [], profile: { id: "p", title: "p" }, send_back_cap: 3, playbooks: [], inventories: [], likelihood: [], stage_tools: [], stage_models: [], case_types: [] }, ...ref });
   const v = makeTimeline(ui, { store, nav });
   win.document.body.append(v.el as never);
   v.update();

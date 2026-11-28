@@ -14,8 +14,8 @@ import { EntryBuilder, card } from "../helpers/entries";
 const A = "a".repeat(64);
 const MARKUP = "<script>alert(1)</script>";
 const summaries = (): LoopSummaryView[] => [
-  { id: "investigation", title: "Investigation", about: "Frame a question and research it.", version: 1, hash: A, stages: ["frame"], usable: true, problems: [], implicit: false, trusted: true, root: "sample" },
-  { id: "triage", title: "Triage", about: "Frame, then investigate as a child case.", version: 2, hash: A, stages: ["frame"], usable: true, problems: [], implicit: false, trusted: true, root: "sample" },
+  { id: "investigation", title: "Investigation", about: "Frame a question and research it.", version: 1, hash: A, stages: ["frame"], usable: true, problems: [], implicit: false, trusted: true, root: "sample", case_type: null },
+  { id: "triage", title: "Triage", about: "Frame, then investigate as a child case.", version: 2, hash: A, stages: ["frame"], usable: true, problems: [], implicit: false, trusted: true, root: "sample", case_type: null },
 ];
 const stage = (id: string): LoopStageView => ({
   id, title: "Frame", runs: "agent", role: id, gate: null, reviews: false, on_pass: null, on_fail: null, hash: A, inline: false, context: [], middleware: [],

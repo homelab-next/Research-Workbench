@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compose } from "../../src/cli/compose";
@@ -26,7 +26,7 @@ export interface Served {
   dir: string; app: App; origin: string; config: Config; wb: Workbench; problems: string[];
   get(path: string, headers?: Record<string, string>): Promise<Response>;
   post(path: string, body: unknown, headers?: Record<string, string>): Promise<Response>;
-  newCase(over?: Partial<NewCase> & { loop?: string }): Promise<string>;
+  newCase(over?: Partial<NewCase> & { loop?: string; type?: string }): Promise<string>;
   entries(id: string): Entry[];
   command(id: string, name: string, args?: Record<string, unknown>): Promise<{ status: number; body: CommandResult }>;
   /** start_run, then wait for the server to drive the run to the plan gate. */
@@ -50,6 +50,7 @@ export async function served(opts: { role?: Role; listen?: boolean; onError?: (e
   opts.before?.(sample.root);
   const loaded = loadConfig({ env: {}, home: dir, repoRoot: dir });
   const { cases: casesGiven, ...rest } = opts.config ?? {};
+  const dataDir = rest.data_dir ?? join(dir, "wb");
   const config: Config = {
     ...loaded,
     data_dir: join(dir, "wb"), role: opts.role ?? "analyst",
@@ -59,8 +60,10 @@ export async function served(opts: { role?: Role; listen?: boolean; onError?: (e
     loops: { ...loaded.loops, store: join(rest.data_dir ?? join(dir, "wb"), "loops"), imports: join(rest.data_dir ?? join(dir, "wb"), "imported"), ...rest.loops },
     // the store follows this data folder unless the test names one
     cases: { ...loaded.cases, store: join(rest.data_dir ?? join(dir, "wb"), "store"), ...casesGiven },
+    // the memory store and its files are in this data folder unless the test names them
+    memory: { ...loaded.memory, store: join(dataDir, "memory"), files: join(dataDir, "memory-files"), ...rest.memory },
   };
-  const wb = Workbench.open(config.data_dir, { onError: () => {}, store: config.cases.store, max_case_bytes: config.cases.max_bytes });
+  const wb = Workbench.open(config.data_dir, { onError: () => {}, store: config.cases.store, max_case_bytes: config.cases.max_bytes, memory: config.memory.store });
   let host = `127.0.0.1:${PRETEND_PORT}`;
   let composed: ReturnType<typeof compose> | undefined;
   let running: Running | undefined;
@@ -98,7 +101,7 @@ export async function served(opts: { role?: Role; listen?: boolean; onError?: (e
     post: (path, body, headers = {}) =>
       send(path, { method: "POST", body: typeof body === "string" ? body : JSON.stringify(body) }, { origin, "content-type": "application/json", ...headers }),
     async newCase(over = {}) {
-      const input: NewCase & { loop?: string } = { title: "Sample", asked: "Who is behind the traffic to 198.51.100.77?", why: "test", starting: [SAMPLE_START], window: SAMPLE_WINDOW, objective: "sample-objective", marking: "TLP:GREEN", ...over };
+      const input: NewCase & { loop?: string; type?: string } = { title: "Sample", asked: "Who is behind the traffic to 198.51.100.77?", why: "test", starting: [SAMPLE_START], window: SAMPLE_WINDOW, objective: "sample-objective", marking: "TLP:GREEN", ...over };
       const res = await s.post("/api/cases", input);
       if (res.status !== 200) throw new Error(`creating the case failed: ${res.status} ${await res.text()}`);
       return ((await res.json()) as { id: string }).id;
@@ -148,4 +151,38 @@ export async function served(opts: { role?: Role; listen?: boolean; onError?: (e
 export function writeLocalModel(root: string, id: string, where: string, base_url: string): void {
   mkdirSync(join(root, "models"), { recursive: true });
   writeFileSync(join(root, "models", `${id}.yaml`), `kind: model\nid: ${id}\ntitle: ${id}\nprovider: local\nwhere: ${where}\nbase_url: ${base_url}\n`);
+}
+
+/** Two case types of the sample's own kind of question. */
+export const CASE_TYPES = "kind: case-types\nid: sample-types\ntypes:\n  - { id: unknown-device, title: Unknown device, about: A device on the network that no inventory names. }\n  - { id: phishing, title: Phishing, about: A message that tries to take a person's credentials. }\n";
+
+/**
+ * The sample's root with what slice 13 brings: two case types, a profile whose Plan and Research list memory references, and a loop "memo"
+ * (the investigation loop's stages, with an inline Frame that may propose a case type and names unknown-device) that reads the shared lessons
+ * of the case's type and the case's notes at Plan and Research. The investigation loop, its stages, schema and script are as they were.
+ */
+export function withMemoryLoop(root: string, opts: { case_type?: string } = {}): void {
+  writeFileSync(join(root, "context", "case-types.yaml"), CASE_TYPES);
+  const profile = readFileSync(join(root, "context", "profile.yaml"), "utf8").replace("id: investigation", "id: memory-test")
+    .replace("    skills: [ask-the-person]\n  research:", "    skills: [ask-the-person]\n    references: [shared-lessons, case-notes]\n  research:")
+    .replace("    procedure: research-sop\n", "    procedure: research-sop\n    references: [shared-lessons, case-notes]\n");
+  writeFileSync(join(root, "context", "memory-profile.yaml"), profile);
+  const loopBody = Bun.YAML.parse(readFileSync(join(root, "loops", "investigation.yaml"), "utf8")) as Record<string, unknown>;
+  const reads = { "reference:shared-lessons": { memory: "shared/*" }, "reference:case-notes": { memory: "case/notes" } };
+  const frame = Bun.YAML.parse(readFileSync(join(root, "stages", "frame.yaml"), "utf8")) as Record<string, unknown>;
+  const { kind: _kind, ...frameBody } = frame;
+  const typedFrame = { ...frameBody, schema: "frame-typed", model: { provider: "scripted", model: "memo-frame", effort: null } };
+  const stages = (loopBody.stages as string[]).map((x) => (x === "frame" ? typedFrame : x));
+  writeFileSync(join(root, "loops", "memo.yaml"), JSON.stringify({
+    ...loopBody, id: "memo", title: "Memo", profile: "memory-test", stages, components: { plan: reads, research: reads },
+    ...(opts.case_type === undefined ? {} : { case_type: opts.case_type }),
+  }));
+  const from = `"notes": {"type": "string"}}}`;
+  const schema = readFileSync(join(root, "context", "schemas", "frame-output.yaml"), "utf8").replace("id: frame-output", "id: frame-typed");
+  if (!schema.includes(from)) throw new Error("the frame-output schema is not the one this helper edits");
+  writeFileSync(join(root, "context", "schemas", "frame-typed.yaml"), schema.replace(from, `"notes": {"type": "string"}, "case_type": {"type": ["string", "null"]}}}`));
+  type Turn = { actor: string; reply: { content?: string } };
+  const script = Bun.YAML.parse(readFileSync(join(root, "scripts", "sample-run.yaml"), "utf8")) as { turns: Turn[] };
+  const framing = script.turns.filter((t) => t.actor === "orchestrator").map((t) => (t.reply.content === undefined ? t : { ...t, reply: { content: JSON.stringify({ ...JSON.parse(t.reply.content) as object, case_type: "unknown-device" }) } }));
+  writeFileSync(join(root, "scripts", "memo-frame.yaml"), JSON.stringify({ kind: "script", id: "memo-frame", title: "Memo Frame", turns: [...framing, ...framing, ...framing] }));
 }

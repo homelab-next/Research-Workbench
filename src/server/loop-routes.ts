@@ -110,11 +110,13 @@ function summaryOf(d: LoopRouteDeps, x: ReturnType<LoopCatalog["list"]>[number])
   return {
     id: x.id, title: d.shown(man?.title ?? x.id), about: d.shown(man?.about ?? ""), version: man?.version ?? null, hash: x.loop?.pipeline.hash ?? null, stages,
     usable: x.loop !== null, problems: x.problems.filter((p) => p !== IMPLICIT_NOTE).map(d.shown), implicit: man?.implicit === true,
-    trusted: trustedOf(man, d.config), root,
+    trusted: trustedOf(man, d.config), root, case_type: man?.case_type ?? null,
   };
 }
 
-const item = (d: LoopRouteDeps, i: ResolvedItem): ItemView => ({ kind: i.kind, id: i.id, title: d.shown(i.title), source: i.source, hash: i.hash });
+const item = (d: LoopRouteDeps, i: ResolvedItem): ItemView => ({
+  kind: i.kind, id: i.id, title: d.shown(i.title), source: i.source, hash: i.hash, ...(i.source === "memory" && typeof i.memory === "string" ? { memory: i.memory } : {}),
+});
 const returnText = (r: NonNullable<StageManifest["subloop"]>["returns"][string]): string => (r.as === "cards" ? "cards" : `draft_section:${r.section}`);
 
 function stageView(d: LoopRouteDeps, loop: ResolvedLoop, stage: StageManifest): LoopStageView {

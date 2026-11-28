@@ -52,6 +52,7 @@ export function referenceOf(deps: EngineDeps): Reference {
     profile: { id: deps.profile.id, title: shown(deps, deps.profile.title) }, send_back_cap: SEND_BACK_CAP, playbooks, inventories,
     likelihood: likelihoodTerms(deps),
     stage_tools: [...STAGE_TOOL_NAMES], stage_models: stageModels(deps),
+    case_types: [...(deps.case_types ?? [])].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).map((t) => ({ id: t.id, title: shown(deps, t.title), about: shown(deps, t.about) })),
   };
 }
 

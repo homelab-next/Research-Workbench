@@ -34,7 +34,7 @@ export interface Page {
 }
 
 /** What a role that may not read the reference sees: nothing to choose from. */
-const noReference: Reference = { types: [], sources: [], pivots: [], objectives: [], phases: [], profile: { id: "none", title: "none" }, send_back_cap: 3, playbooks: [], inventories: [], likelihood: [], stage_tools: [], stage_models: [] };
+const noReference: Reference = { types: [], sources: [], pivots: [], objectives: [], phases: [], profile: { id: "none", title: "none" }, send_back_cap: 3, playbooks: [], inventories: [], likelihood: [], stage_tools: [], stage_models: [], case_types: [] };
 
 /** A Ui over a happy-dom window with no server behind it: for tests of the helpers alone. */
 export function testUi(win: Window, over: Partial<Ui> = {}): Ui {
@@ -44,7 +44,7 @@ export function testUi(win: Window, over: Partial<Ui> = {}): Ui {
   return {
     doc, win: win as unknown as globalThis.Window, h: makeH(doc), api: makeApi(none as unknown as Fetcher, "http://127.0.0.1:1", entries), prefs: makePrefs(null),
     me: { user: "analyst", role: "analyst", origin: "http://127.0.0.1:1", markings: [], policy: {} as never, problems: [], cases: { store: "<data>/cases", on_complete: "keep" }, loops: { default: "investigation" } },
-    ref: { types: [], sources: [], pivots: [], objectives: [], phases: [], profile: { id: "p", title: "p" }, send_back_cap: 3, playbooks: [], inventories: [], likelihood: [], stage_tools: [], stage_models: [] },
+    ref: { types: [], sources: [], pivots: [], objectives: [], phases: [], profile: { id: "p", title: "p" }, send_back_cap: 3, playbooks: [], inventories: [], likelihood: [], stage_tools: [], stage_models: [], case_types: [] },
     toast: () => {}, reducedMotion: () => false, act: async () => false, send: async () => null, ...over,
   } as Ui;
 }

@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { CaseSummaryView, LoopFileView, LoopSummaryView, LoopView } from "../../src/core/wire";
-import { served } from "../helpers/served";
+import type { CaseSummaryView, LoopFileView, LoopSummaryView, LoopView, Reference } from "../../src/core/wire";
+import { served, withMemoryLoop } from "../helpers/served";
 import type { Served } from "../helpers/served";
 import { SCRIPTED, writeLoopFile, writeTriage } from "../helpers/loop-files";
 
@@ -548,4 +548,45 @@ test("trusting an imported folder is re-validated: a folder that now holds a kin
   expect((await refusedOf(res)).join(" ")).toContain('source "gift-names"');
   expect(readFileSync(s.config.write_path, "utf8")).toBe(text);
   expect(s.app.hub.deps.registry.source("gift-names")).toMatchObject({ title: "My names" });
+});
+
+// ---------- memory (slice 13) ----------
+
+test("GET /api/reference lists the case types; a loop's view shows a memory item with its selector and the loop's case type", async () => {
+  s = await served({ before: (root) => withMemoryLoop(root, { case_type: "unknown-device" }) });
+  expect((await getJson<Reference>("/api/reference")).case_types).toEqual([
+    { id: "phishing", title: "Phishing", about: "A message that tries to take a person's credentials." },
+    { id: "unknown-device", title: "Unknown device", about: "A device on the network that no inventory names." },
+  ]);
+  const list = await loopsNow();
+  expect(list.find((l) => l.id === "memo")!.case_type).toBe("unknown-device");
+  expect(list.find((l) => l.id === "investigation")!.case_type).toBeNull();
+  const view = await getJson<LoopView>("/api/loops/memo");
+  const plan = view.stage_views.find((x) => x.id === "plan")!;
+  const memory = plan.context.filter((i) => i.source === "memory");
+  expect(memory.map((i) => [i.kind, i.id, i.memory])).toEqual([["reference", "case-notes", "case/notes"], ["reference", "shared-lessons", "shared/*"]].sort((a, b) => (a[1]! < b[1]! ? -1 : 1)));
+  expect(memory.every((i) => typeof i.hash === "string")).toBe(true);
+  // an item of another source has no selector
+  expect(plan.context.filter((i) => i.source !== "memory").every((i) => !("memory" in i))).toBe(true);
+});
+
+test("saving a loop's draft keeps its case_type and its memory components", async () => {
+  s = await served({ before: (root) => withMemoryLoop(root, { case_type: "unknown-device" }) });
+  expect((await s.post("/api/loops/memo/copy", { id: "memo-two", title: "Memo two" })).status).toBe(200);
+  const before = await getJson<LoopView>("/api/loops/memo-two");
+  expect(before.case_type).toBe("unknown-device");
+  const draft = before.draft as unknown as Draft & { case_type: string | null };
+  expect(draft.case_type).toBe("unknown-device");
+  draft.case_type = "phishing";
+  const res = await s.post("/api/loops/memo-two/save", { draft, version: 1 });
+  expect(res.status).toBe(200);
+  const after = await getJson<LoopView>("/api/loops/memo-two");
+  expect(after).toMatchObject({ version: 2, case_type: "phishing" });
+  const selectors = (v: LoopView): string[] => v.stage_views.flatMap((x) => x.context.filter((i) => i.source === "memory").map((i) => `${x.id}:${i.memory}`)).sort();
+  expect(selectors(after)).toEqual(selectors(before));
+  expect(selectors(after).length).toBe(4);
+  expect(readFileSync(rootFile("loops", "memo-two.yaml"), "utf8")).toContain(`case_type: "phishing"`);
+  // a case of it takes the saved type
+  const id = await s.newCase({ loop: "memo-two" });
+  expect(s.app.hub.read(id).state.memory.type).toBe("phishing");
 });

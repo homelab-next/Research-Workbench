@@ -6,7 +6,7 @@ import { extractCaseFile, readManifest, writeCaseFile } from "../../src/core/cas
 import type { CaseSummaryView, StoreView } from "../../src/core/wire";
 import { Engine } from "../../src/pipeline/engine";
 import type { EngineDeps } from "../../src/pipeline/engine";
-import { served } from "../helpers/served";
+import { served, withMemoryLoop } from "../helpers/served";
 import type { Served } from "../helpers/served";
 import { storedEntries } from "../helpers/stored";
 import { rawCaseFile } from "../helpers/tar";
@@ -262,4 +262,40 @@ test("delete with the id typed removes the file and logs one line naming the per
   expect(line).toEqual({ id: "CASE-1", title: "To delete", head: m.head.hash, when: expect.any(String), who: s.config.user, file: FILE });
   // the id is not given out again
   expect(await s.newCase()).toBe("CASE-2");
+});
+
+// ---------- a case's type (slice 13) ----------
+
+test("a new case with a type records it; with none it takes its loop's; with none and a loop that has none it has no type", async () => {
+  s = await served({ before: (root) => withMemoryLoop(root, { case_type: "unknown-device" }) });
+  const named = await s.newCase({ type: "phishing" });
+  const ofLoop = await s.newCase({ loop: "memo" });
+  const none = await s.newCase();
+  const typeSet = (id: string) => s.entries(id).filter((e) => e.type === "case.type_set");
+  // in the commit of case.created, by the person
+  expect(typeSet(named).map((e) => [e.seq, e.payload, e.actor])).toEqual([[2, { type: "phishing" }, { kind: "human", id: s.config.user }]]);
+  expect(typeSet(ofLoop).map((e) => e.payload)).toEqual([{ type: "unknown-device" }]);
+  expect(typeSet(none)).toEqual([]);
+  expect([named, ofLoop, none].map((id) => s.app.hub.read(id).state.memory.type)).toEqual(["phishing", "unknown-device", null]);
+  // a type named wins over the loop's
+  const both = await s.newCase({ loop: "memo", type: "phishing" });
+  expect(s.app.hub.read(both).state.memory.type).toBe("phishing");
+});
+
+test("a new case with a type that is not loaded is refused: there is no case type", async () => {
+  s = await served({ before: (root) => withMemoryLoop(root) });
+  const base = { title: "T", asked: "A", why: "W", starting: [], window: { from: "2026-11-17T00:00:00.000Z", to: "2026-11-24T00:00:00.000Z" }, objective: null, marking: "TLP:GREEN" };
+  for (const type of ["printer", 7, null]) {
+    const res = await s.post("/api/cases", { ...base, type });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ ok: false, refused: [`there is no case type "${String(type)}"`] });
+  }
+  expect(await listed()).toEqual([]);
+});
+
+test("the case list says each case's type", async () => {
+  s = await served({ before: (root) => withMemoryLoop(root) });
+  await s.newCase({ type: "unknown-device" });
+  await s.newCase();
+  expect((await listed()).map((c) => [c.id, c.type])).toEqual([["CASE-2", null], ["CASE-1", "unknown-device"]]);
 });

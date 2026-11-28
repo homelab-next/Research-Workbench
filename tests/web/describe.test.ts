@@ -6,7 +6,7 @@ import { describe } from "../../src/web/describe";
 import { EntryBuilder } from "../helpers/entries";
 
 const ref: Reference = {
-  types: [], pivots: [], objectives: [], phases: [], profile: { id: "p", title: "p" }, send_back_cap: 3, playbooks: [], inventories: [], likelihood: [], stage_tools: [], stage_models: [],
+  types: [], pivots: [], objectives: [], phases: [], profile: { id: "p", title: "p" }, send_back_cap: 3, playbooks: [], inventories: [], likelihood: [], stage_tools: [], stage_models: [], case_types: [],
   sources: [{ id: "reputation", title: "Reputation service", connector: "http", marking: "TLP:GREEN", where: "machine", confirmed: true, adhoc: false, cost: { weight: 5, unit: "lookups" }, quality: "" }],
 };
 const sampleOf = (type: EntryType, payload: unknown = {}): Entry => new EntryBuilder().add(type, payload as never);
