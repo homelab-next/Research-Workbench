@@ -370,8 +370,8 @@ function blobOf(caseDir: string, ref: unknown): Uint8Array | null {
  * staged candidate's otherwise); and, when the child is in `casesDir`, its ledger holds an entry of the recorded seq and hash, its probe.child and
  * subloop.child name this case, probe, candidate and task, its first entry is the origin probe.started recorded, the run it ran bound the loop version
  * probe.started names, no entry of improve-probe in it passes any gate but the plan gate, and the output the case recorded is the output of the
- * child's fold at that head (both the blob's bytes and output_hash); an output recorded without `asked` (before outputs carried the child's
- * questions to the person) is compared without it. A child that is not in `casesDir` is not_loaded and does not fail the report.
+ * child's fold at that head (both the blob's bytes and output_hash); an output recorded as format 1 (before outputs carried the child's
+ * questions to the person) is compared with the fold's output as format 1, without them. A child that is not in `casesDir` is not_loaded and does not fail the report.
  * Reads only. The first failing check names the status.
  */
 export function verifyProbes(caseDir: string, casesDir: string): ProbeReport {
@@ -422,11 +422,12 @@ export function verifyProbes(caseDir: string, casesDir: string): ProbeReport {
         return "output_differs";
       }
       if (sha256Hex(canonical(again as unknown as Json)) === p.output_hash) return "matches";
-      // an output recorded before outputs carried the child's questions to the person is that output without them
+      // an output recorded before outputs carried the child's questions to the person (format 1) is that output without them; a format 2
+      // output always carries them, so one stripped of them is no output and fails here
       const recorded = readProbeOutput(bytes);
-      if (again.asked === undefined || recorded === null || recorded.asked !== undefined) return "output_differs";
+      if (again.asked === undefined || recorded === null || recorded.format !== 1) return "output_differs";
       const { asked: _later, ...older } = again;
-      return sha256Hex(canonical(older as unknown as Json)) === p.output_hash ? "matches" : "output_differs";
+      return sha256Hex(canonical({ ...older, format: 1 } as unknown as Json)) === p.output_hash ? "matches" : "output_differs";
     })();
     probes.push({ probe: p.probe, child: p.child, status });
   }

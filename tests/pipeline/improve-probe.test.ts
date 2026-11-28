@@ -22,7 +22,7 @@ import type { ManifestFile } from "../../src/modules/loop-write";
 import { Engine } from "../../src/pipeline/engine";
 import type { EngineDeps, StageEnv, StageRunner } from "../../src/pipeline/engine";
 import type { ImproveHost, ProbeRef } from "../../src/pipeline/improve/host";
-import { driveProbe, NO_IMPROVE_HOST, PROBE_PLAN_ACCEPTS, probeBudgets, probeLink } from "../../src/pipeline/improve/probe";
+import { driveProbe, NO_IMPROVE_HOST, PROBE_PLAN_ACCEPTS, probeBudgets, probeLink, probePassOvers } from "../../src/pipeline/improve/probe";
 import type { ResolvedLoop } from "../../src/pipeline/loops";
 import { frameRunner } from "../../src/pipeline/stages/frame";
 import { planRunner } from "../../src/pipeline/stages/plan";
@@ -367,6 +367,21 @@ test("driveProbe goes on past a blocking question to the person as improve-probe
   // drafted, and carrying the question for the Judge to credit
   expect(probeOutputOf(c.state)).toMatchObject({ outcome: "drafted", asked: ["Is the device expected on that access point?"] });
   expect(c.entries().some((e) => e.actor.kind === "human")).toBe(false);
+});
+
+test("probePassOvers counts improve-probe's resumes of a run paused on a question, not its resume of a run interrupted while so paused", async () => {
+  const parent = await parentAtProbe();
+  const c = probeChildOf(parent);
+  const e = engineOf(c);
+  e.start(ENGINE, { loop: live() });
+  const held = (): void => { c.commit((st) => [{ type: "run.paused", actor: ENGINE, run: st.run.id, payload: { reason: "waiting for the person's answer", hold: { kind: "question", stage: "frame" } } }]); };
+  held();
+  c.commit((st) => [{ type: "run.interrupted", actor: { kind: "system", id: "recovery" }, run: st.run.id, payload: {} }]);
+  expect(e.resumeProbe()).toBe(true);
+  expect(probePassOvers(c)).toBe(0);
+  held();
+  expect(e.passOverQuestion()).toBe(true);
+  expect(probePassOvers(c)).toBe(1);
 });
 
 test("Engine.passOverQuestion writes only in a probe child held on a question, and refuses in any other case", async () => {

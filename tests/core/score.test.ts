@@ -266,7 +266,7 @@ test("every number in a sheet is an integer", () => {
 // ---------- credit for asking: an expected finding that is the person's to say ----------
 
 const theirs = (claim: string): ExpectedFinding => ({ claim, likelihood: "likely", confidence: "moderate", asks: true });
-const asking = (findings: Finding[], asked: string[]): ProbeOutput => ({ ...drafted(findings), asked });
+const asking = (findings: Finding[], asked: string[]): ProbeOutput => ({ ...drafted(findings), format: 2, asked });
 
 test("an expected finding that is the person's to say scores 1000 when the probe asked a question code matches to its claim", () => {
   // "the device belongs to the owner" vs "does the device belong to the owner": the, device, to, owner shared of 7 words = 571
@@ -283,7 +283,7 @@ test("an expected finding that is the person's to say scores 1000 when the probe
   // a question far from the claim is no match
   expect(scoreOutput(probe("base", "T1"), asking([], ["Which network is this?"]), answer("T1", [theirs("the device belongs to the owner")]), SEVEN).score).toBe(0);
   // an incomplete output scores 0 whatever it asked
-  expect(scoreOutput(probe("base", "T1"), { ...incomplete, asked: ["Does the device belong to the owner?"] }, a, SEVEN).score).toBe(0);
+  expect(scoreOutput(probe("base", "T1"), { ...incomplete, format: 2, asked: ["Does the device belong to the owner?"] }, a, SEVEN).score).toBe(0);
 });
 
 test("a produced finding that states the person's claim counts as before; each question is matched once, greatest similarity first", () => {
@@ -321,4 +321,38 @@ test("rescore recomputes a sheet whose matches include questions, from the code 
   expect(rescore(sheet, outputs, a)).toEqual(sheet);
   // without the questions in the output, the recorded asks no longer hold
   expect(rescore(sheet, { "base/T1": drafted([]) }, a)).not.toEqual(sheet);
+});
+
+test("a question's credit is 1000 × min(1, (claims the person's to say + 1) / questions asked): one extra question is free, more dilute it", () => {
+  const a = answer("T1", [theirs("the device belongs to the owner")]);
+  const q = "Does the device belong to the owner?";
+  const credit = (asked: string[]): number => scoreOutput(probe("base", "T1"), asking([], asked), a, SEVEN).findings[0]!.score;
+  expect(credit([q])).toBe(1000);
+  expect(credit([q, "Anything else?"])).toBe(1000);
+  expect(credit([q, "Anything else?", "Anything more?"])).toBe(667);
+  expect(credit([q, "a?", "b?", "c?"])).toBe(500);
+  // a model's question match is credited the same way
+  const m = scoreOutput(probe("base", "T1"), asking([], ["Is this yours?", "a?", "b?", "c?", "d?"]), a, SEVEN, [{ expected: 0, produced: null, asked: 0 }]);
+  expect(m.findings[0]).toMatchObject({ asked: 0, by: "model", score: 400 });
+});
+
+test("when a stated finding and a question both match a claim that is the person's to say, the row takes the higher score", () => {
+  const a = answer("T1", [theirs("the device belongs to the owner")]);
+  const stated = found("F1", "the device belongs to the owner", "very likely");
+  const statedScore = 500 + Math.round(250 * (5 / 6)) + 250;
+  // one question: 1000 beats the stated finding's 958; the finding is left over
+  const asked = scoreOutput(probe("base", "T1"), asking([stated], ["Does the device belong to the owner?"]), a, SEVEN);
+  expect(asked.findings[0]).toEqual({ expected: 0, produced: null, asked: 0, by: "code", similarity: 571, likelihood_distance: null, confidence_distance: null, score: 1000 });
+  expect(asked.left_over).toEqual(["F1"]);
+  // three questions: 667 loses to the stated finding
+  const diluted = scoreOutput(probe("base", "T1"), asking([stated], ["Does the device belong to the owner?", "a?", "b?"]), a, SEVEN);
+  expect(diluted.findings[0]).toMatchObject({ expected: 0, produced: "F1", by: "code", score: statedScore });
+  expect(diluted.findings[0]).not.toHaveProperty("asked");
+  expect(diluted.left_over).toEqual([]);
+  // and rescore gives each back
+  for (const o of [asked, diluted]) {
+    const outputs = { "base/T1": o === asked ? asking([stated], ["Does the device belong to the owner?"]) : asking([stated], ["Does the device belong to the owner?", "a?", "b?"]) };
+    const sheet = scoreSheet([o], SEVEN, ["base"]);
+    expect(rescore(sheet, outputs, [a])).toEqual(sheet);
+  }
 });

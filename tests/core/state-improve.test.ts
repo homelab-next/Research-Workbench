@@ -703,11 +703,18 @@ test("probeOutputOf carries the texts of the questions the child asked the perso
   expect(s.skipped).toEqual([]);
   const o = probeOutputOf(s);
   expect(o.asked).toEqual(["Is the device expected on that access point?", "Does the device belong to the owner?"]);
-  expect(readProbeOutput(new TextEncoder().encode(canonical(o as never)))).toEqual(o);
+  // an output that carries questions is format 2, so one stripped of them is no output at all
+  expect(o.format).toBe(2);
+  const bytes = (x: unknown): Uint8Array => new TextEncoder().encode(canonical(x as never));
+  expect(readProbeOutput(bytes(o))).toEqual(o);
+  const { asked: _gone, ...stripped } = o;
+  expect(readProbeOutput(bytes(stripped))).toBeNull();
   const none = probeOutputOf(fold(atPublishGate(atPlanGate(probeChild())).b.entries));
   expect(Object.hasOwn(none, "asked")).toBe(false);
-  // an empty list is no output a probe gives
-  expect(readProbeOutput(new TextEncoder().encode(canonical({ ...none, asked: [] } as never)))).toBeNull();
+  expect(none.format).toBe(1);
+  // format 1 carries no questions; an empty list is no output a probe gives
+  expect(readProbeOutput(bytes({ ...none, asked: ["Is it?"] }))).toBeNull();
+  expect(readProbeOutput(bytes({ ...none, format: 2, asked: [] }))).toBeNull();
 });
 
 test("an expected finding with asks: true folds with it; asks of any other value is malformed; one without it folds as before", () => {

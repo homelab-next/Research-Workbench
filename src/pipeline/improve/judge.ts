@@ -19,6 +19,7 @@ import type { StageEnd, StageEnv, StageRunner } from "../engine";
 import type { ImproveHost } from "./host";
 import { knownAnswerOf, withdrawnSince } from "./answers";
 import { stageAgent } from "../stages/agent";
+import { PROBE_PASS_OVERS } from "./probe";
 
 const ENGINE: Actor = { kind: "system", id: "engine" };
 const AFTER_CHOICE = "the judge runs after Compose has chosen";
@@ -62,13 +63,15 @@ function askedOf(answer: AnswerCopy, output: ProbeOutput): Asked | null {
   const produced = output.product.key_findings;
   if (answer.findings.length === 0) return { expected: [], free: produced.map((f) => f.id), text: true, asks: [], questions: [] };
   const questions = output.asked ?? [];
-  const rows = matchAll(answer.findings, produced, questions);
+  const { claims: rows, questions: matched } = matchAll(answer.findings, produced, questions);
   const open = rows.filter((r) => r.by === null).map((r) => r.expected);
   const taken = new Set(rows.map((r) => r.produced));
   const free = produced.map((f) => f.id).filter((id) => !taken.has(id));
-  const asked = new Set(rows.flatMap((r) => (r.asked === undefined ? [] : [r.asked])));
-  const freeQuestions = questions.map((_, q) => q).filter((q) => !asked.has(q));
-  const asks = open.filter((e) => answer.findings[e]!.asks === true);
+  const asked = new Set(matched.flatMap((m) => (m === null ? [] : [m.asked])));
+  // at most MATCHER_QUESTIONS are offered; every question the probe asked still counts in the credit
+  const freeQuestions = questions.map((_, q) => q).filter((q) => !asked.has(q)).slice(0, MATCHER_QUESTIONS);
+  // a claim a finding states may still be asked about: the row takes the better of the two
+  const asks = answer.findings.map((_, e) => e).filter((e) => answer.findings[e]!.asks === true && matched[e] === null);
   const claims = free.length === 0 ? [] : open;
   const left = asks.length === 0 || freeQuestions.length === 0 ? { asks: [], questions: [] } : { asks, questions: freeQuestions };
   return claims.length === 0 && left.asks.length === 0 ? null : { expected: claims, free: claims.length === 0 ? [] : free, text: false, ...left };
@@ -123,7 +126,12 @@ const QUESTION = [
   "For a probe that lists a known answer, give { probe, verdict } with the verdict agrees, partly or disagrees.",
   "Give no number and no score.",
 ].join("\n");
-const QUESTION_ASKED = "For each expected finding only the person can say that one of the probe's questions to the person asks about, give { probe, expected, question } in asked: the probe's id, the number of the expected finding and the number of the question (3 for q3).";
+const QUESTION_ASKED = [
+  "For each expected finding only the person can say that one of the probe's questions to the person asks about, give { probe, expected, question } in asked: the probe's id, the number of the expected finding and the number of the question (3 for q3).",
+  "Mind: a question that does not name the claim's subject (a vague 'anything else?') does not state it.",
+].join("\n");
+/** The most questions of one probe a model is shown: the most a probe child asks and is passed over (PROBE_PASS_OVERS). */
+const MATCHER_QUESTIONS = PROBE_PASS_OVERS;
 
 /**
  * The asked probe a model's answer names: the probe itself, or, when the model wrote only the task ("T1" for "base/T1"), the one asked probe of

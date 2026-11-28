@@ -11,6 +11,8 @@ import type { CandidateState, CaseState, ImproveState, KnownAnswerState, ProbeSt
 export const PROBE_ACTOR_ID = "improve-probe";
 export const BASE = "base";
 export const PROBE_OUTPUT_FORMAT = 1;
+/** The format of a probe output that carries the child's questions to the person (`asked`); one without them is PROBE_OUTPUT_FORMAT. */
+export const PROBE_OUTPUT_FORMAT_ASKED = 2;
 export const ANSWER_TEXT_MAX = 600;
 export const ANSWER_FINDINGS_MAX = 12;
 export const CLAIM_MAX = 300;
@@ -332,9 +334,12 @@ export interface TaskRecord {
   queries: { source: string; pivot: string | null; outcome: string; rows: number | null }[]; questions: number; sendbacks: number; usage: { input: number; output: number; calls: number };
 }
 /** What a probe child gave, from its state alone. */
-/** `asked`: the texts of the questions the child asked the person, in the order asked; present only when it asked one (an older output has none). */
+/**
+ * `asked`: the texts of the questions the child asked the person, in the order asked; present exactly when it asked one, and then the format is 2
+ * (so an output stripped of them is no output). An output of format 1 has none.
+ */
 export interface ProbeOutput {
-  format: 1; outcome: "drafted" | "incomplete"; reason: string; draft_hash: string | null; product: Product | null;
+  format: 1 | 2; outcome: "drafted" | "incomplete"; reason: string; draft_hash: string | null; product: Product | null;
   stats: { lookups: number; tokens: number; model_calls: number; stages: { id: string; status: string; attempts: number }[] };
   asked?: string[];
 }
@@ -371,11 +376,11 @@ const isTaskRecord = (x: unknown): x is TaskRecord =>
   && Array.isArray(x.queries) && x.queries.every((q) => isObj(q) && isStr(q.source) && isStrOrNull(q.pivot) && isStr(q.outcome) && isCountOrNull(q.rows))
   && isCount(x.questions) && isCount(x.sendbacks) && isObj(x.usage) && isCount(x.usage.input) && isCount(x.usage.output) && isCount(x.usage.calls);
 const isProbeOutput = (x: unknown): x is ProbeOutput =>
-  isObj(x) && x.format === PROBE_OUTPUT_FORMAT && isOneOf(x.outcome, PROBE_OUTCOMES) && isStr(x.reason)
+  isObj(x) && (x.format === PROBE_OUTPUT_FORMAT || x.format === PROBE_OUTPUT_FORMAT_ASKED) && isOneOf(x.outcome, PROBE_OUTCOMES) && isStr(x.reason)
   && (x.outcome === "drafted" ? isId(x.draft_hash) && isProduct(x.product) : x.draft_hash === null && x.product === null)
   && isObj(x.stats) && isCount(x.stats.lookups) && isCount(x.stats.tokens) && isCount(x.stats.model_calls)
   && Array.isArray(x.stats.stages) && x.stats.stages.every((st) => isObj(st) && isStr(st.id) && isStr(st.status) && isCount(st.attempts))
-  && (x.asked === undefined || (isStrList(x.asked) && x.asked.length > 0));
+  && (x.format === PROBE_OUTPUT_FORMAT ? x.asked === undefined : isStrList(x.asked) && x.asked.length > 0);
 const isContrast = (x: unknown): x is Contrast =>
   isObj(x) && isId(x.task) && isId(x.candidate) && isOneOf(x.base, PROBE_OUTCOMES) && isOneOf(x.now, PROBE_OUTCOMES) && isStrList(x.added) && isStrList(x.removed)
   && Array.isArray(x.changed) && x.changed.every((c) => isObj(c) && isStr(c.statement) && (c.likelihood === null || isPair(c.likelihood, isStr)) && (c.confidence === null || isPair(c.confidence, isStr)))
@@ -433,7 +438,7 @@ export function probeOutputOf(child: Readonly<CaseState>): ProbeOutput {
   const ended = (run.status === "waiting" && run.waiting === "publish") || (run.status === "finished" && run.outcome === "completed");
   // the questions it asked the person, for the Judge to credit; the key only when there is one, so an output that asked none is as it was
   const texts = Object.values(child.questions).sort((a, b) => a.seq - b.seq).map((q) => q.text);
-  const asked = texts.length === 0 ? {} : { asked: texts };
-  if (draft !== null && ended) return { format: PROBE_OUTPUT_FORMAT, outcome: "drafted", reason: "", draft_hash: draft.hash, product: draft.product, stats, ...asked };
-  return { format: PROBE_OUTPUT_FORMAT, outcome: "incomplete", reason: incompleteReason(child), draft_hash: null, product: null, stats, ...asked };
+  const asked = texts.length === 0 ? { format: PROBE_OUTPUT_FORMAT } as const : { format: PROBE_OUTPUT_FORMAT_ASKED, asked: texts } as const;
+  if (draft !== null && ended) return { outcome: "drafted", reason: "", draft_hash: draft.hash, product: draft.product, stats, ...asked };
+  return { outcome: "incomplete", reason: incompleteReason(child), draft_hash: null, product: null, stats, ...asked };
 }

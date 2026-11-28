@@ -591,8 +591,8 @@ function askingTask(r: Rig): Record14 {
   taskCase(r, 0, [{ claim: OWNER, likelihood: "likely", confidence: "high", asks: true }]);
   return {
     outputs: {
-      "base/T1": { ...outputOf([finding("f1", UNRELATED)]), asked: ["Does the device belong to the owner?"] },
-      "K1/T1": { ...outputOf([finding("f1", UNRELATED)]), asked: ["Which network is this?", "Is this yours?"] },
+      "base/T1": { ...outputOf([finding("f1", UNRELATED)]), format: 2, asked: ["Does the device belong to the owner?"] },
+      "K1/T1": { ...outputOf([finding("f1", UNRELATED)]), format: 2, asked: ["Which network is this?", "Is this yours?"] },
     },
     chosen: true, candidate: true,
   };
@@ -640,11 +640,32 @@ test("matcherParts lists the questions no claim took, by number, under the claim
   const s = improveCase(r, 1);
   const copy: AnswerCopy[] = [{ task: "T1", seq: 1, hash: "x", text: "the text", marking: "TLP:GREEN", findings: [{ claim: OWNER, likelihood: "likely", confidence: "high", asks: true }] }];
   const parts = matcherParts(s, copy, {
-    "base/T1": { ...outputOf([finding("f1", UNRELATED)]), asked: ["Is this yours?"] },
-    // nothing left: code matched the question
-    "K1/T1": { ...outputOf([finding("f1", UNRELATED)]), asked: ["Does the device belong to the owner?"] },
+    "base/T1": { ...outputOf([finding("f1", UNRELATED)]), format: 2, asked: ["Is this yours?"] },
+    // code matched the question: only the claim is left, for a finding that may state it (the row takes the better)
+    "K1/T1": { ...outputOf([finding("f1", UNRELATED)]), format: 2, asked: ["Does the device belong to the owner?"] },
   });
-  expect(parts.map((p) => p.id)).toEqual(["base/T1"]);
+  expect(parts.map((p) => p.id)).toEqual(["base/T1", "K1/T1"]);
   expect(parts[0]!.text).toContain("q0: Is this yours?");
   expect(parts[0]!.text).toContain(`0: ${OWNER}`);
+  expect(parts[1]!.text).toContain(`f1: ${UNRELATED}`);
+  expect(parts[1]!.text).not.toContain("questions to the person");
+});
+
+test("the model is offered at most 8 questions of a probe, all of which still dilute the credit; its task says a vague question does not state a claim", async () => {
+  const r = rig(true);
+  taskCase(r, 0, [{ claim: OWNER, likelihood: "likely", confidence: "high", asks: true }]);
+  const ten = Array.from({ length: 10 }, (_, i) => `Question number ${i}?`);
+  const sc: Record14 = { outputs: { "base/T1": { ...outputOf([finding("f1", UNRELATED)]), format: 2, asked: ten }, "K1/T1": outputOf([finding("f1", UNRELATED)]) }, chosen: true, candidate: true };
+  const s = improveCase(r, 1);
+  // question 9 was not offered: dropped; question 3 was: kept, credited 1000 × 2/10
+  const reply = { matches: [], texts: [], asked: [{ probe: "base/T1", expected: 0, question: 9 }, { probe: "base/T1", expected: 0, question: 3 }] };
+  const engine = engineFor(r, s, { select: recorded(r, 1, sc) }, providersOf([turn("judge", reply)]));
+  engine.start(human);
+  await engine.advance();
+  const sent = s.blobs.text((requestsOf(s)[0]!.payload as { messages: { blob: string } }).messages.blob);
+  expect(sent).toContain("q7: Question number 7?");
+  expect(sent).not.toContain("q8:");
+  expect(sent).toContain("a question that does not name the claim's subject (a vague 'anything else?') does not state it");
+  const sheet = readScoreSheet(s.blobs.get(s.state.improve.scored!.scores.blob))!;
+  expect(sheet.outputs.find((o) => o.probe === "base/T1")!.findings[0]).toMatchObject({ asked: 3, by: "model", score: 200 });
 });

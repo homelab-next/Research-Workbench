@@ -971,14 +971,17 @@ test("a probe's output carries the questions its child asked; one recorded befor
   };
   const wb = Workbench.open(join(root, "wb"), { onError: () => {} });
   try {
-    // base/T1's output recorded as this workbench takes it, K1/T1's as one taken before outputs carried the questions
+    // base/T1's output recorded as this workbench takes it, K1/T1's as one taken before outputs carried the questions (format 1)
     const p = probedCase(wb, { before, outputOf: (probe, c) => {
       const o = probeOutputOf(c.state);
-      expect(o.asked).toEqual(["Does the device belong to the owner?"]);
+      expect(o).toMatchObject({ format: 2, asked: ["Does the device belong to the owner?"] });
       const { asked: _left, ...older } = o;
-      return canonical((probe === "base/T1" ? o : older) as never);
+      return canonical((probe === "base/T1" ? o : { ...older, format: 1 }) as never);
     } });
     expect(verifyProbes(p.improve.dir, p.cases).probes.map((x) => x.status)).toEqual(["matches", "matches"]);
+    // a format 2 output stripped of its questions is no older recording
+    const stripped = probedCase(wb, { before, outputOf: (_probe, c) => { const { asked: _x, ...rest } = probeOutputOf(c.state); return canonical(rest as never); } });
+    expect(verifyProbes(stripped.improve.dir, stripped.cases).probes.map((x) => x.status)).toEqual(["output_differs", "output_differs"]);
     const changed = probedCase(wb, { before, outputOf: (_probe, c) => canonical({ ...probeOutputOf(c.state), asked: ["Another question?"] } as never) });
     expect(verifyProbes(changed.improve.dir, changed.cases).probes.map((x) => x.status)).toEqual(["output_differs", "output_differs"]);
   } finally {

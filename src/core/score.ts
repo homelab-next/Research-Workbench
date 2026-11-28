@@ -42,8 +42,6 @@ export function matchClaims(expected: readonly ExpectedFinding[], produced: read
   return claimRows(expected, produced, extra).rows;
 }
 
-/** The positions of the produced findings code matched to a claim. */
-const codeUsed = (expected: readonly ExpectedFinding[], produced: readonly Finding[]): Set<number> => claimRows(expected, produced, []).used;
 
 function claimRows(expected: readonly ExpectedFinding[], produced: readonly Finding[], extra: readonly ModelMatch[]): { rows: Match[]; used: Set<number> } {
   const pairs: { e: number; p: number; sim: number }[] = [];
@@ -70,19 +68,22 @@ function claimRows(expected: readonly ExpectedFinding[], produced: readonly Find
   return { rows, used };
 }
 
+/** A question the probe asked the person, matched to an expected finding that is the person's to say: its index in the output's `asked`. */
+export interface QuestionMatch { asked: number; by: "code" | "model"; similarity: number }
+
 /**
- * matchClaims, then each expected finding that is the person's to say (`asks`) and still unmatched is matched to a question the probe asked the
- * person: code first (every pair at or above CLAIM_MATCH, greatest similarity first, ties to the earlier expected, then the earlier question, each
- * question used once), then the entries of `extra` with `asked`, in order, each used only when both are still free. In that order exactly: the
- * code's claims, the code's questions, the model's claims, the model's questions; so a recorded sheet's matches give the same rows again.
+ * Per expected finding, the question to the person matched to it, or null: only for a finding that is the person's to say (`asks`). Code first
+ * (every pair at or above CLAIM_MATCH, greatest similarity first, ties to the earlier expected, then the earlier question, each question once),
+ * then the entries of `extra` with `asked`, in order, each used only when the finding has no question yet and the question is free. A finding
+ * a produced finding states is matched to a question all the same: scoreOutput takes the better of the two.
  */
-export function matchAll(expected: readonly ExpectedFinding[], produced: readonly Finding[], asked: readonly string[] = [], extra: readonly ModelMatch[] = []): Match[] {
-  const rows = matchClaims(expected, produced);
+export function matchQuestions(expected: readonly ExpectedFinding[], asked: readonly string[], extra: readonly ModelMatch[] = []): (QuestionMatch | null)[] {
+  const rows: (QuestionMatch | null)[] = expected.map(() => null);
   const taken = new Set<number>();
-  const free = (e: number): boolean => expected[e]?.asks === true && rows[e]!.by === null;
+  const free = (e: number): boolean => Number.isInteger(e) && e >= 0 && e < expected.length && expected[e]!.asks === true && rows[e] === null;
   const pairs: { e: number; q: number; sim: number }[] = [];
   expected.forEach((ef, e) => {
-    if (!free(e)) return;
+    if (ef.asks !== true) return;
     asked.forEach((text, q) => {
       const sim = claimSimilarity(ef.claim, text);
       if (sim >= CLAIM_MATCH) pairs.push({ e, q, sim });
@@ -91,28 +92,30 @@ export function matchAll(expected: readonly ExpectedFinding[], produced: readonl
   pairs.sort((x, y) => y.sim - x.sim || x.e - y.e || x.q - y.q);
   for (const { e, q, sim } of pairs) {
     if (!free(e) || taken.has(q)) continue;
-    rows[e] = { expected: e, produced: null, asked: q, by: "code", similarity: sim };
+    rows[e] = { asked: q, by: "code", similarity: sim };
     taken.add(q);
-  }
-  // the model's claims, over the rows code left: a row code matched to a question is not free
-  // as matchClaims takes them: by position, so two findings of one id are two findings
-  const used = new Set<number>(codeUsed(expected, produced));
-  for (const m of extra) {
-    if (m.asked !== undefined || m.produced === null || !Number.isInteger(m.expected) || m.expected < 0 || m.expected >= expected.length) continue;
-    if (rows[m.expected]!.by !== null) continue;
-    const p = produced.findIndex((pf, i) => pf.id === m.produced && !used.has(i));
-    if (p < 0) continue;
-    rows[m.expected] = { expected: m.expected, produced: m.produced, by: "model", similarity: claimSimilarity(expected[m.expected]!.claim, produced[p]!.statement) };
-    used.add(p);
   }
   for (const m of extra) {
     const q = m.asked;
-    if (q === undefined || !Number.isInteger(q) || q < 0 || q >= asked.length || taken.has(q)) continue;
-    if (!Number.isInteger(m.expected) || m.expected < 0 || m.expected >= expected.length || !free(m.expected)) continue;
-    rows[m.expected] = { expected: m.expected, produced: null, asked: q, by: "model", similarity: claimSimilarity(expected[m.expected]!.claim, asked[q]!) };
+    if (q === undefined || !Number.isInteger(q) || q < 0 || q >= asked.length || taken.has(q) || !free(m.expected)) continue;
+    rows[m.expected] = { asked: q, by: "model", similarity: claimSimilarity(expected[m.expected]!.claim, asked[q]!) };
     taken.add(q);
   }
   return rows;
+}
+
+/** The claims matched to produced findings (matchClaims, the model's claim matches included) and the questions matched (matchQuestions). */
+export function matchAll(expected: readonly ExpectedFinding[], produced: readonly Finding[], asked: readonly string[] = [], extra: readonly ModelMatch[] = []): { claims: Match[]; questions: (QuestionMatch | null)[] } {
+  return { claims: matchClaims(expected, produced, extra.filter((m) => m.asked === undefined)), questions: matchQuestions(expected, asked, extra) };
+}
+
+/**
+ * What a matched question earns: 1000 × min(1, (the answer's claims that are the person's to say + 1) / the questions the probe asked), rounded.
+ * One question beyond those claims is free; more dilute the credit, so asking at random earns less than asking what matters.
+ */
+export function questionCredit(expected: readonly ExpectedFinding[], questions: number): number {
+  const theirs = expected.filter((f) => f.asks === true).length;
+  return questions === 0 ? 0 : Math.round(1000 * Math.min(1, (theirs + 1) / questions));
 }
 
 /** The expected findings code left unmatched, by index: what a model may be asked about. */
@@ -151,23 +154,34 @@ export function scoreOutput(
     return { ...head, score: 0, text: null, findings, left_over: [] };
   }
   const produced = output.product.key_findings;
-  const rows = matchAll(answer.findings, produced, output.asked ?? [], extra);
-  const taken = new Set(rows.map((r) => r.produced));
-  const left_over = produced.map((f) => f.id).filter((id) => !taken.has(id));
-  if (answer.findings.length === 0) return { ...head, score: text === null ? null : TEXT_SCORE[text], text, findings: [], left_over };
-  const findings: FindingScore[] = rows.map((r) => {
-    // asked the person about a claim that is theirs to say: the full credit, with nothing of likelihood or confidence to weigh
-    if (r.asked !== undefined) return { ...r, produced: null, likelihood_distance: null, confidence_distance: null, score: 1000 };
+  const questions = output.asked ?? [];
+  const { claims, questions: asked } = matchAll(answer.findings, produced, questions, extra);
+  const credit = questionCredit(answer.findings, questions.length);
+  if (answer.findings.length === 0) {
+    const taken = new Set(claims.map((r) => r.produced));
+    return { ...head, score: text === null ? null : TEXT_SCORE[text], text, findings: [], left_over: produced.map((f) => f.id).filter((id) => !taken.has(id)) };
+  }
+  const findings: FindingScore[] = claims.map((r) => {
     const pf = r.produced === null ? undefined : produced.find((f) => f.id === r.produced);
-    if (pf === undefined) return { ...r, produced: null, by: null, similarity: null, likelihood_distance: null, confidence_distance: null, score: 0 };
-    const ef = answer.findings[r.expected]!;
-    const ld = distance(scale, ef.likelihood, pf.likelihood);
-    const cd = distance(CONFIDENCE_ORDER, ef.confidence, pf.confidence);
-    return {
-      ...r, likelihood_distance: Math.round(1000 * ld), confidence_distance: Math.round(1000 * cd),
-      score: 500 + Math.round(250 * (1 - ld)) + Math.round(250 * (1 - cd)),
-    };
+    let stated: FindingScore | null = null;
+    if (pf !== undefined) {
+      const ef = answer.findings[r.expected]!;
+      const ld = distance(scale, ef.likelihood, pf.likelihood);
+      const cd = distance(CONFIDENCE_ORDER, ef.confidence, pf.confidence);
+      stated = {
+        ...r, likelihood_distance: Math.round(1000 * ld), confidence_distance: Math.round(1000 * cd),
+        score: 500 + Math.round(250 * (1 - ld)) + Math.round(250 * (1 - cd)),
+      };
+    }
+    // a claim that is the person's to say, asked about: the row takes the better of the question's credit and the stated finding's score
+    const q = asked[r.expected] ?? null;
+    if (q !== null && (stated === null || credit > stated.score)) {
+      return { expected: r.expected, produced: null, asked: q.asked, by: q.by, similarity: q.similarity, likelihood_distance: null, confidence_distance: null, score: credit };
+    }
+    return stated ?? { ...r, produced: null, by: null, similarity: null, likelihood_distance: null, confidence_distance: null, score: 0 };
   });
+  const taken = new Set(findings.map((r) => r.produced));
+  const left_over = produced.map((f) => f.id).filter((id) => !taken.has(id));
   return { ...head, score: mean(findings.map((f) => f.score)), text: null, findings, left_over };
 }
 

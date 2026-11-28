@@ -51,12 +51,16 @@ export function probeLink(state: Readonly<CaseState>, stage: string, probe: { pr
 const codeAccepts = (session: CaseSession): number =>
   session.entries().filter((e) => e.type === "plan.accepted" && e.actor.kind === PROBE_ACTOR.kind && e.actor.id === PROBE_ACTOR.id).length;
 
-/** How many times code has gone on past a question to the person in this child: improve-probe's run.resumed right after a pause held for a question, counted from its ledger. */
-function codePassOvers(session: CaseSession): number {
+/**
+ * How many times code has gone on past a question to the person in this child: improve-probe's run.resumed of a run paused on a question,
+ * counted from its ledger. A run interrupted while so paused is resumed as interrupted, which is not a pass-over.
+ */
+export function probePassOvers(session: CaseSession): number {
   let n = 0;
   let held = false;
   for (const e of session.entries()) {
     if (e.type === "run.paused") held = e.payload.hold?.kind === "question";
+    else if (e.type === "run.interrupted") held = false;
     else if (e.type === "run.resumed") {
       if (held && e.actor.kind === PROBE_ACTOR.kind && e.actor.id === PROBE_ACTOR.id) n += 1;
       held = false;
@@ -88,7 +92,7 @@ export async function driveProbe(engine: Engine, session: CaseSession, loop: Res
         throw err;
       }
       if (!accepted) return engine.summary();
-    } else if (run.status === "paused" && run.hold?.kind === "question" && codePassOvers(session) < PROBE_PASS_OVERS) {
+    } else if (run.status === "paused" && run.hold?.kind === "question" && probePassOvers(session) < PROBE_PASS_OVERS) {
       if (!engine.passOverQuestion()) return engine.summary();
     } else {
       return summary;
