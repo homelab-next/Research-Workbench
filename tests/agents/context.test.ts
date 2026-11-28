@@ -395,3 +395,22 @@ test("a component the loop does not hold is a ContextError naming the stage, the
     expect(() => loadProfile(loop.components, "other")).toThrow('the loop: profile "other" is not one of this loop\'s components');
   } finally { close(); }
 });
+
+test("stageParts leaves a memory reference out and still gives a root reference", () => {
+  writeFileSync(join(root, "context", "root-ref.md"), "---\nkind: reference\nid: root-ref\n---\nA reference from the root.\n");
+  const profile = join(root, "context", "profile.yaml");
+  writeFileSync(profile, readFileSync(profile, "utf8").replace("    procedure: research-sop\n", "    procedure: research-sop\n    references: [root-ref, case-notes, shared-lessons]\n"));
+  mkdirSync(join(root, "loops"), { recursive: true });
+  const loop = Bun.YAML.parse(readFileSync(join(root, "loops", "investigation.yaml"), "utf8")) as Record<string, unknown>;
+  writeFileSync(join(root, "loops", "memo.yaml"), JSON.stringify({
+    ...loop, id: "memo", title: "Memo", components: { research: { "reference:case-notes": { memory: "case/notes" }, "reference:shared-lessons": { memory: "shared/*" } } },
+  }));
+  const { loops, close } = loopsOf();
+  try {
+    const got = loops.current("memo");
+    if (got === null) throw new Error(loops.problems("memo").join("; "));
+    const parts = stageParts(got.components, got.profile, "research", { schema: null, objective: null });
+    expect(keyed(parts).filter((k) => k.startsWith("reference:"))).toEqual(["reference:root-ref"]);
+    expect(parts.some((p) => p.text === "" || p.kind === "shared-lesson" || p.kind === "case-note")).toBe(false);
+  } finally { close(); }
+});

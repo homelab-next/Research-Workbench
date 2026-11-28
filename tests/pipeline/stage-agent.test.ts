@@ -18,6 +18,7 @@ import { Engine } from "../../src/pipeline/engine";
 import type { EngineDeps, StageEnv } from "../../src/pipeline/engine";
 import { loadPipeline } from "../../src/pipeline/manifests";
 import { frameOf, lastOutput, stageAgent } from "../../src/pipeline/stages/agent";
+import { noteMemory } from "../../src/pipeline/notes";
 import { packBudget } from "../../src/agents/pack";
 import { fixture, person, WINDOW } from "../helpers/tools-fixture";
 import type { Fixture } from "../helpers/tools-fixture";
@@ -402,4 +403,95 @@ test("an agent stage of a bound run packs the pinned skill after the root's copy
     expect(item.hash).toBe(sha256Hex(was));
     expect(item.hash).not.toBe(sha256Hex(now.get("skill", "ask-the-person")!.text!));
   } finally { chain.close(); }
+});
+
+// ---- slice 13: memory reaches the pack
+
+const packIds = (e: Entry): string[] => (e as Req).payload.pack.map((i) => `${i.kind}:${i.id}`);
+
+/** A lock of the loop whose stages read memory: one item each, as the loop's lock lists them. */
+const memLock = (...items: [stage: string, id: string, memory: string][]): EngineDeps["lock"] =>
+  ({ items: items.map(([stage, id, memory]) => ({ stage, kind: "reference", id, title: id, source: "memory", hash: "0".repeat(64), path: null, memory })) }) as unknown as EngineDeps["lock"];
+
+/** What the run was given from the store: one lesson per marking, bound to the run in progress as the engine binds it. */
+function bindLessons(markings: ("TLP:GREEN" | "TLP:AMBER")[], stages: string[]): void {
+  const lessons = markings.map((marking, i) => ({
+    lesson: `LESSON-${i + 1}`, hash: "a".repeat(64), case_type: "unknown-device", title: `Lesson title ${i + 1}`, text: `Lesson body number ${i + 1}.`, marking, triggers: [],
+    matched: ["every unknown-device case"], from: { kind: "person" }, accepted: { by: "analyst", seq: 1, ts: "2026-11-20T10:00:00.000Z" }, supersedes: null, stages,
+  }));
+  const lock = {
+    format: 1, store: { origin: null, head: { seq: 1, hash: "e".repeat(64) } }, case_type: "unknown-device",
+    facts: { type: "unknown-device", marking: "TLP:GREEN", observables: [], sources: [], findings: [] }, lessons, left_out: [],
+  };
+  const ref = f.s.blobs.put(JSON.stringify(lock));
+  f.s.commit(() => [{
+    type: "memory.bound", actor: person,
+    payload: { lock: ref, store: { origin: null, head: { seq: 1, hash: "e".repeat(64) } }, case_type: "unknown-device", lessons: lessons.map((l) => ({ lesson: l.lesson, hash: l.hash })) },
+  }]);
+}
+
+test("a stage of a loop that reads memory is given its lessons after the case and before its cards, and the request's pack lists them", async () => {
+  const r = rig(script(say(FRAME)));
+  r.deps.lock = memLock(["frame", "lessons", "shared/*"]);
+  r.engine.start(person);
+  bindLessons(["TLP:GREEN", "TLP:GREEN"], ["frame"]);
+  const card: PackPart = { kind: "card", id: "c1", title: "Card c1", text: "rows", marking: null, fixed: false };
+  await stageAgent(r.env(), { actor_id: "orchestrator", task: "t", extras: [card] });
+  const pack = packIds(ofType("model.request")[0]!);
+  const at = pack.indexOf(`case:${f.s.state.meta!.id}`);
+  expect(pack.slice(at + 1)).toEqual(["shared-lesson:LESSON-1", "shared-lesson:LESSON-2", "card:c1"]);
+  const item = (ofType("model.request")[0] as Req).payload.pack.find((i) => i.kind === "shared-lesson")!;
+  expect(item.fixed).toBe(false);
+});
+
+test("a stage's pack limit of TLP:GREEN leaves an AMBER lesson out of the pack and names it only by kind and id", async () => {
+  const r = rig(script(say(FRAME)));
+  r.deps.lock = memLock(["frame", "lessons", "shared/*"]);
+  r.engine.setPackLimit("frame", "TLP:GREEN", person);
+  r.engine.start(person);
+  bindLessons(["TLP:AMBER", "TLP:GREEN"], ["frame"]);
+  await stageAgent(r.env(), { actor_id: "orchestrator", task: "t", extras: [] });
+  const req = ofType("model.request")[0] as Req;
+  expect(req.payload.left_out.map((i) => `${i.kind}:${i.id}`)).toEqual(["shared-lesson:LESSON-1"]);
+  expect(packIds(req)).toContain("shared-lesson:LESSON-2");
+  expect(f.s.blobs.text(req.payload.messages.blob)).not.toContain("Lesson body number 1.");
+  expect(f.s.blobs.text(req.payload.messages.blob)).toContain("Lesson body number 2.");
+});
+
+test("a pack holding an AMBER lesson is marked at least AMBER, and a model that may not receive AMBER is blocked", async () => {
+  const r = rig(script(say(FRAME), say(FRAME)));
+  r.deps.lock = memLock(["frame", "lessons", "shared/*"]);
+  r.engine.start(person);
+  bindLessons(["TLP:AMBER"], ["frame"]);
+  expect(await stageAgent(r.env(), { actor_id: "orchestrator", task: "t", extras: [] })).toMatchObject({ kind: "output" });
+  expect((ofType("model.request")[0] as Req).payload.marking).toBe("TLP:AMBER");
+  const policy = r.deps.config.marking_policy;
+  r.deps.config.marking_policy = { ...policy, "TLP:AMBER": [] };
+  expect(await stageAgent(r.env(), { actor_id: "orchestrator", task: "t", extras: [] })).toEqual({ kind: "blocked", marking: "TLP:AMBER" });
+  r.deps.config.marking_policy = policy;
+});
+
+test("a stage of a loop that reads no memory is given the parts it was given before, in the same order", async () => {
+  const r = rig(script(say(FRAME)));
+  r.engine.start(person);
+  await stageAgent(r.env(), { actor_id: "orchestrator", task: "t", extras: [] });
+  expect(packIds(ofType("model.request")[0]!)).toEqual([
+    "rules:base-rules", "persona:orchestrator", "goal:frame-goal", "schema:frame-output", "framework:intel-cycle", "standard:icd203", `case:${f.s.state.meta!.id}`,
+  ]);
+});
+
+test("a stage is given the notes of the case as they are when it starts: a note added by Research is in Assemble's pack", async () => {
+  const replies = { id: "sample-run", turns: [{ actor: "analyst", reply: { content: "nothing" } }, { actor: "analyst", reply: { content: "nothing" } }] } as Script;
+  const r = rig([replies]);
+  r.deps.lock = memLock(["assemble", "notes", "case/notes"]);
+  r.engine.start(person);
+  const go = () => stageAgent(r.env("assemble"), { actor_id: "analyst", task: "t", extras: [] });
+  await go();
+  expect(packIds(ofType("model.request")[0]!).filter((k) => k.startsWith("case-note:"))).toEqual([]);
+  const researcher = { kind: "agent", id: "researcher-g1", stage: "research", profile: "investigation", model: "s", effort: null, where: "machine" } as const;
+  f.s.commit((_st, ids) => [{ type: "model.request", actor: researcher, run: f.s.state.run.id, stage: "research", payload: { request: ids.next("request"), provider: "p", model: "m", effort: null, where: "machine", marking: "TLP:GREEN", pack: [], left_out: [], messages: f.s.blobs.put("{}"), tools: [] } }]);
+  noteMemory(f.s, { kind: "fact", text: "AP-3 is in the lobby", actor: researcher, link: { run: f.s.state.run.id, stage: "research", job: null } });
+  await go();
+  expect(packIds(ofType("model.request").at(-1)!).filter((k) => k.startsWith("case-note:"))).toEqual(["case-note:m1"]);
+  expect(f.s.blobs.text((ofType("model.request").at(-1) as Req).payload.messages.blob)).toContain("AP-3 is in the lobby");
 });

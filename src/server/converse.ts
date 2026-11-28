@@ -6,6 +6,8 @@ import { cardRefs, latestDraft } from "../core/state";
 import type { Actor, Card, Entry, ModelChoice, Section } from "../core/types";
 import type { AgentView, PartView } from "../core/wire";
 import { ContextError, casePart, packPart, partOf, stageParts } from "../agents/context";
+import { memoryParts } from "../agents/memory";
+import { memoryUses } from "../pipeline/loops";
 import type { PackPart } from "../agents/context";
 import { runAgent } from "../agents/loop";
 import type { AgentEnd } from "../agents/loop";
@@ -65,6 +67,8 @@ export function agentParts(session: CaseSession, deps: EngineDeps, added: readon
   try {
     // the rules, persona and the rest of your agent's context are the loop version's; what a person adds for one turn is read from the roots
     const parts: PackPart[] = [...stageParts(contextFrom(deps), profile, STAGE, { schema: null, objective: state.meta?.objective ?? null }), casePart(state)];
+    const uses = deps.lock === undefined ? [] : memoryUses(deps.lock).filter((u) => u.stage === STAGE);
+    parts.push(...memoryParts(session, STAGE, uses, registry));
     const draft = latestDraft(state);
     if (draft !== null) parts.push(draftPart(session, draft));
     const kept = Object.values(state.cards).filter((c) => c.place === "lane").sort((a, b) => b.created_seq - a.created_seq);

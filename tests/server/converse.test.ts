@@ -406,3 +406,31 @@ test("your agent on a case with a bound run reads that version's rules and perso
   expect(fresh.find((p) => p.kind === "rules")!.text).toContain("Edited rules.");
   expect(fresh.find((p) => p.kind === "persona")!.text).toContain("You are an edited assistant");
 });
+
+test("your agent is given the notes and lessons of the stage agent when its loop names them", async () => {
+  s = await served();
+  const id = await atGate();
+  const deps = s.app.hub.deps;
+  const session = s.app.hub.read(id);
+  const item = (stage: string, name: string, memory: string) => ({ stage, kind: "reference", id: name, title: name, source: "memory", hash: "0".repeat(64), path: null, memory });
+  const items = [item("agent", "lessons", "shared/*"), item("agent", "notes", "case/notes"), item("research", "other", "case/notes")] as unknown as NonNullable<typeof deps.lock>["items"];
+  const named = { ...deps, lock: { ...deps.lock!, items } };
+  const person: Actor = { kind: "human", id: "analyst" };
+  const lesson = {
+    lesson: "LESSON-1", hash: "a".repeat(64), case_type: "unknown-device", title: "Check the controller", text: "Ask the controller first.", marking: "TLP:GREEN", triggers: [],
+    matched: ["every unknown-device case"], from: { kind: "person" }, accepted: { by: "analyst", seq: 1, ts: "2026-11-20T10:00:00.000Z" }, supersedes: null, stages: ["agent", "research"],
+  };
+  const lock = session.blobs.put(JSON.stringify({
+    format: 1, store: { origin: null, head: { seq: 1, hash: "e".repeat(64) } }, case_type: "unknown-device",
+    facts: { type: "unknown-device", marking: "TLP:GREEN", observables: [], sources: [], findings: [] }, lessons: [lesson], left_out: [],
+  }));
+  session.commit(() => [{ type: "memory.bound", actor: person, payload: { lock, store: { origin: null, head: { seq: 1, hash: "e".repeat(64) } }, case_type: "unknown-device", lessons: [{ lesson: "LESSON-1", hash: "a".repeat(64) }] } }]);
+  session.commit((_st, ids) => [{ type: "memory.noted", actor: person, payload: { item: ids.next("memory"), kind: "fact", text: "AP-3 is in the lobby", cards: [] } }]);
+  const keys = (parts: ReturnType<typeof agentParts>): string[] => parts.map((p) => `${p.kind}:${p.id}`);
+  const plain = keys(agentParts(session, deps, []));
+  expect(plain.some((k) => k.startsWith("shared-lesson:") || k.startsWith("case-note:"))).toBe(false);
+  const got = keys(agentParts(session, named, []));
+  const at = got.indexOf(`case:${id}`);
+  expect(got.slice(at + 1, at + 3)).toEqual(["shared-lesson:LESSON-1", "case-note:m1"]);
+  expect(got.filter((k) => !k.startsWith("shared-lesson:") && !k.startsWith("case-note:"))).toEqual(plain);
+});

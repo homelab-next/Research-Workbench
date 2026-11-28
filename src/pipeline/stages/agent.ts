@@ -6,6 +6,7 @@ import { runUsage } from "../../core/state";
 import type { Actor, Draft, Entry, ModelChoice, PackItem, TimeWindow } from "../../core/types";
 import { ContextError, casePart, packPart, schemaOf, stageParts, withLive } from "../../agents/context";
 import type { PackPart } from "../../agents/context";
+import { memoryParts } from "../../agents/memory";
 import type { CallRecord } from "../../agents/loop";
 import { runAgent } from "../../agents/loop";
 import { assemblePack, fitProblem, packBudget, slotContext } from "../../agents/pack";
@@ -20,6 +21,7 @@ import type { StageEnd, StageEnv } from "../engine";
 import type { Role } from "../manifests";
 import type { Registry } from "../../modules/registry";
 import type { Components } from "../components";
+import { memoryUses } from "../loops";
 import { questionsPart } from "../questions";
 
 export type AgentStageEnd = { kind: "output"; output: Json; calls: CallRecord[] } | Exclude<StageEnd, { kind: "finished" }>;
@@ -103,7 +105,11 @@ export async function stageAgent(env: StageEnv, opts: {
   try {
     const asked = questionsPart(session, deps.registry);
     const from = contextFrom(deps);
-    const parts = [...stageParts(from, deps.profile, stage.id, { schema: stage.schema, objective: state.meta?.objective ?? null, ...(opts.narrow === undefined ? {} : { narrow: opts.narrow }) }), casePart(state), ...(asked === null ? [] : [asked]), ...opts.extras];
+    const uses = deps.lock === undefined ? [] : memoryUses(deps.lock).filter((u) => u.stage === stage.id);
+    const parts = [
+      ...stageParts(from, deps.profile, stage.id, { schema: stage.schema, objective: state.meta?.objective ?? null, ...(opts.narrow === undefined ? {} : { narrow: opts.narrow }) }), casePart(state),
+      ...memoryParts(session, stage.id, uses, deps.registry), ...(asked === null ? [] : [asked]), ...opts.extras,
+    ];
     if (stage.schema !== null) schema = opts.narrow === undefined ? schemaOf(from, stage.schema, stage.id) : opts.narrow(schemaOf(from, stage.schema, stage.id));
     pack = assemblePack(parts, { budget: packBudget(fast === null ? who.context : Math.min(who.context, fast.context)), case_marking: state.meta!.marking, max_marking: Object.hasOwn(state.pack_limits, stage.id) ? state.pack_limits[stage.id]! : null });
   } catch (err) {
@@ -132,7 +138,7 @@ export async function stageAgent(env: StageEnv, opts: {
       session, deps: deps.runner, seeker: deps.seeker, actor: who.actor, link: { run: state.run.id, stage: stage.id, job: opts.job ?? null },
       draft: opts.draft ?? null, draft_hash: opts.draft_hash ?? null, subgoal: opts.subgoal ?? null, window, limits,
       ...(opts.onNeedsBudget === undefined ? {} : { onNeedsBudget: opts.onNeedsBudget }),
-      max_open_questions: deps.config.questions.max_open,
+      max_open_questions: deps.config.questions.max_open, max_notes: deps.config.memory.max_notes,
     },
   });
   switch (end.kind) {

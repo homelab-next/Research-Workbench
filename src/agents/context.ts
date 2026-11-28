@@ -7,6 +7,7 @@ import type { Entry, Marking, PersonStatement } from "../core/types";
 import { isMarking, strictest } from "../core/types";
 import type { LoadedManifest, Registry } from "../modules/registry";
 import type { Components } from "../pipeline/components";
+import { memorySpecOf } from "../pipeline/components";
 import { scrub, scrubCoverage } from "./tools/kit";
 
 export class ContextError extends Error {
@@ -113,7 +114,8 @@ export function stageParts(from: Components | Registry, profile: Profile, stage:
   if (s.procedure !== null) parts.push(partOf(from, "procedure", s.procedure, false, stage));
   for (const id of s.skills) parts.push(partOf(from, "skill", id, false, stage));
   if (opts.schema !== null) parts.push(schemaPart(from, opts.schema, opts.narrow, stage));
-  for (const id of s.references) parts.push(partOf(from, "reference", id, false, stage));
+  // a memory reference is a marker: memory reaches a pack only through memoryParts, never through the manifest path
+  for (const id of s.references) if (memorySpecOf(manifestIn(from, "reference", id, stage)) === null) parts.push(partOf(from, "reference", id, false, stage));
   for (const id of s.gates) parts.push(partOf(from, "gate", id, false, stage));
   if (opts.objective !== null) parts.push(partOf(from, "objective", opts.objective, false, stage));
   if (profile.framework !== null) parts.push(partOf(from, "framework", profile.framework, false, stage));
