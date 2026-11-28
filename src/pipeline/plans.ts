@@ -170,8 +170,12 @@ export function acceptPlan(session: CaseSession, input: { steps?: string[]; budg
     if (typeof budget !== "number" || !Number.isFinite(budget) || budget <= 0) throw new PlanRefused(`the budget for ${step} must be a number above zero`);
     budgets[step] = budget;
   }
+  writeAcceptance(session, plan, steps, budgets, input.actor);
+}
+
+/** plan.accepted for `steps` (in the plan's order), a lane for each sub-goal that has one and no lane yet, and the plan gate passed: one commit. */
+function writeAcceptance(session: CaseSession, plan: Plan, steps: string[], budgets: Record<string, number>, actor: Actor): void {
   const ordered = plan.steps.map((s) => s.id).filter((s) => steps.includes(s));
-  const { actor } = input;
   session.commit((_state, ids) => {
     const out: EntryInput[] = [{ type: "plan.accepted", actor, ...link(session), payload: { plan: plan.id, steps: ordered, budgets } }];
     for (const g of plan.subgoals) {
@@ -182,6 +186,23 @@ export function acceptPlan(session: CaseSession, input: { steps?: string[]; budg
     out.push({ type: "gate.passed", actor, ...link(session), payload: { gate: "plan" } });
     return out;
   });
+}
+
+/** The improve loop's Probe stage (slice 14), the one actor besides a person whose plan acceptance the fold reads, and only in a probe child. */
+export const PROBE_ACTOR: Actor = { kind: "system", id: "improve-probe" };
+
+/**
+ * Accepts the proposed plan of a probe child whose policy is accept: every free step, no budget, the lanes, the gate. False, writing nothing,
+ * when the plan has no free step. Throws PlanRefused anywhere else. It is the only place code passes a gate: a costly step is never accepted,
+ * so spendPlanBudget, which pays only a person's acceptance, never runs one.
+ */
+export function probeAcceptPlan(session: CaseSession): boolean {
+  if (session.state.improve.probe_of?.plan_gate !== "accept") throw new PlanRefused("only a probe child whose improve loop says so has its plan accepted by code");
+  const plan = proposedPlan(session);
+  const steps = plan.steps.filter((s) => s.free).map((s) => s.id);
+  if (steps.length === 0) return false;
+  writeAcceptance(session, plan, steps, {}, PROBE_ACTOR);
+  return true;
 }
 
 /** `anchor` is called once the denial is written: closing a run is anchored, and the caller says how. */

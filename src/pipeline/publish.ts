@@ -194,6 +194,7 @@ function coverOf(session: CaseSession, stage: string, hash: string): { title: st
   return null;
 }
 
+const PROBE_NEVER_PUBLISHES = "a probe child never publishes: its draft is what the improve case reads";
 const publishStage = (pipeline: Pipeline): string | null => pipeline.stages.find((s) => s.gate === "publish")?.id ?? null;
 
 function atGate(session: CaseSession, actor: Actor): void {
@@ -246,6 +247,8 @@ export function previewBundle(session: CaseSession, deps: EngineDeps): Bundle | 
  * "Unload after publishing": it is recorded on gate.passed only when true, and nothing here unloads (the host does, once the run has finished).
  */
 export function approve(session: CaseSession, deps: EngineDeps, input: { actor: Actor; unload_after?: boolean }): { n: number; dir: string; draft_hash: string } {
+  // a probe child (slice 14) ends at its publish gate: the improve case reads its draft, and nothing of it is ever published
+  if (session.state.improve.probe_of !== null) throw new PublishRefused([PROBE_NEVER_PUBLISHES]);
   const { actor } = input;
   const passed: Payloads["gate.passed"] = input.unload_after === true ? { gate: "publish", unload_after: true } : { gate: "publish" };
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {

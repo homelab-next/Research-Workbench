@@ -17,7 +17,7 @@ import type { MemoryFileManifest } from "./memfile";
 import { MemoryRefused, MemoryStore } from "./memstore";
 import { Refused } from "./refused";
 import { CaseSession } from "./session";
-import { builderMarking, builderOpen, CASE_TYPE_ID, caseFields, fold, isCard, isCaseCreated, unloadDue } from "./state";
+import { builderMarking, builderOpen, CANDIDATES_MAX, CASE_TYPE_ID, caseFields, fold, isCard, isCaseCreated, PROBE_ACTOR_ID, probeId, TASKS_MAX, unloadDue } from "./state";
 import type { CaseState, RunState } from "./state";
 import { CaseStoreFolder } from "./store";
 import type { StoreListing } from "./store";
@@ -76,6 +76,10 @@ export interface CaseSummary { id: string; title: string; marking: Marking; crea
   type: string | null }
 /** What a child case's first commit names of the stage that made it: subloop.child's payload. */
 export interface ChildLink { parent: string; run: string; stage: string; attempt: number; loop: string; input_hash: string; depth: number; floor: Marking }
+/** A probe child's mark (slice 14): probe.child's payload, and the token budget recorded as budget.set in the same commit. */
+export interface ProbeMark { improve: string; origin: string; probe: string; candidate: string; task: string; plan_gate: "accept"; max_lookups: number; max_tokens: number }
+/** What the person asks of an improve case: improve.requested's payload. */
+export interface ImproveRequest { target: string; case_type: string; tasks: number; candidates: number }
 export type ErrorHandler = (error: unknown, entry?: Entry) => void;
 
 export type UnloadResult = { ok: true; file: string; path: string; head: { seq: number; hash: string } } | { ok: false; reason: string };
@@ -391,11 +395,20 @@ export class Workbench {
    * engine for a child. `type_by`: the system actor that stands for a type the person did not choose (a loop's default, or one inherited from a
    * parent); case.type_set is then by it, not by `actor` or the engine. A type that is not a case type's id, an agent as the actor, a `type_by`
    * that is not a system actor, or a `type_by` with no `type`, is a TypeError.
+   * `probe`: a probe child (slice 14), which needs `link`; probe.child (the mark without `max_tokens`) and budget.set { tokens: max_tokens }
+   * follow subloop.child and case.type_set, both by the engine. The mark names the link's parent; when that parent is loaded here it must be an
+   * improve case, and the child is marked at least as strictly as it and as the task it probes. `improve`: an improve case, made by a person,
+   * for a loop and of the type it improves for; improve.requested by that person is the commit's third entry. Each refuses, as a TypeError and
+   * having written nothing, what the fold would skip. No case is made by improve-probe.
    */
-  createCase(input: NewCase, actor: Actor, opts: { loop?: string; default_loop?: string; link?: ChildLink; cards?: Card[]; type?: string; type_by?: Actor } = {}): CaseSession {
+  createCase(
+    input: NewCase, actor: Actor,
+    opts: { loop?: string; default_loop?: string; link?: ChildLink; cards?: Card[]; type?: string; type_by?: Actor; probe?: ProbeMark; improve?: ImproveRequest } = {},
+  ): CaseSession {
     this.open();
     if (!isMarking(input?.marking)) throw new TypeError(`unknown marking ${JSON.stringify(input?.marking)}`);
     const { loop, link } = opts;
+    if (actor?.kind === "system" && actor.id === PROBE_ACTOR_ID) throw new TypeError("improve-probe makes no case");
     const cards = opts.cards ?? [];
     if (loop !== undefined && !(typeof loop === "string" && loop !== "")) throw new TypeError("a case's loop is a non-empty string");
     if (loop !== undefined && actor?.kind === "agent") throw new TypeError("a case's loop is chosen by a person or the workbench");
@@ -412,6 +425,15 @@ export class Workbench {
       if (strictest(input.marking, link.floor) !== input.marking) throw new TypeError(`a child case is marked at least ${link.floor}, its floor; this one is ${input.marking}`);
     } else if (cards.length > 0) {
       throw new TypeError("only a child case is made with cards");
+    }
+    const { probe, improve } = opts;
+    if (probe !== undefined) this.checkProbe(input.marking, link, probe);
+    if (improve !== undefined) {
+      if (probe !== undefined || link !== undefined) throw new TypeError("an improve case is no child and no probe");
+      if (actor?.kind !== "human") throw new TypeError("an improve case is asked for by a person");
+      if (loop === undefined) throw new TypeError("an improve case names the improve loop it runs");
+      if (!isImproveRequest(improve)) throw new TypeError(`an improve request names a target loop and a case type, 1 to ${TASKS_MAX} tasks and 1 to ${CANDIDATES_MAX} candidates`);
+      if (type !== improve.case_type) throw new TypeError(`an improve case is of the case type it improves for ("${improve.case_type}")`);
     }
     for (const c of cards) {
       if (!isCard({ ...c, id: "c1" })) throw new TypeError("a child's input card is not a card the fold would read");
@@ -445,7 +467,16 @@ export class Workbench {
           const { parent, run, stage, attempt, input_hash, depth, floor } = link;
           entries.push({ type: "subloop.child", payload: { parent, run, stage, attempt, loop: link.loop, input_hash, depth, floor }, actor: ENGINE });
         }
+        if (improve !== undefined) {
+          const { target, case_type, tasks, candidates } = improve;
+          entries.push({ type: "improve.requested", payload: { target, case_type, tasks, candidates }, actor });
+        }
         if (type !== undefined) entries.push({ type: "case.type_set", payload: { type }, actor: type_by ?? (link === undefined ? actor : ENGINE) });
+        if (probe !== undefined) {
+          const { improve: of, origin, probe: id, candidate, task, plan_gate, max_lookups, max_tokens } = probe;
+          entries.push({ type: "probe.child", payload: { improve: of, origin, probe: id, candidate, task, plan_gate, max_lookups }, actor: ENGINE });
+          entries.push({ type: "budget.set", payload: { tokens: max_tokens }, actor: ENGINE });
+        }
         for (const c of cards) entries.push({ type: "card.created", payload: { card: { ...c, id: ids.next("card") } }, actor: ENGINE });
         return entries;
       });
@@ -459,6 +490,29 @@ export class Workbench {
       throw err;
     }
     return session;
+  }
+
+  /**
+   * Throws TypeError for a probe mark the fold would skip, or one that would let a probe child be marked less strictly than what it probes:
+   * a probe needs a link, names the link's parent, and is a well-formed mark with caps of 1 or more. When the parent is loaded here it must be an
+   * improve case, and the child is marked at least as strictly as it, as the task it records for the mark's task, and as that task's case
+   * when it is loaded. The link's floor holds in every case.
+   */
+  private checkProbe(marking: Marking, link: ChildLink | undefined, probe: ProbeMark): void {
+    if (link === undefined) throw new TypeError("a probe child is a child case: it needs its link");
+    if (!isProbeMark(probe)) {
+      throw new TypeError("a probe's mark names its improve case, origin, probe (<candidate>/<task>), candidate and task, the plan gate accept, and lookups and tokens of 1 or more");
+    }
+    if (probe.improve !== link.parent) throw new TypeError(`a probe child is of the improve case its link names ("${link.parent}"), not "${probe.improve}"`);
+    const parent = this.linkedState(link.parent);
+    if (parent === null) return;
+    if (parent.improve.request === null || parent.meta === null) throw new TypeError(`${link.parent} is no improve case, so it makes no probe child`);
+    const t = Object.hasOwn(parent.improve.tasks, probe.task) ? parent.improve.tasks[probe.task]! : null;
+    const taskCase = t === null ? null : this.linkedState(t.case);
+    const floor = strictest(parent.meta.marking, t?.marking ?? parent.meta.marking, taskCase?.meta?.marking ?? parent.meta.marking);
+    if (strictest(marking, floor) !== marking) {
+      throw new TypeError(`a probe child is marked at least as strictly as its improve case and the task it probes (${floor}); this one is ${marking}`);
+    }
   }
 
   session(id: string): CaseSession {
@@ -1248,6 +1302,20 @@ export class Workbench {
 const ENGINE: Actor = { kind: "system", id: "engine" };
 
 const isLinkText = (x: unknown): x is string => typeof x === "string" && x !== "";
+const isCap = (x: unknown): x is number => Number.isSafeInteger(x) && (x as number) >= 1;
+/** The shape the fold reads probe.child by, with the token budget beside it. */
+function isProbeMark(x: unknown): x is ProbeMark {
+  if (typeof x !== "object" || x === null || Array.isArray(x)) return false;
+  const m = x as Record<string, unknown>;
+  return isLinkText(m.improve) && typeof m.origin === "string" && isLinkText(m.candidate) && isLinkText(m.task) && m.probe === probeId(m.candidate, m.task)
+    && m.plan_gate === "accept" && isCap(m.max_lookups) && isCap(m.max_tokens);
+}
+/** The shape the fold reads improve.requested by. */
+function isImproveRequest(x: unknown): x is ImproveRequest {
+  if (typeof x !== "object" || x === null || Array.isArray(x)) return false;
+  const r = x as Record<string, unknown>;
+  return isLinkText(r.target) && isLinkText(r.case_type) && isCap(r.tasks) && (r.tasks as number) <= TASKS_MAX && isCap(r.candidates) && (r.candidates as number) <= CANDIDATES_MAX;
+}
 /** The shape the fold reads subloop.child by. */
 function isChildLink(x: unknown): x is ChildLink {
   if (typeof x !== "object" || x === null || Array.isArray(x)) return false;

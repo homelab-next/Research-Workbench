@@ -3,12 +3,13 @@ import { appendFileSync, cpSync, mkdtempSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Plan } from "../../src/core/types";
+import { Workbench } from "../../src/core/workbench";
 import { loadConfig } from "../../src/modules/config";
 import { stepPins } from "../../src/modules/pins";
 import { Registry } from "../../src/modules/registry";
 import { loadRegistry } from "../../src/modules/registry-record";
 import { DEFAULT_LIMITS } from "../../src/modules/seeker";
-import { acceptPlan, buildPlan, denyPlan, estimateStep, PlanRefused, requestReplan, spendPlanBudget } from "../../src/pipeline/plans";
+import { acceptPlan, buildPlan, denyPlan, estimateStep, PlanRefused, PROBE_ACTOR, probeAcceptPlan, requestReplan, spendPlanBudget } from "../../src/pipeline/plans";
 import type { PlanOutput } from "../../src/pipeline/plans";
 import { agent, fixture, PLAN, person, START, WINDOW } from "../helpers/tools-fixture";
 import type { Fixture } from "../helpers/tools-fixture";
@@ -448,4 +449,121 @@ test("a playbook plan step checks every end step: each must find the wanted type
   const plan = buildPlan("", pbOut({ playbook: "triage-lease" }), twoAssets, pbFrame, null) as Plan;
   expect(plan.steps).toHaveLength(1);
   expect(plan.steps[0]!.empty_means).toBe("not-seen");
+});
+
+// ---------- slice 14: the one plan gate code passes ----------
+
+/** A probe child, in a workbench of its own under `dir`, whose run waits at the plan gate with `o` proposed (or nothing proposed). */
+function probeChild(o: PlanOutput | null = out): { s: import("../../src/core/session").CaseSession; close(): void } {
+  const wb = Workbench.open(join(dir, "wb-probe"), { onError: () => {} });
+  const link = { parent: "CASE-99", run: "run-1", stage: "probe", attempt: 1, loop: "investigation", input_hash: "a".repeat(64), depth: 1, floor: "TLP:GREEN" as const };
+  const mark = { improve: "CASE-99", origin: "b".repeat(64), probe: "base/T1", candidate: "base", task: "T1", plan_gate: "accept" as const, max_lookups: 4, max_tokens: 100000 };
+  const s = wb.createCase({ title: "p", asked: "a", why: "w", starting: [{ type: "address", value: START }], window: WINDOW, objective: null, marking: "TLP:GREEN" }, system, { loop: "investigation", link, probe: mark });
+  s.commit((_st, ids) => [{ type: "run.started", actor: system, payload: { run: ids.next("run"), pipeline: "investigation", pipeline_hash: "h", stages: [STAGE] } }]);
+  s.commit((st) => [{ type: "gate.waiting", actor: system, run: st.run.id, payload: { gate: "plan" } }]);
+  if (o !== null) s.commit((st, ids) => [{ type: "plan.proposed", actor: agent, run: st.run.id, payload: { plan: buildPlan(ids.next("plan"), o, deps(), frame, null) as Plan } }]);
+  return {
+    s,
+    close(): void {
+      expect(s.state.skipped).toEqual([]);
+      wb.close();
+    },
+  };
+}
+
+test("probeAcceptPlan accepts every free step with no budget, makes the lanes, and passes the plan gate as improve-probe; the run goes on", () => {
+  const c = probeChild();
+  try {
+    const before = c.s.entries().length;
+    expect(probeAcceptPlan(c.s)).toBe(true);
+    const added = c.s.entries().slice(before);
+    // the entries are plan.accepted { budgets: {} }, lane.created…, gate.passed { gate: "plan" }, each by { kind: "system", id: "improve-probe" }
+    expect(added.map((e) => e.type)).toEqual(["plan.accepted", "lane.created", "gate.passed"]);
+    expect(added.every((e) => e.actor.kind === "system" && e.actor.id === "improve-probe")).toBe(true);
+    expect(PROBE_ACTOR).toEqual({ kind: "system", id: "improve-probe" });
+    expect(added.every((e) => e.run === c.s.state.run.id)).toBe(true);
+    expect(added[0]!.payload).toEqual({ plan: "plan-1", steps: ["s1", "s2"], budgets: {} });
+    expect(added[1]!.payload).toMatchObject({ title: "Is it internal", subgoal: "g1" });
+    expect(added[2]!.payload).toEqual({ gate: "plan" });
+    expect(c.s.state.plan.status).toBe("accepted");
+    expect(c.s.state.plan.accepted_steps).toEqual(["s1", "s2"]);
+    expect(c.s.state.lanes.map((l) => l.subgoal)).toEqual(["g1"]);
+    expect(c.s.state.run.waiting).toBeNull();
+    expect(c.s.state.run.status).not.toBe("finished");
+    // a second call has no plan waiting to accept
+    expect(() => probeAcceptPlan(c.s)).toThrow(PlanRefused);
+  } finally {
+    c.close();
+  }
+});
+
+test("a costly step is left out of the acceptance, and spendPlanBudget gives it nothing", async () => {
+  const c = probeChild();
+  try {
+    probeAcceptPlan(c.s);
+    const plan = c.s.state.plan.current!;
+    const costlyStep = plan.steps.find((x) => !x.free)!;
+    expect(costlyStep.id).toBe("s3");
+    expect(c.s.state.plan.accepted_steps).not.toContain("s3");
+    // a costly_query proposal for that step, as the researcher's run_step would raise it, is never paid for by the acceptance
+    c.s.commit((st, ids) => [{ type: "proposal.created", actor: agent, run: st.run.id, payload: { proposal: {
+      id: ids.next("proposal"), kind: "costly_query", title: "reputation", by: agent.id, step: "s3", subgoal: "g2", source: costlyStep.source, pivot: costlyStep.pivot,
+      pivot_hash: null, source_hash: "h", text: "reputation", bound: { value: START }, window: WINDOW, estimate: null, why: "reputation",
+    } } }]);
+    expect(c.s.state.proposals.p1!.status).toBe("open");
+    expect(await spendPlanBudget(c.s, f.sample.deps, "p1", "s3")).toBeNull();
+    expect(c.s.state.proposals.p1!.status).toBe("open");
+    expect(c.s.entries().some((e) => e.type === "proposal.accepted" || e.type === "query.issued")).toBe(false);
+  } finally {
+    c.close();
+  }
+});
+
+test("a plan with no free step is not accepted: probeAcceptPlan is false and nothing is written", () => {
+  const c = probeChild(sub({ title: "Reputation", have: [{ type: "address", value: START }], want: "verdict", route: ["address_to_verdict"] }));
+  try {
+    expect(c.s.state.plan.current!.steps.every((x) => !x.free)).toBe(true);
+    const before = c.s.entries().length;
+    expect(probeAcceptPlan(c.s)).toBe(false);
+    expect(c.s.entries().length).toBe(before);
+    expect(c.s.state.plan.status).toBe("proposed");
+    expect(c.s.state.run.waiting).toBe("plan");
+  } finally {
+    c.close();
+  }
+});
+
+test("probeAcceptPlan in a case that is not a probe child throws and writes nothing", () => {
+  propose();
+  const sentence = "only a probe child whose improve loop says so has its plan accepted by code";
+  refused(() => probeAcceptPlan(f.s));
+  expect(() => probeAcceptPlan(f.s)).toThrow(sentence);
+  expect(f.s.state.plan.status).toBe("proposed");
+  // in a probe child, the plan must be one waiting at the gate
+  const c = probeChild(null);
+  try {
+    const before = c.s.entries().length;
+    expect(() => probeAcceptPlan(c.s)).toThrow("there is no proposed plan");
+    expect(c.s.entries().length).toBe(before);
+  } finally {
+    c.close();
+  }
+});
+
+test("acceptPlan by improve-probe is refused as any actor but a person is", () => {
+  propose();
+  refused(() => acceptPlan(f.s, { actor: PROBE_ACTOR }));
+  refused(() => denyPlan(f.s, { actor: PROBE_ACTOR, reason: "no" }, () => {}));
+  refused(() => requestReplan(f.s, { actor: PROBE_ACTOR, note: "no" }));
+  // and in a probe child too: code passes its plan gate only through probeAcceptPlan
+  const c = probeChild();
+  try {
+    const before = c.s.entries().length;
+    expect(() => acceptPlan(c.s, { actor: PROBE_ACTOR })).toThrow(PlanRefused);
+    expect(() => denyPlan(c.s, { actor: PROBE_ACTOR, reason: "no" }, () => {})).toThrow(PlanRefused);
+    expect(() => requestReplan(c.s, { actor: PROBE_ACTOR, note: "no" })).toThrow(PlanRefused);
+    expect(c.s.entries().length).toBe(before);
+  } finally {
+    c.close();
+  }
 });

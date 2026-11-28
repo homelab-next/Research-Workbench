@@ -114,6 +114,9 @@ function refusedBy(err: unknown): RunQueryResult {
  * a costly_query proposal (an open one for the same request is reused), which a person runs with runProposal.
  */
 export async function runQuery(session: CaseSession, deps: RunnerDeps, input: RunQueryInput): Promise<RunQueryResult> {
+  // A probe child's lookups are capped before anything else is looked at.
+  const capped = lookupCap(session);
+  if (capped !== null) return capped;
   // Everything that decides what runs, and whether an empty answer proves anything, is checked here before a write.
   const bound = checkBound(input.bound);
   if (typeof bound === "string") return { status: "refused", reasons: [bound] };
@@ -184,6 +187,8 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
       } catch (err) {
         return refusedBy(err);
       }
+      const estimateCapped = lookupCap(session);
+      if (estimateCapped !== null) return estimateCapped;
       const priced = await issueAndRun(session, deps, {
         ...base, req: estimateReq, rendered: estimateText, pivot: null, why: `estimate for: ${input.why}`, verifies: null,
         purpose: "estimate", estimate: null, cause: input.cause ?? null, makeCard: false, title,
@@ -231,6 +236,9 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
     }
   }
 
+  // looked at again after pricing, when another query of this probe may have been issued meanwhile; nothing is awaited from here to the issue
+  const stillCapped = lookupCap(session);
+  if (stillCapped !== null) return stillCapped;
   let resultCause = cause ?? input.cause ?? null;
   if (input.actor.kind === "human" && input.accept != null && budget !== null) {
     const id = input.accept.proposal;
@@ -249,6 +257,17 @@ export async function runQuery(session: CaseSession, deps: RunnerDeps, input: Ru
     purpose: input.verifies != null ? "verify" : playbook ? "playbook" : "result", estimate, cause: resultCause, makeCard: input.make_card !== false, title,
   });
   return ran.result;
+}
+
+/**
+ * In a probe child (slice 14) whose ledger already holds its `max_lookups` query.issued entries, the refusal; null in every other case. Every
+ * query.issued counts, an estimate's too: each is a lookup the source answered.
+ */
+function lookupCap(session: CaseSession): Extract<RunQueryResult, { status: "refused" }> | null {
+  const mark = session.state.improve.probe_of;
+  if (mark === null) return null;
+  const issued = session.entries().filter((e) => e.type === "query.issued").length;
+  return issued < mark.max_lookups ? null : { status: "refused", reasons: [`this probe's lookup budget of ${mark.max_lookups} is used up`] };
 }
 
 function openProposal(session: CaseSession, id: string): boolean {

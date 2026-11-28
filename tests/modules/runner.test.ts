@@ -907,3 +907,45 @@ test("a card from an ad-hoc query has no observed and no event time", async () =
   const r = await runQuery(s, deps, base);
   expect("observed" in cardOf(r)).toBe(false); expect(cardOf(r).event_time).toBeNull();
 });
+
+// ---------- slice 14: a probe child's lookups are capped ----------
+
+/** A probe child of an improve case that is not loaded here, allowed `max` lookups. */
+function probeChild(max: number): CaseSession {
+  const engine: Actor = { kind: "system", id: "engine" };
+  const link = { parent: "CASE-99", run: "run-1", stage: "probe", attempt: 1, loop: "investigation", input_hash: "a".repeat(64), depth: 1, floor: "TLP:GREEN" as const };
+  const mark = { improve: "CASE-99", origin: "b".repeat(64), probe: "base/T1", candidate: "base", task: "T1", plan_gate: "accept" as const, max_lookups: max, max_tokens: 1000 };
+  return wb.createCase({ title: "p", asked: "a", why: "w", starting: [], window: win, objective: null, marking: "TLP:GREEN" }, engine, { loop: "investigation", link, probe: mark });
+}
+
+test("in a probe child with max_lookups 2, the third runQuery is refused with the sentence and writes nothing", async () => {
+  const child = probeChild(2);
+  expect(await runQuery(child, deps, base)).toMatchObject({ status: "done" });
+  expect(await runQuery(child, deps, { ...base, actor: agent, pivot: registry.pivot("peers")!, text: registry.pivot("peers")!.query })).toMatchObject({ status: "done" });
+  const before = child.entries().length;
+  expect(await runQuery(child, deps, base)).toEqual({ status: "refused", reasons: ["this probe's lookup budget of 2 is used up"] });
+  // refused first of all: even a query that would be refused for another reason, or would raise a proposal, gets the sentence
+  expect(await runQuery(child, deps, { ...base, source: "nowhere" })).toEqual({ status: "refused", reasons: ["this probe's lookup budget of 2 is used up"] });
+  expect(await runQuery(child, deps, { ...repInput, actor: agent })).toEqual({ status: "refused", reasons: ["this probe's lookup budget of 2 is used up"] });
+  expect(child.entries().length).toBe(before);
+  expect(child.entries().filter((e) => e.type === "query.issued")).toHaveLength(2);
+  expect(child.state.skipped).toEqual([]);
+});
+
+test("a probe's queries priced at the same moment are counted again when each is issued, so none passes the cap", async () => {
+  const child = probeChild(2);
+  // a costly source priced locally by an estimate the stub gives after a pause: three queries all pass the first look before any is issued
+  const priced = stubDeps({ columns: ["address"], rows: [] });
+  const stub = (priced.pool as unknown as { for: () => Connector }).for();
+  stub.estimate = async () => { await Bun.sleep(1); return { amount: 1, unit: "lookups" }; };
+  const results = await Promise.all([1, 2, 3].map(() => runQuery(child, priced, { ...repInput, budget: 5 })));
+  expect(results.filter((r) => r.status === "done")).toHaveLength(2);
+  expect(results.filter((r) => r.status === "refused")).toEqual([{ status: "refused", reasons: ["this probe's lookup budget of 2 is used up"] }]);
+  expect(child.entries().filter((e) => e.type === "query.issued")).toHaveLength(2);
+  expect(child.state.skipped).toEqual([]);
+});
+
+test("in a case that is no probe child, runQuery counts nothing", async () => {
+  for (let i = 0; i < 4; i++) expect(await runQuery(s, deps, base)).toMatchObject({ status: "done" });
+  expect(s.entries().filter((e) => e.type === "query.issued")).toHaveLength(4);
+});

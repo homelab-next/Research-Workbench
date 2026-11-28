@@ -675,3 +675,42 @@ test("the engine itself unloads nothing: after the run the case folder is where 
   expect(f.s.state.archive).toMatchObject({ pending: null, failed: null, unloads: 0 });
   expect(verifyCase(f.s.dir).ok).toBe(true);
 });
+
+// ---------- slice 14: a probe child never publishes ----------
+
+test("approve in a probe child is refused: a probe child never publishes", async () => {
+  const wb = Workbench.open(join(dir, "wb-probe"), { onError: () => {} });
+  try {
+    const engine: Actor = { kind: "system", id: "engine" };
+    const link = { parent: "CASE-99", run: "run-1", stage: "probe", attempt: 1, loop: "investigation", input_hash: "a".repeat(64), depth: 1, floor: "TLP:GREEN" as const };
+    const mark = { improve: "CASE-99", origin: "b".repeat(64), probe: "base/T1", candidate: "base", task: "T1", plan_gate: "accept" as const, max_lookups: 4, max_tokens: 100000 };
+    const child = wb.createCase({ title: "p", asked: "a", why: "w", starting: [], window: { from: null, to: null }, objective: null, marking: "TLP:GREEN" }, engine, { loop: "investigation", link, probe: mark });
+    // carried to its publish gate with a draft the Publish stage named
+    const r = rig({}, child);
+    r.engine.start(human);
+    await r.engine.advance();
+    child.commit(() => [
+      { type: "plan.accepted", actor: human, payload: { plan: child.state.plan.current!.id, steps: ["s1"], budgets: {} } },
+      { type: "gate.passed", actor: human, payload: { gate: "plan" } },
+    ]);
+    expect(await r.engine.advance()).toMatchObject({ status: "waiting", waiting: "publish" });
+    const before = child.entries().length;
+    const sentence = ["a probe child never publishes: its draft is what the improve case reads"];
+    for (const actor of [human, researcher, engine]) {
+      try {
+        approve(child, r.deps, { actor });
+        throw new Error("approved");
+      } catch (err) {
+        expect(err).toBeInstanceOf(PublishRefused);
+        expect((err as PublishRefused).reasons).toEqual(sentence);
+      }
+    }
+    expect(() => r.engine.approve({ actor: human })).toThrow(PublishRefused);
+    expect(child.entries().length).toBe(before);
+    expect(child.state.published).toEqual([]);
+    expect(existsSync(join(child.dir, "published")) ? readdirSync(join(child.dir, "published")) : []).toEqual([]);
+    expect(child.state.skipped).toEqual([]);
+  } finally {
+    wb.close();
+  }
+});
