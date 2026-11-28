@@ -28,7 +28,8 @@ import type { BuilderTools, ToolContext } from "../agents/tools";
 import { hideCredentials } from "../agents/tools/builder";
 import { scrub } from "../agents/tools/kit";
 import { rootsOf } from "../modules/config";
-import { checkChange, planChange, saveManifests, writeRoot } from "../modules/loop-write";
+import { coveredLock, uncovered } from "../modules/loop-stage";
+import { checkChange, saveManifests, writeRoot } from "../modules/loop-write";
 import type { ManifestFile, SaveDeps } from "../modules/loop-write";
 import { parseManifestFile, pivotWeight } from "../modules/manifests";
 import { bindPivot, PivotError } from "../modules/pivots";
@@ -585,9 +586,10 @@ export function builderDecideAll(
       throw new BuilderRefused(reasons[0] ?? "the save's check refused it", reasons);
     };
     if (opts.expect !== undefined) {
-      const planned = planChange(saveDeps, root, laid, { loop: opts.expect.loop });
+      // the version these files make, sources and playbooks included, must be the one probed, and it must name every file written
+      const planned = coveredLock(saveDeps, root, laid, opts.expect.loop);
       if (!planned.check.ok) refuse(planned.check.problems);
-      if (planned.lock?.hash !== opts.expect.hash) throw new BuilderRefused(opts.expect.refusal);
+      if (planned.lock === null || planned.lock.hash !== opts.expect.hash || uncovered(planned.lock, laid).length > 0) throw new BuilderRefused(opts.expect.refusal);
     }
     const check = saveManifests(saveDeps, root, laid, { actor: ctx.actor, why: "builder", session: session.state.meta!.id });
     if (!check.ok) refuse(check.problems);

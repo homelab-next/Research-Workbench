@@ -17,7 +17,7 @@ import type { RunnerDeps, RunQueryResult } from "../modules/runner";
 import type { Seeker } from "../modules/seeker";
 import type { Pipeline, Role, StageManifest } from "./manifests";
 import type { Components } from "./components";
-import { IMPLICIT_NOTE } from "./loops";
+import { IMPLICIT_NOTE, isStagedLock } from "./loops";
 import type { LoopCatalog, LoopLock, LoopOutput, ResolvedLoop } from "./loops";
 import type { BlobStore } from "../core/blobs";
 import { firstUnpassedReview, nextStep } from "./next";
@@ -221,7 +221,18 @@ export class Engine {
       this.lost = { run, why: NOT_IN_WORKBENCH };
       return;
     }
-    const deps: EngineDeps = { ...this.deps, pipeline: made.pipeline, profile: made.profile, components: made.components, lock: made.lock };
+    // a staged version that changed a source or a playbook is probed over the registry of its snapshot, never the live one
+    let over: Pick<EngineDeps, "registry" | "runner" | "seeker"> | null = null;
+    const probe = s.improve.probe_of;
+    if (isStagedLock(made.lock)) {
+      const got = probe === null ? NOT_IN_WORKBENCH : this.deps.improve?.registryFor?.({ case: probe.improve, origin: probe.origin }, made.lock) ?? NOT_IN_WORKBENCH;
+      if (typeof got === "string") {
+        this.lost = { run, why: NOT_IN_WORKBENCH };
+        return;
+      }
+      over = got;
+    }
+    const deps: EngineDeps = { ...this.deps, ...(over ?? {}), pipeline: made.pipeline, profile: made.profile, components: made.components, lock: made.lock };
     this.held = { run, deps, loop: made, release: this.deps.retain?.() ?? null };
   }
 

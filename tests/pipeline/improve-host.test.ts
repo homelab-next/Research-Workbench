@@ -251,3 +251,44 @@ test("probes.end ends a waiting child's run as stopped by improve-probe and does
   expect(c.state.seq).toBe(seq);
   expect(c.entries().some((e) => e.type === "product.published")).toBe(false);
 });
+
+// ---------- final review C1: a staged version covers every file of its change ----------
+const SOURCE = "sources/dns-logs.yaml";
+const NOTE = "the answer column is the address the name resolved to";
+const sourceFile = (): ManifestFile => {
+  const text = readFileSync(join(sample.root, ...SOURCE.split("/")), "utf8");
+  if (!text.includes("{ name: answer, type: address }")) throw new Error("the sample's dns-logs source changed");
+  return { path: SOURCE, text: text.replace("{ name: answer, type: address }", `{ name: answer, type: address, meaning: "${NOTE}" }`) };
+};
+const noteOf = (deps: { registry: { source(id: string): { tables: { columns: { name: string; meaning: string }[] }[] } | null } }): string | null =>
+  deps.registry.source("dns-logs")?.tables.flatMap((t) => t.columns).find((c) => c.name === "answer")?.meaning ?? null;
+
+test("a candidate that changes a source's field notes is staged whole: its hash is not the procedure's alone nor the base's, and a probe child binds a registry with the note", () => {
+  const s = improveCase();
+  const both = host.stage(me(s), sample.root, [...candidateFiles(), sourceFile()], TARGET);
+  const procOnly = host.stage(me(s), sample.root, candidateFiles(), TARGET);
+  const srcOnly = host.stage(me(s), sample.root, [sourceFile()], TARGET);
+  if (!both.ok || !procOnly.ok || !srcOnly.ok) throw new Error("a stage was refused");
+  expect(both.loop.pipeline.hash).not.toBe(procOnly.loop.pipeline.hash);
+  expect(srcOnly.loop.pipeline.hash).not.toBe(live().pipeline.hash);
+  // the lock names the source's staged bytes
+  const item = both.loop.lock.items.find((i) => i.kind === "source" && i.id === "dns-logs");
+  expect(item?.hash).toBe(sha256Hex(new TextEncoder().encode(sourceFile().text)));
+  // a probe child of that version reads the note; the live registry does not
+  const child = probeChild(s);
+  const childSession = wb.session(child.id);
+  const first = new Engine(childSession, { ...composed.deps, improve: host });
+  first.start(ENGINE, { loop: both.loop });
+  expect(first.loop!.pipeline.hash).toBe(both.loop.pipeline.hash);
+  expect(noteOf(first.bound as never)).toBe(NOTE);
+  expect(noteOf(first.bound.runner as never)).toBe(NOTE);
+  expect(noteOf(composed.deps as never)).not.toBe(NOTE);
+  first.close();
+  // after a restart, an engine made for the child binds the same
+  const again = new Engine(childSession, { ...composed.deps, improve: host });
+  expect(again.loop!.pipeline.hash).toBe(both.loop.pipeline.hash);
+  expect(noteOf(again.bound as never)).toBe(NOTE);
+  again.close();
+  // staging wrote nothing into the root
+  expect(readFileSync(join(sample.root, ...SOURCE.split("/")), "utf8")).not.toContain(NOTE);
+});

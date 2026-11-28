@@ -1,9 +1,10 @@
 // The staging folders of improve runs: where each is, the mark staging leaves in each folder it makes, and the sweep that removes only those.
 // This file names no module root; it writes only under the configuration's improve.staged.
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Workbench } from "../../core/workbench";
 import type { Config } from "../../modules/config";
+import { SNAPSHOT_OF } from "../../modules/loop-stage";
 
 /** A staging folder's name: the improve case's id, a dash, and the first 12 hex of its first entry's hash. */
 const FOLDER = /^(CASE-[1-9][0-9]*)-([0-9a-f]{12})$/;
@@ -26,6 +27,25 @@ export function markStaged(folder: string, improve: { case: string; origin: stri
   mkdirSync(folder, { recursive: true });
   const at = join(folder, STAGED_MARK);
   if (!existsSync(at)) writeFileSync(at, JSON.stringify({ case: improve.case, origin: improve.origin }));
+}
+
+/** The folder, inside an improve case's staging folder, of the root snapshots its candidates that change a source or a playbook are probed over. */
+export const SNAPSHOTS = "roots";
+/** Where staging lays a snapshot before its version's hash is known. */
+export const nextSnapshot = (folder: string): string => join(folder, SNAPSHOTS, "next");
+
+/** Files the snapshot laid at nextSnapshot(folder) under its version's hash, naming the root it copies; removes what is left of it otherwise. */
+export function keepSnapshot(folder: string, kept: boolean, hash: string, root: string): void {
+  const next = nextSnapshot(folder);
+  try {
+    if (!kept) return;
+    writeFileSync(join(next, SNAPSHOT_OF), JSON.stringify({ root }));
+    const at = join(folder, SNAPSHOTS, hash);
+    rmSync(at, { recursive: true, force: true });
+    renameSync(next, at);
+  } finally {
+    rmSync(next, { recursive: true, force: true });
+  }
 }
 
 /** The improve case and origin a folder's mark names, when the mark is a file staging wrote and agrees with the folder's name; null otherwise. */

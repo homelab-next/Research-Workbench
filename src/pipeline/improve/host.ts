@@ -4,8 +4,8 @@ import type { CaseState } from "../../core/state";
 import type { Entry } from "../../core/types";
 import type { ChildLink, NewCase, ProbeMark } from "../../core/workbench";
 import type { ChangeCheck, ManifestFile } from "../../modules/loop-write";
-import type { RunSummary } from "../engine";
-import type { ResolvedLoop } from "../loops";
+import type { EngineDeps, RunSummary } from "../engine";
+import type { LoopLock, ResolvedLoop } from "../loops";
 import type { ChildRef, ChildView } from "../subloop";
 
 /** A task Select named: its case and the hash of that case's first entry. */
@@ -25,6 +25,11 @@ export interface ImproveHost {
   staged(improve: { case: string; origin: string | null }): BlobStore;
   /** stageCandidate over the roots as they are now, into this improve case's staging store. */
   stage(improve: { case: string; origin: string | null }, root: string, files: ManifestFile[], target: string): { ok: true; loop: ResolvedLoop } | { ok: false; problems: string[] };
+  /**
+   * What a probe child of a staged version that changed a source or a playbook queries and plans through: the registry loaded from the snapshot
+   * staging kept, with a runner and a seeker over it. The reason when it cannot be had. An engine asks only for a probe child's staged lock.
+   */
+  registryFor?(improve: { case: string; origin: string | null }, lock: LoopLock): Pick<EngineDeps, "registry" | "runner" | "seeker"> | string;
   /** checkCandidate over the roots as they are now. */
   check(root: string, files: ManifestFile[], target: string): ChangeCheck;
   /** Removes the improve case's staging folder. Never throws. */

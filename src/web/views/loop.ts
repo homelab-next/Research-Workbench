@@ -11,7 +11,7 @@ import { hashChip, problemList, versionLine } from "./loops";
 export let editButton: ((shell: Shell, loop: LoopView) => HTMLElement[]) | null = null;
 export function setEditButton(make: typeof editButton): void { editButton = make; }
 
-const SOURCE_WORDS: Record<ItemView["source"], string> = { root: "root", pinned: "pinned", "loop-output": "loop output", inline: "inline", memory: "memory", "built-in": "built in" };
+const SOURCE_WORDS: Record<ItemView["source"], string> = { root: "root", pinned: "pinned", "loop-output": "loop output", inline: "inline", memory: "memory", "built-in": "built in", staged: "staged" };
 /** The roles of an improve loop's stages: such a loop is not improved by an improve run (the server's targetProblem says the same). */
 const IMPROVE_ROLES: readonly string[] = ["select", "propose", "probe", "compose", "judge", "reflect", "adopt"];
 /** Whether an improve run may take this loop: usable, no stage of an improve role, and no sub-loop (refused in this version). */

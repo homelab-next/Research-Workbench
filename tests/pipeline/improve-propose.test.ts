@@ -273,12 +273,14 @@ test("two proposed changes become K1 and K2, each staged with its lock and hash"
   expect(composed.deps.loops!.current(TARGET)!.pipeline.hash).toBe(base);
 });
 
-test("a change that resolves to the base's hash is dropped: it changes nothing the loop reads", async () => {
+test("a change of a source's field notes alone is staged, not dropped: the version it is probed as covers the source", async () => {
   const s = improveCase();
   await run(s, host(), [{ tool_calls: [proposal("Wifi notes", [wifiEdit()])] }, FINAL]);
   expect(ofType(s, "builder.proposed").length).toBe(1);
-  expect(ofType(s, "improve.candidate").map((e) => e.payload)).toEqual([{ candidate: "K1", change: "chg-1", status: "dropped", loop_hash: null, lock: null, reason: "it changes nothing the loop reads" }]);
-  expect(proposeOutput(s)).toEqual({ candidates: [{ candidate: "K1", change: "chg-1", status: "dropped" }] });
+  const [k1] = ofType(s, "improve.candidate").map((e) => e.payload);
+  expect(k1).toMatchObject({ candidate: "K1", change: "chg-1", status: "staged", reason: "" });
+  expect(k1!.loop_hash).not.toBe(s.state.improve.selected!.loop_hash);
+  expect(proposeOutput(s)).toEqual({ candidates: [{ candidate: "K1", change: "chg-1", status: "staged" }] });
 });
 
 test("a change that no longer resolves when it is staged is dropped with the loop's problem", async () => {

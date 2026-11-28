@@ -387,16 +387,26 @@ test("loops.current(target) and loops.atHash(target, staged hash) do not return 
   }
 });
 
-test("a candidate that changes nothing the lock reads resolves to the current hash", () => {
+test("a candidate that changes a playbook's steps and a source's field notes is staged whole: its lock names both files, and its hash covers them", () => {
   const d = deps();
   const current = d.loops.current(TARGET)!;
   const into = stagedInto();
-  // a playbook's steps and a source's field notes are read by no item of the lock
+  // a playbook's steps and a source's field notes are read by no component of the lock: they are its staged items
   const files = [edit("playbooks/address-triage.yaml", "max_values: 5", "max_values: 3"), edit("sources/wifi.yaml", "A disconnection message names neither.", "A disconnection message names neither the host nor the access point.")];
   const staged = stage(files, into, d);
-  expect(staged.pipeline.hash).toBe(current.pipeline.hash);
-  expect(staged.lock).toEqual(current.lock);
-  expect(hashes(join(config.data_dir, "staged", "IMP-1", "blobs"))).toEqual({});
+  expect(staged.pipeline.hash).not.toBe(current.pipeline.hash);
+  expect(staged.lock.hash).toBe(staged.pipeline.hash);
+  // what the loop's components are is the current version's; the two files are named beside them
+  expect(staged.lock.items.filter((i) => i.source !== "staged")).toEqual(current.lock.items);
+  const named = staged.lock.items.filter((i) => i.source === "staged").map((i) => [i.stage, i.kind, i.id, i.path, i.hash]);
+  const hashOf = (t: string) => sha256Hex(new TextEncoder().encode(t));
+  expect(named).toEqual([["*", "playbook", "address-triage", files[0]!.path, hashOf(files[0]!.text)], ["*", "source", "wifi", files[1]!.path, hashOf(files[1]!.text)]]);
+  // their bytes are in the staging store and nowhere else; the lock is rebuilt only over it
+  expect(Object.keys(hashes(join(config.data_dir, "staged", "IMP-1", "blobs"))).sort()).toEqual([hashOf(files[0]!.text), hashOf(files[1]!.text)].sort());
+  expect(d.loops.fromLock(staged.lock)).toContain("only a probe child binds it");
+  // the same files staged again give the same version; one of them alone, another
+  expect(stage(files, into, d).pipeline.hash).toBe(staged.pipeline.hash);
+  expect(stage(files.slice(1), into, d).pipeline.hash).not.toBe(staged.pipeline.hash);
 });
 
 test("a candidate that breaks the loop is { ok: false } with the loop's problem, and `into` is left as it was", () => {

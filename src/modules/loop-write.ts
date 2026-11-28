@@ -1,6 +1,6 @@
 // Saving manifests into a trusted root: checked first on a copy of the root, written by a person only, recorded on the workbench chain.
 import { randomUUID } from "node:crypto";
-import { closeSync, copyFileSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
+import { closeSync, copyFileSync, cpSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { OverlayBlobs } from "../core/blobs";
 import type { BlobStore } from "../core/blobs";
@@ -167,7 +167,7 @@ function keepFor(lock: LoopLock, from: BlobStore, content: BlobStore, into: Blob
 }
 
 /** checkChange, the texts a save writes and, with `opts.loop`, that loop's lock in the copy (its bytes kept in `opts.into` when given). */
-function plan(deps: SaveDeps, root: string, files: ManifestFile[], opts: { into?: BlobStore; loop?: string } = {}): Plan {
+function plan(deps: SaveDeps, root: string, files: ManifestFile[], opts: { into?: BlobStore; loop?: string; keep?: string } = {}): Plan {
   const refused = (problems: string[], planned: Planned[] = []): Plan => ({
     check: { ok: false, problems, files: planned.map(({ text: _t, ...f }) => f) }, planned, lock: null,
   });
@@ -299,6 +299,12 @@ function plan(deps: SaveDeps, root: string, files: ManifestFile[], opts: { into?
     // the lock of the loop asked for, as the copy resolves it; what it reads that the content store lacks is kept before the copy is removed
     const lock = opts.loop === undefined ? null : afterLoops.current(opts.loop)?.lock ?? null;
     if (lock !== null && opts.into !== undefined) keepFor(lock, content, deps.content, opts.into);
+    // the copy the registry was loaded from, with the files laid over it, kept where the caller says (a staged candidate's snapshot)
+    if (opts.keep !== undefined) {
+      rmSync(opts.keep, { recursive: true, force: true });
+      mkdirSync(dirname(opts.keep), { recursive: true });
+      cpSync(copy, opts.keep, { recursive: true });
+    }
     return { check: { ok: true, problems: [], files: planned.map(({ text: _t, ...f }) => f) }, planned, lock };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
@@ -310,7 +316,7 @@ function plan(deps: SaveDeps, root: string, files: ManifestFile[], opts: { into?
  * in the copy, is returned. The check is always made over a temporary store, and the copy of the root is always removed; only when the check
  * passes are the bytes the returned lock reads that the content store lacks put into `opts.into`, so a refused change leaves it as it was.
  */
-export function planChange(deps: SaveDeps, root: string, files: ManifestFile[], opts?: { into?: BlobStore; loop?: string }): { check: ChangeCheck; lock: LoopLock | null } {
+export function planChange(deps: SaveDeps, root: string, files: ManifestFile[], opts?: { into?: BlobStore; loop?: string; keep?: string }): { check: ChangeCheck; lock: LoopLock | null } {
   const { check, lock } = plan(deps, root, files, opts);
   return { check, lock };
 }

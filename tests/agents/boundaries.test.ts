@@ -235,8 +235,8 @@ test("stageCandidate and planChange with `into` are called only from src/pipelin
   const found = all.flatMap((f) => stagesOnlyThere(relOf(f), readFileSync(f, "utf8")));
   expect(found).toEqual([]);
   // they are called: once by the host, and planChange with into once, by stageCandidate itself, which only the host calls
-  expect(codeOf(readFileSync(join(ROOT, WORKBENCH_HOST), "utf8"))).toMatch(/\bstageCandidate\(deps, path, files, target, host\.staged\(improve\)\)/);
-  expect(codeOf(readFileSync(join(ROOT, LOOP_STAGE), "utf8"))).toMatch(/\bplanChange\(deps, root, files, \{ into, loop: target \}\)/);
+  expect(codeOf(readFileSync(join(ROOT, WORKBENCH_HOST), "utf8"))).toMatch(/\bstageCandidate\(deps, path, files, target, host\.staged\(improve\), \{ keep: join\(nextSnapshot\(at\), "root"\) \}\)/);
+  expect(codeOf(readFileSync(join(ROOT, LOOP_STAGE), "utf8"))).toMatch(/\bplanChange\(deps, root, files, \{ into, loop: target, \.\.\.\(keep === undefined \? \{\} : \{ keep \}\) \}\)/);
   // planted
   expect(stagesOnlyThere("src/pipeline/improve/propose.ts", `const r = stageCandidate(deps, root, files, target, store);`)).toEqual(["src/pipeline/improve/propose.ts calls stageCandidate"]);
   expect(stagesOnlyThere("src/server/builder.ts", `const p = planChange(saveDeps, root, laid, { into: store });`)).toEqual(["src/server/builder.ts calls planChange with into"]);

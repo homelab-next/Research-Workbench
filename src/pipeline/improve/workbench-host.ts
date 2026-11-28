@@ -7,14 +7,15 @@ import { CaseNotFoundError, CaseRefused } from "../../core/workbench";
 import type { ChildLink, NewCase, ProbeMark, Workbench } from "../../core/workbench";
 import type { Actor } from "../../core/types";
 import type { Config } from "../../modules/config";
-import { checkCandidate, stageCandidate } from "../../modules/loop-stage";
+import { checkCandidate, snapshotRegistry, stageCandidate } from "../../modules/loop-stage";
+import { SEEKERS } from "../../modules/seeker";
 import type { ChangeCheck, ManifestFile } from "../../modules/loop-write";
 import type { Engine, EngineDeps } from "../engine";
 import { notTheChild, readChild } from "../subloop";
 import type { ChildRef } from "../subloop";
 import type { ImproveHost, ProbeRef, TaskRef, TaskView } from "./host";
 import { driveProbe } from "./probe";
-import { inProgress, markStaged, stagedFolder } from "./staging";
+import { SNAPSHOTS, inProgress, keepSnapshot, markStaged, nextSnapshot, stagedFolder } from "./staging";
 
 export { STAGED_MARK, markStaged, stagedFolder, sweepStaged } from "./staging";
 
@@ -81,8 +82,23 @@ export function improveHost(opts: { wb: Workbench; deps: () => EngineDeps; engin
       const deps = saveDeps();
       const path = rootPath(deps.config, root);
       if (path === null) return { ok: false, problems: [notARoot(root)] };
-      markStaged(folder(improve), improve);
-      return stageCandidate(deps, path, files, target, host.staged(improve));
+      const at = folder(improve);
+      markStaged(at, improve);
+      let made: ReturnType<typeof stageCandidate> = { ok: false, problems: [] };
+      try {
+        made = stageCandidate(deps, path, files, target, host.staged(improve), { keep: join(nextSnapshot(at), "root") });
+      } finally {
+        keepSnapshot(at, made.ok && made.snapshot, made.ok ? made.loop.pipeline.hash : "", resolve(path));
+      }
+      return made.ok ? { ok: true, loop: made.loop } : made;
+    },
+    registryFor: (improve, lock) => {
+      const d = opts.deps();
+      const registry = snapshotRegistry(d.config, join(folder(improve), SNAPSHOTS), lock);
+      if (typeof registry === "string") return registry;
+      const makeSeeker = Object.hasOwn(SEEKERS, d.config.seeker) ? SEEKERS[d.config.seeker] : undefined;
+      if (makeSeeker === undefined) return `the seeker "${d.config.seeker}" is not one this build has`;
+      return { registry, runner: { ...d.runner, registry }, seeker: makeSeeker(registry) };
     },
     check: (root, files: ManifestFile[], target): ChangeCheck => {
       const deps = saveDeps();

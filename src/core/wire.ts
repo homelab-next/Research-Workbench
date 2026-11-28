@@ -38,7 +38,7 @@ export interface NewCaseInput { title: string; asked: string; why: string; start
   type?: string }
 
 /** One component, check or built-in rule of a loop's stage: where it comes from and its hash (null for what is built in). */
-export interface ItemView { kind: string; id: string; title: string; source: "root" | "pinned" | "loop-output" | "inline" | "built-in" | "memory"; hash: string | null;
+export interface ItemView { kind: string; id: string; title: string; source: "root" | "pinned" | "loop-output" | "inline" | "built-in" | "memory" | "staged"; hash: string | null;
   /** The selector, for a memory item: shared/<case-type>, shared/* or case/notes. */
   memory?: string }
 export interface LoopStageView {

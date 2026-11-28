@@ -15,7 +15,7 @@ import { recordedAs } from "../modules/registry-record";
 
 export type SourceSpec = "root" | { pinned: string } | { "loop-output": string } | { memory: string };
 export interface ResolvedItem {
-  stage: string; kind: string; id: string; title: string; source: "root" | "pinned" | "loop-output" | "inline" | "memory"; hash: string; path: string | null;
+  stage: string; kind: string; id: string; title: string; source: "root" | "pinned" | "loop-output" | "inline" | "memory" | "staged"; hash: string; path: string | null;
   origin?: { case: string; head: string; marking: Marking };
   /** Set exactly when source is "memory": the store and selector. */
   memory?: string;

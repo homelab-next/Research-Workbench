@@ -166,14 +166,39 @@ export function loopHash(parts: { loop: string; manifest: string; entry: string;
 
 const byItem = (a: ResolvedItem, b: ResolvedItem): number => lt(a.stage, b.stage) || lt(a.kind, b.kind) || lt(a.id, b.id);
 
-/** The hash of a lock's own content, as loopHash computes it. */
+/** The kinds of file a staged candidate changes that no loop resolves as a component: they are named in a staged lock as items of source "staged". */
+export const STAGED_ITEM_KINDS: readonly string[] = ["source", "playbook"];
+
+/** The hash of a staged version: the loop's own hash and every staged file (kind, id, path, bytes' hash), sorted. */
+function stagedHash(core: string, staged: readonly ResolvedItem[]): string {
+  const files = staged.map((i): [string, string, string, string] => [i.kind, i.id, i.path ?? "", i.hash]).sort((a, b) => lt(a[0], b[0]) || lt(a[1], b[1]) || lt(a[2], b[2]));
+  return sha256Hex(canonical({ v: "staged", core, files } as unknown as Json));
+}
+
+/** The hash of a lock's own content, as loopHash computes it; a staged lock's hash also covers the staged files it names. */
 function hashOfLock(lock: Pick<LoopLock, "loop" | "manifest" | "entry" | "items" | "subloops">, stages: StageManifest[]): string {
-  return loopHash({
+  const core = loopHash({
     loop: lock.loop, manifest: lock.manifest.hash, entry: lock.entry, stages: stages.map((s): [string, string] => [s.id, s.hash]),
-    components: lock.items.filter((i) => i.kind !== "stage").map((i): [string, string, string, string, string] => [i.stage, i.kind, i.id, i.source, i.hash]),
+    components: lock.items.filter((i) => i.kind !== "stage" && i.source !== "staged").map((i): [string, string, string, string, string] => [i.stage, i.kind, i.id, i.source, i.hash]),
     subloops: lock.subloops.map((x): [string, string, string] => [x.stage, x.loop, x.hash]),
   });
+  const staged = lock.items.filter((i) => i.source === "staged");
+  return staged.length === 0 ? core : stagedHash(core, staged);
 }
+
+/**
+ * A loop's lock with the files of a candidate no component names (a source's field notes, a playbook's steps) as items of source "staged", and
+ * its hash over them too; the lock itself when there are none. The version a probe child binds is then the whole change, and Adopt compares it.
+ */
+export function stagedLock(lock: LoopLock, staged: readonly ResolvedItem[]): LoopLock {
+  if (lock.items.some((i) => i.source === "staged")) throw new Error("the lock is staged already");
+  if (staged.length === 0) return lock;
+  const items = [...lock.items, ...staged.map((i) => ({ ...i, stage: "*", source: "staged" as const }))].sort(byItem);
+  return { ...lock, items, hash: stagedHash(lock.hash, items.filter((i) => i.source === "staged")) };
+}
+
+/** True when a lock names staged files: it is a candidate's, bound only by a probe child, over its improve case's staging store. */
+export const isStagedLock = (lock: Pick<LoopLock, "items">): boolean => lock.items.some((i) => i.source === "staged");
 
 /** A profile from its manifest, by the context's own reader (which reads a registry; this one holds the one manifest). */
 function profileFrom(m: LoadedManifest): Profile {
@@ -476,6 +501,8 @@ class Missing extends Error {}
 
 /** The loop a lock describes, from the content store alone, or read through `over` first. */
 function fromLock(ctx: ResolveContext, lock: LoopLock, over?: BlobStore): ResolvedLoop | string {
+  // a staged version's files are in its improve case's staging store and nowhere else
+  if (over === undefined && isStagedLock(lock)) return `the lock of loop "${lock.loop}" is a staged candidate's; only a probe child binds it`;
   const store = over === undefined ? ctx.content : readingOver(over, ctx.content);
   const bytesOf = (hash: string, what: string): Uint8Array => {
     if (store.check(hash) !== "ok") throw new Missing(`the content store does not hold ${what} (${hash})`);
@@ -547,7 +574,7 @@ function fromLock(ctx: ResolveContext, lock: LoopLock, over?: BlobStore): Resolv
 }
 
 const HEX64 = /^[0-9a-f]{64}$/;
-const SOURCES: readonly string[] = ["root", "pinned", "loop-output", "inline", "memory"];
+const SOURCES: readonly string[] = ["root", "pinned", "loop-output", "inline", "memory", "staged"];
 function isItem(x: unknown): x is ResolvedItem {
   if (!isPlainObject(x)) return false;
   const o = x as Record<string, unknown>;

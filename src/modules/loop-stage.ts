@@ -1,16 +1,22 @@
 // An improve candidate: a change of what a loop already has, checked by the candidate rules after the save's own check, and staged beside the
 // live registry: the target loop as the files would leave it, rebuilt from its lock over a store of its own. Nothing here writes a root, the
 // workbench chain or the content store.
-import { lstatSync, readFileSync } from "node:fs";
-import { dirname, resolve, sep } from "node:path";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
 import type { BlobStore } from "../core/blobs";
 import { canonical, isPlainObject } from "../core/canonical";
+import { sha256Hex } from "../core/hash";
 import type { Json } from "../core/canonical";
 import { rootRelative } from "../pipeline/components";
-import type { LoopCatalog, ResolvedLoop } from "../pipeline/loops";
+import type { ResolvedItem } from "../pipeline/components";
+import { STAGED_ITEM_KINDS, stagedLock } from "../pipeline/loops";
+import type { LoopCatalog, LoopLock, ResolvedLoop } from "../pipeline/loops";
 import { checkChange, planChange } from "./loop-write";
 import type { ChangeCheck, ManifestFile, SaveDeps } from "./loop-write";
+import { rootsOf } from "./config";
+import type { Config } from "./config";
 import { parseManifestFile } from "./manifests";
+import { loadRegistry } from "./registry-record";
 import type { Registry } from "./registry";
 
 /** The kinds a candidate may change. */
@@ -162,14 +168,104 @@ export function checkCandidate(deps: CandidateDeps, root: string, files: Manifes
   return problems.length === 0 ? check : { ok: false, problems, files: check.files };
 }
 
-/** The target loop as these files would leave it, rebuilt from its lock over `into`; the bytes the content store lacks are in `into` and nowhere else. */
-export function stageCandidate(deps: CandidateDeps, root: string, files: ManifestFile[], target: string, into: BlobStore): { ok: true; loop: ResolvedLoop } | { ok: false; problems: string[] } {
+/** The files of a change no loop component names (sources, playbooks), as the staged items of its lock: kind, id, title, path and bytes' hash. */
+export function stagedItems(files: ManifestFile[]): ResolvedItem[] {
+  const out: ResolvedItem[] = [];
+  for (const f of files) {
+    const bytes = new TextEncoder().encode(f.text);
+    let parsed: { kind: string; body: Body };
+    try { parsed = parseManifestFile(f.path, bytes); } catch { continue; }
+    if (!STAGED_ITEM_KINDS.includes(parsed.kind) || typeof parsed.body.id !== "string") continue;
+    const title = typeof parsed.body.title === "string" && parsed.body.title !== "" ? parsed.body.title : parsed.body.id;
+    out.push({ stage: "*", kind: parsed.kind, id: parsed.body.id, title, source: "staged", hash: sha256Hex(bytes), path: f.path });
+  }
+  return out;
+}
+
+/** The paths of `files` whose bytes the lock does not name (as a component, a stage, the loop file or a staged file): what a version does not cover. */
+export function uncovered(lock: LoopLock, files: ManifestFile[]): string[] {
+  const named = new Set([lock.manifest.hash, ...lock.items.map((i) => i.hash)]);
+  return files.filter((f) => !named.has(sha256Hex(new TextEncoder().encode(f.text)))).map((f) => f.path);
+}
+
+/**
+ * The lock of loop `target` with these files laid over the root, covering every one of them: the save's plan, then the files no component
+ * names as staged items. What Adopt compares with the probed version; it keeps nothing.
+ */
+export function coveredLock(deps: SaveDeps, root: string, files: ManifestFile[], target: string): { check: ChangeCheck; lock: LoopLock | null } {
+  const { check, lock } = planChange(deps, root, files, { loop: target });
+  return { check, lock: lock === null ? null : stagedLock(lock, stagedItems(files)) };
+}
+
+/** The file in a candidate's snapshot folder that names the root the snapshot is a copy of. */
+export const SNAPSHOT_OF = "of.json";
+
+/**
+ * The target loop as these files would leave it, its lock covering every file (stagedLock), rebuilt over `into`; the bytes the content store
+ * lacks, the staged files' among them, are in `into` and nowhere else. With `opts.keep`, when the files change a source or a playbook, the copy
+ * of the root the check loaded (the files laid over it) is kept there: the snapshot a probe child's registry is loaded from. `snapshot` says
+ * whether one was kept.
+ */
+export function stageCandidate(
+  deps: CandidateDeps, root: string, files: ManifestFile[], target: string, into: BlobStore, opts: { keep?: string } = {},
+): { ok: true; loop: ResolvedLoop; snapshot: boolean } | { ok: false; problems: string[] } {
   // the rules read only the root and the live lock: a file they refuse is never planned, so `into` takes nothing for it
   const rules = candidateProblems(deps, root, files, target);
   if (rules.length > 0) return { ok: false, problems: rules };
-  const { check, lock } = planChange(deps, root, files, { into, loop: target });
+  const staged = stagedItems(files);
+  const keep = staged.length > 0 ? opts.keep : undefined;
+  const { check, lock: planned } = planChange(deps, root, files, { into, loop: target, ...(keep === undefined ? {} : { keep }) });
   if (!check.ok) return { ok: false, problems: check.problems };
-  if (lock === null) return { ok: false, problems: [`loop "${target}" is not usable`] };
+  if (planned === null) return { ok: false, problems: [`loop "${target}" is not usable`] };
+  const lock = stagedLock(planned, staged);
+  // the staged files' bytes are read through `into`, as the lock's other bytes are
+  for (const f of files) if (staged.some((i) => i.path === f.path)) into.put(new TextEncoder().encode(f.text));
   const loop = deps.loops.fromLock(lock, into);
-  return typeof loop === "string" ? { ok: false, problems: [loop] } : { ok: true, loop };
+  return typeof loop === "string" ? { ok: false, problems: [loop] } : { ok: true, loop, snapshot: keep !== undefined };
+}
+
+/** Points every path a registry loaded from `from` holds at `to` instead: the snapshot's manifests read as the root's, whose data they name. */
+function rebase(registry: Registry, from: string, to: string): void {
+  const at = (p: string): string => (p === from ? to : p.startsWith(from + sep) ? to + p.slice(from.length) : p);
+  const r = registry as unknown as { roots: { path: string }[]; problems: { root: string; path: string }[] };
+  for (const root of r.roots) root.path = at(root.path);
+  for (const p of r.problems) { p.root = at(p.root); p.path = at(p.path); }
+  for (const m of registry.manifests()) {
+    const x = m as { root: string; path: string; dir: string };
+    x.root = at(x.root); x.path = at(x.path); x.dir = at(x.dir);
+  }
+  for (const s of registry.sources()) {
+    const x = s as { root: string; dir: string };
+    x.root = at(x.root); x.dir = at(x.dir);
+  }
+}
+
+/**
+ * The registry a probe child of a staged version binds: the roots as configured, with the root the candidate changed read from the snapshot
+ * staging kept (`<snapshots>/<lock hash>`), its paths pointed back at that root. Nothing is recorded. The reason, when the snapshot is not
+ * there, its root is no trusted root now, or a staged file the lock names is not in it with those bytes.
+ */
+export function snapshotRegistry(config: Config, snapshots: string, lock: LoopLock): Registry | string {
+  const dir = join(snapshots, lock.hash);
+  const missing = `the staged files of version ${lock.hash.slice(0, 12)} are not in this workbench`;
+  let root: string;
+  try {
+    const of = JSON.parse(readFileSync(join(dir, SNAPSHOT_OF), "utf8")) as { root?: unknown };
+    if (typeof of.root !== "string") return missing;
+    root = of.root;
+  } catch {
+    return missing;
+  }
+  const copy = join(dir, "root");
+  if (!existsSync(copy)) return missing;
+  const roots = rootsOf(config);
+  if (!roots.some((r) => r.trusted && sameDir(r.path, root))) return `the root the staged version changed is not a trusted root here now`;
+  const registry = loadRegistry(roots.map((r) => (sameDir(r.path, root) ? { ...r, path: copy } : r)));
+  rebase(registry, resolve(copy), resolve(root));
+  for (const i of lock.items) {
+    if (i.source !== "staged") continue;
+    const m = registry.get(i.kind, i.id);
+    if (m === null || m.hash !== i.hash || !sameDir(m.root, root)) return missing;
+  }
+  return registry;
 }
