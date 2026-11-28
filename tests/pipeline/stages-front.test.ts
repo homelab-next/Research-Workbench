@@ -900,3 +900,60 @@ test("a Research pass Assemble sent back for a question never sends the work bac
   expect(ofType("stage.sent_back").map((e) => [e.payload.from, e.payload.to])).toEqual([["assemble", "research"]]);
   expect(finished("research").map((e) => [e.payload.outcome, e.payload.reason])).toEqual([["pass", null], ["pass", null]]);
 });
+
+// ---- slice 13: Frame and the case's type
+
+const CASE_TYPES = [{ id: "unknown-device", title: "Unknown device", about: "A device that no inventory names." }, { id: "phishing", title: "Phishing", about: "" }];
+/** The sample's registry with Frame's schema given the optional case_type. */
+function typedRegistry(): Registry {
+  const p = join(f.sample.root, "context", "schemas", "frame-output.yaml");
+  writeFileSync(p, readFileSync(p, "utf8").replace(`"notes": {"type": "string"}}}`, `"notes": {"type": "string"}, "case_type": {"type": ["string", "null"]}}}`));
+  return loadRegistry([{ path: f.sample.root, trusted: true, credentials: [] }]);
+}
+const frameOnce = (r: Rig): Promise<StageEnd> =>
+  frameRunner({ session: f.s, deps: r.deps, stage: r.deps.pipeline.stages.find((s) => s.id === "frame")!, attempt: 1, onNeedsBudget: async () => null });
+const frameTask = (): string =>
+  (JSON.parse(f.s.blobs.text(ofType("model.request").at(-1)!.payload.messages.blob)) as { messages: { content: string }[] }).messages.map((m) => m.content).join("\n");
+const TYPE_LINES = "Case types: phishing (Phishing); unknown-device (Unknown device: A device that no inventory names.)\nIf the question is plainly one of them, give its id as case_type; otherwise null.";
+
+test("Frame's task lists the case types when the case has none and its schema has case_type, and not otherwise", async () => {
+  const r = rig({ orchestrator: [say(FRAME), say(FRAME), say(FRAME), say(FRAME)] });
+  r.engine.start(person);
+  r.deps.case_types = [CASE_TYPES[1]!, CASE_TYPES[0]!].sort((a, b) => (a.id < b.id ? -1 : 1));
+  // the sample's schema has no case_type
+  expect(await frameOnce(r)).toMatchObject({ kind: "finished", outcome: "pass" });
+  expect(frameTask()).not.toContain("Case types:");
+  r.deps.registry = typedRegistry();
+  expect(await frameOnce(r)).toMatchObject({ kind: "finished", outcome: "pass" });
+  expect(frameTask()).toContain(TYPE_LINES);
+  // no case types loaded
+  r.deps.case_types = [];
+  await frameOnce(r);
+  expect(frameTask()).not.toContain("Case types:");
+  // a case with a type
+  r.deps.case_types = CASE_TYPES;
+  f.s.commit(() => [{ type: "case.type_set", actor: person, payload: { type: "phishing" } }]);
+  await frameOnce(r);
+  expect(frameTask()).not.toContain("Case types:");
+  expect(ofType("case.type_proposed")).toEqual([]);
+});
+
+test("Frame naming a loaded case type records case.type_proposed by the engine; naming one that is not loaded records nothing", async () => {
+  const r = rig({ orchestrator: [say({ ...FRAME, case_type: "insider" }), say({ ...FRAME, case_type: "unknown-device" }), say({ ...FRAME, case_type: "phishing" })] });
+  r.deps.registry = typedRegistry();
+  r.deps.case_types = CASE_TYPES;
+  r.engine.start(person);
+  const ignored = await frameOnce(r);
+  expect(ignored).toMatchObject({ kind: "finished", outcome: "pass", reason: `Frame named "insider", which is no case type here; it was ignored` });
+  expect(ofType("case.type_proposed")).toEqual([]);
+  expect(await frameOnce(r)).toMatchObject({ kind: "finished", outcome: "pass", reason: null });
+  const proposed = ofType("case.type_proposed");
+  expect(proposed.map((e) => [e.actor, e.payload, e.run, e.stage])).toEqual([[{ kind: "system", id: "engine" }, { type: "unknown-device", why: "Frame read the question as this type" }, f.s.state.run.id, "frame"]]);
+  expect(f.s.state.memory.proposed_type?.type).toBe("unknown-device");
+  expect(f.s.state.memory.type).toBeNull();
+  // a loop that reads no shared memory asks the person nothing, and Frame never sets the type
+  expect(ofType("question.asked")).toEqual([]);
+  expect(ofType("case.type_set")).toEqual([]);
+  await frameOnce(r);
+  expect(f.s.state.memory.proposed_type?.type).toBe("phishing");
+});

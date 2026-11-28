@@ -4,6 +4,7 @@ import type { Ledger } from "../core/ledger";
 import type { Workbench } from "../core/workbench";
 import { loadProviders } from "../agents/providers";
 import { loadCaseTypes } from "../modules/case-types";
+import type { CaseType } from "../modules/case-types";
 import { rootsOf } from "../modules/config";
 import type { Config } from "../modules/config";
 import { ConnectorPool } from "../modules/connectors";
@@ -20,6 +21,8 @@ import { rootComponents } from "../pipeline/components";
 import type { EngineDeps } from "../pipeline/engine";
 import type { Pipeline } from "../pipeline/manifests";
 import { IMPLICIT_NOTE, loadLoops } from "../pipeline/loops";
+import { storeHost } from "../pipeline/memory";
+import { fileSeeds, loadSeeds } from "../modules/seeds";
 import type { LoopCatalog } from "../pipeline/loops";
 
 export class ComposeError extends Error {
@@ -119,7 +122,22 @@ export function secretValues(config: Config, registry: Registry): string[] {
 }
 
 /** What compose builds from the roots, and reload builds again. */
-type Built = Pick<EngineDeps, "registry" | "runner" | "seeker" | "providers" | "loops" | "components" | "pipeline" | "profile">;
+type Built = Pick<EngineDeps, "registry" | "runner" | "seeker" | "providers" | "loops" | "components" | "pipeline" | "profile" | "case_types">;
+
+/**
+ * Files the seeds of the roots' lesson-seeds manifests into the workbench's store, each once (fileSeeds); a seed that is not a lesson, or that
+ * the store refuses, is one of the problems, and a store that cannot be opened now (an export packing it) is one too: the workbench starts.
+ */
+function seedStore(config: Config, wb: Workbench, registry: Registry, types: readonly CaseType[], problems: string[]): void {
+  const seeds = loadSeeds(registry, types);
+  problems.push(...seeds.problems);
+  if (seeds.seeds.length === 0) return;
+  try {
+    fileSeeds(wb.memory, seeds.seeds, { secrets: secretValues(config, registry), problems });
+  } catch (err) {
+    problems.push(`the lesson seeds were not filed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
 
 function build(config: Config, wb: Workbench, opts: { refuse_hosts?: () => readonly string[] }): { built: Built; pool: ConnectorPool; problems: string[] } {
   const roots = rootsOf(config);
@@ -146,7 +164,9 @@ function build(config: Config, wb: Workbench, opts: { refuse_hosts?: () => reado
     if (loop === null) problems.push(defaultLoopProblem(id, loops));
     for (const x of loops.list()) problems.push(...x.problems.filter((p) => p !== IMPLICIT_NOTE).map((p) => `loop "${x.id}": ${p}`));
     recordLoops(loops, wb.chain, wb.chainBlobs);
+    seedStore(config, wb, registry, caseTypes.types, problems);
     const built: Built = {
+      case_types: caseTypes.types,
       registry, runner: { registry, pool, observables }, seeker: makeSeeker(registry), providers: loaded.providers,
       pipeline: loop?.pipeline ?? unusablePipeline(id), profile: loop?.profile ?? UNUSABLE_PROFILE, loops, components: loop?.components ?? rootComponents(registry),
     };
@@ -210,6 +230,12 @@ export function compose(config: Config, wb: Workbench, opts: { refuse_hosts?: ()
       wb.chain.append({ type: "case.anchored", actor: { kind: "system", id: "engine" }, payload: { case: a.case, seq: a.seq, hash: a.hash, why: a.why } });
     },
   };
+  // the store is taken from the workbench each time (an export or a load reopens it); what a proposal is checked against is the deps' now
+  deps.memory = storeHost(() => wb.memory, {
+    secrets: () => secretValues(config, deps.registry),
+    case_types: () => (deps.case_types ?? []).map((t) => t.id),
+    observables: () => deps.registry.types().map((t) => t.id),
+  });
   return {
     deps, problems: first.problems,
     close: () => { for (const h of [...open]) shut(h); },

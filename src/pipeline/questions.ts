@@ -3,11 +3,12 @@ import { ContextError, packPart } from "../agents/context";
 import type { PackPart } from "../agents/context";
 import { CARD_REF, FORM_EXCEPTIONS } from "../agents/draft";
 import { scrub } from "../agents/tools/kit";
+import type { IdAllocator } from "../core/ids";
 import type { CaseSession } from "../core/session";
 import { runQuestions } from "../core/state";
-import type { QuestionState } from "../core/state";
+import type { CaseState, QuestionState } from "../core/state";
 import { MARKINGS, strictest } from "../core/types";
-import type { Actor, Entry, Marking, Observable, PersonBasis } from "../core/types";
+import type { Actor, Entry, EntryInput, Marking, Observable, PersonBasis } from "../core/types";
 import type { Registry } from "../modules/registry";
 import type { RunnerDeps } from "../modules/runner";
 import { checkStatement, personCard, PersonRefused } from "./person";
@@ -35,8 +36,13 @@ export function questionMarking(session: CaseSession, q: QuestionState): Marking
   }
 }
 
-/** Records the person's answer: a statement card that answers the question, and question.answered naming it, in one commit. Returns the card id. Throws PersonRefused. */
-export function answerQuestion(session: CaseSession, deps: RunnerDeps, input: { actor: Actor; question: string; answer: string; basis: PersonBasis; detail: string; about: Observable[] | null; marking: Marking | null }): string {
+type AnswerInput = { actor: Actor; question: string; answer: string; basis: PersonBasis; detail: string; about: Observable[] | null; marking: Marking | null };
+
+/**
+ * The person's answer, checked, as what writes it: `entries` gives the statement card that answers the question and question.answered naming
+ * it, for a commit the caller makes (checking again that the question is still unanswered), with the card's id. Throws PersonRefused.
+ */
+export function preparedAnswer(session: CaseSession, deps: RunnerDeps, input: AnswerInput): { entries: (s: Readonly<CaseState>, ids: Pick<IdAllocator, "next">) => { card: string; entries: EntryInput[] } } {
   if (input.actor.kind !== "human") throw new PersonRefused("only a person may answer a question");
   const state = session.state;
   const q = Object.hasOwn(state.questions, input.question) ? state.questions[input.question]! : null;
@@ -50,16 +56,31 @@ export function answerQuestion(session: CaseSession, deps: RunnerDeps, input: { 
   // no request to read the marking from: the answer is as strict as can be
   const marking = checkStatement(session, deps, { actor: input.actor, statement: input.answer, detail: input.detail, about, marking: input.marking }, [asked ?? "TLP:RED"]);
   const detail = input.detail.trim();
+  return {
+    entries: (s, ids) => {
+      const now = Object.hasOwn(s.questions, q.id) ? s.questions[q.id]! : null;
+      if (now !== null && now.answer !== null) throw new PersonRefused(`${q.id} is already answered (card ${now.answer.card}); add a statement to correct it`);
+      const id = ids.next("card");
+      const card = personCard(id, { title: answerTitle(q), statement: input.answer, basis: input.basis, detail, about, answers: q.id, marking });
+      return {
+        card: id,
+        entries: [
+          { type: "card.created", actor: input.actor, cause: q.seq, payload: { card } },
+          { type: "question.answered", actor: input.actor, cause: q.seq, payload: { question: q.id, card: id } },
+        ],
+      };
+    },
+  };
+}
+
+/** Records the person's answer: a statement card that answers the question, and question.answered naming it, in one commit. Returns the card id. Throws PersonRefused. */
+export function answerQuestion(session: CaseSession, deps: RunnerDeps, input: AnswerInput): string {
+  const prepared = preparedAnswer(session, deps, input);
   let id = "";
   session.commit((s, ids) => {
-    const now = Object.hasOwn(s.questions, q.id) ? s.questions[q.id]! : null;
-    if (now !== null && now.answer !== null) throw new PersonRefused(`${q.id} is already answered (card ${now.answer.card}); add a statement to correct it`);
-    id = ids.next("card");
-    const card = personCard(id, { title: answerTitle(q), statement: input.answer, basis: input.basis, detail, about, answers: q.id, marking });
-    return [
-      { type: "card.created", actor: input.actor, cause: q.seq, payload: { card } },
-      { type: "question.answered", actor: input.actor, cause: q.seq, payload: { question: q.id, card: id } },
-    ];
+    const made = prepared.entries(s, ids);
+    id = made.card;
+    return made.entries;
   });
   return id;
 }

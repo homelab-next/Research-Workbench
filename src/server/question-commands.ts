@@ -3,6 +3,7 @@ import type { Schema } from "../core/schema";
 import { waitingOn } from "../core/state";
 import { MARKINGS, PERSON_BASES } from "../core/types";
 import type { Marking, PersonBasis } from "../core/types";
+import { isCaseTypeQuestion } from "../pipeline/memory";
 import { answerQuestion } from "../pipeline/questions";
 import { defineCommand } from "./commands";
 import { ABOUT_SCHEMA, aboutArg } from "./statement-commands";
@@ -16,7 +17,10 @@ defineCommand("answer_question", {
   },
   then: "nothing",
   perform: ({ hub, case: id, engine, session, deps, actor }, a) => {
-    answerQuestion(session, deps.runner, {
+    const asked = Object.hasOwn(session.state.questions, a.question as string) ? session.state.questions[a.question as string]! : null;
+    // Frame's question of the case's type: the answer names the type, which the same commit sets (and binds memory again for)
+    if (asked !== null && isCaseTypeQuestion(asked)) engine.answerCaseType({ question: asked.id, answer: a.answer as string, actor });
+    else answerQuestion(session, deps.runner, {
       actor, question: a.question as string, answer: a.answer as string, basis: a.basis === undefined ? "unstated" : (a.basis as PersonBasis),
       detail: a.detail === undefined ? "" : (a.detail as string),
       // no about given: the question's own values

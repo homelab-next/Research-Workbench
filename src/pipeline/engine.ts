@@ -3,8 +3,10 @@ import type { Json } from "../core/canonical";
 import { canonical } from "../core/canonical";
 import type { CaseSession } from "../core/session";
 import type { CaseState, RunState } from "../core/state";
-import { gateChanges, latestDraft, loopOf, waitingOn } from "../core/state";
-import type { Actor, Draft, EntryInput, Marking, ModelChoice, Product, RunHold } from "../core/types";
+import { CASE_TYPE_ID, gateChanges, latestDraft, loopOf, runQuestions, waitingOn } from "../core/state";
+import type { Actor, Draft, EntryInput, LessonOrigin, Marking, ModelChoice, Product, RunHold } from "../core/types";
+import type { LessonDraft, StoreState } from "../core/lessons";
+import type { CaseType } from "../modules/case-types";
 import { termsOf } from "../agents/draft";
 import { mayGo, tooStrict } from "../agents/pack";
 import type { Providers } from "../agents/providers";
@@ -23,7 +25,8 @@ import type { Step } from "./next";
 import { acceptPlan, denyPlan, requestReplan, spendPlanBudget } from "./plans";
 import { answerChallenge, reviseDraft } from "./revise";
 import { gateSendBack, overrule, overruleSendBack } from "./overrule";
-import { waitingReason } from "./questions";
+import { preparedAnswer, waitingReason } from "./questions";
+import { bindEntry, isCaseTypeQuestion, typeOfAnswer } from "./memory";
 import { assembleRunner } from "./stages/assemble";
 import { challengeRunner } from "./stages/challenge";
 import { checksRunner } from "./stages/checks";
@@ -62,6 +65,14 @@ export interface EngineDeps {
    * version of the child's loop that this lock names.
    */
   lock?: LoopLock;
+  memory?: MemoryHost;
+  case_types?: readonly CaseType[];
+}
+/** How the engine reaches the shared store: the host's. It reads at a bind and files proposals; it never accepts. */
+export interface MemoryHost {
+  read(): { state: Readonly<StoreState>; origin: string | null; head: { seq: number; hash: string } };
+  /** Files a proposal by the workbench ({ kind: "system", id: "feedback" }). Throws Refused. */
+  propose(draft: LessonDraft, from: LessonOrigin): { lesson: string; fresh: boolean };
 }
 export interface StageEnv {
   session: CaseSession; deps: EngineDeps; stage: StageManifest; attempt: number;
@@ -238,12 +249,75 @@ export class Engine {
       if (loop === null) throw new RunRefused(firstProblem(loops, id));
       const { pipeline } = loop;
       const lock = this.session.blobs.put(canonical(loop.lock as unknown as Json));
+      // what the run is given from the shared store, chosen in code and locked into the case: read once, here
+      const memory = bindEntry(this.session, state, loop, this.deps, actor);
       return [
         { type: "loop.bound", actor, payload: { loop: id, version: loop.manifest.version, hash: pipeline.hash, lock } },
+        ...(memory === null ? [] : [memory]),
         { type: "run.started", actor, payload: { run: ids.next("run"), pipeline: id, pipeline_hash: pipeline.hash, stages: stagesOf(pipeline) } },
       ];
     });
     this.bind();
+  }
+
+  /**
+   * A person sets the case's type (null clears it). During a run in progress whose loop reads shared memory, the same commit binds memory again,
+   * so the stages that start afterwards read the lessons of the new type. When the run waits on Frame's question of the case's type, the same
+   * commit answers it. Advances nothing. Throws RunRefused.
+   */
+  setCaseType(input: { type: string | null; actor: Actor }): void {
+    const { type, actor } = input;
+    this.mayType(actor, type);
+    const open = this.openTypeQuestion();
+    const statement = type === null ? "This case has no case type." : `This is a ${this.deps.case_types?.find((t) => t.id === type)?.title ?? type} case (case type ${type}).`;
+    const answer = open === null ? null : preparedAnswer(this.session, this.deps.runner, { actor, question: open, answer: statement, basis: "unstated", detail: "", about: null, marking: null });
+    this.bind();
+    this.session.commit((s, ids) => {
+      if (s.memory.type === type) throw new RunRefused("that is already this case's type");
+      return [...this.typed(s, type, actor), ...(answer === null ? [] : answer.entries(s, ids).entries)];
+    });
+  }
+
+  /**
+   * A person answers Frame's question of the case's type: a case type's id, yes for the type Frame proposed, or none. The answer, and the type
+   * when it changes (with memory bound again), are one commit. Advances nothing. Throws RunRefused, or PersonRefused as an answer does.
+   */
+  answerCaseType(input: { question: string; answer: string; actor: Actor }): void {
+    const { actor } = input;
+    if (actor.kind !== "human") throw new RunRefused("only a person sets a case's type");
+    const state = this.session.state;
+    const q = Object.hasOwn(state.questions, input.question) ? state.questions[input.question]! : null;
+    if (q === null || !isCaseTypeQuestion(q)) throw new RunRefused(`${input.question.slice(0, 40)} is not the question of this case's type`);
+    const named = typeOfAnswer(input.answer, this.deps.case_types ?? [], state.memory.proposed_type?.type ?? null);
+    if (typeof named === "string") throw new RunRefused(named);
+    if (named.type !== state.memory.type) this.mayType(actor, named.type);
+    const answer = preparedAnswer(this.session, this.deps.runner, { actor, question: q.id, answer: input.answer.trim(), basis: "unstated", detail: "", about: null, marking: null });
+    this.bind();
+    this.session.commit((s, ids) => [...(s.memory.type === named.type ? [] : this.typed(s, named.type, actor)), ...answer.entries(s, ids).entries]);
+  }
+
+  /** Refuses a type a person may not set here: by anyone but a person, or a type that is not loaded. */
+  private mayType(actor: Actor, type: string | null): void {
+    if (actor.kind !== "human") throw new RunRefused("only a person sets a case's type");
+    if (type !== null && (!CASE_TYPE_ID.test(type) || (this.deps.case_types !== undefined && !this.deps.case_types.some((t) => t.id === type)))) {
+      throw new RunRefused(`there is no case type "${type.slice(0, 64)}"`);
+    }
+  }
+
+  /** The open question of the case's type in the run in progress, not answered and not waived; null when there is none. */
+  private openTypeQuestion(): string | null {
+    const s = this.session.state;
+    if (!inProgress(s)) return null;
+    return runQuestions(s).find((q) => isCaseTypeQuestion(q) && q.answer === null && q.waived === null)?.id ?? null;
+  }
+
+  /** case.type_set by the person and, during a run bound to a loop that reads shared memory, memory.bound for the new type. */
+  private typed(s: Readonly<CaseState>, type: string | null, actor: Actor): EntryInput[] {
+    if (!inProgress(s)) return [{ type: "case.type_set", actor, payload: { type } }];
+    const link = { run: s.run.id };
+    const loop = this.held?.run === s.run.id ? this.held.loop : null;
+    const memory = loop === null ? null : bindEntry(this.session, s, loop, this.deps, actor, type);
+    return [{ type: "case.type_set", actor, payload: { type }, ...link }, ...(memory === null ? [] : [{ ...memory, ...link }])];
   }
 
   /** Carries the run as far as it goes without a person. A call made while another is in flight returns that one's promise. */

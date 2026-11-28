@@ -1,8 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { CaseSession } from "../../src/core/session";
 import type { Actor } from "../../src/core/types";
 import { COMMANDS } from "../../src/server/commands";
 import "../../src/server/app";
+import { CASE_TYPE_WHY } from "../../src/pipeline/memory";
 import { served } from "../helpers/served";
 import type { Served } from "../helpers/served";
 
@@ -71,5 +74,32 @@ test("answering the question a run is held for resumes the run; answering anothe
   const st = s.app.hub.read(id).state;
   expect([st.questions["ask-1"]!.waived, st.questions["ask-2"]!.waived]).toEqual([null, null]);
   expect(st.run.status).not.toBe("paused");
+  expect(st.skipped).toEqual([]);
+});
+
+test("answering Frame's question of the case's type sets the type in the person's name and resumes the run; an answer that names no type is refused", async () => {
+  const types = "kind: case-types\nid: sample-types\ntypes:\n  - { id: unknown-device, title: Unknown device }\n";
+  s = await served({ before: (root) => writeFileSync(join(root, "context", "case-types.yaml"), types) });
+  const id = await s.newCase();
+  await s.toPlanGate(id);
+  const session = s.app.hub.read(id);
+  const orchestrator: Extract<Actor, { kind: "agent" }> = { ...researcher, id: "orchestrator", stage: "frame" };
+  // the question Frame puts to the person when the case has no type, and the hold the run waits on
+  session.commit((st, ids) => [
+    { type: "model.request", actor: orchestrator, run: st.run.id, stage: "frame", payload: { request: ids.next("request"), provider: "scripted", model: "sample-run", effort: null, where: "machine", marking: "TLP:GREEN", pack: [], left_out: [], messages: session.blobs.put("{}"), tools: [] } },
+    { type: "question.asked", actor: orchestrator, run: st.run.id, stage: "frame", payload: { question: { id: ids.next("question"), text: "What is this case's type? Answer with a case type's id (unknown-device), or none.", why: CASE_TYPE_WHY, cards: [], about: [], blocking: true } } },
+  ]);
+  session.commit((st) => [{ type: "run.paused", actor: engine, run: st.run.id, payload: { reason: "waiting for the person's answer to ask-1", hold: { kind: "question", stage: "frame" } } }]);
+  const n = s.entries(id).length;
+  expect(await s.command(id, "answer_question", { question: "ask-1", answer: "a printer, I think" })).toEqual({ status: 409, body: { ok: false, refused: ["answer with a case type's id (unknown-device), or none"] } });
+  expect(s.entries(id).length).toBe(n);
+  expect((await s.command(id, "answer_question", { question: "ask-1", answer: "unknown-device" })).status).toBe(200);
+  await s.app.hub.idle();
+  const written = s.entries(id).slice(n);
+  expect(written.slice(0, 3).map((e) => [e.type, e.actor.kind])).toEqual([["case.type_set", "human"], ["card.created", "human"], ["question.answered", "human"]]);
+  expect(written.some((e) => e.type === "run.resumed" && e.actor.kind === "human")).toBe(true);
+  const st = s.app.hub.read(id).state;
+  expect(st.memory.type).toBe("unknown-device");
+  expect(st.questions["ask-1"]!.waived).toBeNull();
   expect(st.skipped).toEqual([]);
 });

@@ -131,3 +131,66 @@ test("reload closes the old connector pool", () => {
   composed.reload();
   expect(closed).toBe(1);
 });
+
+// ---- slice 13: case types, the memory host and the roots' seeds
+
+const TYPES = "kind: case-types\nid: sample-types\ntypes:\n  - { id: unknown-device, title: Unknown device, about: A device that no inventory names. }\n";
+const seedsOf = (text: string, marking = "TLP:GREEN"): string =>
+  `kind: lesson-seeds\nid: sample-seeds\ntitle: Sample lessons\nlessons:\n  - id: lobby-ap\n    case_type: unknown-device\n    title: Check the lobby access point first\n    text: ${text}\n    marking: ${marking}\n`;
+function recompose(): void {
+  composed.close();
+  composed = compose(config, wb);
+}
+
+test("compose gives the deps the case types, a memory host over the workbench's store, and files a root's seeds once", async () => {
+  writeFileSync(join(sample.root, "context", "case-types.yaml"), TYPES);
+  writeFileSync(join(sample.root, "context", "seeds.yaml"), seedsOf("A device seen only on AP-3 is usually a guest in the lobby."));
+  recompose();
+  expect(composed.problems).toEqual([]);
+  const deps = composed.deps;
+  expect(deps.case_types).toEqual([{ id: "unknown-device", title: "Unknown device", about: "A device that no inventory names." }]);
+  const read = deps.memory!.read();
+  expect(read.head).toEqual(wb.memory.head());
+  expect(read.origin).toBe(wb.memory.origin());
+  expect(read.state.order).toEqual(["LESSON-1"]);
+  expect(read.state.lessons["LESSON-1"]).toMatchObject({ status: "proposed", from: { kind: "seed", manifest: "sample-seeds", item: "lobby-ap" } });
+  expect(composed.reload()).toEqual([]);
+  recompose();
+  expect(composed.deps.memory!.read().state.order).toEqual(["LESSON-1"]);
+  // the host takes the store fresh each time: a store reopened after an export is the one it reads
+  const before = wb.memory;
+  await wb.exportMemory(join(dir, "memory-files"), { actor: human });
+  expect(wb.memory).not.toBe(before);
+  expect(composed.deps.memory!.read().state.order).toEqual(["LESSON-1"]);
+  // a reload replaces the case types in place, on the same deps
+  writeFileSync(join(sample.root, "context", "case-types.yaml"), `${TYPES}  - { id: phishing, title: Phishing }\n`);
+  const same = composed.deps;
+  expect(composed.reload()).toEqual([]);
+  expect(composed.deps).toBe(same);
+  expect(same.case_types!.map((t) => t.id)).toEqual(["phishing", "unknown-device"]);
+});
+
+test("a reload after a seed manifest changed files the new seed and keeps the old lesson", () => {
+  writeFileSync(join(sample.root, "context", "case-types.yaml"), TYPES);
+  writeFileSync(join(sample.root, "context", "seeds.yaml"), seedsOf("A device seen only on AP-3 is usually a guest in the lobby."));
+  recompose();
+  writeFileSync(join(sample.root, "context", "seeds.yaml"), seedsOf("A device seen only on AP-3 is most often a guest's phone in the lobby."));
+  expect(composed.reload()).toEqual([]);
+  const state = composed.deps.memory!.read().state;
+  expect(state.order).toEqual(["LESSON-1", "LESSON-2"]);
+  expect(state.lessons["LESSON-1"]).toMatchObject({ status: "proposed", text: "A device seen only on AP-3 is usually a guest in the lobby." });
+  expect(state.lessons["LESSON-2"]).toMatchObject({ status: "proposed", text: "A device seen only on AP-3 is most often a guest's phone in the lobby." });
+});
+
+test("a seed that is not a lesson is one of compose's problems, and the workbench starts", () => {
+  writeFileSync(join(sample.root, "context", "case-types.yaml"), TYPES);
+  writeFileSync(join(sample.root, "context", "seeds.yaml"), seedsOf("A device seen only on AP-3 is usually a guest in the lobby.", "TLP:PURPLE"));
+  recompose();
+  expect(composed.problems.length).toBe(1);
+  expect(composed.problems[0]).toStartWith(`lesson-seeds "sample-seeds": lesson lobby-ap: `);
+  expect(composed.deps.memory!.read().state.order).toEqual([]);
+  const session = newCase();
+  Engine.open(session, composed.deps).start(human);
+  expect(session.state.run.status).toBe("running");
+  expect(session.state.skipped).toEqual([]);
+});
