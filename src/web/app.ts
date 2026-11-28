@@ -19,7 +19,7 @@ import { makeHelp } from "./views/help";
 import { dispatchKey } from "./keys";
 import { nextThing } from "./derive";
 
-export type LensId = "agent" | "steps" | "timeline" | "graph" | "narrative" | "worklog" | "discarded" | "jobs" | "pipeline" | "replay";
+export type LensId = "agent" | "steps" | "timeline" | "graph" | "narrative" | "worklog" | "memory" | "discarded" | "jobs" | "pipeline" | "replay";
 export type Route = { screen: "home" } | { screen: "pick" } | { screen: "new"; loop?: string } | { screen: "store" } | { screen: "soon"; mode: string } | { screen: "case"; id: string }
   | { screen: "loops" } | { screen: "loop"; id: string } | { screen: "loop_edit"; id: string } | { screen: "memory" };
 

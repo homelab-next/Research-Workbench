@@ -354,3 +354,17 @@ test("the page makes no element with innerHTML and sets no inline style", () => 
   const src = readFileSync(join(import.meta.dir, "../../src/web/views/memory.ts"), "utf8");
   expect(src).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|createElement|setAttribute|\.style\b|cssText/);
 });
+
+test("each memory file has a download link to its path on this server, and a path that is not a memory file's gets no link", async () => {
+  const s = await stub();
+  const links = s.all(".memory-file a.download");
+  expect(links.map((a) => [a.getAttribute("href"), a.hasAttribute("download"), a.getAttribute("rel"), text(a)]))
+    .toEqual([["/api/memory/files/memory.TLP-GREEN.444444444444.memory.tar.gz", true, "noopener noreferrer", "Download"]]);
+  const { memoryFileLink } = await import("../../src/web/links");
+  const h = (await import("../../src/web/dom")).makeH(s.win.document as unknown as Document);
+  for (const bad of ["/api/memory/files/../ledger.sqlite", "/api/memory/files/memory.TLP-GREEN.444444444444.memory.tar.gz/..", "https://example.com/memory.TLP-GREEN.444444444444.memory.tar.gz", "/api/loop-files/x.v1.444444444444.loop.tar.gz"]) {
+    const el = memoryFileLink(h, bad, "Download");
+    expect([bad, el.tagName]).toEqual([bad, "SPAN"]);
+  }
+  expect(memoryFileLink(h, "/api/memory/files/memory.TLP-AMBER%2BSTRICT.444444444444.memory.tar.gz", "Download").tagName).toBe("A");
+});

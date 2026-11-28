@@ -2,6 +2,7 @@ import { makeAgent } from "./agent";
 import { makeDiscarded } from "./discarded";
 import { makeGraph } from "./graph";
 import { makeJobs } from "./jobs";
+import { makeMemory } from "./memory";
 import { makeNarrative } from "./narrative";
 import { makePipeline } from "./pipeline";
 import { makeReplay } from "./replay";
@@ -20,6 +21,7 @@ export const LENSES: LensDef[] = [
   { id: "timeline", key: "t", title: "Timeline", make: (ui, open) => makeTimeline(ui, open) },
   { id: "graph", key: "g", title: "Graph", make: (ui, open) => makeGraph(ui, open) },
   { id: "worklog", key: "w", title: "Worklog", make: (ui, open) => makeWorklog(ui, open) },
+  { id: "memory", key: "m", title: "Memory", make: (ui, open) => makeMemory(ui, open) },
   { id: "discarded", key: "d", title: "Discarded", make: (ui, open) => makeDiscarded(ui, open) },
   { id: "jobs", key: "b", title: "Jobs", make: (ui, open) => makeJobs(ui, open) },
   { id: "pipeline", key: "q", title: "Pipeline", make: (ui, open, arg) => makePipeline(ui, open, arg) },

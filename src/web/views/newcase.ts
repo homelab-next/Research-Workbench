@@ -27,6 +27,17 @@ export function newView(shell: Shell, loop?: string): Screen {
   const objective = h("select", { id: "nc-objective", name: "Objective" }, h("option", { value: "" }, "None"), ui.ref.objectives.map((o) => h("option", { value: o.id }, o.title))) as HTMLSelectElement;
   const marking = h("select", { id: "nc-marking", name: "Marking" }, ui.me.markings.map((m) => h("option", { value: m }, m))) as HTMLSelectElement;
   marking.value = ui.me.markings.includes("TLP:AMBER") ? "TLP:AMBER" : (ui.me.markings[0] ?? "");
+  // the case's type (slice 13): None, or a loaded case type; preset to the loop's own once the server says it, unless the person chose first
+  const caseType = h("select", { id: "nc-type", name: "Case type" }, h("option", { value: "" }, "None"), (ui.ref.case_types ?? []).map((t) => h("option", { value: t.id }, t.title))) as HTMLSelectElement;
+  let typeChosen = false;
+  caseType.addEventListener("change", () => { typeChosen = true; paintTypeNote(); });
+  /** Said under the select when the loop has a case type of its own and None is chosen: the server gives such a case the loop's. */
+  const typeNote = h("p", { class: "muted type-note" });
+  let loopType: string | null = null;
+  const paintTypeNote = (): void => {
+    const title = loopType === null ? null : ((ui.ref.case_types ?? []).find((t) => t.id === loopType)?.title ?? loopType);
+    typeNote.textContent = title !== null && caseType.value === "" ? `A case of this loop that names no type takes the loop's: ${title}.` : "";
+  };
 
   let rows: Row[] = [];
   const list = h("div", { class: "rows" });
@@ -69,6 +80,7 @@ export function newView(shell: Shell, loop?: string): Screen {
         objective: objective.value === "" ? null : objective.value,
         marking: marking.value as Marking,
         ...(loop === undefined ? {} : { loop }),
+        ...(caseType.value === "" ? {} : { type: caseType.value }),
       });
       if ("refused" in made) {
         for (const reason of made.refused) refusals.appendChild(h("li", null, reason));
@@ -95,7 +107,11 @@ export function newView(shell: Shell, loop?: string): Screen {
   if (loop !== undefined && loopLine !== null) {
     ui.api.loops().then((list) => {
       const found = list.find((l) => l.id === loop);
-      if (!destroyed && found !== undefined) loopLine.textContent = `Loop: ${found.title}`;
+      if (destroyed || found === undefined) return;
+      loopLine.textContent = `Loop: ${found.title}`;
+      loopType = found.case_type;
+      if (!typeChosen && loopType !== null && [...caseType.options].some((o) => o.value === loopType)) caseType.value = loopType;
+      paintTypeNote();
     }, () => {});
   }
   const el = h("main", { class: "top", data: { screen: "new" }, tabindex: -1 },
@@ -106,6 +122,7 @@ export function newView(shell: Shell, loop?: string): Screen {
       h("fieldset", null, h("legend", null, "Starting values"), list, add),
       field("nc-from", "Window from", from), field("nc-to", "Window to", to),
       field("nc-objective", "Objective", objective), field("nc-marking", "Marking", marking),
+      field("nc-type", "Case type", caseType), typeNote,
       refusals, submit));
   // Escape from a button keeps a form that holds anything; it only steps up when the form is empty.
   el.addEventListener("keydown", (e) => {

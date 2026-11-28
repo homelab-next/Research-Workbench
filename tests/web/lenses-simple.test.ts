@@ -207,7 +207,7 @@ test("with nothing yet, Jobs and Discarded say so", async () => {
 
 test("each lens opens with its key and closes with Escape", async () => {
   await published();
-  for (const [key, id] of [["s", "steps"], ["t", "timeline"], ["w", "worklog"], ["d", "discarded"], ["b", "jobs"]] as const) {
+  for (const [key, id] of [["s", "steps"], ["t", "timeline"], ["w", "worklog"], ["m", "memory"], ["d", "discarded"], ["b", "jobs"]] as const) {
     p.press(key);
     expect([id, p.all(".lens-dock .lens").length, p.q(".lens-dock").hidden]).toEqual([id, 1, false]);
     expect(p.q(`.lens-button[data-lens=${id}]`).classList.contains("active")).toBe(true);

@@ -49,7 +49,9 @@ export function pickView(shell: Shell): Screen {
     ui.api.loops().then((list) => { if (destroyed) return; loopTitles = new Map(list.map((l) => [l.id, l.title])); render(); }, () => {});
   };
   /** What a tile says of its loop and its links: the loop when not the default, its parent, the child it waits on. */
-  const links = (c: CaseSummaryView): string => [c.loop === DEFAULT_LOOP ? "" : loopTitle(c.loop), c.parent ?? "", c.waiting_on ?? ""].join("|");
+  const links = (c: CaseSummaryView): string => [c.loop === DEFAULT_LOOP ? "" : loopTitle(c.loop), c.type ?? "", c.parent ?? "", c.waiting_on ?? ""].join("|");
+  /** A case type's title, or its id when it is not loaded here now. */
+  const typeTitle = (id: string): string => (ui.ref.case_types ?? []).find((t) => t.id === id)?.title ?? id;
 
   const grid = h("div", { class: "grid" });
   const loadError = h("p", { class: "load-error say", role: "alert" });
@@ -93,6 +95,7 @@ export function pickView(shell: Shell): Screen {
       h("span", { class: "chips" }, markingChip(ui, c.marking), h("span", { class: "chip" }, `${c.incoming} incoming`), h("span", { class: "chip" }, `${c.kept} kept`),
         c.unload_failed === null ? null : h("span", { class: "chip unload-failed", title: c.unload_failed }, "unload failed"),
         c.loop === DEFAULT_LOOP ? null : h("span", { class: "chip loop", title: `A case of the loop ${loopTitle(c.loop)}` }, loopTitle(c.loop)),
+        c.type == null ? null : h("span", { class: "chip case-type", title: `Its case type: ${typeTitle(c.type)}` }, typeTitle(c.type)),
         c.parent === null ? null : h("span", { class: "chip parent", title: `Made by ${c.parent}` }, `child of ${c.parent}`),
         c.waiting_on === null ? null : h("span", { class: "chip waiting-on", title: `Its run waits on ${c.waiting_on}` }, `waiting on ${c.waiting_on}`)));
     return h("div", { class: "tile-wrap" }, tile, makeMenu(c));

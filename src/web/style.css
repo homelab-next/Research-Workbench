@@ -535,3 +535,32 @@ details.lesson ul.history { color: var(--muted); font-size: 12px; }
 .memory-file { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius); }
 .memory-file p { margin: 0; overflow-wrap: anywhere; }
 .memory-file .file, .memory-file .head { font-family: var(--mono); overflow-wrap: anywhere; }
+.memory-file a.download, .memory-file .download { font-size: 12px; }
+.memory-propose .from-note-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.memory-propose .from-note { margin: 0; font-family: var(--mono); }
+/* Slice 13: a case's Memory lens. Three simple lists: the case's type, its notebook, the shared lessons its run was given. */
+.lens-memory { display: flex; flex-direction: column; gap: 16px; }
+.lens-memory .memory-part { display: flex; flex-direction: column; gap: 6px; }
+.lens-memory h3 { margin: 0; }
+.lens-memory h3.sub { font-size: 13px; margin-top: 6px; }
+.lens-memory p { margin: 0; overflow-wrap: anywhere; }
+.lens-memory .case-type { font-weight: 600; }
+.lens-memory .type-proposal { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 10px; border: 1px dashed var(--line); border-radius: var(--radius); }
+.lens-memory .type-proposal .why { flex-basis: 100%; }
+.lens-memory .act { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.lens-memory .act .refusal, .lens-memory .note > .refusal { flex-basis: 100%; }
+.lens-memory ol.notes, .lens-memory ul.loaded-lessons, .lens-memory ul.proposed-lessons, .lens-memory .dropped-notes ul { margin: 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.lens-memory .note, .lens-memory .loaded-lesson { border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px; background: var(--panel); display: flex; flex-direction: column; gap: 4px; }
+.lens-memory .note .text, .lens-memory .loaded-lesson .lesson-text, .lens-memory .dropped-note .text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.lens-memory .note .cards { display: flex; gap: 4px; flex-wrap: wrap; }
+.lens-memory .note-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.lens-memory .revise { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; flex: 1 1 100%; }
+.lens-memory textarea { min-height: 4em; flex: 1 1 280px; }
+.lens-memory .note-count { font-family: var(--mono); color: var(--muted); font-size: 12px; }
+.lens-memory .note-count.over { color: var(--amber); }
+.lens-memory .loaded-lesson .id, .lens-memory .proposed-lesson .id { font-family: var(--mono); }
+.lens-memory .loaded-lesson .title { font-weight: 600; }
+.lens-memory .no-longer { color: var(--muted); }
+.lens-memory .dropped-notes > summary { cursor: pointer; color: var(--muted); }
+.lens-memory .dropped-note { color: var(--muted); overflow-wrap: anywhere; }
+.loop-head .case-type-line { margin: 2px 0; }

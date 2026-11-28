@@ -3,8 +3,10 @@ import { MARKINGS } from "../../core/types";
 import type { Marking, Trigger } from "../../core/types";
 import { markingChip } from "../chips";
 import { clear } from "../dom";
+import { memoryFileLink } from "../links";
 import { refusalLine } from "../refusal";
 import type { Screen, Shell } from "../app";
+import type { Ui } from "../ui";
 
 /** A lesson's limits, as the store holds them (slice 13). */
 export const MAX_TITLE = 120;
@@ -13,7 +15,14 @@ export const MAX_TRIGGERS = 8;
 
 type TriggerKind = "observable" | "source" | "finding";
 interface TriggerDraft { kind: TriggerKind; value: string }
-interface Draft { case_type: string; title: string; text: string; marking: Marking; triggers: TriggerDraft[]; supersedes: string | null }
+interface Draft { case_type: string; title: string; text: string; marking: Marking; triggers: TriggerDraft[]; supersedes: string | null; from: { case: string; item: string } | null }
+
+/** What a case's Memory lens hands this page when the person proposes one of the case's notes as a lesson (slice 13, Task 14). */
+export interface NotePrefill { case: string; item: string; case_type: string; text: string; marking: Marking }
+/** Handed over in memory, once, never in the address or the browser's storage: a note's text is the case's. */
+const handed = new WeakMap<Ui, NotePrefill>();
+/** The next Memory page drawn for `ui` opens its propose form filled from this note: the case, the note and the case's type. */
+export function proposeFromNote(ui: Ui, prefill: NotePrefill): void { handed.set(ui, prefill); }
 
 const STATUS_WORDS: Record<LessonView["status"], string> = { proposed: "proposed", accepted: "shared", rejected: "rejected", retired: "retired", superseded: "superseded" };
 const KIND_WORDS: [TriggerKind, string][] = [["observable", "an observable type is present"], ["source", "a source was used"], ["finding", "a finding mentions"]];
@@ -51,8 +60,11 @@ export function memoryView(shell: Shell): Screen {
   const caseTypes = (): { id: string; title: string }[] => ui.ref.case_types ?? [];
   const firstValue = (kind: TriggerKind): string =>
     kind === "observable" ? (ui.ref.types[0]?.id ?? "") : kind === "source" ? (ui.ref.sources[0]?.id ?? "") : "";
-  const blank = (): Draft => ({ case_type: caseTypes()[0]?.id ?? "", title: "", text: "", marking: MARKINGS[0]!, triggers: [], supersedes: null });
+  const blank = (): Draft => ({ case_type: caseTypes()[0]?.id ?? "", title: "", text: "", marking: MARKINGS[0]!, triggers: [], supersedes: null, from: null });
   let draft: Draft = blank();
+  const pre = handed.get(ui);
+  handed.delete(ui);
+  if (pre !== undefined) draft = { ...blank(), case_type: pre.case_type, text: pre.text, marking: pre.marking, from: { case: pre.case, item: pre.item } };
 
   const groupList = h("div", { class: "memory-groups" });
   const formHost = h("section", { class: "memory-propose", data: { section: "propose" } });
@@ -131,7 +143,7 @@ export function memoryView(shell: Shell): Screen {
   };
 
   const newVersion = (l: LessonView): void => {
-    draft = { case_type: l.case_type, title: l.title, text: l.text, marking: l.marking, triggers: l.triggers.map(draftOf), supersedes: l.id };
+    draft = { case_type: l.case_type, title: l.title, text: l.text, marking: l.marking, triggers: l.triggers.map(draftOf), supersedes: l.id, from: null };
     said.delete("propose"); refused.delete("propose");
     paintForm();
     (formHost.querySelector("[data-field=title]") as HTMLElement | null)?.focus();
@@ -213,6 +225,7 @@ export function memoryView(shell: Shell): Screen {
     const body = {
       case_type: draft.case_type, title: draft.title, text: draft.text, marking: draft.marking, triggers: draft.triggers.map(triggerOf),
       ...(draft.supersedes === null ? {} : { supersedes: draft.supersedes }),
+      ...(draft.from === null ? {} : { case: draft.from.case, item: draft.from.item }),
     };
     if (busy.has("propose")) return;
     busy.add("propose"); said.delete("propose"); refused.delete("propose"); paintForm();
@@ -242,6 +255,8 @@ export function memoryView(shell: Shell): Screen {
     formHost.append(
       h("h2", null, draft.supersedes === null ? "Propose a lesson" : `Propose a new version of ${draft.supersedes}`),
       h("p", { class: "muted" }, "A lesson is shared only when a person accepts it. It reaches a case of its type as a note, never as rules."),
+      draft.from === null ? "" : h("div", { class: "from-note-row" }, h("p", { class: "from-note" }, `From note ${draft.from.item} of ${draft.from.case}`),
+        h("button", { type: "button", data: { action: "not-from-note" }, title: "Propose it as a person's lesson, naming no case", on: { click: () => { draft.from = null; paintForm(); } } }, "Name no case")),
       h("label", { class: "field" }, "Case type ", typeSelect),
       h("label", { class: "field" }, "Title ", h("input", { type: "text", data: { field: "title" }, name: "Title", value: draft.title, on: { input: (e) => { draft.title = (e.target as HTMLInputElement).value; } } })),
       h("label", { class: "field" }, "Text ", h("textarea", { data: { field: "text" }, name: "Text", value: draft.text, on: { input: (e) => { draft.text = (e.target as HTMLTextAreaElement).value; count.textContent = `${draft.text.length} / ${MAX_TEXT}`; count.classList.toggle("over", draft.text.length > MAX_TEXT); } } }), count),
@@ -274,7 +289,7 @@ export function memoryView(shell: Shell): Screen {
     const button = h("button", { type: "button", data: { action: "load" }, name: `Load ${f.file}`, disabled: !ready(), title: "Type the 12 characters shown to load it", on: { click: send } }, "Load") as HTMLButtonElement;
     return h("article", { class: "memory-file", role: "listitem", data: { file: f.file } },
       h("div", { class: "memory-file-head" }, h("span", { class: "file" }, f.file), h("span", { class: "chip" }, f.marking), h("span", { class: "chip" }, `${f.lessons} lessons`),
-        h("span", { class: "chip" }, `${f.bytes} bytes`)),
+        h("span", { class: "chip" }, `${f.bytes} bytes`), memoryFileLink(h, ui.api.memoryFilePath(f.file), "Download")),
       f.problem === null ? null : h("p", { class: "problem muted" }, f.problem),
       h("p", { class: "muted" }, "Loading replaces the store here, and only with the same store further on. Type the 12 characters of its head to confirm: ", h("span", { class: "head" }, f.head)),
       h("div", { class: "memory-file-actions" },

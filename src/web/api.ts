@@ -1,5 +1,5 @@
 import type { Entry, Marking, ModelChoice, Trigger } from "../core/types";
-import type { AgentView, BuilderSummaryView, BuilderView, CaseSummaryView, CommandResult, Custody, Difference, LoopFileView, LoopSummaryView, LoopView, Me, MemoryView, ModelView, NewCaseInput, Preview, Reference, RouteView, StoreView } from "../core/wire";
+import type { AgentView, BuilderSummaryView, BuilderView, CaseMemoryView, CaseSummaryView, CommandResult, Custody, Difference, LoopFileView, LoopSummaryView, LoopView, Me, MemoryView, ModelView, NewCaseInput, Preview, Reference, RouteView, StoreView } from "../core/wire";
 
 export type Fetcher = (req: Request) => Promise<Response>;
 /**
@@ -76,6 +76,8 @@ export interface Api {
   loadMemory(file: string, typed: string): Promise<{ lessons: number } | { refused: string[] }>;
   /** Where a memory file is downloaded from. */
   memoryFilePath(file: string): string;
+  /** A case's type, what its loop reads of memory, and the shared lessons its run was given and why (slice 13). */
+  caseMemory(caseId: string): Promise<CaseMemoryView>;
   entries: EntrySource;
 }
 
@@ -185,6 +187,7 @@ export function makeApi(fetcher: Fetcher, origin: string, entries: EntrySource):
     exportMemory: () => answered<{ file: string }>("/api/memory/export", {}),
     loadMemory: (file, typed) => answered<{ lessons: number }>("/api/memory/load", { file, typed }),
     memoryFilePath: (file) => `/api/memory/files/${seg(file)}`,
+    caseMemory: (id) => read<CaseMemoryView>(`/api/cases/${seg(id)}/memory`),
     entries,
   };
 }

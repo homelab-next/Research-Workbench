@@ -4,7 +4,7 @@ export interface KeyBinding { area: Area; keys: readonly string[]; action: strin
 
 const b = (area: Area, keys: readonly string[], action: string, label: string): KeyBinding => ({ area, keys, action, label });
 const LENS_KEYS: readonly [string, string, string][] = [
-  ["a", "agent", "Agent"], ["s", "steps", "Steps"], ["t", "timeline", "Timeline"], ["g", "graph", "Graph"], ["r", "narrative", "Narrative"], ["w", "worklog", "Worklog"],
+  ["a", "agent", "Agent"], ["s", "steps", "Steps"], ["t", "timeline", "Timeline"], ["g", "graph", "Graph"], ["r", "narrative", "Narrative"], ["w", "worklog", "Worklog"], ["m", "memory", "Memory"],
   ["d", "discarded", "Discarded"], ["b", "jobs", "Jobs"], ["q", "pipeline", "Pipeline"], ["e", "replay", "Replay"],
 ];
 

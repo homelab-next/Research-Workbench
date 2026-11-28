@@ -41,10 +41,15 @@ export function loopView(shell: Shell, id: string): Screen {
     s.on_fail === null ? null : `on fail → ${titleOf(l, s.on_fail)}`,
   ].filter((x): x is string => x !== null).join(" · ");
 
-  const itemRow = (i: ItemView): HTMLElement => h("li", { class: "item", data: { kind: i.kind } },
-    h("span", { class: "item-name" }, `${i.kind} ${i.title}`), " ",
-    h("span", { class: `chip source source-${i.source}` }, SOURCE_WORDS[i.source] ?? i.source), " ",
-    hashChip(h, i.hash));
+  /** A memory item reads by its selector and shows no hash: what it holds is the store's, read when a run binds, not part of the loop. */
+  const itemRow = (i: ItemView): HTMLElement => i.source === "memory"
+    ? h("li", { class: "item", data: { kind: i.kind, source: "memory" } },
+      h("span", { class: "item-name" }, `${i.kind} ${i.title}`), " ",
+      h("span", { class: "chip source source-memory memory-selector", title: "Read from memory when a run starts" }, `memory: ${i.memory ?? i.id}`))
+    : h("li", { class: "item", data: { kind: i.kind } },
+      h("span", { class: "item-name" }, `${i.kind} ${i.title}`), " ",
+      h("span", { class: `chip source source-${i.source}` }, SOURCE_WORDS[i.source] ?? i.source), " ",
+      hashChip(h, i.hash));
   const group = (name: string, title: string, rows: HTMLElement[]): HTMLElement => h("section", { class: "stage-group", data: { group: name } },
     h("h3", null, title), rows.length === 0 ? h("p", { class: "muted" }, "nothing") : h("ul", { role: "list" }, rows));
 
@@ -115,6 +120,7 @@ export function loopView(shell: Shell, id: string): Screen {
         h("h1", null, l.title),
         h("p", { class: "facts" }, versionLine(h, l), " · ", h("span", { class: "caps" }, `depth cap ${l.caps.max_depth} · children cap ${l.caps.max_children}`),
           " · ", h("span", { class: "root" }, l.implicit ? "implicit loop" : `from ${l.root}${l.trusted ? "" : " (not trusted)"}`)),
+        l.case_type === null ? null : h("p", { class: "case-type-line" }, `Case type: ${(ui.ref.case_types ?? []).find((t) => t.id === l.case_type)?.title ?? l.case_type}`),
         h("p", { class: "about" }, l.about)),
       actions,
       l.usable ? null : problemList(h, l.problems),
