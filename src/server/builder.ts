@@ -34,7 +34,7 @@ import { parseManifestFile, pivotWeight } from "../modules/manifests";
 import { bindPivot, PivotError } from "../modules/pivots";
 import { runQuery } from "../modules/runner";
 import type { RunQueryResult } from "../modules/runner";
-import { MIN_SECRET_LENGTH } from "../modules/secrets";
+import { REDACTED, redactSecrets, searched } from "../core/redact";
 import { DEFAULT_LIMITS } from "../modules/seeker";
 import type { EngineDeps } from "../pipeline/engine";
 import { IMPLICIT_NOTE } from "../pipeline/loops";
@@ -60,8 +60,6 @@ export interface BuilderContext {
 /** The stage of the builder's profile, and the profile. */
 export const BUILDER_STAGE = "builder";
 export const BUILDER_PROFILE = "loop-builder";
-/** What a secret value a person typed, or a model wrote, is replaced with before it is written anywhere. */
-export const REDACTED = "[redacted secret]";
 export const STALE = "this file changed since it was proposed; ask the builder to propose again";
 const NO_MODEL = "The builder has no model. Choose one for this session.";
 const QUESTION_MAX = 4000;
@@ -73,18 +71,7 @@ const clip = (s: string, n: number): string => (s.length > n ? s.slice(0, n) : s
 
 // ---------- redaction ----------
 
-const searched = (secrets: readonly string[]): string[] => [...new Set(secrets.filter((s) => typeof s === "string" && s.length >= MIN_SECRET_LENGTH))].sort((a, b) => b.length - a.length);
-
-/** The text with every secret value, as written and as it is escaped inside a JSON string, replaced by REDACTED. */
-export function redactSecrets(text: string, secrets: readonly string[]): string {
-  let out = text;
-  for (const s of searched(secrets)) {
-    out = out.split(s).join(REDACTED);
-    const escaped = JSON.stringify(s).slice(1, -1);
-    if (escaped !== s) out = out.split(escaped).join(REDACTED);
-  }
-  return out;
-}
+export { REDACTED, redactSecrets };
 
 /** JSON text with every string in it redacted (so a value written with \u escapes is found too); text that is not JSON is redacted as text. */
 function redactJsonText(text: string, secrets: readonly string[]): string {

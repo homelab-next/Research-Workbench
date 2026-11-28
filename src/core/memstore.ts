@@ -6,8 +6,9 @@ import { join } from "node:path";
 import { MIN_SECRET_LENGTH } from "pivot/secrets";
 import { BlobStore } from "./blobs";
 import { Ledger } from "./ledger";
-import { applyLesson, draftProblem, initialStore, isLessonOrigin, lessonHash } from "./lessons";
+import { applyLesson, draftProblem, initialStore, isLessonOrigin, lessonHash, REASON_MAX } from "./lessons";
 import type { LessonDraft, LessonState, StoreState } from "./lessons";
+import { redactSecrets } from "./redact";
 import { Refused } from "./refused";
 import { MARKINGS, isMarking } from "./types";
 import type { Actor, Entry, EntryInput, LessonOrigin, Marking, Trigger } from "./types";
@@ -19,6 +20,14 @@ export class MemoryRefused extends Refused {}
 const CLOSED = "the memory store is closed";
 const rank = (m: Marking): number => MARKINGS.indexOf(m);
 const triggerValue = (t: Trigger): string => ("observable" in t ? t.observable : "source" in t ? t.source : t.finding);
+
+/** A reason as it is written: with every secret value redacted, not blank, and at most REASON_MAX characters. Throws MemoryRefused. */
+function reasonOf(by: { reason: string; secrets?: readonly string[] }, blank: string): string {
+  if (typeof by.reason !== "string" || by.reason.trim() === "") throw new MemoryRefused(blank);
+  const reason = redactSecrets(by.reason, by.secrets ?? []);
+  if (reason.length > REASON_MAX) throw new MemoryRefused(`a reason is at most ${REASON_MAX} characters`);
+  return reason;
+}
 
 /** True when the two origins name the same filing: the same case, its first entry and run; or the same seed item at the same hash. */
 function sameFiling(a: LessonOrigin, b: LessonOrigin): boolean {
@@ -127,23 +136,25 @@ export class MemoryStore {
     return this.lessonAfter(entry, l.id);
   }
 
-  reject(lesson: string, by: { actor: Actor; reason: string }): LessonState {
+  /** `secrets`: every secret value the workbench holds; each one in the reason is written redacted. */
+  reject(lesson: string, by: { actor: Actor; reason: string; secrets?: readonly string[] }): LessonState {
     const s = this.writable();
     if (by.actor.kind !== "human") throw new MemoryRefused("only a person rejects a lesson");
-    if (typeof by.reason !== "string" || by.reason.trim() === "") throw new MemoryRefused("a rejection needs a reason");
+    const reason = reasonOf(by, "a rejection needs a reason");
     const l = this.lessonOf(s, lesson);
     if (l.status !== "proposed") throw new MemoryRefused(`${l.id} is ${l.status}; only a proposed lesson is rejected`);
-    const entry = this.write({ type: "lesson.rejected", actor: by.actor, payload: { lesson: l.id, reason: by.reason } });
+    const entry = this.write({ type: "lesson.rejected", actor: by.actor, payload: { lesson: l.id, reason } });
     return this.lessonAfter(entry, l.id);
   }
 
-  retire(lesson: string, by: { actor: Actor; reason: string }): LessonState {
+  /** `secrets`: every secret value the workbench holds; each one in the reason is written redacted. */
+  retire(lesson: string, by: { actor: Actor; reason: string; secrets?: readonly string[] }): LessonState {
     const s = this.writable();
     if (by.actor.kind !== "human") throw new MemoryRefused("only a person retires a lesson");
-    if (typeof by.reason !== "string" || by.reason.trim() === "") throw new MemoryRefused("retiring a lesson needs a reason");
+    const reason = reasonOf(by, "retiring a lesson needs a reason");
     const l = this.lessonOf(s, lesson);
     if (l.status !== "accepted") throw new MemoryRefused(`${l.id} is ${l.status}; only a shared lesson is retired`);
-    const entry = this.write({ type: "lesson.retired", actor: by.actor, payload: { lesson: l.id, reason: by.reason } });
+    const entry = this.write({ type: "lesson.retired", actor: by.actor, payload: { lesson: l.id, reason } });
     return this.lessonAfter(entry, l.id);
   }
 

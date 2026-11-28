@@ -396,3 +396,27 @@ test("GET /api/cases/CASE-1/memory?at=N gives the type and the binding in force 
   expect(await getJson<CaseMemoryView>(s, `/api/cases/${id}/memory?at=${s.app.hub.read(id).state.seq + 5}`)).toEqual(live);
   for (const bad of ["0", "-1", "x", "1.5", ""]) expect((await s.get(`/api/cases/${id}/memory?at=${bad}`)).status).toBe(400);
 });
+
+// ---------- final review I1: a secret in a reason is not stored, exported or served ----------
+
+test("a reject or retire reason holding a credential's value is stored redacted: GET /api/memory and the exported file hold no value; a reason over 500 characters is 409", async () => {
+  const value = "s3cr3t-Value-0123456789";
+  const s = await open({ credential: { name: "PROBE_CRED", value } });
+  await proposeRoute(s);
+  await proposeRoute(s, { title: "Ask the front desk" });
+  await s.post("/api/memory/lessons/LESSON-2/accept", { hash: hashOf(s, "LESSON-2") });
+  const long = await s.post("/api/memory/lessons/LESSON-1/reject", { reason: "a".repeat(200_000) });
+  expect(long.status).toBe(409);
+  expect(await long.json()).toEqual({ ok: false, refused: ["a reason is at most 500 characters"] });
+  expect((await s.post("/api/memory/lessons/LESSON-1/reject", { reason: `because ${value}` })).status).toBe(200);
+  expect((await s.post("/api/memory/lessons/LESSON-2/retire", { reason: `old, ${value}` })).status).toBe(200);
+  const view = await (await s.get("/api/memory")).text();
+  expect(view).not.toContain(value);
+  expect(view).toContain("because [redacted secret]");
+  expect(JSON.stringify(s.wb.memory.entries())).not.toContain(value);
+  const res = await s.post("/api/memory/export", {});
+  expect(res.status).toBe(200);
+  const { file } = (await res.json()) as { file: string };
+  const unpacked = new TextDecoder("latin1").decode(Bun.gunzipSync(readFileSync(join(s.config.memory.files, file))));
+  expect(unpacked).not.toContain(value);
+});

@@ -27,7 +27,7 @@ export interface MemoryRouteDeps {
   config: Config; wb: Workbench; hub: CaseHub; deps: EngineDeps; human: () => Extract<Actor, { kind: "human" }>;
   /** A text as the person may see it (app.ts's `shown`): scrubbed as a card is. */
   shown: (text: string) => string;
-  /** The value of every secret the workbench holds: a proposal holding one is refused. */
+  /** The value of every secret the workbench holds: a proposal holding one is refused; one in a reason is written redacted. */
   secrets: () => readonly string[];
 }
 /** What a handler is given, as app.ts gives it. */
@@ -273,7 +273,8 @@ export function memoryRoutes(d: MemoryRouteDeps): MemoryRoute[] {
     if (typeof fields.reason !== "string") return refused(400, "reason must be text");
     const reason = fields.reason;
     return refusing(() => inLine(() => {
-      const l = verb === "reject" ? d.wb.memory.reject(id, { actor: d.human(), reason }) : d.wb.memory.retire(id, { actor: d.human(), reason });
+      const by = { actor: d.human(), reason, secrets: d.secrets() };
+      const l = verb === "reject" ? d.wb.memory.reject(id, by) : d.wb.memory.retire(id, by);
       return json(200, { id: l.id, status: l.status });
     }));
   };

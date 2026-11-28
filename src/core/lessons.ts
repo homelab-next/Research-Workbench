@@ -15,6 +15,8 @@ export const LESSON_TEXT_MAX = 1200;
 export const MAX_TRIGGERS = 8;
 export const FINDING_MIN = 3;
 export const FINDING_MAX = 200;
+/** The most a reason for a rejection or a retirement may hold. */
+export const REASON_MAX = 500;
 
 export interface LessonDraft { case_type: string; title: string; text: string; triggers: Trigger[]; marking: Marking; supersedes: string | null }
 
@@ -128,7 +130,7 @@ const withLessons = (s: StoreState, ...ls: LessonState[]): StoreState => {
   return { ...s, lessons };
 };
 const isReasoned = (x: unknown): x is { lesson: string; reason: string } =>
-  isPlainObject(x) && isStr(x.lesson) && isStr(x.reason) && x.reason.trim() !== "";
+  isPlainObject(x) && isStr(x.lesson) && isStr(x.reason) && x.reason.trim() !== "" && x.reason.length <= REASON_MAX;
 
 /** The skip sentence, or null, for a lesson.proposed that is well formed. */
 function proposedProblem(s: StoreState, actor: Actor, p: Payloads["lesson.proposed"]): string | null {

@@ -209,3 +209,41 @@ test("a closed store refuses every write", () => {
   expect(refusal(() => store.retire("LESSON-1", { actor: person, reason: "no" }))).toBe(closed);
   store.close();
 });
+
+// ---------- final review I1: a reason is searched for secret values and is capped ----------
+
+test("a reject or retire reason holding a secret value is written with the value redacted; nothing of it is in the ledger", () => {
+  const store = fresh();
+  const secret = "s3cr3t-Value-0123456789";
+  store.propose(draft(), PERSON, person);
+  store.propose(draft({ title: "Second" }), PERSON, person);
+  store.accept("LESSON-2", { actor: person, hash: lessonHash(draft({ title: "Second" })) });
+  store.reject("LESSON-1", { actor: person, reason: `because ${secret}`, secrets: [secret] });
+  // the value as it is escaped inside a JSON string is found too
+  const escaped = "tok\"en-with-quote-0123";
+  store.retire("LESSON-2", { actor: person, reason: `old: ${secret} and ${JSON.stringify(escaped).slice(1, -1)}`, secrets: [secret, escaped] });
+  const raw = JSON.stringify(store.entries());
+  expect(raw).not.toContain(secret);
+  expect(raw).not.toContain("tok\\\\\\\"en");
+  expect(store.state.lessons["LESSON-1"]!.decided!.reason).toBe("because [redacted secret]");
+  expect(store.state.lessons["LESSON-2"]!.decided!.reason).toBe("old: [redacted secret] and [redacted secret]");
+  expect(store.state.skipped).toEqual([]);
+});
+
+test("a reason is at most 500 characters: a longer one is refused and writes nothing, and the fold skips one", () => {
+  const store = fresh();
+  store.propose(draft(), PERSON, person);
+  store.propose(draft({ title: "Second" }), PERSON, person);
+  store.accept("LESSON-2", { actor: person, hash: lessonHash(draft({ title: "Second" })) });
+  const before = store.entries().length;
+  expect(refusal(() => store.reject("LESSON-1", { actor: person, reason: "x".repeat(501) }))).toBe("a reason is at most 500 characters");
+  expect(refusal(() => store.retire("LESSON-2", { actor: person, reason: "y".repeat(200_000) }))).toBe("a reason is at most 500 characters");
+  expect(store.entries().length).toBe(before);
+  expect(store.reject("LESSON-1", { actor: person, reason: "x".repeat(500) }).status).toBe("rejected");
+  // a ledger written by other code: a rejection with a longer reason is not read
+  const [first] = store.entries();
+  const long = { ...first!, seq: 2, type: "lesson.rejected", actor: person, payload: { lesson: "LESSON-1", reason: "z".repeat(501) } } as unknown as typeof first;
+  const s = foldLessons([first!, long!]);
+  expect(s.lessons["LESSON-1"]!.status).toBe("proposed");
+  expect(s.skipped.map((k) => k.seq)).toEqual([2]);
+});

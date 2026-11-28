@@ -182,3 +182,27 @@ test("the package script and the usage name the same commands: bun run memory wi
   for (const w of ["list", "show", "propose", "accept", "reject", "retire", "export", "load", "verify"]) expect(text).toContain(`bun run memory ${w}`);
   expect(existsSync(join(dir, "memory"))).toBe(false);
 });
+
+test("reject and retire write a reason with a credential's value redacted", async () => {
+  const value = "s3cr3t-Value-0123456789";
+  writeFileSync(a.config, readFileSync(a.config, "utf8").replace("trusted: true }", "trusted: true, credentials: [PROBE_CLI_CRED] }"));
+  writeFileSync(join(a.root, "sources", "reputation.yaml"), `${readFileSync(join(a.root, "sources", "reputation.yaml"), "utf8")}credential: PROBE_CLI_CRED\n`);
+  process.env.PROBE_CLI_CRED = value;
+  try {
+    await run(a, ...PROPOSE);
+    await run(a, ...proposal("A second version."));
+    await run(a, "accept", "LESSON-2");
+    expect(await run(a, "reject", "LESSON-1", "--reason", `because ${value}`)).toBe(0);
+    expect(await run(a, "retire", "LESSON-2", "--reason", `old, ${value}`)).toBe(0);
+    const wb = Workbench.open(a.data);
+    try {
+      const raw = JSON.stringify(wb.memory.entries());
+      expect(raw).not.toContain(value);
+      expect(raw).toContain("because [redacted secret]");
+    } finally {
+      wb.close();
+    }
+  } finally {
+    delete process.env.PROBE_CLI_CRED;
+  }
+});

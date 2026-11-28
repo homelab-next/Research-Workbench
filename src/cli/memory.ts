@@ -263,12 +263,12 @@ export async function memory(argv: string[], io: MemoryIO): Promise<number> {
         return 0;
       }
       case "reject": {
-        const l = store.reject(p.arg!, { actor: human, reason: p.one.reason! });
+        const l = store.reject(p.arg!, { actor: human, reason: p.one.reason!, secrets: secretValues(config, registry) });
         io.log(`rejected ${l.id}`);
         return 0;
       }
       case "retire": {
-        const l = store.retire(p.arg!, { actor: human, reason: p.one.reason! });
+        const l = store.retire(p.arg!, { actor: human, reason: p.one.reason!, secrets: secretValues(config, registry) });
         io.log(`retired ${l.id}`);
         return 0;
       }
