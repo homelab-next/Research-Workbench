@@ -67,7 +67,8 @@ test("the sample has two usable loops, investigation and triage, and triage's lo
     expect(w.composed.problems).toEqual([]);
     const loops = w.composed.deps.loops!;
     const listed = loops.list();
-    expect(listed.map((l) => [l.id, l.problems])).toEqual([["investigation", []], ["triage", []]]);
+    // slice 13 adds a third, unknown-device, which neither of these names
+    expect(listed.map((l) => [l.id, l.problems])).toEqual([["investigation", []], ["triage", []], ["unknown-device", []]]);
     const investigation = loops.current("investigation")!;
     const triage = loops.current("triage")!;
     expect(triage.manifest).toMatchObject({ title: "Triage", version: 1, profile: "triage", entry: "sort" });
@@ -109,7 +110,7 @@ test("an investigation case made before slice 12's entries existed, stopped at i
   wb = Workbench.open(config.data_dir, { onError: () => {} });
   composed = compose(config, wb);
   try {
-    expect(composed.deps.loops!.list().map((l) => l.id)).toEqual(["investigation", "triage"]);
+    expect(composed.deps.loops!.list().map((l) => l.id)).toEqual(["investigation", "triage", "unknown-device"]);
     const again = wb.session(id);
     const engine = Engine.open(again, composed.deps);
     engine.acceptPlan({ budgets: { s3: 1 }, actor: human });

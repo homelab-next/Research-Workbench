@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 
 // The browser-shared modules (bundled for the browser in plan 4) and everything they import.
 const CORE = resolve(import.meta.dir, "../../src/core");
@@ -92,3 +92,28 @@ test("the check itself catches each kind of violation", () => {
   expect(found).toEqual([`${bad}: imports node:fs`, `${bad}: uses Bun`, `${bad}: uses process`, `${bad}: uses Buffer`]);
   expect(closure([bad])).toEqual([bad, ok]);
 });
+
+test("src/web and src/core/state import none of lessons.ts, memstore.ts, memfile.ts", () => {
+  const SERVER_SIDE = ["lessons.ts", "memstore.ts", "memfile.ts"].map((f) => join(CORE, f));
+  for (const f of SERVER_SIDE) expect(existsSync(f)).toBe(true);
+  // nothing the browser bundles, and nothing the fold is made of, reaches them by any chain of imports (build.ts, which bundles the
+  // interface on the server and is never bundled itself, aside)
+  const reached = closure([...ENTRY_POINTS, ...listTs(WEB).filter((f) => f !== join(WEB, "build.ts")), ...listTs(join(CORE, "state"))]);
+  expect(reached.length).toBeGreaterThan(ENTRY_POINTS.length);
+  for (const f of SERVER_SIDE) expect(`${f}: ${reached.includes(f)}`).toBe(`${f}: false`);
+  // the check sees such an import
+  const d = mkdtempSync(join(tmpdir(), "browser-safety-"));
+  dirs.push(d);
+  const planted = join(d, "planted.ts");
+  writeFileSync(planted, `import { foldLessons } from "${join(CORE, "lessons")}";\nexport const x = foldLessons;\n`.replace(`"${join(CORE, "lessons")}"`, JSON.stringify(`./${relativeTo(d, join(CORE, "lessons"))}`)));
+  expect(closure([planted])).toContain(join(CORE, "lessons.ts"));
+});
+
+/** Every .ts file under a folder. */
+function listTs(dir: string): string[] {
+  return readdirSync(dir).flatMap((n) => {
+    const p = join(dir, n);
+    return statSync(p).isDirectory() ? listTs(p) : n.endsWith(".ts") ? [p] : [];
+  });
+}
+const relativeTo = (from: string, to: string): string => relative(from, to).split("\\").join("/");

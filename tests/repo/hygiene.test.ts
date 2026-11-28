@@ -107,3 +107,32 @@ test("package.json's version is the workbench version a case file names", async 
   const { WORKBENCH_VERSION } = await import("../../src/core/casefile");
   expect(JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")).version).toBe(WORKBENCH_VERSION);
 });
+
+test("the sample's seeds are marked TLP:CLEAR and name only sample hosts, example domains and documentation addresses", () => {
+  const seeds = textFiles().filter((f) => f.path.startsWith("sample/") && /\.ya?ml$/.test(f.path) && /^kind:\s*lesson-seeds\s*$/m.test(f.lines.join("\n")));
+  expect(seeds.map((f) => f.path)).toEqual(["sample/memory/unknown-device-lessons.yaml"]);
+  // the hosts the sample's own data names, by the sample's host and asset types
+  const sampleTypes = Bun.YAML.parse(readFileSync(join(REPO, "sample", "types.yaml"), "utf8")) as { types: { id: string; pattern: string }[] };
+  const pattern = (id: string): RegExp => new RegExp(`^(?:${sampleTypes.types.find((t) => t.id === id)!.pattern})$`);
+  const isSampleName = (n: string): boolean => /\.example\.(?:com|net|org)$/.test(n) || pattern("asset").test(n);
+  const problems: string[] = [];
+  for (const f of seeds) {
+    const body = Bun.YAML.parse(f.lines.join("\n")) as { lessons: { id: string; marking: string; title: string; text: string; triggers?: unknown[] }[] };
+    expect(body.lessons.length).toBeGreaterThan(0);
+    for (const l of body.lessons) {
+      if (l.marking !== "TLP:CLEAR") problems.push(`${f.path}: ${l.id} is marked ${l.marking}`);
+      const said = `${l.title}\n${l.text}\n${JSON.stringify(l.triggers ?? [])}`;
+      for (const m of said.matchAll(/(?<![\d.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?![\d])/g)) {
+        const parts = [m[1]!, m[2]!, m[3]!, m[4]!].map(octet);
+        if (parts.some((x) => x === null) || !allowed(parts as number[])) problems.push(`${f.path}: ${l.id} names ${m[0]}`);
+      }
+      // a dotted name is an example domain or a sample asset; a hardware address is never written
+      for (const m of said.matchAll(/\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\.[a-z]{2,}\b/gi)) if (!isSampleName(m[0].toLowerCase())) problems.push(`${f.path}: ${l.id} names ${m[0]}`);
+      if (/\b[0-9a-f]{2}(?::[0-9a-f]{2}){5}\b/i.test(said)) problems.push(`${f.path}: ${l.id} names a hardware address`);
+    }
+  }
+  expect(problems).toEqual([]);
+  // the check sees what it is for
+  expect(isSampleName("ws-17.example.net")).toBe(true);
+  expect(isSampleName("printer.corp.internal")).toBe(false);
+});

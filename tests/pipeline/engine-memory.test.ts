@@ -42,7 +42,7 @@ const sessions: CaseSession[] = [];
  * that reads the shared lessons of the case's type and the case's notes at Plan and Research.
  */
 function withMemory(root: string): void {
-  writeFileSync(join(root, "context", "case-types.yaml"), TYPES);
+  writeFileSync(join(root, "case-types.yaml"), TYPES);
   const edit = (rel: string, from: string, to: string): void => {
     const p = join(root, rel);
     const text = readFileSync(p, "utf8");

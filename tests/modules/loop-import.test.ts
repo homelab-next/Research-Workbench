@@ -415,7 +415,7 @@ test("an exported lock carries no loop-output item's origin: the case it came fr
 
 test("exportLoop of a loop that reads memory writes its manifests and no member for a memory item; the file imports and resolves", async () => {
   const CASE_TYPES = "kind: case-types\nid: sample-types\ntypes:\n  - { id: unknown-device, title: Unknown device }\n";
-  writeFileSync(join(root, "context", "case-types.yaml"), CASE_TYPES);
+  writeFileSync(join(root, "case-types.yaml"), CASE_TYPES);
   const profile = readFileSync(join(root, "context", "profile.yaml"), "utf8").replace("id: investigation", "id: memory-test").replace("    procedure: research-sop\n", "    procedure: research-sop\n    references: [shared-lessons, case-notes]\n");
   writeFileSync(join(root, "context", "memory-profile.yaml"), profile);
   const body = Bun.YAML.parse(readFileSync(join(root, "loops", "investigation.yaml"), "utf8")) as Record<string, Json>;
@@ -429,7 +429,7 @@ test("exportLoop of a loop that reads memory writes its manifests and no member 
   const paths = manifest.files.map((f) => f.path);
   expect(paths).toContain("loops/memo.yaml");
   expect(paths).toContain("context/memory-profile.yaml");
-  expect(paths).not.toContain("context/case-types.yaml");
+  expect(paths).not.toContain("case-types.yaml");
   // every member is a file of the lock or of uses; a memory item has none
   const withPath = loop.lock.items.filter((i) => i.path !== null).map((i) => i.path);
   for (const p of withPath) expect(paths).toContain(p!);

@@ -115,6 +115,60 @@ profiles, personas, rules, schemas, checks and the checks' programs; never a mod
 <other>` trusts it. `tests/sample/loops-acceptance.test.ts` drives all of this on the scripted model, and `tests/web/browser-loops.test.ts` in a
 browser.
 
+## Memory: the Unknown device loop
+
+The sample has one **case type**, in `case-types.yaml`: `unknown-device`, "Unknown device", "A device nobody recognises is on the network:
+what is it, and does it belong?". `memory/unknown-device-lessons.yaml` is a `lesson-seeds` manifest with two synthetic lessons of that type,
+both `TLP:CLEAR`, about the sample's own planted data and nothing else:
+
+1. `connection-message`, "Read the connection message before the lease", when the case holds an address: in the WiFi log a connection
+   message names the host a device announced, when no lease names the address.
+2. `complete-list`, "An empty answer proves absence only from a list declared complete", when the case uses the asset list: the asset list
+   is declared complete and the lease records are not.
+
+The workbench files each seed once, as a **proposal**, the first time it loads the roots to work (`serve` or `investigate`; `preflight` and
+`memory` do not). Neither is shared with any case until a person accepts it.
+
+The third loop, `loops/unknown-device.yaml` (**Unknown device**, `case_type: unknown-device`), writes all nine stages inline on its own script,
+`scripts/sample-device.yaml`, so the investigation loop's stage manifests and hashes are unchanged. Its profile is
+`context/unknown-device-profile.yaml`. Plan, Research and Assemble are given the shared lessons of the type (`memory: shared/unknown-device`),
+Research and Assemble the case's notebook (`memory: case/notes`), and the loop lists `wifi` and `assets` in `uses.sources`, so a source
+trigger can match on a first run. Its Frame answers with the case type (`context/schemas/frame-with-type.yaml`); its researcher writes one note
+into the notebook, a pointer to the asset card behind the internal peer; and its Feedback stage runs the reviewer
+(`context/personas/reviewer.md`, schema `context/schemas/lessons-output.yaml`), whose answer holds two lessons: one is filed as a proposal
+from the case, and the other, whose trigger names an observable type the sample does not have, is dropped with its reason.
+
+```
+bun run memory list
+bun run memory show LESSON-1
+bun run memory accept LESSON-1
+bun run memory accept LESSON-2
+bun run investigate start --loop unknown-device --sample-fixture --title "Device" --asked "Who is behind the traffic to 198.51.100.77?" --why "demo" \
+  --start address=198.51.100.77 --from 2026-11-17T00:00:00.000Z --to 2026-11-24T00:00:00.000Z --objective sample-objective --marking TLP:GREEN
+bun run investigate accept-plan CASE-1 --budget s3=1 --sample-fixture
+bun run investigate approve CASE-1
+bun run memory list --status proposed
+bun run memory verify --case CASE-1
+bun run memory export
+```
+
+On a new data folder, run `bun run serve --sample-fixture` once and stop it, so the seeds are filed; `memory list` then shows them. The two accepts share
+them; the case is typed `unknown-device` by its loop, and `start` prints `memory: 2 lessons`: both were bound at the run's start (the case
+starts from an address, and the loop uses the asset list). After `approve` the product is published and Feedback has filed `LESSON-3`,
+which waits for a person: `bun run memory accept LESSON-3` shares it with the next case of the type, or `bun run memory reject LESSON-3
+--reason ...` does not. `verify --case` checks each lesson the run was locked to against the store; `export` writes
+`memory.TLP-<marking>.<12 hex>.memory.tar.gz` into `<data_dir>/memory-files`, which `bun run memory load <file>` loads into a new workbench
+(before it first loads the roots, which would file the seeds into its empty store).
+
+In the interface: Home, **Memory** shows the two proposals under Unknown device, each with Accept and Reject; Loops, Unknown device, New
+case from this loop shows the case type on the form; the case's Memory lens (`m`) shows its type, its notebook (add a note there) and the
+lessons its run was given, each with the trigger that offered it. A case made with **None** chosen still takes the loop's type; clear it in
+the lens (Set with None) to see Frame ask for the type before Plan runs.
+
+`tests/sample/memory-acceptance.test.ts` drives all of this on the scripted model (an untyped case asked its type, the seeds and the
+Feedback proposal accepted on the Memory page's routes, markings, replay, verify, the store file and the case file), and
+`tests/web/browser-memory.test.ts` the Memory page and the lens in a browser.
+
 ## Build with help: the partner blocklist
 
 The sample data has one file no source names: `data/blocklist.sqlite`, a partner's list of addresses it calls bad (table `blocklist`:

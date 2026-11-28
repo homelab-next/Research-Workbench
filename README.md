@@ -371,9 +371,10 @@ bun run cases store delete CASE-1 --config ~/workbench/config.yaml
 
 A **loop** is the order of work a case follows: its stages, their gates, the context each stage is given, the checks that run on a draft, and which stage runs another loop. It is a manifest (`kind: loop`) in a module root's `loops/` folder, like any other. A case is made for one loop, and its run binds the loop's version when it starts: a `loop.bound` entry names the loop, its version and its pipeline hash, and the lock (every stage, persona, rules, skill, schema and check it resolved to, each with its hash) is a blob of the case. A loop edited while a case runs on it does not change that run; the case's next run binds the new version. A case made before loops existed goes on as it did, held to the hash it recorded.
 
-The sample has two loops:
+The sample has three loops:
 
 - **Investigation** (`sample/loops/investigation.yaml`): the nine stages, Frame to Feedback, with the plan gate and the publish gate. It is the default loop (`loops.default`), and every case made without `--loop` is one of it.
+- **Unknown device** (`sample/loops/unknown-device.yaml`): the investigation's nine stages written inline, for cases of the type `unknown-device`, with memory: Plan, Research and Assemble are given the shared lessons a person accepted for the type, Research and Assemble the case's notebook, Research may write a note, and Feedback proposes lessons. See [Memory](#memory).
 - **Triage** (`sample/loops/triage.yaml`): Sort, which turns a report into one question, then Investigate, which runs the investigation loop as a **child case** and brings its findings back. Triage has no gate of its own: the child's plan and publish gates are the person's, passed in the child, and while the child waits the triage case is paused, "waiting on child CASE-2". When the child publishes, its findings come back to the triage case as note cards that say where they came from (the child, its loop, its run, its head), carry the marking of the child's product, and cite nothing of the triage case. The triage run then ends as `completed`. Replaying the triage case reads the child's head and the hash of what came back from its own ledger; it never opens or re-runs the child.
 
 The command line, with `--config <file>` on each and the server stopped:
@@ -423,6 +424,49 @@ The sample has a scripted builder conversation, `sample/scripts/sample-builder.y
 ```bash
 bun test tests/sample/builder-acceptance.test.ts
 bun test tests/web/browser-builder.test.ts
+```
+
+## Memory
+
+A case can carry what was learned forward in two ways, and both are notes, never rules.
+
+**The notebook** is a case's own memory: short notes (`fact`, `decision` or `pointer`, at most 600 characters, naming up to 10 cards), entries of the case's own ledger. An agent adds one with the tool `note_memory`, only where its loop's stage lists the tool; a person adds, revises or drops one in the case's **Memory lens** (key `m`). A note is not evidence and is never cited. It reaches a stage only where the loop names `memory: case/notes` for one of that stage's references, as the stage starts; at most `memory.max_notes` (40) notes are live at once.
+
+**Shared lessons** are memory across cases. A lesson belongs to one **case type** (a `case-types` manifest of a trusted root: `id`, `title`, `about`), has a title (120 characters), a text (1200), a marking and up to 8 triggers (`{ observable: <type> }`, `{ source: <id> }`, `{ finding: <words> }`; all must match, and a lesson with none applies to every case of its type). Lessons live in the **memory store**, a ledger of its own at `<data_dir>/memory`, apart from every case.
+
+How a lesson becomes shared:
+
+1. It is **proposed**, from one of three places: a loop's Feedback stage that runs an agent with the `lessons-output` schema (after a published run of a typed case, its model is asked what would have made the case faster or more correct, and up to three answers are filed, each checked by code; one that does not check out is dropped with its reason, the others are filed as proposals); a person (the Memory page, or `bun run memory propose`); or a `lesson-seeds` manifest of a trusted root, which the workbench files once per item when `serve` or `investigate` loads the roots.
+2. **A person accepts it** (or rejects it, with a reason). Only a person does; a model, a stage or a seed never shares a lesson. Accepting names the hash of the proposal the person was shown, so a proposal changed since then is refused, and it may raise the lesson's marking but never lower it. A shared lesson can later be retired, or replaced by a new version.
+3. When a run of a loop that reads shared memory starts, code **selects** the shared lessons of the case's type whose triggers match the case (its observable types, the sources it used or its loop lists in `uses.sources`, the words of its latest findings) and that are not marked stricter than the case, newest acceptance first, at most `memory.max_lessons` (12). No model chooses what is loaded. What was selected, with each lesson's whole text, hash, marking, provenance and the triggers that matched, is **locked** into a blob of the case (`memory.bound`), so a replay or a case file needs no store. A lesson reaches only the stages whose loop names `memory: shared/<type>` (or `shared/*`) for a reference, as a part of its own after the stage's rules, persona, procedure and the case, under a line that says it is a note to weigh, not a rule.
+
+A case gets its type at creation (`--type`, the new-case form, or the loop's `case_type`), or from the person later. A case of a loop that reads shared memory and has no type is asked: Frame proposes a type and the run waits on a blocking question after Frame; the person's answer sets the type, the lessons of that type are bound, and only then does Plan run. A case with no type is given no shared lesson. A loop that names no memory (the sample's investigation and triage loops) writes no memory entry at all.
+
+The command line, with `--config <file>` on each; every form but `verify` needs the server stopped:
+
+```bash
+bun run memory list [--type unknown-device] [--status proposed]
+bun run memory show LESSON-1
+bun run memory propose --type unknown-device --title "..." --text "..." --marking TLP:GREEN --when observable=address
+bun run memory accept LESSON-1 [--marking TLP:AMBER]
+bun run memory reject LESSON-3 --reason "too general"
+bun run memory retire LESSON-2 --reason "the asset list is no longer complete"
+bun run memory export [--to <dir>]
+bun run memory load <dir>/memory.TLP-GREEN.<12 hex>.memory.tar.gz
+bun run memory verify [--case CASE-2]
+bun run investigate start --type unknown-device ...
+```
+
+`export` writes a **memory file**, `memory.<marking>.<12 hex of its head>.memory.tar.gz`, into `memory.files` (`<data_dir>/memory-files`) and leaves the store in place. `load` replaces the whole store, and only when the store here is empty or the file is the same store further on; stores are never merged. A workbench whose roots hold seeds files them the first time it loads its roots, so load a file into a new workbench before its first `serve` or `investigate`. `verify` checks the store's chain and every lesson's hash and, with `--case`, each lesson the case's runs were locked to against the store here. In the interface the **Memory** tile on Home opens the Memory page (proposals to review, shared lessons, export and load), and a case's Memory lens shows its type, its notebook and the lessons its run was given and why; see [docs/gui-guide.md](docs/gui-guide.md). What memory holds, who writes it and how markings gate it is in [docs/security-notes.md](docs/security-notes.md), and the sample's Unknown device loop in [sample/README.md](sample/README.md).
+
+The configuration's `memory` block, with its defaults:
+
+```yaml
+memory:
+  store: <data_dir>/memory          # the shared store's ledger
+  files: <data_dir>/memory-files    # where export writes and the Memory page lists memory files
+  max_lessons: 12                   # the most shared lessons a run is given
+  max_notes: 40                     # the most live notes a case's notebook holds
 ```
 
 ## Known limits

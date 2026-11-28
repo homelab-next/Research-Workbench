@@ -392,16 +392,19 @@ test("the case list shows a case's loop when it is not the default, and child of
 test("the Memory tile counts the store's proposals, and the Memory page accepts one through the server", async () => {
   const p = await open();
   const person = { kind: "human" as const, id: p.s.config.user };
-  p.s.wb.memory.propose({ case_type: "unknown-device", title: "Read the lease table first", text: "The lease table names a lobby device.", triggers: [], marking: "TLP:GREEN", supersedes: null }, { kind: "person" }, person);
+  // the sample's two seed lessons wait for a person too
+  const seeds = p.s.wb.memory.state.order.length;
+  expect(seeds).toBe(2);
+  const { lesson } = p.s.wb.memory.propose({ case_type: "unknown-device", title: "Read the lease table first", text: "The lease table names a lobby device.", triggers: [], marking: "TLP:GREEN", supersedes: null }, { kind: "person" }, person);
   p.click("[data-mode=loops]"); await p.settle();
   p.click(".trail .home"); await p.settle();
-  expect(p.q("[data-column=resources] [data-mode=memory]").textContent).toBe("Memory1 to review");
+  expect(p.q("[data-column=resources] [data-mode=memory]").textContent).toBe(`Memory${seeds + 1} to review`);
   p.click("[data-mode=memory]"); await p.settle();
   expect(p.win.location.hash).toBe("#/memory");
-  expect(p.q("details.lesson[data-lesson=LESSON-1] > summary .status").textContent).toBe("proposed");
-  p.click("details.lesson[data-lesson=LESSON-1] [data-action=accept]");
+  expect(p.q(`details.lesson[data-lesson=${lesson.id}] > summary .status`).textContent).toBe("proposed");
+  p.click(`details.lesson[data-lesson=${lesson.id}] [data-action=accept]`);
   await p.settle();
-  expect(p.s.wb.memory.state.lessons["LESSON-1"]!.status).toBe("accepted");
-  expect(p.q("details.lesson[data-lesson=LESSON-1] > summary .status").textContent).toBe("shared");
+  expect(p.s.wb.memory.state.lessons[lesson.id]!.status).toBe("accepted");
+  expect(p.q(`details.lesson[data-lesson=${lesson.id}] > summary .status`).textContent).toBe("shared");
   expect(p.s.wb.memory.state.skipped).toEqual([]);
 });

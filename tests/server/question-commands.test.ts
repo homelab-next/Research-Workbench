@@ -79,7 +79,7 @@ test("answering the question a run is held for resumes the run; answering anothe
 
 test("answering Frame's question of the case's type sets the type in the person's name and resumes the run; an answer that names no type is refused", async () => {
   const types = "kind: case-types\nid: sample-types\ntypes:\n  - { id: unknown-device, title: Unknown device }\n";
-  s = await served({ before: (root) => writeFileSync(join(root, "context", "case-types.yaml"), types) });
+  s = await served({ before: (root) => writeFileSync(join(root, "case-types.yaml"), types) });
   const id = await s.newCase();
   await s.toPlanGate(id);
   const session = s.app.hub.read(id);

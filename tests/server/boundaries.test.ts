@@ -480,3 +480,52 @@ test("the page loads exactly one script and one stylesheet, and every bundle fil
 test("the sample run folds with nothing skipped", () => {
   expect(s.app.hub.read(id).state.skipped).toEqual([]);
 });
+
+// ---------- slice 13: the memory routes ----------
+
+test("every memory route is in the app's table behind the role check, and no memory route reads an actor from its body", async () => {
+  const app = sources.find((f) => f.path === "src/server/app.ts")!.text;
+  const table = app.slice(app.indexOf("const routes: Route[] = ["));
+  expect(table).toContain("...memoryTable,");
+  expect(app).toMatch(/const memoryTable = memoryRoutes\(\{[^}]*human: \(\) => \(\{ kind: "human", id: config\.user \}\)/);
+  const routes = sources.find((f) => f.path === "src/server/memory-routes.ts")!.text;
+  // each route literal names what it needs (a read or a command), so the role check applies to it; none takes an actor from what it is sent
+  const literals = [...routes.matchAll(/\{\s*method:\s*"(GET|POST)",\s*path[^\n]*/g)].map((m) => m[0]);
+  expect(literals.length).toBeGreaterThanOrEqual(4);
+  for (const l of literals) if (!l.includes("needs:")) expect(routes).toMatch(/method: "POST", path, needs: \{ command \}/);
+  expect(serverNamesTheActor("src/server/memory-routes.ts", routes)).toEqual([]);
+  expect(serverNamesTheActor("src/server/memory-commands.ts", sources.find((f) => f.path === "src/server/memory-commands.ts")!.text)).toEqual([]);
+  expect(routes).not.toMatch(/["']actor["']\s*[,\]]/);
+  expect([...routes.matchAll(/actor:\s*([^,}\n]+)/g)].map((m) => m[1]!.trim()).every((a) => a === "d.human()")).toBe(true);
+
+  // the same, from outside: a requester may not read or change memory, and a body that names an actor writes nothing
+  const paths: [string, string, unknown?][] = [
+    ["GET", "/api/memory"], ["GET", `/api/cases/${id}/memory`], ["GET", "/api/memory/files/memory.TLP-CLEAR.000000000000.memory.tar.gz"],
+    ["POST", "/api/memory/lessons", {}], ["POST", "/api/memory/lessons/LESSON-1/accept", {}], ["POST", "/api/memory/lessons/LESSON-1/reject", {}],
+    ["POST", "/api/memory/lessons/LESSON-1/retire", {}], ["POST", "/api/memory/export", {}], ["POST", "/api/memory/load", {}],
+  ];
+  const t = await served({ listen: true, role: "requester" });
+  try {
+    for (const [method, path, body] of paths) {
+      const res = await fetch(`${t.origin}${path}`, method === "GET" ? {} : { method, headers: { origin: t.origin, "content-type": "application/json" }, body: JSON.stringify(body) });
+      expect(`${method} ${path}: ${res.status}`).toBe(`${method} ${path}: 403`);
+    }
+  } finally {
+    await t.close();
+  }
+  const before = s.wb.memory.head();
+  const lesson = s.wb.memory.state.order[0]!;
+  const someone = { kind: "human", id: "someone-else" };
+  for (const [path, body] of [
+    ["/api/memory/lessons", { case_type: "unknown-device", title: "T", text: "x", triggers: [], marking: "TLP:CLEAR", supersedes: null, actor: someone }],
+    [`/api/memory/lessons/${lesson}/accept`, { hash: s.wb.memory.state.lessons[lesson]!.hash, actor: someone }],
+    [`/api/memory/lessons/${lesson}/reject`, { reason: "r", actor: someone }],
+    [`/api/memory/lessons/${lesson}/retire`, { reason: "r", actor: someone }],
+    ["/api/memory/export", { actor: someone }], ["/api/memory/load", { file: "x", typed: "x", actor: someone }],
+  ] as [string, unknown][]) {
+    const res = await s.post(path, body);
+    expect(`${path}: ${res.status}`).toBe(`${path}: 400`);
+    expect(((await res.json()) as { refused: string[] }).refused).toEqual(["the server names the actor"]);
+  }
+  expect(s.wb.memory.head()).toEqual(before);
+});

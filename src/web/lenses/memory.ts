@@ -34,17 +34,20 @@ export function leftOutWords(l: { marking: number; trigger: number; cap: number 
 /**
  * The Memory lens (slice 13): the case's type (with Frame's proposal to confirm), its notebook (the person adds, revises and drops notes; an
  * agent's notes say which stage wrote them), and the shared lessons its run was given, each with the trigger that matched it. The type and the
- * notebook are read from the state on screen, so Replay shows them as they were; the lessons are the server's view of the latest binding, read
- * when the lens opens and again whenever a new binding arrives. Every note, lesson, reason and title is only ever text. Simple lists only.
+ * notebook are read from the state on screen, so Replay shows them as they were; the lessons are the server's view of the binding in force,
+ * read when the lens opens, again whenever a new binding arrives, and, in Replay, for the entry shown: at entry N the lens lists the lessons of
+ * the binding in force at N. Every note, lesson, reason and title is only ever text. Simple lists only.
  */
 export function makeMemory(ui: Ui, open: Open): View {
   const { h } = ui;
   const { store, nav } = open;
   let view: CaseMemoryView | null = null;
+  /** The entry the view was read for: null for the live case. */
+  let viewAt: number | null = null;
   let failed = false;
   let destroyed = false;
   let asked = 0;
-  /** What the server's view was last read for: the live binding, the run's status and the type. */
+  /** What the server's view was last read for: the live binding, the run's status and the type, and the entry Replay shows. */
   let readFor = "";
   /** What was typed in each field, by key ("note-text", "revise:m1", "drop:m1"), kept across repaints. */
   const typed = new Map<string, string>();
@@ -56,20 +59,23 @@ export function makeMemory(ui: Ui, open: Open): View {
   const busy = new Set<string>();
   /** Bumped by any change of the lens's own that the next paint must show. */
   let local = 0;
-  let painted: unknown[] = [];
+  /** What each part was last drawn from: a part is drawn again only when what it shows changed, so a read of the lessons (a run's status
+   * changed, a binding arrived) does not replace the notebook's or the type's controls under the person's pointer. */
+  const painted: Record<"type" | "notes" | "lessons", unknown[]> = { type: [], notes: [], lessons: [] };
 
   const typePart = h("section", { class: "memory-part", data: { part: "type" } });
   const notePart = h("section", { class: "memory-part", data: { part: "notebook" } });
   const lessonPart = h("section", { class: "memory-part", data: { part: "lessons" } });
   const el = h("div", { class: "lens lens-memory", name: "Memory" }, typePart, notePart, lessonPart);
 
-  const liveKey = (): string => `${store.live.memory.bound?.seq ?? ""}|${store.live.run.status}|${store.live.memory.type ?? ""}`;
+  const liveKey = (): string => `${store.live.memory.bound?.seq ?? ""}|${store.live.run.status}|${store.live.memory.type ?? ""}|${store.at ?? ""}`;
   const read = (): void => {
     readFor = liveKey();
     const mine = ++asked;
-    ui.api.caseMemory(store.id).then((v) => {
+    const at = store.at;
+    (at === null ? ui.api.caseMemory(store.id) : ui.api.caseMemory(store.id, at)).then((v) => {
       if (destroyed || mine !== asked) return;
-      view = v; failed = false; paint();
+      view = v; viewAt = at; failed = false; paint();
     }, () => { if (destroyed || mine !== asked) return; failed = true; paint(); });
   };
   const replaying = (): boolean => store.at !== null;
@@ -224,17 +230,15 @@ export function makeMemory(ui: Ui, open: Open): View {
     if (store.at === null) return null;
     const at = store.at;
     const then = store.shown.memory.bound;
-    const latest = view?.bound ?? null;
-    const words = then === null ? `At entry #${at} no binding of shared lessons was in force.`
-      : latest !== null && latest.seq === then.seq ? `At entry #${at} the binding of entry #${then.seq} was in force: the lessons below.`
-      : `At entry #${at} the binding of entry #${then.seq} was in force; the lessons below are of the latest binding${latest === null ? "" : `, entry #${latest.seq}`}.`;
+    const words = then === null ? `At entry #${at} no binding of shared lessons was in force.` : `At entry #${at} the binding of entry #${then.seq} was in force: the lessons below.`;
     return h("p", { class: "replay-binding" }, words);
   };
 
   const paintLessons = (): void => {
     clear(lessonPart);
     lessonPart.append(...present(h("h3", null, "Shared lessons loaded"), replayLine()));
-    if (view === null) { lessonPart.append(h("p", { class: failed ? "load-error say" : "muted", role: failed ? "alert" : "status" }, failed ? "The case's memory could not be read" : "Reading the case's memory…")); return; }
+    // a view read for another entry than the one shown is not drawn: the lessons listed are always the binding's in force where Replay is
+    if (view === null || viewAt !== store.at) { lessonPart.append(h("p", { class: failed ? "load-error say" : "muted", role: failed ? "alert" : "status" }, failed ? "The case's memory could not be read" : "Reading the case's memory…")); return; }
     const b = view.bound;
     if (b === null) lessonPart.append(h("p", { class: "no-binding muted" }, "No run of this case has loaded shared lessons."));
     else {
@@ -258,16 +262,28 @@ export function makeMemory(ui: Ui, open: Open): View {
     }
   };
 
+  /** Whether a part's inputs changed since it was drawn; records them when they did. */
+  const changed = (part: keyof typeof painted, next: unknown[]): boolean => {
+    const was = painted[part];
+    if (next.length === was.length && next.every((x, i) => x === was[i])) return false;
+    painted[part] = next;
+    return true;
+  };
+
   /** Draws what changed; focus (and a field's caret) stays where it was. */
   function paint(): void {
-    const next = [store.shown.memory, store.at, view, failed, local];
-    if (next.length === painted.length && next.every((x, i) => x === painted[i])) return;
-    painted = next;
+    const m = store.shown.memory;
+    const type = changed("type", [m, store.at, view?.reads.shared ?? null, local]);
+    const notes = changed("notes", [m, store.at, view?.reads.notes ?? null, local]);
+    const lessons = changed("lessons", [store.shown.memory.bound, store.at, view, viewAt, failed, local]);
+    if (!type && !notes && !lessons) return;
     const active = ui.doc.activeElement as HTMLElement | null;
     const key = active !== null && el.contains(active) ? active.getAttribute("data-key") : null;
     const typing = active !== null && (active.tagName === "TEXTAREA" || active.tagName === "INPUT");
     const caret = key !== null && typing ? [(active as HTMLInputElement).selectionStart, (active as HTMLInputElement).selectionEnd] : null;
-    paintType(); paintNotes(); paintLessons();
+    if (type) paintType();
+    if (notes) paintNotes();
+    if (lessons) paintLessons();
     if (key === null) return;
     const again = el.querySelector(`[data-key="${key}"]`) as HTMLElement | null;
     if (again === null) return;

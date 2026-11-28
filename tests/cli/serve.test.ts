@@ -190,7 +190,9 @@ test("SIGTERM stops a spawned serve cleanly: exit 0 and the lock released", asyn
 test("serve reads the memory store the configuration names, not <data>/memory", async () => {
   const e = setup();
   const root = join(dirname(e.config), "sample");
-  writeFileSync(join(root, "context", "case-types.yaml"), "kind: case-types\nid: sample-types\ntypes:\n  - { id: unknown-device, title: Unknown device, about: A device on the network that no inventory names. }\n");
+  writeFileSync(join(root, "case-types.yaml"), "kind: case-types\nid: sample-types\ntypes:\n  - { id: unknown-device, title: Unknown device, about: A device on the network that no inventory names. }\n");
+  // the sample's own seed lessons are left out: the store holds only the one lesson proposed here
+  rmSync(join(root, "memory"), { recursive: true, force: true });
   const store = join(dirname(e.config), "elsewhere", "memory");
   writeFileSync(e.config, readFileSync(e.config, "utf8") + `memory: { store: ${store} }\n`);
   const args = ["--title", "Check the lobby access point first", "--text", "Read the lease table of AP-3 first.", "--type", "unknown-device", "--marking", "TLP:GREEN"];

@@ -390,9 +390,17 @@ const SAMPLE_INVESTIGATION_HASH = "ec2e79367acfc215dbbc23642eb0039c9d2f67971ab12
 /** The twelve entry types slice 13 adds; a ledger written before it holds none of them. */
 const SLICE_13_TYPES = ["case.type_set", "case.type_proposed", "memory.noted", "memory.revised", "memory.dropped", "memory.bound", "lesson.proposed", "lesson.accepted", "lesson.rejected", "lesson.retired", "memory.exported", "memory.loaded"];
 
+/** What slice 13 adds to the sample root: a case type, two seed lessons and the unknown-device loop with its profile, schemas, persona and script. */
+const SLICE_13_SAMPLE_FILES = [
+  "case-types.yaml", "memory/unknown-device-lessons.yaml", "loops/unknown-device.yaml", "context/unknown-device-profile.yaml",
+  "context/schemas/lessons-output.yaml", "context/schemas/frame-with-type.yaml", "context/personas/reviewer.md", "scripts/sample-device.yaml",
+];
+
 test("a case started before slice 13 and stopped at its plan gate goes on to the publish gate once the root has case types and a loop that reads memory: the hash it recorded, no pause, no memory bound, nothing skipped, replay unchanged", async () => {
   const d = mkdtempSync(join(tmpdir(), "sample-pre13-"));
   const sample = sampleRoot(d);
+  // the sample as it was before slice 13
+  for (const f of SLICE_13_SAMPLE_FILES) rmSync(join(sample.root, f));
   try {
     const config: Config = { ...loadConfig({ env: {}, home: d, repoRoot: d }), data_dir: join(d, "wb"), roots: [{ path: sample.root, trusted: true, credentials: [] }], research: { parallel: 1 } };
     // before the slice: the sample as it was, the investigation loop at the hash slice 12 gave it
@@ -412,7 +420,7 @@ test("a case started before slice 13 and stopped at its plan gate goes on to the
     composed.close();
 
     // the root gains what this slice brings: a case-types manifest, a profile that lists memory references and a loop that reads them
-    writeFileSync(join(sample.root, "context", "case-types.yaml"), "kind: case-types\nid: sample-types\ntypes:\n  - { id: unknown-device, title: Unknown device }\n");
+    writeFileSync(join(sample.root, "case-types.yaml"), "kind: case-types\nid: sample-types\ntypes:\n  - { id: unknown-device, title: Unknown device }\n");
     const profile = readFileSync(join(sample.root, "context", "profile.yaml"), "utf8").replace("id: investigation", "id: memory-test").replace("    procedure: research-sop\n", "    procedure: research-sop\n    references: [shared-lessons, case-notes]\n");
     writeFileSync(join(sample.root, "context", "memory-profile.yaml"), profile);
     const loopBody = Bun.YAML.parse(readFileSync(join(sample.root, "loops", "investigation.yaml"), "utf8")) as Record<string, unknown>;
@@ -451,5 +459,62 @@ test("a case started before slice 13 and stopped at its plan gate goes on to the
   } finally {
     sample.close();
     rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("the sample's slice 13 files: the unknown-device case type, two TLP:CLEAR seeds of it, and a third loop with every stage inline that reads memory, on its own script", async () => {
+  for (const f of SLICE_13_SAMPLE_FILES) expect(`${f}: ${existsSync(join(REPO_SAMPLE, f))}`).toBe(`${f}: true`);
+  expect(registry.get("case-types", "sample-case-types")!.body.types).toEqual([
+    { id: "unknown-device", title: "Unknown device", about: "A device nobody recognises is on the network: what is it, and does it belong?" },
+  ]);
+  const seeds = registry.get("lesson-seeds", "sample-unknown-device")!.body.lessons as { id: string; case_type: string; title: string; triggers: unknown[]; marking: string }[];
+  expect(seeds.map((l) => [l.id, l.case_type, l.title, l.triggers, l.marking])).toEqual([
+    ["connection-message", "unknown-device", "Read the connection message before the lease", [{ observable: "address" }], "TLP:CLEAR"],
+    ["complete-list", "unknown-device", "An empty answer proves absence only from a list declared complete", [{ source: "assets" }], "TLP:CLEAR"],
+  ]);
+  // the loop: nine inline stages on sample-device, the case type, memory at Plan, Research and Assemble, notes at Research and Assemble
+  const loop = registry.get("loop", "unknown-device")!.body as { case_type: string; profile: string; stages: Record<string, unknown>[]; components: Record<string, Record<string, unknown>>; uses: { sources: string[] } };
+  expect([loop.case_type, loop.profile]).toEqual(["unknown-device", "unknown-device"]);
+  expect(loop.stages.map((st) => st.id)).toEqual(["frame", "plan", "research", "assemble", "checks", "evaluate", "challenge", "publish", "feedback"]);
+  for (const st of loop.stages) if (st.model !== null) expect(st.model).toEqual({ provider: "scripted", model: "sample-device", effort: null });
+  // each inline stage is the sample's stage manifest, but for its model and the three changes slice 13 makes
+  for (const st of loop.stages) {
+    const { kind: _k, model: _m, ...own } = registry.get("stage", st.id as string)!.body as Record<string, unknown>;
+    const { model: _n, ...inline } = st;
+    const changed = { ...own, ...(st.id === "frame" ? { schema: "frame-with-type" } : {}), ...(st.id === "research" ? { tools: [...(own.tools as string[]), "note_memory"] } : {}),
+      ...(st.id === "feedback" ? { runs: "agent", schema: "lessons-output", tools: ["list_cards", "read_card"] } : {}) };
+    expect(inline).toEqual(changed);
+  }
+  expect(loop.components).toEqual({
+    plan: { "reference:shared-lessons": { memory: "shared/unknown-device" } },
+    research: { "reference:shared-lessons": { memory: "shared/unknown-device" }, "reference:case-notes": { memory: "case/notes" } },
+    assemble: { "reference:shared-lessons": { memory: "shared/unknown-device" }, "reference:case-notes": { memory: "case/notes" } },
+  });
+  expect(loop.uses.sources).toEqual(["wifi", "assets"]);
+  const profile = registry.get("profile", "unknown-device")!.body.stages as Record<string, { references?: string[]; agent: string; persona: string; goal: string }>;
+  expect([profile.plan!.references, profile.research!.references, profile.assemble!.references]).toEqual([["shared-lessons"], ["shared-lessons", "case-notes"], ["shared-lessons", "case-notes"]]);
+  expect(profile.feedback).toEqual({ agent: "reviewer", persona: "reviewer", goal: "Say what would have made this case faster or more correct, as lessons for later cases of its type." });
+  expect(registry.get("persona", "reviewer")).not.toBeNull();
+  // the script: Frame names the type, the researcher writes one note, the reviewer answers with two lessons
+  const script = Bun.YAML.parse(readFileSync(join(REPO_SAMPLE, "scripts", "sample-device.yaml"), "utf8")) as { id: string; turns: { actor: string; reply: { content?: string; tool_calls?: { tool: string }[] } }[] };
+  expect(script.id).toBe("sample-device");
+  const framed = script.turns.filter((t) => t.actor === "orchestrator" && t.reply.content !== undefined).map((t) => JSON.parse(t.reply.content!) as { case_type?: string });
+  expect(framed.map((f) => f.case_type)).toEqual(["unknown-device"]);
+  expect(script.turns.flatMap((t) => (t.reply.tool_calls ?? []).filter((c) => c.tool === "note_memory").map(() => t.actor))).toEqual(["researcher-g1"]);
+  const reviewer = script.turns.filter((t) => t.actor === "reviewer");
+  expect(reviewer.length).toBe(1);
+  expect((JSON.parse(reviewer[0]!.reply.content!) as { lessons: unknown[] }).lessons.length).toBe(2);
+  // the investigation loop's two hashes are what they were
+  const w = Workbench.open(join(dir, "wb13"), { onError: () => {} });
+  const config: Config = { ...loadConfig({ env: {}, home: dir, repoRoot: dir }), data_dir: join(dir, "wb13"), roots: [{ path: root, trusted: true, credentials: [] }] };
+  const composed = compose(config, w);
+  try {
+    expect(composed.problems).toEqual([]);
+    expect(composed.deps.loops!.current("investigation")!.pipeline.hash).toBe(SAMPLE_INVESTIGATION_HASH);
+    expect(composed.deps.loops!.current("investigation")!.pipeline.legacy_hash).toBe(SAMPLE_LEGACY_HASH);
+    expect(composed.deps.loops!.current("unknown-device")).not.toBeNull();
+  } finally {
+    composed.close();
+    w.close();
   }
 });

@@ -1,0 +1,7 @@
+kind: case-types
+id: sample-case-types
+title: Sample case types
+types:
+  - id: unknown-device
+    title: Unknown device
+    about: "A device nobody recognises is on the network: what is it, and does it belong?"

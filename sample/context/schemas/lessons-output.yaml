@@ -1,0 +1,5 @@
+kind: schema
+id: lessons-output
+title: Lessons output
+# A trigger is any object here: code checks each lesson (its triggers among them), so one bad trigger drops that lesson, not the whole answer.
+schema: {"type": "object", "additionalProperties": false, "required": ["lessons"], "properties": {"lessons": {"type": "array", "maxItems": 3, "items": {"type": "object", "additionalProperties": false, "required": ["title", "text", "triggers"], "properties": {"title": {"type": "string"}, "text": {"type": "string"}, "triggers": {"type": "array", "items": {"type": "object"}}}}}}}

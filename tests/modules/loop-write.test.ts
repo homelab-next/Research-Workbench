@@ -256,7 +256,7 @@ test("saveManifests by a person writes the files, appends manifest.written for e
   expect(registry.get("stage", "research")!.title).toBe("Research, edited");
   expect(loops.current("triage")).not.toBeNull();
   // no temporary file is left beside the written ones
-  expect(readdirSync(join(root, "loops")).sort()).toEqual(["investigation.yaml", "triage.yaml"]);
+  expect(readdirSync(join(root, "loops")).sort()).toEqual(["investigation.yaml", "triage.yaml", "unknown-device.yaml"]);
   expect(readdirSync(join(root, "stages")).filter((n) => n.startsWith("."))).toEqual([]);
   expect(tmpOf()).toEqual([]);
 });
@@ -420,7 +420,7 @@ test("a save through a linked folder inside the root is refused, and nothing is 
 
 /** A case-types manifest and a profile whose research entry lists two references, beside the sample. */
 function memoryRoot(): void {
-  writeFileSync(join(root, "context", "case-types.yaml"), "kind: case-types\nid: sample-types\ntypes:\n  - { id: unknown-device, title: Unknown device }\n");
+  writeFileSync(join(root, "case-types.yaml"), "kind: case-types\nid: sample-types\ntypes:\n  - { id: unknown-device, title: Unknown device }\n");
   const profile = readFileSync(join(root, "context", "profile.yaml"), "utf8").replace("id: investigation", "id: memory-test").replace("    procedure: research-sop\n", "    procedure: research-sop\n    references: [shared-lessons, case-notes]\n");
   writeFileSync(join(root, "context", "memory-profile.yaml"), profile);
 }

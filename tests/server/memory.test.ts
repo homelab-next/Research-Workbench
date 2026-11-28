@@ -369,3 +369,30 @@ test("a file name with a slash or .. is refused", async () => {
   const res = await s.get("/api/memory/files/%2E%2E%2Fmemory.TLP-GREEN.0123456789ab.memory.tar.gz");
   expect(await res.json()).toEqual({ ok: false, refused: ["file must be a memory file's name"] });
 });
+
+test("GET /api/cases/CASE-1/memory?at=N gives the type and the binding in force after entry N; an at that is not an entry's number is 400", async () => {
+  const s = await open();
+  const first = shareDirect(s, { title: "The first lesson" });
+  const id = await s.newCase({ loop: "memo", type: "unknown-device" });
+  await s.toPlanGate(id);
+  const boundAt = s.app.hub.read(id).state.memory.bound!.seq;
+  const mid = s.app.hub.read(id).state.seq;
+  const second = shareDirect(s, { title: "The second lesson" });
+  expect((await s.command(id, "set_case_type", { type: null })).status).toBe(200);
+  expect((await s.command(id, "set_case_type", { type: "unknown-device" })).status).toBe(200);
+  const live = await getJson<CaseMemoryView>(s, `/api/cases/${id}/memory`);
+  expect(live.bound!.lessons.map((l) => l.id)).toEqual([second, first]);
+  const then = await getJson<CaseMemoryView>(s, `/api/cases/${id}/memory?at=${mid}`);
+  expect(then.bound!.seq).toBe(boundAt);
+  expect(then.bound!.lessons.map((l) => l.id)).toEqual([first]);
+  expect(then.type).toBe("unknown-device");
+  // after the type was cleared, the binding then in force gave nothing, and the case had no type
+  const cleared = s.entries(id).filter((e) => e.type === "memory.bound")[1]!.seq;
+  const none = await getJson<CaseMemoryView>(s, `/api/cases/${id}/memory?at=${cleared}`);
+  expect([none.type, none.bound!.seq, none.bound!.lessons]).toEqual([null, cleared, []]);
+  // before the run bound memory: no binding
+  expect((await getJson<CaseMemoryView>(s, `/api/cases/${id}/memory?at=1`)).bound).toBeNull();
+  // an at past the head is the case as it stands
+  expect(await getJson<CaseMemoryView>(s, `/api/cases/${id}/memory?at=${s.app.hub.read(id).state.seq + 5}`)).toEqual(live);
+  for (const bad of ["0", "-1", "x", "1.5", ""]) expect((await s.get(`/api/cases/${id}/memory?at=${bad}`)).status).toBe(400);
+});

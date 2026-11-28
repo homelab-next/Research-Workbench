@@ -1,0 +1,148 @@
+kind: loop
+id: unknown-device
+title: Unknown device
+about: >-
+  The investigation loop for a case of type unknown-device, with memory: Plan, Research and Assemble are given the shared lessons
+  a person has accepted for the type, Research and Assemble the case's own notebook, and Feedback proposes lessons for later cases.
+version: 1
+case_type: unknown-device
+profile: unknown-device
+entry: frame
+# Every stage is written here, so the investigation loop's stage manifests (and its hashes) are not changed.
+stages:
+  - id: frame
+    title: Frame
+    order: 1
+    phase: direction
+    runs: agent
+    role: frame
+    gate: null
+    reviews: false
+    tools: [list_sources, describe_source]
+    schema: frame-with-type
+    model: { provider: scripted, model: sample-device, effort: null }
+    on_pass: plan
+    on_fail: null
+  - id: plan
+    title: Plan
+    order: 2
+    phase: direction
+    runs: agent
+    role: plan
+    gate: plan
+    reviews: false
+    tools: [list_sources, describe_source, find_routes, list_playbooks, ask_person]
+    schema: plan-output
+    model: { provider: scripted, model: sample-device, effort: null }
+    on_pass: research
+    on_fail: null
+  - id: research
+    title: Research
+    order: 3
+    phase: collection
+    runs: agent
+    role: research
+    gate: null
+    reviews: false
+    tools: [find_routes, run_step, run_pivot, run_query, list_cards, read_card, ask_person, note_memory]
+    schema: research-output
+    model: { provider: scripted, model: sample-device, effort: null }
+    on_pass: assemble
+    on_fail: plan
+  - id: assemble
+    title: Assemble
+    order: 4
+    phase: analysis
+    runs: agent
+    role: assemble
+    gate: null
+    reviews: false
+    tools: [list_cards, read_card, propose_assessment, propose_narrative, request_research, answer_challenge, ask_person]
+    schema: assemble-output
+    model: { provider: scripted, model: sample-device, effort: null }
+    on_pass: checks
+    on_fail: research
+  - id: checks
+    title: Checks
+    order: 5
+    phase: processing
+    runs: script
+    role: checks
+    gate: null
+    reviews: true
+    tools: []
+    schema: null
+    model: null
+    on_pass: evaluate
+    on_fail: assemble
+  - id: evaluate
+    title: Evaluate
+    order: 6
+    phase: analysis
+    runs: agent
+    role: evaluate
+    gate: null
+    reviews: true
+    tools: [list_cards, read_card, verify_card]
+    schema: evaluate-output
+    model: { provider: scripted, model: sample-device, effort: null }
+    on_pass: challenge
+    on_fail: assemble
+  - id: challenge
+    title: Challenge
+    order: 7
+    phase: analysis
+    runs: agent
+    role: challenge
+    gate: null
+    reviews: true
+    tools: [list_cards, read_card, verify_card, raise_challenge]
+    schema: challenge-output
+    model: { provider: scripted, model: sample-device, effort: null }
+    on_pass: publish
+    on_fail: assemble
+  - id: publish
+    title: Publish
+    order: 8
+    phase: dissemination
+    runs: agent
+    role: publish
+    gate: publish
+    reviews: false
+    tools: []
+    schema: publish-output
+    model: { provider: scripted, model: sample-device, effort: null }
+    on_pass: feedback
+    on_fail: assemble
+  - id: feedback
+    title: Feedback
+    order: 9
+    phase: feedback
+    runs: agent
+    role: feedback
+    gate: null
+    reviews: false
+    tools: [list_cards, read_card]
+    schema: lessons-output
+    model: { provider: scripted, model: sample-device, effort: null }
+    on_pass: null
+    on_fail: null
+components:
+  plan:
+    "reference:shared-lessons": { memory: shared/unknown-device }
+  research:
+    "reference:shared-lessons": { memory: shared/unknown-device }
+    "reference:case-notes": { memory: case/notes }
+  assemble:
+    "reference:shared-lessons": { memory: shared/unknown-device }
+    "reference:case-notes": { memory: case/notes }
+uses:
+  sources: [wifi, assets]
+inputs:
+  question: { type: question, required: true }
+  observables: { type: observables, required: true }
+  window: { type: window, required: true }
+outputs:
+  product: { from: product }
+  findings: { from: findings }
+  cards: { from: cards.kept }

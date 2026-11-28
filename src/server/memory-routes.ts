@@ -7,6 +7,7 @@ import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { isPlainObject } from "../core/canonical";
 import { isTrigger, readMemoryLock, triggerWords } from "../core/lessons";
+import { fold } from "../core/state";
 import type { LessonDraft, LessonState, MemoryLock } from "../core/lessons";
 import { checkMemoryFile, parseMemoryFileName } from "../core/memfile";
 import { MemoryRefused } from "../core/memstore";
@@ -156,9 +157,13 @@ async function memoryView(d: MemoryRouteDeps): Promise<MemoryView> {
 /** The marking a case's views compare a lesson with: the case's; with no record, the least that may be shown. */
 const caseMarking = (marking: Marking | undefined): Marking => marking ?? MARKINGS[0]!;
 
-function caseMemoryView(d: MemoryRouteDeps, id: string): CaseMemoryView {
+/**
+ * A case's memory as it stands, or, with `at`, as it stood after entry `at` (Replay): the type and the binding in force then, folded from the
+ * case's own entries, so the lessons listed are the ones that binding locked. The lessons proposed from the case are the store's now.
+ */
+function caseMemoryView(d: MemoryRouteDeps, id: string, at: number | null = null): CaseMemoryView {
   const session = d.hub.read(id);
-  const st = session.state;
+  const st = at === null || at >= session.state.seq ? session.state : fold(session.entries(0, at), at);
   const m = st.memory;
   const marking = caseMarking(st.meta?.marking);
   const types = d.deps.case_types ?? [];
@@ -275,7 +280,14 @@ export function memoryRoutes(d: MemoryRouteDeps): MemoryRoute[] {
 
   return [
     { method: "GET", path: /^\/api\/memory$/, needs: { read: "memory" }, kind: "api", handle: () => refusing(async () => json(200, await memoryView(d))) },
-    { method: "GET", path: /^\/api\/cases\/([^/]+)\/memory$/, needs: { read: "memory" }, kind: "api", handle: ({ params }) => refusing(() => json(200, caseMemoryView(d, params[0]!))) },
+    {
+      method: "GET", path: /^\/api\/cases\/([^/]+)\/memory$/, needs: { read: "memory" }, kind: "api",
+      handle: ({ params, url }) => {
+        const given = url.searchParams.get("at");
+        if (given !== null && !/^[1-9]\d{0,9}$/.test(given)) return refused(400, "at must be an entry's number");
+        return refusing(() => json(200, caseMemoryView(d, params[0]!, given === null ? null : Number(given))));
+      },
+    },
     {
       method: "POST", path: /^\/api\/memory\/lessons$/, needs: { command: "propose_lesson" }, kind: "api",
       handle: async ({ body }) => {

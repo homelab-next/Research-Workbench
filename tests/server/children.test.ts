@@ -239,7 +239,7 @@ test("a card given to a child holds no query of the parent, and verify_card on i
 });
 
 test("a child case takes its own loop's case type, else its parent's", async () => {
-  const types = (root: string): void => { writeTriage(root); writeFileSync(join(root, "context", "case-types.yaml"), CASE_TYPES); };
+  const types = (root: string): void => { writeTriage(root); writeFileSync(join(root, "case-types.yaml"), CASE_TYPES); };
   // the child's loop names no case type: the child takes its parent's, by the engine
   s = await served({ before: types, onError: (e) => { errors.push(e); } });
   let parent = await s.newCase({ loop: "triage", type: "phishing" });

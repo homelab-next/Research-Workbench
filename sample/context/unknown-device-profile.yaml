@@ -1,0 +1,53 @@
+kind: profile
+id: unknown-device
+title: Unknown device
+rules: base-rules
+framework: intel-cycle
+standard: icd203
+# The investigation profile's entries, with the memory references the unknown-device loop fills listed on Plan, Research and Assemble,
+# and a Feedback entry whose reviewer proposes lessons for later cases of the type.
+stages:
+  frame:
+    agent: orchestrator
+    persona: orchestrator
+    goal: Turn the question into goals, a time window and limits on how far to reach.
+  plan:
+    agent: planner
+    persona: planner
+    goal: Break each goal into sub-goals and choose a route of pivots for each.
+    skills: [ask-the-person]
+    references: [shared-lessons]
+  research:
+    agent: researcher
+    persona: researcher
+    goal: Run the accepted steps, collect what each returns and say what was not found.
+    procedure: research-sop
+    skills: [ask-the-person]
+    references: [shared-lessons, case-notes]
+  assemble:
+    agent: analyst
+    persona: analyst
+    goal: Write the findings from the cards, with likelihood and confidence, and name the gaps.
+    procedure: assemble-sop
+    skills: [ask-the-person]
+    references: [shared-lessons, case-notes]
+  evaluate:
+    agent: evaluator
+    persona: evaluator
+    goal: Check the draft against its cards and report what does not hold.
+  challenge:
+    agent: adversary
+    persona: adversary
+    goal: Argue against the draft and raise the objections that must be answered.
+  publish:
+    agent: publisher
+    persona: publisher
+    goal: Give the reviewed product a title and a short note for its bundle.
+  feedback:
+    agent: reviewer
+    persona: reviewer
+    goal: Say what would have made this case faster or more correct, as lessons for later cases of its type.
+  agent:
+    agent: assistant
+    persona: assistant
+    goal: Answer the analyst's questions from the case as it stands. Cite cards as [c1]. Say what is not known. You propose; the analyst decides.

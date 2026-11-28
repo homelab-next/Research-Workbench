@@ -514,7 +514,7 @@ test("compose does not fail when the default loop is not usable: the problem nam
 /** The sample's investigation loop with its research stage reading two memory references, under a profile whose research entry lists them; a case-types manifest beside it. */
 const MEMORY_COMPONENTS = { research: { "reference:shared-lessons": { memory: "shared/unknown-device" }, "reference:case-notes": { memory: "case/notes" } } };
 function memoryFixture(opts: { references?: boolean } = {}): void {
-  writeFileSync(join(root, "context", "case-types.yaml"), "kind: case-types\nid: sample-types\ntypes:\n  - { id: unknown-device, title: Unknown device, about: A device on the network nobody can name }\n");
+  writeFileSync(join(root, "case-types.yaml"), "kind: case-types\nid: sample-types\ntypes:\n  - { id: unknown-device, title: Unknown device, about: A device on the network nobody can name }\n");
   const profile = readFileSync(join(root, "context", "profile.yaml"), "utf8").replace("id: investigation", "id: memory-test").replace("title: Investigation", "title: Memory test");
   const listed = opts.references === false ? profile : profile.replace("    procedure: research-sop\n", "    procedure: research-sop\n    references: [shared-lessons, case-notes]\n");
   if (opts.references !== false && listed === profile) throw new Error("the profile's research entry was not found");
@@ -604,7 +604,7 @@ test("fromLock rebuilds the loop from the content store with its memory items, a
   writeLoop("memo", memoryLoop());
   const first = typedCatalog().loops.current("memo")!;
   // the root changes and the case types go: the lock still rebuilds, from the content store alone
-  rmSync(join(root, "context", "case-types.yaml"));
+  rmSync(join(root, "case-types.yaml"));
   editFile("context/personas/researcher.md", "You are the researcher.", "You are someone else.");
   const back = typedCatalog().loops.fromLock(first.lock);
   if (typeof back === "string") throw new Error(back);

@@ -76,8 +76,11 @@ export interface Api {
   loadMemory(file: string, typed: string): Promise<{ lessons: number } | { refused: string[] }>;
   /** Where a memory file is downloaded from. */
   memoryFilePath(file: string): string;
-  /** A case's type, what its loop reads of memory, and the shared lessons its run was given and why (slice 13). */
-  caseMemory(caseId: string): Promise<CaseMemoryView>;
+  /**
+   * A case's type, what its loop reads of memory, and the shared lessons its run was given and why (slice 13); with `at`, the type and the
+   * binding in force after that entry (Replay).
+   */
+  caseMemory(caseId: string, at?: number): Promise<CaseMemoryView>;
   entries: EntrySource;
 }
 
@@ -187,7 +190,7 @@ export function makeApi(fetcher: Fetcher, origin: string, entries: EntrySource):
     exportMemory: () => answered<{ file: string }>("/api/memory/export", {}),
     loadMemory: (file, typed) => answered<{ lessons: number }>("/api/memory/load", { file, typed }),
     memoryFilePath: (file) => `/api/memory/files/${seg(file)}`,
-    caseMemory: (id) => read<CaseMemoryView>(`/api/cases/${seg(id)}/memory`),
+    caseMemory: (id, at) => read<CaseMemoryView>(`/api/cases/${seg(id)}/memory${at === undefined ? "" : `?at=${at}`}`),
     entries,
   };
 }

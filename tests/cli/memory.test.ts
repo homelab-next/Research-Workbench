@@ -20,7 +20,7 @@ interface Env { config: string; data: string; root: string }
 function envOf(name: string): Env {
   const root = join(dir, `${name}-root`);
   copySample(root);
-  writeFileSync(join(root, "context", "case-types.yaml"), TYPES);
+  writeFileSync(join(root, "case-types.yaml"), TYPES);
   const data = join(dir, `${name}-data`);
   const config = join(dir, `${name}.yaml`);
   writeFileSync(config, [`data_dir: ${data}`, "user: analyst", "roots:", `  - { path: ${root}, trusted: true }`, ""].join("\n"));

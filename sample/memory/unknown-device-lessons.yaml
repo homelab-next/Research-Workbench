@@ -1,0 +1,24 @@
+kind: lesson-seeds
+id: sample-unknown-device
+title: Sample lessons for unknown-device cases
+# Two synthetic lessons about the sample's own planted data and nothing else. compose files each as a proposal, once; neither is shared
+# with any case until a person accepts it (the Memory page, or `bun run memory accept`).
+lessons:
+  - id: connection-message
+    case_type: unknown-device
+    title: Read the connection message before the lease
+    text: >-
+      In the sample's WiFi log, a connection message names the host a device announced and the access point it joined. When no lease
+      names the address, that message is where the device's name is: read it before concluding the address is unknown.
+    triggers:
+      - { observable: address }
+    marking: "TLP:CLEAR"
+  - id: complete-list
+    case_type: unknown-device
+    title: An empty answer proves absence only from a list declared complete
+    text: >-
+      The sample's asset list is declared complete for internal hosts, so an address it has no row for is proven not a known asset.
+      Its lease records are not complete: an empty answer from them only says the address was not seen there.
+    triggers:
+      - { source: assets }
+    marking: "TLP:CLEAR"

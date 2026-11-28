@@ -397,7 +397,7 @@ test("status of a child names its parent and the stage that made it", () => {
 const TYPES = "kind: case-types\nid: sample-types\ntypes:\n  - { id: unknown-device, title: Unknown device, about: A device on the network that no inventory names. }\n";
 /** The sample with a case type, and a loop `typed` (the investigation's stages) whose default case type it is. */
 function writeTyped(e: Env): void {
-  writeFileSync(join(e.dir, "sample", "context", "case-types.yaml"), TYPES);
+  writeFileSync(join(e.dir, "sample", "case-types.yaml"), TYPES);
   const body = readFileSync(join(e.dir, "sample", "loops", "investigation.yaml"), "utf8");
   writeFileSync(join(e.dir, "sample", "loops", "typed.yaml"), body.replace("id: investigation", "id: typed").replace("version: 1\n", "version: 1\ncase_type: unknown-device\n"));
 }

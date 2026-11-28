@@ -309,6 +309,38 @@ test("in replay the notebook is the one of the replayed entry", async () => {
   expect(pg().root.querySelector(".lens-memory .replay-binding")).toBeNull();
 });
 
+test("in replay at entry N the lens lists the lessons of the binding in force at N, not the latest binding's", async () => {
+  await open();
+  const first = share({ title: "The first lesson" });
+  const id = await typedAtPlanGate();
+  const boundAt = state(id).memory.bound!.seq;
+  const mid = state(id).seq;
+  // a second lesson is shared, and the person sets the case's type again during the run: memory is bound again, with both
+  const second = share({ title: "The second lesson" });
+  expect((await pg().s.command(id, "set_case_type", { type: null })).status).toBe(200);
+  expect((await pg().s.command(id, "set_case_type", { type: "unknown-device" })).status).toBe(200);
+  const latest = state(id).memory.bound!;
+  expect(latest.seq).toBeGreaterThan(boundAt);
+  expect(latest.lessons.map((l) => l.lesson)).toEqual([second, first]);
+  await openLens(id);
+  await pg().settle();
+  expect(pg().all(".lens-memory .loaded-lesson").map((r) => r.dataset.lesson)).toEqual([second, first]);
+  // at an entry before the second binding, the lessons listed are the first binding's
+  pg().store()!.goTo(mid);
+  await pg().settle();
+  await pg().settle();
+  expect(text(pg().q(".lens-memory .replay-binding"))).toBe(`At entry #${mid} the binding of entry #${boundAt} was in force: the lessons below.`);
+  expect(text(pg().q(".lens-memory .bound-at"))).toStartWith(`Bound at entry #${boundAt},`);
+  expect(pg().all(".lens-memory .loaded-lesson").map((r) => r.dataset.lesson)).toEqual([first]);
+  expect(text(lens())).not.toContain("The second lesson");
+  // back to live: the latest binding's
+  pg().store()!.goTo(null);
+  await pg().settle();
+  await pg().settle();
+  expect(pg().root.querySelector(".lens-memory .replay-binding")).toBeNull();
+  expect(pg().all(".lens-memory .loaded-lesson").map((r) => r.dataset.lesson)).toEqual([second, first]);
+});
+
 test("the m key opens the lens, and the help card lists it", async () => {
   await open();
   const id = await pg().s.newCase({ loop: "memo", type: "unknown-device" });

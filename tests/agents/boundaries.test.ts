@@ -90,3 +90,62 @@ test("the builder tools rule catches a planted violation", () => {
   expect(builderToolsDoNotWrite(BUILDER_TOOLS, `export type { LoopDraft } from "../../modules/loop-write";`)).toEqual([]);
   expect(builderToolsDoNotWrite("src/agents/tools/kit.ts", `import { saveManifests } from "../../modules/loop-write";`)).toEqual([]);
 });
+
+// ---------- slice 13: a lesson is shared only by a person, and is a note, never rules ----------
+
+const ROOT = join(SRC, "..");
+const relOf = (f: string): string => f.slice(ROOT.length + 1).split("\\").join("/");
+/** Whether an import specifier of `file` names src/core/memstore(.ts). */
+const namesMemstore = (file: string, spec: string): boolean => spec.startsWith(".") && /(?:^|\/)core\/memstore(?:\.ts)?$/.test(relOf(join(file, "..", spec)));
+
+test("no file under src/agents or src/pipeline/stages imports src/core/memstore.ts", () => {
+  const all = [...files(join(SRC, "agents")), ...files(join(SRC, "pipeline", "stages"))];
+  expect(all.some((f) => f.endsWith(join("agents", "memory.ts")))).toBe(true);
+  expect(all.some((f) => f.endsWith(join("stages", "feedback.ts")))).toBe(true);
+  for (const f of all) for (const spec of imports(readFileSync(f, "utf8"))) expect(`${relOf(f)}: ${namesMemstore(f, spec)}`).toBe(`${relOf(f)}: false`);
+  // the check sees an import of it
+  expect(namesMemstore(join(SRC, "agents", "tools", "x.ts"), "../../core/memstore")).toBe(true);
+  expect(namesMemstore(join(SRC, "pipeline", "stages", "x.ts"), "../../core/memstore.ts")).toBe(true);
+  expect(namesMemstore(join(SRC, "agents", "x.ts"), "../core/lessons")).toBe(false);
+});
+
+/** Kinds a part made from memory may never have. */
+const RULE_KINDS = ["rules", "persona", "procedure", "skill", "gate", "schema", "standard", "framework"];
+
+test("src/agents/memory.ts is the only file that calls readMemoryLock to make pack parts, and it makes no part of kind rules, persona, procedure, skill, gate, schema, standard or framework", async () => {
+  // under src/agents and src/pipeline (where packs are made), only src/agents/memory.ts reads a lock or names the two part kinds
+  const packMakers = [...files(join(SRC, "agents")), ...files(join(SRC, "pipeline"))];
+  for (const f of packMakers) {
+    if (relOf(f) === "src/agents/memory.ts") continue;
+    const text = readFileSync(f, "utf8");
+    expect(`${relOf(f)}: ${/\breadMemoryLock\s*\(/.test(text)}`).toBe(`${relOf(f)}: false`);
+    expect(`${relOf(f)}: ${/["'](?:shared-lesson|case-note)["']|\b(?:LESSON_KIND|NOTE_KIND)\b/.test(text) && !/\bmemoryParts\b/.test(text)}`).toBe(`${relOf(f)}: false`);
+  }
+  const memory = readFileSync(join(SRC, "agents", "memory.ts"), "utf8");
+  expect(memory).toMatch(/\breadMemoryLock\s*\(/);
+  // every part it makes has one of the two kinds and is not fixed
+  const kinds = [...memory.matchAll(/\bkind:\s*([A-Za-z_"'-]+)/g)].map((m) => m[1]!);
+  expect(kinds.length).toBeGreaterThan(0);
+  for (const k of kinds) expect(["LESSON_KIND", "NOTE_KIND"]).toContain(k);
+  for (const k of RULE_KINDS) expect(memory).not.toMatch(new RegExp(`kind:\\s*["']${k}["']`));
+  expect(memory).not.toMatch(/fixed:\s*true/);
+  const { LESSON_KIND, NOTE_KIND, lessonPart } = await import("../../src/agents/memory");
+  expect([LESSON_KIND, NOTE_KIND]).toEqual(["shared-lesson", "case-note"]);
+  for (const k of [LESSON_KIND, NOTE_KIND]) expect(RULE_KINDS).not.toContain(k);
+  const { loadRegistry } = await import("../../src/modules/registry-record");
+  const part = lessonPart({
+    lesson: "LESSON-1", hash: "h", case_type: "t", title: "T", text: "x", marking: "TLP:CLEAR", triggers: [], matched: ["every t case"],
+    from: { kind: "person" }, accepted: { by: "a", seq: 1, ts: "2026-11-27T00:00:00.000Z" }, supersedes: null, stages: ["plan"],
+  } as Parameters<typeof lessonPart>[0], loadRegistry([]));
+  expect([part.kind, part.fixed]).toEqual(["shared-lesson", false]);
+});
+
+test("lesson.accepted, lesson.rejected and lesson.retired are written only in src/core/memstore.ts", () => {
+  const DECISION = /\btype:\s*["'](lesson\.(?:accepted|rejected|retired))["']/g;
+  const found: string[] = [];
+  for (const f of files(SRC)) for (const m of readFileSync(f, "utf8").matchAll(DECISION)) found.push(`${relOf(f)} ${m[1]}`);
+  expect(found.sort()).toEqual(["src/core/memstore.ts lesson.accepted", "src/core/memstore.ts lesson.rejected", "src/core/memstore.ts lesson.retired"]);
+  // and only behind a check that the actor is a person
+  const store = readFileSync(join(SRC, "core", "memstore.ts"), "utf8");
+  expect(store).toMatch(/kind\s*!==\s*["']human["']/);
+});

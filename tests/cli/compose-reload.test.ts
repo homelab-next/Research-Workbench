@@ -23,6 +23,8 @@ let composed: ReturnType<typeof compose>;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "compose-reload-"));
   sample = sampleRoot(dir);
+  // the sample's own seed lessons are left out: these tests file seeds of their own and count them
+  rmSync(join(sample.root, "memory"), { recursive: true, force: true });
   const base = loadConfig({ env: {}, home: dir, repoRoot: dir });
   config = {
     ...base, data_dir: join(dir, "wb"), roots: [{ path: sample.root, trusted: true, credentials: [] }], research: { parallel: 1 },
@@ -143,7 +145,7 @@ function recompose(): void {
 }
 
 test("compose gives the deps the case types, a memory host over the workbench's store, and files a root's seeds once", async () => {
-  writeFileSync(join(sample.root, "context", "case-types.yaml"), TYPES);
+  writeFileSync(join(sample.root, "case-types.yaml"), TYPES);
   writeFileSync(join(sample.root, "context", "seeds.yaml"), seedsOf("A device seen only on AP-3 is usually a guest in the lobby."));
   recompose();
   expect(composed.problems).toEqual([]);
@@ -163,7 +165,7 @@ test("compose gives the deps the case types, a memory host over the workbench's 
   expect(wb.memory).not.toBe(before);
   expect(composed.deps.memory!.read().state.order).toEqual(["LESSON-1"]);
   // a reload replaces the case types in place, on the same deps
-  writeFileSync(join(sample.root, "context", "case-types.yaml"), `${TYPES}  - { id: phishing, title: Phishing }\n`);
+  writeFileSync(join(sample.root, "case-types.yaml"), `${TYPES}  - { id: phishing, title: Phishing }\n`);
   const same = composed.deps;
   expect(composed.reload()).toEqual([]);
   expect(composed.deps).toBe(same);
@@ -171,7 +173,7 @@ test("compose gives the deps the case types, a memory host over the workbench's 
 });
 
 test("a reload after a seed manifest changed files the new seed and keeps the old lesson", () => {
-  writeFileSync(join(sample.root, "context", "case-types.yaml"), TYPES);
+  writeFileSync(join(sample.root, "case-types.yaml"), TYPES);
   writeFileSync(join(sample.root, "context", "seeds.yaml"), seedsOf("A device seen only on AP-3 is usually a guest in the lobby."));
   recompose();
   writeFileSync(join(sample.root, "context", "seeds.yaml"), seedsOf("A device seen only on AP-3 is most often a guest's phone in the lobby."));
@@ -183,7 +185,7 @@ test("a reload after a seed manifest changed files the new seed and keeps the ol
 });
 
 test("a seed that is not a lesson is one of compose's problems, and the workbench starts", () => {
-  writeFileSync(join(sample.root, "context", "case-types.yaml"), TYPES);
+  writeFileSync(join(sample.root, "case-types.yaml"), TYPES);
   writeFileSync(join(sample.root, "context", "seeds.yaml"), seedsOf("A device seen only on AP-3 is usually a guest in the lobby.", "TLP:PURPLE"));
   recompose();
   expect(composed.problems.length).toBe(1);
