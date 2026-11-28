@@ -16,7 +16,7 @@ import { Registry } from "../../src/modules/registry";
 import { loadRegistry } from "../../src/modules/registry-record";
 import { loadConfig } from "../../src/modules/config";
 import { Engine } from "../../src/pipeline/engine";
-import type { EngineDeps, StageEnd, StageRunner } from "../../src/pipeline/engine";
+import type { EngineDeps, MemoryHost, StageEnd, StageRunner } from "../../src/pipeline/engine";
 import { computeMops, FeedbackRefused, MOP_IDS, recordFeedback, recordMops } from "../../src/pipeline/feedback";
 import { loadPipeline } from "../../src/pipeline/manifests";
 import type { Role } from "../../src/pipeline/manifests";
@@ -88,13 +88,13 @@ afterEach(() => {
 
 const product: Product = { objective: "o", question: "q", marking: "TLP:GREEN", summary: "s", key_findings: [], gaps_and_limits: "", alternatives: "", assessment: "", sources: [], assumptions: [], change: "c" };
 
-function rig(s: CaseSession = f.s): Engine {
+function rig(s: CaseSession = f.s, memory?: MemoryHost): Engine {
   const registry = f.sample.registry;
   const { pipeline } = loadPipeline(registry);
   const deps: EngineDeps = {
     config: loadConfig({ env: {}, home: dir, repoRoot: dir }), registry, runner: f.sample.deps, seeker: f.sample.seeker,
     providers: new Providers([new ScriptedProvider({ id: "scripted", scripts: [{ id: "sample-run", turns: [{ actor: "publisher", reply: { content: JSON.stringify({ title: "T", note: "" }) } }] }] })]),
-    pipeline: pipeline!, profile: loadProfile(registry, "investigation"),
+    pipeline: pipeline!, profile: loadProfile(registry, "investigation"), ...(memory === undefined ? {} : { memory }),
   };
   const pass = (): StageEnd => ({ ...PASS, draft_hash: latestDraft(s.state)?.hash ?? null });
   const runners: Partial<Record<Role, StageRunner>> = {
@@ -137,6 +137,21 @@ test("after approval the measures are recorded and the run finishes as published
   const batch = f.s.entries().filter((e) => e.seq >= entries[0]!.seq && e.seq <= entries.at(-1)!.seq);
   expect(batch).toHaveLength(7);
   expect(f.s.state.feedback.find((x) => x.measure === "queries_run")!.value).toBe(0);
+});
+
+test("the sample's Feedback stage runs no agent: with a memory host and a typed case it asks nothing and files nothing", async () => {
+  f.s.commit(() => [{ type: "case.type_set", actor: person, payload: { type: "unknown-device" } }]);
+  const proposed: unknown[] = [];
+  const engine = rig(f.s, {
+    read: () => { throw new Error("not read"); },
+    propose: (d) => { proposed.push(d); return { lesson: "LESSON-1", fresh: true }; },
+  });
+  await published(engine);
+  expect(await engine.advance()).toMatchObject({ status: "finished", outcome: "published" });
+  const ends = f.s.entries().filter((e) => e.type === "stage.finished" && e.payload.stage === "feedback");
+  expect(ends.map((e) => (e.type === "stage.finished" ? [e.payload.outcome, e.payload.output, e.payload.reason] : null))).toEqual([["pass", null, null]]);
+  expect(f.s.entries().some((e) => e.type === "model.request" && e.stage === "feedback")).toBe(false);
+  expect(proposed).toEqual([]);
 });
 
 /** A case that names the sample objective, in its own workbench, and a registry whose objective lists only `ids`' kinds as given. */
