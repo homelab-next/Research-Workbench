@@ -400,19 +400,17 @@ test("when an improve case's run ends, finished or stopped by a person, the host
   for (const e of [e1, e2, e3]) e.close();
 });
 
-test("the stub of a role that is not built stalls the run with its sentence", async () => {
+test("every improve role has its own runner: none answers with the not-built stub", async () => {
   const s = improveCase();
   const engine = Engine.open(s, depsWith(fakeHost([])));
   engine.start(human);
-  // Select is built (slice 14, Task 9): with a host that cannot give tasks the run stops at it with the failure's sentence, not the stub's
+  // with a host that cannot give tasks the run stops at Select with the failure's sentence, not a stub's
   expect(await engine.advance()).toMatchObject({ status: "paused", current: "select", pause_reason: "Select failed unexpectedly: the engine does not call tasks" });
-  // Reflect and Adopt are built too (slice 14, Task 14): each is held by its own test file
-  // Propose is built (slice 14, Task 10): held by tests/pipeline/improve-propose.test.ts
-  // Probe is built (slice 14, Task 11): held by tests/pipeline/improve-probe.test.ts
-  const built: readonly string[] = ["select", "propose", "probe", "reflect", "adopt"];
-  for (const role of IMPROVE_ROLES.filter((r) => !built.includes(r))) {
-    const end = await IMPROVE_RUNNERS[role]({} as StageEnv);
-    expect(end).toEqual({ kind: "stalled", reason: `${TITLES[role]} is not built yet` });
+  // each role's behaviour is held by its own test file (improve-select/propose/probe/compose/judge/reflect); here: no role is still the stub
+  for (const role of IMPROVE_ROLES) {
+    let end: unknown = null;
+    try { end = await IMPROVE_RUNNERS[role]({} as StageEnv); } catch { end = "threw"; }
+    expect(end).not.toEqual({ kind: "stalled", reason: `${TITLES[role]} is not built yet` });
   }
   engine.close();
 });
