@@ -15,6 +15,7 @@ import { runQuery } from "../../src/modules/runner";
 import type { Connector, QueryOutcome } from "../../src/modules/connectors";
 import type { RunnerDeps } from "../../src/modules/runner";
 import { difference, revalidateCard } from "../../src/modules/revalidate";
+import { writeLakeCatalog } from "pivot/synth/format";
 import type { Revalidation, Verdict } from "../../src/modules/revalidate";
 import { startStandin } from "../helpers/http-standin";
 import type { Standin } from "../helpers/http-standin";
@@ -452,4 +453,47 @@ test("a reader that throws gives the unreadable reason, never an error", async (
   await v();
   const broken = { ...registry, source: () => ({ limits: null }) } as unknown as typeof registry;
   expect(difference(s, { ...deps, registry: broken }, "c1")).toEqual({ reason: "the stored result cannot be read back row by row" });
+});
+
+test("revalidate re-runs a fakeathena query from its stored template and bound values, as it does a sql one", async () => {
+  // a root of its own: one free fakeathena source over a lake made by hand with pivot's writeLakeCatalog
+  const root = join(dir, "synth-root");
+  mkdirSync(join(root, "sources"), { recursive: true });
+  writeFileSync(join(root, "sources", "signins.yaml"), `kind: source
+id: signins
+title: Sign-ins (synthetic)
+connector: fakeathena
+location: ../../lake.sqlite
+marking: "TLP:GREEN"
+where: machine
+adhoc: true
+cost: { weight: 0, unit: USD }
+tables:
+  - { name: signins, time_column: ts, guarded: true, columns: [] }
+`);
+  const lakePath = join(dir, "lake.sqlite");
+  const db = new Database(lakePath);
+  db.run("CREATE TABLE signins (ts TEXT, account TEXT, dt TEXT)");
+  for (const dt of ["2026-10-01", "2026-10-02"]) for (const who of ["ada", "bo", "ada"]) db.run("INSERT INTO signins VALUES (?, ?, ?)", [`${dt}T01:00:00.000Z`, who, dt]);
+  writeLakeCatalog(db, {
+    params: { seed: 15 }, digest: "d".repeat(64),
+    tables: [{ name: "signins", columns: ["ts", "account", "dt"], row_bytes: 50, partitioned: true }],
+    partitions: [{ table: "signins", dt: "2026-10-01", rows: 3, bytes: 7_500_000 }, { table: "signins", dt: "2026-10-02", rows: 3, bytes: 7_500_000 }],
+  });
+  db.close();
+  const synthRegistry = loadRegistry([{ path: root, trusted: true, credentials: [] }]);
+  const synthPool = new ConnectorPool({ secrets: new Secrets({}, null), observables });
+  const synthDeps: RunnerDeps = { registry: synthRegistry, pool: synthPool, observables };
+  try {
+    const w: TimeWindow = { from: "2026-10-01T00:00:00.000Z", to: "2026-10-03T00:00:00.000Z" };
+    const r1 = await runQuery(s, synthDeps, { source: "signins", text: "select ts, account from signins where ts >= {window.from} and ts < {window.to} and account = {value} limit 10", bound: { value: "ada" }, window: w, why: "w", actor: human });
+    expect(r1).toMatchObject({ status: "done", rows: 4 });
+    expect(issued("q1")).toMatchObject({ connector: "fakeathena", pivot: null });
+    expect(issued("q1").text).toContain("$window_from");
+    const r = verdict(await revalidateCard(s, synthDeps, { card: "c1", actor: human, why: "check before publishing" }));
+    expect(r).toMatchObject({ outcome: "matches", rerun: "q2" });
+    expect(issued("q2")).toMatchObject({ text: issued("q1").text, bound: { value: "ada" }, window: w, verifies: "q1" });
+  } finally {
+    synthPool.closeAll();
+  }
 });

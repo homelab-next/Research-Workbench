@@ -168,17 +168,27 @@ test("no view of any builder tool holds a source's location, user, credential va
   expect(ofType("builder.probe_asked")).toEqual([]);
 });
 
-test("list_connectors names the four connector kinds and which are trusted-only", async () => {
+test("list_connectors names the five connector kinds and which are trusted-only", async () => {
   const r = await f.call("list_connectors", { why: "which kinds" });
   expect(r.ok).toBe(true);
   expect(r.marking).toBeNull();
   const kinds = view<{ connectors: { kind: string; trusted_only: boolean; needs: string[]; credential: string }[] }>(r).connectors;
-  expect(kinds.map((k) => k.kind)).toEqual(["sql", "files", "http", "trino"]);
-  expect(Object.fromEntries(kinds.map((k) => [k.kind, k.trusted_only]))).toEqual({ sql: false, files: false, http: true, trino: true });
-  for (const k of kinds) {
+  expect(kinds.map((k) => k.kind)).toEqual(["sql", "files", "http", "trino", "fakeathena"]);
+  expect(Object.fromEntries(kinds.map((k) => [k.kind, k.trusted_only]))).toEqual({ sql: false, files: false, http: true, trino: true, fakeathena: true });
+  for (const k of kinds.filter((x) => x.kind !== "fakeathena")) {
     expect(k.needs).toContain("location");
     expect(k.credential).toContain("credential: <name>");
   }
+});
+
+test("list_connectors names fakeathena: a synthetic lake file, trusted roots only, cost.unit USD, no credential", async () => {
+  const r = await f.call("list_connectors", { why: "the synthetic lake" });
+  const kinds = view<{ connectors: Record<string, unknown>[] }>(r).connectors;
+  expect(kinds.find((k) => k.kind === "fakeathena")).toEqual({
+    kind: "fakeathena", about: "a synthetic lake file made by pivot's generator, billed as a lake would be", trusted_only: true,
+    needs: ["location", "tables"], location: "the lake file, relative to the manifest; cost.unit must be USD",
+    credential: "none: the file has no sign-in", list_tables: null,
+  });
 });
 
 test("list_roots names roots by their last segment, with trust, whether a save may write there, and credential names only", async () => {

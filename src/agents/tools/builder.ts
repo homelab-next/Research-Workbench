@@ -171,6 +171,12 @@ const CONNECTORS = [
     credential: "credential: <name>, the password sent with user; the person grants <name> to the root in the configuration and sets its value in the secrets file or the environment",
     list_tables: "SHOW TABLES FROM <catalog>.<schema>",
   },
+  {
+    kind: "fakeathena", about: "a synthetic lake file made by pivot's generator, billed as a lake would be", trusted_only: true,
+    needs: ["location", "tables"], location: "the lake file, relative to the manifest; cost.unit must be USD",
+    credential: "none: the file has no sign-in",
+    list_tables: null,
+  },
 ] as const;
 
 async function listConnectors(ctx: ToolContext): Promise<ToolResult> {

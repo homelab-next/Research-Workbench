@@ -179,9 +179,9 @@ test("the workbench's canonical, hash and schema agree with pivot's on the vecto
 
 test("the installed pivot is the tag the lock file pins (by the tag object's hash)", () => {
   const pkg = JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")) as { dependencies?: Record<string, string> };
-  expect(pkg.dependencies).toEqual({ pivot: "github:homelab-next/pivot#v0.2.0" });
+  expect(pkg.dependencies).toEqual({ pivot: "github:homelab-next/pivot#v0.3.0" });
   const installed = JSON.parse(readFileSync(join(PIVOT, "package.json"), "utf8")) as { name: string; version: string };
-  expect(installed).toMatchObject({ name: "pivot", version: "0.2.0" });
+  expect(installed).toMatchObject({ name: "pivot", version: "0.3.0" });
   const lock = readFileSync(join(REPO, "bun.lock"), "utf8");
   const pinned = lock.match(/"pivot": \["pivot@github:homelab-next\/pivot#([0-9a-f]{7,40})"/);
   expect(pinned).not.toBeNull();

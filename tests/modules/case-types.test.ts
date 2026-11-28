@@ -62,7 +62,7 @@ test("a lesson-seeds manifest in a root that is not trusted is refused by the re
   expect(loadRegistry([r]).problems.map((p) => p.error)).toEqual(["a lesson-seeds manifest is accepted only from a trusted root"]);
 });
 
-test("the workbench version is 0.14.0, in casefile.ts and package.json alike", () => {
-  expect(WORKBENCH_VERSION).toBe("0.14.0");
-  expect(JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf8")).version).toBe("0.14.0");
+test("the workbench version is 0.15.0, in casefile.ts and package.json alike", () => {
+  expect(WORKBENCH_VERSION).toBe("0.15.0");
+  expect(JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf8")).version).toBe("0.15.0");
 });

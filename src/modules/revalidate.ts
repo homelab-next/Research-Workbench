@@ -88,7 +88,7 @@ export async function revalidateCard(
     run.pivot = pivot;
     run.text = pivot.query;
     run.bound = bound;
-  } else if (was.connector === "sql" || was.connector === "files") {
+  } else if (was.connector === "sql" || was.connector === "files" || was.connector === "fakeathena") {
     run.text = toTemplate(was.text, was.bound);
     run.bound = was.bound as RunQueryInput["bound"];
   } else if (was.connector === "trino") {

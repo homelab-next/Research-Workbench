@@ -1,6 +1,6 @@
 {
   "name": "research-workbench",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -19,7 +19,7 @@
     "sample:fixture": "bun run sample/fixture/reputation-server.ts"
   },
   "dependencies": {
-    "pivot": "github:homelab-next/pivot#v0.2.0"
+    "pivot": "github:homelab-next/pivot#v0.3.0"
   },
   "devDependencies": {
     "@types/bun": "^1.4.5",
