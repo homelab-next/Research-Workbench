@@ -207,7 +207,7 @@ export function childWaitReason(state: Readonly<CaseState>): string {
   const { run } = state;
   switch (run.status) {
     case "none": return "its run has not started";
-    case "waiting": return run.waiting === "plan" ? "it waits for a person at its plan gate" : run.waiting === "publish" ? "it waits for a person at its publish gate" : "it waits for a person";
+    case "waiting": return run.waiting === null ? "it waits for a person" : `it waits for a person at its ${run.waiting} gate`;
     case "paused": return `it is paused: ${run.pause_reason ?? "no reason given"}`;
     case "interrupted": return "its run was interrupted; a person resumes it";
     case "running": return "it is still running";

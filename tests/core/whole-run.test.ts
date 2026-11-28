@@ -8,7 +8,10 @@ import { canonical } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
 import type { IdAllocator } from "../../src/core/ids";
 import type { CaseSession } from "../../src/core/session";
-import { applyMemory, blockers, builderMarking, builderOpen, fold, initial, initialArchive, initialBuilder, initialLoop, initialMemory, latestDraft, publishable, REDUCERS, runUsage, unloadDue } from "../../src/core/state";
+import {
+  applyImprove, applyMemory, blockers, builderMarking, builderOpen, fold, initial, initialArchive, initialBuilder, initialImprove, initialLoop, initialMemory, latestDraft, publishable, REDUCERS,
+  runUsage, unloadDue,
+} from "../../src/core/state";
 import type { CaseState } from "../../src/core/state";
 import { applyWith } from "../../src/core/state/apply";
 import type { Actor, Draft, EntryInput, Plan, Product, StageDef } from "../../src/core/types";
@@ -518,6 +521,29 @@ test("the whole run's ledger folds to the state it folded to, with an empty memo
     const { memory: _om, counters: { memory: _oc, ...oldCounters }, ...oldRest } = old;
     expect(rest, `entry ${e.seq} (${e.type})`).toEqual(oldRest);
     expect(counters).toEqual(oldCounters);
+  }
+  expect(errors).toEqual([]);
+});
+
+// ---------- slice 14: the improve loop ----------
+
+test("the whole run's ledger folds to the state it folded to, with empty answers and improve beside it", () => {
+  // the existing fixture: every other field equals the literal the test already holds; skipped is []
+  const { s, live } = wholeRun();
+  const entries = s.entries();
+  const state = fold(entries);
+  expect(state.answers).toEqual({});
+  expect(state.improve).toEqual(initialImprove());
+  expect(state.skipped).toEqual([]);
+  expect(state).toEqual(live[state.seq]!);
+  // folded without the improve reducer, as before this slice, every entry gives the same state but for the two new fields
+  const without = REDUCERS.filter((r) => r !== applyImprove);
+  let old = initial();
+  for (const e of entries) {
+    old = applyWith(old, e, without);
+    const { answers: _a, improve: _i, ...rest } = fold(entries, e.seq);
+    const { answers: _oa, improve: _oi, ...oldRest } = old;
+    expect(rest, `entry ${e.seq} (${e.type})`).toEqual(oldRest);
   }
   expect(errors).toEqual([]);
 });

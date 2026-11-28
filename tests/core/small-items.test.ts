@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { BlobStore } from "../../src/core/blobs";
 import { Ledger } from "../../src/core/ledger";
 import { CaseSession } from "../../src/core/session";
-import { apply, applyAnalysis, applyArchive, applyBuilder, applyCards, applyCase, applyLoops, applyMemory, applyPerson, applyPlaybooks, applyRun, fold, initial, REDUCERS } from "../../src/core/state";
+import { apply, applyAnalysis, applyArchive, applyBuilder, applyCards, applyCase, applyImprove, applyLoops, applyMemory, applyPerson, applyPlaybooks, applyRun, fold, initial, REDUCERS } from "../../src/core/state";
 import type { Entry } from "../../src/core/types";
 
 const dirs: string[] = [];
@@ -61,5 +61,5 @@ test("a COMMIT that fails after SQLite rolled back reports the COMMIT error, not
 });
 
 test("state/ exports every reducer, in the order apply runs them", () => {
-  expect(REDUCERS).toEqual([applyCase, applyArchive, applyLoops, applyMemory, applyCards, applyPerson, applyRun, applyAnalysis, applyPlaybooks, applyBuilder]);
+  expect(REDUCERS).toEqual([applyCase, applyArchive, applyLoops, applyMemory, applyCards, applyPerson, applyRun, applyAnalysis, applyPlaybooks, applyBuilder, applyImprove]);
 });

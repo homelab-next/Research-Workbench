@@ -157,3 +157,36 @@ test("each of the twelve entry types has its words", () => {
   expect(d("memory.bound", { lessons: "x" })).toEqual({ what: "memory bound", detail: "" });
   expect(d("case.type_set", {})).toEqual({ what: "case type set", detail: "" });
 });
+
+test("each of the eleven entry types has its words", () => {
+  // "known answer set" product 1 · "known answer withdrawn" · "improve asked" investigation · "tasks selected" 3 · "task" T1 CASE-4 · "candidate staged" K1 · "candidate dropped" K2 · "probe child" K1/T2 · "probe started" base/T1 CASE-9 · "probe ended" drafted · "candidate chosen" K1 · "scored" base 333, K1 1000
+  const ref1 = { blob: "a".repeat(64), bytes: 10 };
+  const head = { seq: 4, hash: "b".repeat(64) };
+  const d = (type: EntryType, payload: unknown) => describe(sampleOf(type, payload), ref);
+  expect(d("answer.known", { product: 1, draft_hash: "d", text: "It was beaconing.", findings: [{ claim: "c", likelihood: "likely", confidence: "low" }, { claim: "e", likelihood: "likely", confidence: "low" }], marking: "TLP:AMBER" }))
+    .toEqual({ what: "known answer set", detail: "product 1 · 2 expected findings" });
+  expect(d("answer.withdrawn", { product: 1, reason: "the answer was wrong" })).toEqual({ what: "known answer withdrawn", detail: "product 1 · the answer was wrong" });
+  expect(d("improve.requested", { target: "investigation", case_type: "beaconing", tasks: 3, candidates: 2 }))
+    .toEqual({ what: "improve asked", detail: "investigation · beaconing · 3 tasks · 2 candidates" });
+  expect(d("improve.selected", { target: "investigation", version: 3, loop_hash: "e", lock: ref1, case_type: "beaconing", scale: [], left_out: [{ case: "CASE-2", why: "marking" }] }))
+    .toEqual({ what: "tasks selected", detail: "investigation v3 · 1 left out" });
+  expect(d("improve.task", { task: "T1", case: "CASE-4", origin: "o", head, product: { n: 1, draft_hash: "d" }, answer: head, marking: "TLP:AMBER", inputs: ref1, record: ref1 }))
+    .toEqual({ what: "task", detail: "T1 · CASE-4 · product 1" });
+  expect(d("improve.candidate", { candidate: "K1", change: "chg-1", status: "staged", loop_hash: "e", lock: ref1, reason: "" })).toEqual({ what: "candidate staged", detail: "K1 · chg-1" });
+  expect(d("improve.candidate", { candidate: "K2", change: "chg-2", status: "dropped", loop_hash: null, lock: null, reason: "its hash is the base's" }))
+    .toEqual({ what: "candidate dropped", detail: "K2 · chg-2 · its hash is the base's" });
+  expect(d("probe.child", { improve: "CASE-7", origin: "o", probe: "K1/T2", candidate: "K1", task: "T2", plan_gate: "accept", max_lookups: 60 })).toEqual({ what: "probe child", detail: "K1/T2 · of CASE-7" });
+  expect(d("probe.started", { probe: "base/T1", candidate: "base", task: "T1", child: "CASE-9", origin: "o", loop_hash: "e", input_hash: "i", budgets: { lookups: 60, tokens: 300000 } }))
+    .toEqual({ what: "probe started", detail: "base/T1 · CASE-9" });
+  expect(d("probe.finished", { probe: "base/T1", child: "CASE-9", child_run: "run-1", head, outcome: "drafted", reason: "", draft_hash: "d", output_hash: "o", output: ref1, lookups: 4, tokens: 1200 }))
+    .toEqual({ what: "probe ended", detail: "base/T1 · drafted" });
+  expect(d("probe.finished", { probe: "K1/T1", outcome: "incomplete", reason: "it waits for a person at its plan gate" })).toEqual({ what: "probe ended", detail: "K1/T1 · incomplete · it waits for a person at its plan gate" });
+  expect(d("compose.chosen", { candidate: "K1", why: "fewer misses", contrasts: ref1 })).toEqual({ what: "candidate chosen", detail: "K1 · fewer misses" });
+  expect(d("compose.chosen", { candidate: null, why: "no candidate was staged", contrasts: ref1 })).toEqual({ what: "no candidate chosen", detail: "no candidate was staged" });
+  expect(d("judge.scored", { answers: ref1, scores: ref1, matcher: "code", summary: [{ candidate: "base", score: 333, drafted: 2, tasks: 3 }, { candidate: "K1", score: 1000, drafted: 3, tasks: 3 }] }))
+    .toEqual({ what: "scored", detail: "base 333, K1 1000" });
+  // read loosely: a missing or odd field is left out, never thrown on
+  expect(d("judge.scored", { summary: "x" })).toEqual({ what: "scored", detail: "" });
+  expect(d("improve.candidate", {})).toEqual({ what: "candidate", detail: "" });
+  expect(d("answer.known", { findings: 3 })).toEqual({ what: "known answer set", detail: "" });
+});

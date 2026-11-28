@@ -33,7 +33,7 @@ test("the delivery loop and the default error handler are written once", () => {
 test("the runtime lists hold every member of their types, in order", () => {
   expect(MARKINGS).toEqual(["TLP:CLEAR", "TLP:GREEN", "TLP:AMBER", "TLP:AMBER+STRICT", "TLP:RED"]);
   expect(SECTIONS).toEqual(["summary", "key_findings", "gaps_and_limits", "alternatives", "assessment"]);
-  expect(GATES).toEqual(["plan", "publish"]);
+  expect(GATES).toEqual(["plan", "publish", "adopt"]);
   expect(STAGE_OUTCOMES).toEqual(["pass", "fail", "declined"]);
   expect(STEP_OUTCOMES).toEqual(["answered", "empty", "partial", "blocked", "failed"]);
   expect(PARTIAL_REASONS).toEqual(["row_limit", "timeout", "window_clipped", "source_error", "budget"]);

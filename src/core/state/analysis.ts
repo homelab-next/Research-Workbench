@@ -1,5 +1,5 @@
 import { ANSWER_ACTIONS, CONFIDENCES, FEEDBACK_KINDS, isMarking, SEVERITIES } from "../types";
-import type { Challenge, CheckFinding, Draft, Entry, Marking, Payloads } from "../types";
+import type { Challenge, CheckFinding, Draft, Entry, Marking, Payloads, Product } from "../types";
 import { canonical } from "../canonical";
 import type { Json } from "../canonical";
 import { has, isBool, isNum, isObj, isOneOf, isStr, isStrList, malformed, recordSkip } from "./guards";
@@ -14,7 +14,8 @@ const isFindings = (x: unknown): x is CheckFinding[] => Array.isArray(x) && x.ev
 const isFindingRecord = (x: unknown): boolean =>
   isObj(x) && isStr(x.id) && isStr(x.statement) && isStr(x.likelihood) && isOneOf(x.confidence, CONFIDENCES)
   && isStr(x.confidence_basis) && isStrList(x.cites) && isStrList(x.assumptions) && isStr(x.reasoning);
-const isProduct = (x: unknown): boolean =>
+/** The shape of a product, as a draft carries it. */
+export const isProduct = (x: unknown): x is Product =>
   isObj(x) && isStr(x.objective) && isStr(x.question) && isMarking(x.marking) && isStr(x.summary)
   && Array.isArray(x.key_findings) && x.key_findings.every(isFindingRecord)
   && isStr(x.gaps_and_limits) && isStr(x.alternatives) && isStr(x.assessment)

@@ -148,6 +148,16 @@ test("the run button follows the run", () => {
   expect(runButton(fold(b.entries))).toEqual({ label: "Run again", command: "start_run", lens: null, disabled: false });
 });
 
+test("a run waiting at the adopt gate is not said to wait at its plan, and no key passes it", () => {
+  const b = base();
+  b.add("run.started", { run: "run-1", pipeline: "improve", pipeline_hash: "h", stages: [{ id: "adopt", title: "Adopt", phase: null, runs: "human", gate: "adopt", reviews: false, model: null }] });
+  b.add("gate.waiting", { gate: "adopt" });
+  const s = fold(b.entries);
+  expect(s.run.waiting).toBe("adopt");
+  expect(runButton(s)).toEqual({ label: "Waiting at Adopt", command: null, lens: null, disabled: true });
+  expect(nextThing(s)).toBeNull();
+});
+
 test("while reviewers disagree, the run button opens the Narrative to settle it instead of resuming", () => {
   const s = gate("paused");
   const withConflict = { ...s, conflicts: { k1: { id: "k1", run: s.run.id, seq: 1, finding: "f1", ruling: null } } } as never;

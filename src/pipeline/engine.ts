@@ -91,7 +91,7 @@ export type StageEnd =
   | { kind: "waiting_child"; child: string; reason: string }
   | { kind: "stopped" };
 export type StageRunner = (env: StageEnv) => Promise<StageEnd>;
-export interface RunSummary { status: RunState["status"]; waiting: "plan" | "publish" | null; current: string | null; pause_reason: string | null; outcome: RunState["outcome"] }
+export interface RunSummary { status: RunState["status"]; waiting: RunState["waiting"]; current: string | null; pause_reason: string | null; outcome: RunState["outcome"] }
 export class RunRefused extends Refused {
   constructor(message: string) {
     super(message);

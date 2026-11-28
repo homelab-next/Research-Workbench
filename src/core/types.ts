@@ -80,7 +80,8 @@ export interface StageDef {
   id: string; title: string; phase: string | null;
   /** "loop": the stage runs another loop as a child case (slice 12). */
   runs: "agent" | "script" | "human" | "loop";
-  gate: "plan" | "publish" | null;
+  /** "adopt" (slice 14): the improve loop's Adopt stage, where a person accepts or rejects the chosen candidate. */
+  gate: "plan" | "publish" | "adopt" | null;
   /** True when this stage reviews the draft and must pass before publishing. */
   reviews: boolean;
   model: ModelChoice | null;
@@ -94,6 +95,8 @@ export interface Finding {
   confidence: "low" | "moderate" | "high"; confidence_basis: string;
   cites: string[]; assumptions: string[]; reasoning: string;
 }
+/** One finding a person expects a product to hold (slice 14): a claim in their words, a likelihood term and a confidence. */
+export interface ExpectedFinding { claim: string; likelihood: string; confidence: Finding["confidence"] }
 export interface Product {
   objective: string; question: string; marking: Marking;
   summary: string; key_findings: Finding[]; gaps_and_limits: string; alternatives: string; assessment: string;
@@ -169,8 +172,8 @@ export interface Payloads {
   "stage.started": { stage: string; attempt: number };
   "stage.finished": { stage: string; attempt: number; outcome: "pass" | "fail" | "declined"; draft_hash: string | null; output: BlobRef | null; reason: string | null };
   "stage.sent_back": { from: string; to: string; reason: string; count: number };
-  "gate.waiting": { gate: "plan" | "publish" };
-  "gate.passed": { gate: "plan" | "publish";
+  "gate.waiting": { gate: NonNullable<StageDef["gate"]> };
+  "gate.passed": { gate: NonNullable<StageDef["gate"]>;
     /** The person's choice at the publish gate: unload the case once this run has published. */
     unload_after?: boolean };
   "budget.set": { tokens: number | null };
@@ -340,6 +343,35 @@ export interface Payloads {
   // workbench chain only; a case fold ignores them
   "memory.exported": { file: string; origin: string | null; head: { seq: number; hash: string }; lessons: number };
   "memory.loaded": { file: string; origin: string; head: { seq: number; hash: string }; before: { seq: number; hash: string } };
+  // the improve loop (slice 14)
+  /** In a task case's ledger: a person's known answer on one product the case published, marked at least as strictly as the case and the product. */
+  "answer.known": { product: number; draft_hash: string; text: string; findings: ExpectedFinding[]; marking: Marking };
+  /** A person took back the known answer on that product. */
+  "answer.withdrawn": { product: number; reason: string };
+  /** In an improve case's first commit, by the person: the loop to improve, the case type, and how many tasks and candidates to try. */
+  "improve.requested": { target: string; case_type: string; tasks: number; candidates: number };
+  /** Select: the target's version and lock, the likelihood scale of its standard (least likely first), and the cases it left out. */
+  "improve.selected": { target: string; version: number; loop_hash: string; lock: BlobRef; case_type: string; scale: string[]; left_out: { case: string; why: "marking" | "cap" }[] };
+  /** Select: one task, a published case with a known answer, by the seq and hash of the answer's entry only; its inputs and its record are blobs of the improve case. */
+  "improve.task": {
+    task: string; case: string; origin: string; head: { seq: number; hash: string }; product: { n: number; draft_hash: string }; answer: { seq: number; hash: string };
+    marking: Marking; inputs: BlobRef; record: BlobRef;
+  };
+  /** Propose: a builder change staged as a candidate version (its lock and hash), or dropped with the reason. */
+  "improve.candidate": { candidate: string; change: string; status: "staged" | "dropped"; loop_hash: string | null; lock: BlobRef | null; reason: string };
+  /** In a probe child's first commit: the improve case, its probe, and the child's lookup cap. */
+  "probe.child": { improve: string; origin: string; probe: string; candidate: string; task: string; plan_gate: "accept"; max_lookups: number };
+  /** Probe: a child made for one candidate (or base) on one task, with its budgets. */
+  "probe.started": { probe: string; candidate: string; task: string; child: string; origin: string; loop_hash: string; input_hash: string; budgets: { lookups: number; tokens: number } };
+  /** Probe: what the child gave at the head it had, as a blob of the improve case. */
+  "probe.finished": {
+    probe: string; child: string; child_run: string | null; head: { seq: number; hash: string }; outcome: "drafted" | "incomplete"; reason: string;
+    draft_hash: string | null; output_hash: string; output: BlobRef; lookups: number; tokens: number;
+  };
+  /** Compose: the candidate it chose (null for none), why, and the contrasts it was shown. */
+  "compose.chosen": { candidate: string | null; why: string; contrasts: BlobRef };
+  /** Judge: the answers it read and the scores code gave, both blobs of the improve case. */
+  "judge.scored": { answers: BlobRef; scores: BlobRef; matcher: "code" | "code+model"; summary: { candidate: string; score: number; drafted: number; tasks: number }[] };
 }
 /** What a note of the notebook is: a fact, a decision, or a pointer to where something is. */
 export type NoteKind = "fact" | "decision" | "pointer";
@@ -378,6 +410,12 @@ export const BLOB_FIELDS: { readonly [T in EntryType as BlobField<Payloads[T]> e
   "loop.output": ["value"],
   "builder.proposed": ["bundle"],
   "memory.bound": ["lock"],
+  "improve.selected": ["lock"],
+  "improve.task": ["inputs", "record"],
+  "improve.candidate": ["lock"],
+  "probe.finished": ["output"],
+  "compose.chosen": ["contrasts"],
+  "judge.scored": ["answers", "scores"],
 };
 
 /** The blob reference fields of payload P that may hold null. */
@@ -404,6 +442,12 @@ export const BLOB_NULLABLE: { readonly [T in keyof typeof BLOB_FIELDS]: { readon
   "loop.output": { value: false },
   "builder.proposed": { bundle: false },
   "memory.bound": { lock: false },
+  "improve.selected": { lock: false },
+  "improve.task": { inputs: false, record: false },
+  "improve.candidate": { lock: true },
+  "probe.finished": { output: false },
+  "compose.chosen": { contrasts: false },
+  "judge.scored": { answers: false, scores: false },
 };
 
 /** True when the typed blob position `field` of entry type `type` may hold null (or is not a typed position at all). */
@@ -434,7 +478,7 @@ function listOf<T extends string>(members: { readonly [K in T]: true }): readonl
 }
 
 export const SECTIONS = listOf<Section>({ summary: true, key_findings: true, gaps_and_limits: true, alternatives: true, assessment: true });
-export const GATES = listOf<NonNullable<StageDef["gate"]>>({ plan: true, publish: true });
+export const GATES = listOf<NonNullable<StageDef["gate"]>>({ plan: true, publish: true, adopt: true });
 export const STAGE_RUNS = listOf<StageDef["runs"]>({ agent: true, script: true, human: true, loop: true });
 export const STAGE_OUTCOMES = listOf<Payloads["stage.finished"]["outcome"]>({ pass: true, fail: true, declined: true });
 export const RUN_OUTCOMES = listOf<Payloads["run.finished"]["outcome"]>({ published: true, stopped: true, completed: true });
@@ -484,6 +528,8 @@ export const ENTRY_TYPES = listOf<EntryType>({
   "builder.proposed": true, "builder.decided": true, "builder.probe_asked": true, "builder.probe_decided": true,
   "case.type_set": true, "case.type_proposed": true, "memory.noted": true, "memory.revised": true, "memory.dropped": true, "memory.bound": true,
   "lesson.proposed": true, "lesson.accepted": true, "lesson.rejected": true, "lesson.retired": true, "memory.exported": true, "memory.loaded": true,
+  "answer.known": true, "answer.withdrawn": true, "improve.requested": true, "improve.selected": true, "improve.task": true, "improve.candidate": true,
+  "probe.child": true, "probe.started": true, "probe.finished": true, "compose.chosen": true, "judge.scored": true,
 });
 const ENTRY_TYPE_SET: ReadonlySet<string> = new Set(ENTRY_TYPES);
 export const isEntryType = (x: unknown): x is EntryType => typeof x === "string" && ENTRY_TYPE_SET.has(x);

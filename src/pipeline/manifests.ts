@@ -237,9 +237,11 @@ export function loadPipeline(registry: Registry): { pipeline: Pipeline | null; p
       if (walked.indexOf(at) !== walked.length - 1) break; // a cycle that does not return to start is reported from its own members
     }
   }
+  // the default pipeline is an investigation: one plan gate and one publish gate, and no adopt gate (that is the improve loop's alone)
   for (const gate of GATES) {
     const n = stages.filter((s) => s.gate === gate).length;
-    if (n !== 1) return refuse(`there must be exactly one stage for gate ${gate}; there are ${n}`);
+    const want = gate === "adopt" ? 0 : 1;
+    if (n !== want) return refuse(`there must be ${want === 1 ? "exactly one stage" : "no stage"} for gate ${gate}; there are ${n}`);
   }
   const reviewing = stages.filter((s) => s.reviews);
   if (reviewing.length === 0) return refuse("no stage has reviews: true; there must be at least one review stage");

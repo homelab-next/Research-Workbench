@@ -98,3 +98,16 @@ test("a malformed memory.noted is recorded and still moves the memory counter, a
     skipped: [{ seq: 2, type: "memory.noted", reason: "malformed memory.noted" }],
   });
 });
+
+test("a malformed entry of the improve loop is recorded and changes nothing else, as a malformed note does", () => {
+  const base = fold(started().entries);
+  for (const [type, payload] of [
+    ["answer.known", { product: 1, draft_hash: "d", text: "", findings: [], marking: "TLP:AMBER" }],
+    ["improve.selected", { target: "investigation" }],
+    ["probe.finished", { probe: "base/T1", outcome: "drafted", draft_hash: null }],
+    ["judge.scored", { answers: null, scores: null, matcher: "model", summary: [] }],
+  ] as const) {
+    const e = { ...last(started()), seq: 2, type, payload } as unknown as Entry;
+    expect(apply(base, e)).toEqual({ ...base, seq: 2, head_ts: e.ts, skipped: [{ seq: 2, type, reason: `malformed ${type}` }] });
+  }
+});

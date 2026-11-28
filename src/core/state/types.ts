@@ -1,5 +1,5 @@
 import type {
-  Actor, BlobRef, Card, Cost, Marking, Challenge, CheckFinding, Coverage, Draft, Finding, ModelChoice, NoteKind, Observable, Payloads,
+  Actor, BlobRef, Card, Cost, Marking, Challenge, CheckFinding, Coverage, Draft, ExpectedFinding, Finding, ModelChoice, NoteKind, Observable, Payloads,
   Place, Plan, ProposedFile, Proposal, Question, QueryPurpose, ReviewConflict, RunHold, StageDef, StepOutcome, TimeWindow,
 } from "../types";
 
@@ -30,7 +30,7 @@ export interface RunState {
   status: "none" | "running" | "paused" | "waiting" | "interrupted" | "finished";
   outcome: "published" | "stopped" | "completed" | null;
   pause_reason: string | null;
-  waiting: "plan" | "publish" | null;
+  waiting: "plan" | "publish" | "adopt" | null;
   stages: StageState[];
   current: string | null;
   /** Keyed "from>to". */
@@ -199,6 +199,41 @@ export interface MemoryState {
   bound: BoundMemory | null;
 }
 
+/** A person's known answer on one published product of a task case (slice 14), with the entry that set it. */
+export interface KnownAnswerState { product: number; draft_hash: string; text: string; findings: ExpectedFinding[]; marking: Marking; by: string; seq: number; hash: string; ts: string }
+/** One task Select took: the case, its head then, the product, the answer's entry (its seq and hash only) and the blobs of the improve case. */
+export interface TaskState {
+  task: string; case: string; origin: string; head: { seq: number; hash: string }; product: { n: number; draft_hash: string }; answer: { seq: number; hash: string };
+  marking: Marking; inputs: BlobRef; record: BlobRef;
+}
+/** A candidate Propose made: staged (its lock and hash) or dropped with the reason. */
+export interface CandidateState { candidate: string; change: string; status: "staged" | "dropped"; loop_hash: string | null; lock: BlobRef | null; reason: string; seq: number }
+/** One probe: a child for one candidate (or base) on one task, and what it gave once it ended. */
+export interface ProbeState {
+  probe: string; candidate: string; task: string; child: string; origin: string; loop_hash: string; input_hash: string; budgets: { lookups: number; tokens: number }; started_seq: number;
+  finished: null | {
+    child_run: string | null; head: { seq: number; hash: string }; outcome: "drafted" | "incomplete"; reason: string; draft_hash: string | null; output_hash: string;
+    output: BlobRef; lookups: number; tokens: number; seq: number;
+  };
+}
+/** An improve case's request and the record of its run (slice 14), and, on a probe child, the probe it is. */
+export interface ImproveState {
+  /** What the person asked for when the improve case was made; null in every other case. */
+  request: { target: string; case_type: string; tasks: number; candidates: number; by: string } | null;
+  /** Of the run in progress or the last one: cleared by the next improve.selected. */
+  selected: {
+    target: string; version: number; loop_hash: string; lock: BlobRef; case_type: string; scale: string[]; left_out: { case: string; why: "marking" | "cap" }[];
+    run: string; seq: number;
+  } | null;
+  tasks: Record<string, TaskState>; task_order: string[];
+  candidates: Record<string, CandidateState>; candidate_order: string[];
+  probes: Record<string, ProbeState>; probe_order: string[];
+  chosen: { candidate: string | null; why: string; contrasts: BlobRef; by: string; seq: number } | null;
+  scored: { answers: BlobRef; scores: BlobRef; matcher: "code" | "code+model"; summary: { candidate: string; score: number; drafted: number; tasks: number }[]; seq: number } | null;
+  /** Set on a probe child. */
+  probe_of: { improve: string; origin: string; probe: string; candidate: string; task: string; plan_gate: "accept"; max_lookups: number } | null;
+}
+
 export interface CaseState {
   seq: number;
   head_ts: string | null;
@@ -251,4 +286,8 @@ export interface CaseState {
   builder: BuilderState;
   /** The case's type, its notebook and what its run was given from memory (slice 13). */
   memory: MemoryState;
+  /** Known answers on the case's published products, keyed by the product's number (slice 14). */
+  answers: Record<string, KnownAnswerState>;
+  /** An improve case's request and run, or a probe child's mark (slice 14); empty in every other case. */
+  improve: ImproveState;
 }

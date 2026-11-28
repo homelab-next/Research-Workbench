@@ -3,6 +3,7 @@ import { applyAnalysis } from "./analysis";
 import { applyArchive } from "./archive";
 import { applyBuilder } from "./builder";
 import { applyCards } from "./cards";
+import { applyImprove, probeVeto } from "./improve";
 import { isObj, isStr, malformed, recordSkip } from "./guards";
 import { applyLoops } from "./loops";
 import { applyMemory } from "./memory";
@@ -57,9 +58,10 @@ export function applyCase(s: CaseState, entry: Entry): CaseState {
  * applyRun: applyArchive reads the gate the run waits at on gate.passed, and applyPerson the hold on run.resumed, before applyRun clears them.
  * applyLoops comes before applyRun too: it reads run.started to move a pending loop.bound to the run it binds, and the run as it was before.
  * applyMemory comes before applyRun for the same reason: it moves a pending memory.bound to the run that starts right after it.
- * applyBuilder is last: it reads only its own four entries.
+ * applyBuilder reads only its own four entries. applyImprove is last: it reads the published products, the drafts, the run and the builder's
+ * changes as this entry left them.
  */
-export const REDUCERS: readonly Reducer[] = [applyCase, applyArchive, applyLoops, applyMemory, applyCards, applyPerson, applyRun, applyAnalysis, applyPlaybooks, applyBuilder];
+export const REDUCERS: readonly Reducer[] = [applyCase, applyArchive, applyLoops, applyMemory, applyCards, applyPerson, applyRun, applyAnalysis, applyPlaybooks, applyBuilder, applyImprove];
 
 /** Leaves everything as it was except seq, head_ts and the record of what was skipped. */
 function skip(state: CaseState, entry: Entry, reason: string): CaseState {
@@ -72,6 +74,9 @@ export function applyWith(state: CaseState, entry: Entry, reducers: readonly Red
   if (!isObj(entry)) return state;
   if (!isObj(entry.payload)) return skip(state, entry, "malformed payload");
   try {
+    // an entry the improve loop's rules refuse whoever reads it (slice 14); none can be in a ledger written before it
+    const veto = probeVeto(state, entry);
+    if (veto !== null) return skip(state, entry, veto);
     let next: CaseState = { ...state, seq: entry.seq, head_ts: entry.ts };
     const kind = countedKind(entry.type);
     if (kind) next.counters = { ...state.counters, [kind]: state.counters[kind] + 1 };

@@ -157,9 +157,11 @@ export function runButton(state: CaseState): { label: string; command: "start_ru
     case "none": return { label: "Run", command: "start_run", lens: null, disabled: false };
     case "running": return { label: "Running", command: null, lens: null, disabled: true };
     case "paused": case "interrupted": return { label: "Resume", command: "resume", lens: null, disabled: false };
-    case "waiting": return run.waiting === "publish"
-      ? { label: "Review draft", command: null, lens: "narrative", disabled: false }
-      : { label: "Review plan", command: null, lens: "steps", disabled: false };
+    case "waiting":
+      if (run.waiting === "publish") return { label: "Review draft", command: null, lens: "narrative", disabled: false };
+      // the adopt gate is decided file by file in the improve case's own view, never by this button
+      if (run.waiting === "adopt") return { label: "Waiting at Adopt", command: null, lens: null, disabled: true };
+      return { label: "Review plan", command: null, lens: "steps", disabled: false };
     case "finished": return { label: "Run again", command: "start_run", lens: null, disabled: false };
   }
 }

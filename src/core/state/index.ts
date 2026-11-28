@@ -2,6 +2,7 @@ import type { Entry } from "../types";
 import { apply } from "./apply";
 import { initialArchive } from "./archive";
 import { initialBuilder } from "./builder";
+import { initialImprove } from "./improve";
 import { initialLoop } from "./loops";
 import { initialMemory } from "./memory";
 import type { CaseState, IdKind } from "./types";
@@ -15,6 +16,7 @@ export { applyMemory, CASE_TYPE_ID, initialMemory, LESSON_ID, liveNotes, NOTE_CA
 export { applyRun, runUsage, stageFinishedCounts, subgoalAnswered } from "./run";
 export { applyAnalysis, blockers, latestDraft, notedExceptions, openMustAddress, proposalMarking, publishable } from "./analysis";
 export { applyCards, cardLocation } from "./cards";
+export * from "./improve";
 export { applyPlaybooks } from "./playbooks";
 export { applyConflicts, holds, keepText, namesFinding, revisedRulingReason, ruledFindings, rulingText, runConflicts } from "./conflicts";
 export { CARD_REF, cardRefs } from "./cites";
@@ -70,6 +72,8 @@ export function initial(): CaseState {
     loop: initialLoop(),
     builder: initialBuilder(),
     memory: initialMemory(),
+    answers: {},
+    improve: initialImprove(),
   };
 }
 

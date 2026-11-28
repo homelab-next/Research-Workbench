@@ -144,6 +144,25 @@ const TABLE: Record<EntryType, [string | ((p: Loose) => string), Say]> = {
   "lesson.retired": ["lesson retired", (p) => join(str(p.lesson), str(p.reason))],
   "memory.exported": ["memory exported", (p) => join(str(p.file), plural(p.lessons, "lessons"))],
   "memory.loaded": ["memory loaded", (p) => str(p.file)],
+  "answer.known": ["known answer set", (p) => join(
+    typeof p.product === "number" ? `product ${p.product}` : "", Array.isArray(p.findings) ? plural(p.findings.length, p.findings.length === 1 ? "expected finding" : "expected findings") : "",
+  )],
+  "answer.withdrawn": ["known answer withdrawn", (p) => join(typeof p.product === "number" ? `product ${p.product}` : "", str(p.reason))],
+  "improve.requested": ["improve asked", (p) => join(str(p.target), str(p.case_type), plural(p.tasks, "tasks"), plural(p.candidates, "candidates"))],
+  "improve.selected": ["tasks selected", (p) => join(
+    typeof p.version === "number" ? `${str(p.target)} v${p.version}` : str(p.target), Array.isArray(p.left_out) && p.left_out.length > 0 ? `${p.left_out.length} left out` : "",
+  )],
+  "improve.task": ["task", (p) => { const n = loose(p.product).n; return join(str(p.task), str(p.case), typeof n === "number" ? `product ${n}` : ""); }],
+  "improve.candidate": [
+    (p) => (p.status === "staged" ? "candidate staged" : p.status === "dropped" ? "candidate dropped" : "candidate"),
+    (p) => join(str(p.candidate), str(p.change), str(p.reason)),
+  ],
+  "probe.child": ["probe child", (p) => join(str(p.probe), str(p.improve) === "" ? "" : `of ${str(p.improve)}`)],
+  "probe.started": ["probe started", (p) => join(str(p.probe), str(p.child))],
+  "probe.finished": ["probe ended", (p) => join(str(p.probe), str(p.outcome), str(p.reason))],
+  "compose.chosen": [(p) => (p.candidate === null ? "no candidate chosen" : "candidate chosen"), (p) => join(str(p.candidate), str(p.why))],
+  // the scores are the whole candidate's, each from 0 to 1000
+  "judge.scored": ["scored", (p) => (Array.isArray(p.summary) ? p.summary.map(loose).filter((r) => typeof r.score === "number").map((r) => `${str(r.candidate)} ${str(r.score)}`).join(", ") : "")],
 };
 
 /** One short plain sentence for an entry, and its particulars. Everything from the entry is text, and nothing here throws for an odd payload. */
