@@ -246,6 +246,7 @@ test("no script, loop, skill or schema of the sample holds a known answer's cana
 
 test("every name in the new files is the sample's: loopback and RFC 5737 addresses, example domains", () => {
   const reserved = /^(?:127\.0\.0\.1|192\.0\.2\.\d{1,3}|198\.51\.100\.\d{1,3}|203\.0\.113\.\d{1,3})$/;
+  // generic shapes only: private ranges, a MAC address, a home folder (the owner's own words are read from the private-terms file, below)
   const forbidden = [/\b192\.168\./, /\b10\.\d+\.\d+\.\d+\b/, /\b172\.(?:1[6-9]|2\d|3[01])\./, /(?:[0-9a-f]{2}:){5}[0-9a-f]{2}/i, /\/home\//, /\/Users\//];
   for (const f of [...NEW_FILES, "README.md"]) {
     const text = readFileSync(join(REPO_SAMPLE, f), "utf8");
@@ -257,4 +258,15 @@ test("every name in the new files is the sample's: loopback and RFC 5737 address
   }
   // the task addresses are in the sample's data, and none of them is a prefix of another
   for (const t of SAMPLE_TASKS) for (const u of SAMPLE_TASKS) if (t !== u) expect(u.address.startsWith(t.address)).toBe(false);
+});
+
+// the owner's words are never written in the repository: they are read from the file WORKBENCH_PRIVATE_TERMS names, as the hygiene test reads them
+test.skipIf(!process.env.WORKBENCH_PRIVATE_TERMS)("no private term is in the new sample files", () => {
+  const terms = readFileSync(process.env.WORKBENCH_PRIVATE_TERMS!, "utf8").split("\n").map((l) => l.trim().toLowerCase()).filter((l) => l !== "" && !l.startsWith("#"));
+  const hits: string[] = [];
+  for (const f of [...NEW_FILES, "README.md"]) {
+    const text = readFileSync(join(REPO_SAMPLE, f), "utf8").toLowerCase();
+    terms.forEach((t, n) => { if (text.includes(t)) hits.push(`${f} (term #${n + 1})`); });
+  }
+  expect(hits).toEqual([]);
 });
