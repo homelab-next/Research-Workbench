@@ -19,7 +19,8 @@ const CLAIM_MAX = 300;
 
 export interface AnswerContext { ui: Ui; store: Pick<CaseStore, "id" | "shown" | "at"> }
 
-interface Row { el: HTMLElement; claim: HTMLInputElement; likelihood: HTMLSelectElement | HTMLInputElement; confidence: HTMLSelectElement }
+/** `asks`: the claim is the person's to say, so a probe that asks the person about it gets the credit (the answer's `asks: true`). */
+interface Row { el: HTMLElement; claim: HTMLInputElement; likelihood: HTMLSelectElement | HTMLInputElement; confidence: HTMLSelectElement; asks: HTMLInputElement }
 
 const strictest = (a: Marking, b: Marking): Marking => (MARKINGS.indexOf(a) >= MARKINGS.indexOf(b) ? a : b);
 
@@ -102,9 +103,11 @@ export function answerPanel(ctx: AnswerContext, product: number): View {
     if (t.length > 0) likelihood.value = f !== null && t.includes(f.likelihood) ? f.likelihood : t[Math.floor(t.length / 2)] ?? "";
     const confidence = h("select", { name: `Confidence ${n}`, on: { change: () => { dirty = true; } } }, CONFIDENCES.map((c) => h("option", { value: c }, c))) as HTMLSelectElement;
     confidence.value = f?.confidence ?? "moderate";
+    const asks = h("input", { type: "checkbox", name: `Theirs to say ${n}`, on: { change: () => { dirty = true; } } }) as HTMLInputElement;
+    asks.checked = f?.asks === true;
     const row: Row = {
-      claim, likelihood, confidence,
-      el: h("div", { class: "answer-row" }, claim, likelihood, confidence,
+      claim, likelihood, confidence, asks,
+      el: h("div", { class: "answer-row" }, claim, likelihood, confidence, h("label", { class: "answer-asks" }, asks, "theirs to say (credit for asking)"),
         h("button", { type: "button", class: "link-button", data: { action: "remove-finding" }, name: `Remove finding ${n}`, on: { click: () => { dirty = true; removeRow(row); } } }, "Remove")),
     };
     rows.push(row);
@@ -117,7 +120,9 @@ export function answerPanel(ctx: AnswerContext, product: number): View {
     if (rows.length === 0) newRow(null);
     paintButtons();
   }
-  const valueOf = (r: Row): ExpectedFinding => ({ claim: r.claim.value, likelihood: r.likelihood.value, confidence: r.confidence.value as ExpectedFinding["confidence"] });
+  const valueOf = (r: Row): ExpectedFinding => ({
+    claim: r.claim.value, likelihood: r.likelihood.value, confidence: r.confidence.value as ExpectedFinding["confidence"], ...(r.asks.checked ? { asks: true as const } : {}),
+  });
 
   /** Fills the form from the saved answer (or empties it), unless the person has typed in it since. */
   function fill(s: CaseState, floor: Marking): void {
@@ -146,7 +151,7 @@ export function answerPanel(ctx: AnswerContext, product: number): View {
     save.disabled = ro || busy || t === "" || t.length > TEXT_MAX;
     addRow.disabled = ro || busy || rows.length >= FINDINGS_MAX;
     withdraw.disabled = ro || busy || reason.value.trim() === "";
-    for (const c of [text, marking, reason, ...rows.flatMap((r) => [r.claim, r.likelihood, r.confidence])]) c.disabled = ro;
+    for (const c of [text, marking, reason, ...rows.flatMap((r) => [r.claim, r.likelihood, r.confidence, r.asks])]) c.disabled = ro;
     for (const b of rowsBox.querySelectorAll("[data-action=remove-finding]")) (b as HTMLButtonElement).disabled = ro;
   }
 
@@ -158,7 +163,7 @@ export function answerPanel(ctx: AnswerContext, product: number): View {
       h("p", null, markingChip(ui, known.marking)),
       h("p", { class: "known-answer-text" }, known.text),
       known.findings.length === 0 ? h("p", { class: "muted" }, "No expected findings: the answer is judged from its text.")
-        : h("ul", { class: "known-answer-findings" }, known.findings.map((f) => h("li", null, `${f.claim} · ${f.likelihood} · ${f.confidence} confidence`))))];
+        : h("ul", { class: "known-answer-findings" }, known.findings.map((f) => h("li", null, `${f.claim} · ${f.likelihood} · ${f.confidence} confidence${f.asks === true ? " · theirs to say" : ""}`))))];
   };
 
   function update(): void {

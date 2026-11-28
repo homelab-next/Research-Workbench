@@ -575,6 +575,8 @@ details.lesson ul.history { color: var(--muted); font-size: 12px; }
 .known-answer-form textarea { min-height: 4em; resize: vertical; }
 .known-answer .answer-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .known-answer .answer-row input { flex: 1; min-width: 12em; }
+.known-answer .answer-row .answer-asks { display: inline-flex; gap: 4px; align-items: center; }
+.known-answer .answer-row .answer-asks input { flex: none; min-width: 0; }
 .known-answer .save-row, .known-answer-withdraw { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .improve-form { margin: 16px 0; display: flex; flex-direction: column; gap: 8px; }
 .improve-form h2 { margin: 0; font-size: 1.1em; }

@@ -190,3 +190,32 @@ test("no element here is made by innerHTML and none has an inline style", () => 
     expect([file, src]).not.toEqual([file, expect.stringMatching(/innerHTML|outerHTML|insertAdjacentHTML|createElement|setAttribute|\.style\b|cssText/)]);
   }
 });
+
+test("each expected finding has a checkbox, theirs to say (credit for asking): a checked row is sent with asks: true, an unchecked one without the key, and the saved list says so", async () => {
+  const q = await narrative({ publish: true });
+  const sent = recording(q);
+  form(q).open = true;
+  q.fill(field(q, "Known answer text"), "A printer the owner brought in.");
+  q.fill(field(q, "Claim 1"), "the device belongs to the owner");
+  const box = field(q, "Theirs to say 1");
+  expect(box.type).toBe("checkbox");
+  expect(box.checked).toBe(false);
+  expect(box.closest("label")!.textContent).toBe("theirs to say (credit for asking)");
+  q.click(box);
+  expect(box.checked).toBe(true);
+  q.click(".known-answer [data-action=add-finding]");
+  q.fill(field(q, "Claim 2"), "the device is a printer");
+  q.click(".known-answer [data-action=save-answer]");
+  await settled(q);
+  const findings = (sent[0]![1] as { findings: Record<string, unknown>[] }).findings;
+  expect(findings[0]).toMatchObject({ claim: "the device belongs to the owner", asks: true });
+  expect(Object.hasOwn(findings[1]!, "asks")).toBe(false);
+  expect(state(q).answers["1"]!.findings[0]!.asks).toBe(true);
+  expect(q.all(".known-answer .known-answer-findings li").map((li) => li.textContent)).toEqual([
+    `the device belongs to the owner · ${findings[0]!.likelihood as string} · moderate confidence · theirs to say`, `the device is a printer · ${findings[1]!.likelihood as string} · moderate confidence`,
+  ]);
+  // the form filled again from the saved answer keeps the box checked
+  form(q).open = true;
+  expect(field(q, "Theirs to say 1").checked).toBe(true);
+  expect(field(q, "Theirs to say 2").checked).toBe(false);
+});

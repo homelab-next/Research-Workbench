@@ -173,6 +173,11 @@ export function makeImprove(ui: Ui, open: Open, arg: string | null): View {
   // ---------- the scores ----------
   const findingLine = (f: OutputScore["findings"][number]): string => {
     const n = `expected finding ${f.expected + 1}`;
+    // a claim that is the person's to say, which the probe asked the person about: the question by number, never its words
+    if (f.asked !== undefined) {
+      const why = [f.similarity === null ? null : `similarity ${f.similarity}`, `score ${f.score}`].filter((x): x is string => x !== null);
+      return `${n}: asked the person (question ${f.asked + 1}), matched by ${f.by ?? "code"} · ${why.join(" · ")}`;
+    }
     if (f.produced === null) return `${n}: not matched · score ${f.score}`;
     const parts = [
       f.similarity === null ? null : `similarity ${f.similarity}`,

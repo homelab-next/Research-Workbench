@@ -255,3 +255,16 @@ test("a title, a reason and a diff line that look like markup are text", async (
   expect([...out.el.querySelectorAll("[data-candidate=K1] .diff-added")].map(text)).toEqual([`+${MARKUP}`, `+${MARKUP}`]);
   expect(out.el.querySelectorAll("img").length).toBe(0);
 });
+
+test("an expected finding matched to a question the probe asked the person says asked, with the question's number, never its text", async () => {
+  const id = await improvePage();
+  const entries = pg().s.entries(id);
+  const view = await viewOf(id);
+  const scores = view.scores!;
+  const outputs = scores.outputs.map((o) => (o.probe !== "base/T1" ? o : {
+    ...o, score: 1000, findings: [{ expected: 0, produced: null, asked: 1, by: "model" as const, similarity: 0, likelihood_distance: null, confidence_distance: null, score: 1000 }],
+  }));
+  const lens = lensOver(entries, { ...view, scores: { ...scores, outputs } });
+  await lens.done();
+  expect(text(lens.el.querySelector("[data-output='base/T1'] [data-expected='1']"))).toBe("expected finding 1: asked the person (question 2), matched by model · similarity 0 · score 1000");
+});
