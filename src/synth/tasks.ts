@@ -12,13 +12,16 @@ import type { Marking } from "../core/types";
 import { Workbench } from "../core/workbench";
 import type { NewCase } from "../core/workbench";
 import type { Config } from "../modules/config";
-import { SYNTHETIC_PREFIX, TRUTH_DIR } from "./setup";
+import { SYNTHETIC_PREFIX } from "./setup";
 import type { SynthContext } from "./setup";
 
 export type { SynthContext } from "./setup";
 
 export interface TruthFile extends GroundTruth { case: string; origin: string; made_by: "tasks" | "seed-tasks" }
 export interface TruthIndex { format: 1; cases: { storyline: string; case: string; origin: string; made_by: "tasks" | "seed-tasks" }[] }
+
+/** The folder beside the cases that holds each synthetic case's ground truth: `<data>/synth-truth/`. Named here only, where it is read. */
+export const TRUTH_DIR = "synth-truth";
 
 const MADE_BY = ["tasks", "seed-tasks"];
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -61,17 +64,20 @@ export function recordTruth(config: Config, truth: GroundTruth, session: CaseSes
   writeWhole(indexPath(config), `${JSON.stringify({ format: 1, cases }, null, 2)}\n`);
 }
 
-/** The case input of a storyline's task, as both forms make it. */
+/** The objective every synthetic case carries, the overlay's `synth/root/context/synth-objective.yaml`: the checks ask that a product state one. It names no verdict and no storyline. */
+export const SYNTH_OBJECTIVE = "synth-objective";
+
+/** The case input of a storyline's task, as both forms make it, with the setup's objective. */
 export function caseInput(truth: GroundTruth, marking: Marking): NewCase {
   const { task } = truth;
   return {
     title: SYNTHETIC_PREFIX + task.title, asked: task.question, why: `synthetic task: storyline ${truth.storyline}, seed ${truth.seed}`,
-    starting: task.starting.map((o) => ({ type: o.type, value: o.value })), window: { from: task.window.from, to: task.window.to }, objective: null, marking,
+    starting: task.starting.map((o) => ({ type: o.type, value: o.value })), window: { from: task.window.from, to: task.window.to }, objective: SYNTH_OBJECTIVE, marking,
   };
 }
 
 /** The ground truths of the setup's storylines by id, each `<synth>/truth/<id>.json`; a file that is not one is named in `bad`. Shared with seed-tasks. */
-export function readTruths(ctx: SynthContext): { truths: GroundTruth[]; bad: { storyline: string; why: string }[] } {
+export function readTruths(ctx: Pick<SynthContext, "dir" | "setup">): { truths: GroundTruth[]; bad: { storyline: string; why: string }[] } {
   const truths: GroundTruth[] = [];
   const bad: { storyline: string; why: string }[] = [];
   for (const id of ctx.setup.storylines.map((s) => s.id).sort(byText)) {

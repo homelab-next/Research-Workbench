@@ -2,11 +2,9 @@
 // Builds a self-contained synthetic setup (a fake company's lake, a root over it, its ground truth beside them) and works in one. Every
 // form but build needs --config naming the setup's own configuration; the environment's and the home's are never used for them.
 import { Database } from "bun:sqlite";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readLakeCatalog } from "pivot/synth/format";
 import type { SynthParams } from "pivot/synth/params";
-import { readGroundTruth } from "pivot/synth/truth";
 import { MARKINGS, WHERES, isMarking } from "../core/types";
 import type { Actor, Marking, Where } from "../core/types";
 import { ConfigError, loadConfig } from "../modules/config";
@@ -17,7 +15,7 @@ import type { BuildOptions } from "../synth/build";
 import { synthSeed } from "../synth/seed";
 import { setupOf, SynthRefused } from "../synth/setup";
 import type { SynthContext, SynthSetup } from "../synth/setup";
-import { readIndex, synthTasks } from "../synth/tasks";
+import { readIndex, readTruths, synthTasks } from "../synth/tasks";
 import type { TruthIndex } from "../synth/tasks";
 
 const USAGE = [
@@ -194,16 +192,13 @@ function build(p: Parsed): number {
 /** Each storyline's verdict, title and truth summary, under a warning that this spoils the cases. */
 function revealLines(dir: string, setup: SynthSetup): string[] {
   const lines = ["", "--reveal: this spoils the synthetic cases; do not show it to whoever works them", "verdicts:"];
+  // the truths are read by src/synth/tasks.ts, the one reader of a storyline's truth file
+  const { truths, bad } = readTruths({ dir, setup });
   for (const s of setup.storylines) {
     lines.push(`  ${s.id}: ${s.malicious ? "malicious" : "benign"}, ${s.title}`);
-    let summary: string;
-    try {
-      const truth = readGroundTruth(readFileSync(join(dir, "truth", `${s.id}.json`)));
-      summary = truth === null ? "(its truth file is not a ground truth)" : truth.summary;
-    } catch {
-      summary = "(its truth file cannot be read)";
-    }
-    lines.push(`    ${summary}`);
+    const truth = truths.find((t) => t.storyline === s.id);
+    const why = bad.find((b) => b.storyline === s.id)?.why ?? "";
+    lines.push(`    ${truth !== undefined ? truth.summary : why.endsWith("cannot be read") ? "(its truth file cannot be read)" : "(its truth file is not a ground truth)"}`);
   }
   return lines;
 }

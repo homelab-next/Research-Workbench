@@ -688,3 +688,49 @@ test("builder.decided is written only in src/server/builder.ts", () => {
   expect(improve).toMatch(/\bbuilderDecideAll\(ctx,/);
   expect(sources.filter((s) => s.path.startsWith("src/pipeline/") || s.path.startsWith("src/agents/")).filter((s) => /\bbuilderDecide(?:All)?\b/.test(s.text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, ""))).map((s) => s.path)).toEqual([]);
 });
+
+// ---------- slice 15: the judge stays blind; the runner, and the network, are untouched by the synthetic company ----------
+
+/** A file under src/pipeline, src/agents, src/server, src/core or src/web that imports from src/synth. */
+const blindToSynth: Rule = (path, text) =>
+  /^src\/(pipeline|agents|server|core|web)\//.test(path) ? imports(text).filter((s) => reaches(path, s, "src/synth")).map((s) => `${path} imports ${s}`) : [];
+/** The three files that read a ground truth, which a person's command runs. */
+const TRUTH_READERS = ["src/synth/tasks.ts", "src/synth/answer.ts", "src/synth/seed.ts"];
+const readsTruthOnlyThere: Rule = (path, text) =>
+  !TRUTH_READERS.includes(path) && /synth-truth|\breadGroundTruth\b/.test(text) ? [`${path} names synth-truth or readGroundTruth`] : [];
+/** What src/synth may not name: a way to reach a network, or pivot's network connectors. */
+const NETWORK = /\bfetch\b|\bBun\.(?:connect|listen|serve)\b|\bWebSocket\b|["']node:(?:net|http|https|http2|tls|dgram|dns)["']|["']pivot\/connectors\/(?:http|trino)["']/;
+const synthIsOffline: Rule = (path, text) => (path.startsWith("src/synth/") && NETWORK.test(text) ? [`${path} names ${text.match(NETWORK)![0]}`] : []);
+
+test("nothing under src/pipeline, src/agents, src/server, src/core or src/web imports src/synth", () => {
+  expect(sources.flatMap((s) => blindToSynth(s.path, s.text))).toEqual([]);
+  expect(blindToSynth("src/pipeline/improve/x.ts", `import { truthOfCase } from "../../synth/answer";`)).toHaveLength(1);
+  expect(blindToSynth("src/web/x.ts", `const m = await import("../synth/tasks");`)).toHaveLength(1);
+  expect(blindToSynth("src/cli/x.ts", `import { synthTasks } from "../synth/tasks";`)).toEqual([]);
+  expect(sources.filter((s) => s.path.startsWith("src/synth/")).length).toBeGreaterThanOrEqual(5);
+});
+
+test("a ground-truth file is read only by src/synth/tasks.ts, answer.ts and seed.ts: no other file under src names synth-truth or readGroundTruth", () => {
+  expect(sources.flatMap((s) => readsTruthOnlyThere(s.path, s.text))).toEqual([]);
+  expect(readsTruthOnlyThere("src/cli/x.ts", `import { readGroundTruth } from "pivot/synth/truth";`)).toHaveLength(1);
+  expect(readsTruthOnlyThere("src/synth/setup.ts", `export const TRUTH_DIR = "synth-truth";`)).toHaveLength(1);
+  expect(readsTruthOnlyThere("src/synth/tasks.ts", `import { readGroundTruth } from "pivot/synth/truth";`)).toEqual([]);
+  // the readers are there and read it
+  expect(sources.filter((s) => TRUTH_READERS.includes(s.path)).map((s) => s.path).sort()).toEqual([...TRUTH_READERS].sort());
+  expect(sources.some((s) => s.path === "src/synth/tasks.ts" && /\breadGroundTruth\b/.test(s.text) && s.text.includes("synth-truth"))).toBe(true);
+});
+
+test("src/modules/runner.ts is the file it was at 0.14.0", () => {
+  /* its hash, held as a literal taken from git before this branch */
+  const bytes = readFileSync(join(SRC, "modules", "runner.ts"));
+  expect(new Bun.CryptoHasher("sha256").update(bytes).digest("hex")).toBe("580051c2e11809a33f08f8be63e5b61cb3d7ca741d1346578769d61eb65532db");
+});
+
+test("src/synth names no network API", () => {
+  expect(sources.flatMap((s) => synthIsOffline(s.path, s.text))).toEqual([]);
+  for (const planted of [`const r = await fetch(url);`, `Bun.connect({ hostname, port })`, `Bun.serve({ port: 0 })`, `new WebSocket(u)`, `import { connect } from "node:net";`, `import * as dns from "node:dns";`, `import { httpConnector } from "pivot/connectors/http";`, `import { trino } from "pivot/connectors/trino";`]) {
+    expect(synthIsOffline("src/synth/x.ts", planted)).toHaveLength(1);
+  }
+  expect(synthIsOffline("src/cli/x.ts", `await fetch(url)`)).toEqual([]);
+  expect(synthIsOffline("src/synth/x.ts", `import { Database } from "bun:sqlite";`)).toEqual([]);
+});

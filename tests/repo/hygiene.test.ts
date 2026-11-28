@@ -136,3 +136,31 @@ test("the sample's seeds are marked TLP:CLEAR and name only sample hosts, exampl
   expect(isSampleName("ws-17.example.net")).toBe(true);
   expect(isSampleName("printer.corp.internal")).toBe(false);
 });
+
+test("no file under synth/ or src/synth/ writes out an address of the fake company", async () => {
+  // the fake company's internal addresses are computed in pivot (internalAddress), never written: none of them, and no 10.x address or
+  // network prefix at all, is in the overlay or the workbench's synthetic code
+  const { makeCompany, internalAddress } = await import("pivot/synth/company");
+  const { DEFAULT_PARAMS, TINY_PARAMS } = await import("pivot/synth/params");
+  const known = new Set<string>();
+  for (const p of [DEFAULT_PARAMS, TINY_PARAMS]) {
+    const company = makeCompany(p);
+    for (const h of company.hosts) known.add(h.ip);
+    for (const s of company.sites) for (const n of [1, 2, 250, 251]) { known.add(internalAddress(s, "corp", n)); known.add(internalAddress(s, "guest", n)); }
+  }
+  expect(known.size).toBeGreaterThan(100);
+  const TEN = /(?<![\d.])10\.\d{1,3}\.\d{1,3}\.(?:\d{1,3}(?![\d])|(?!\d))/;
+  const writesOne = (text: string): boolean => TEN.test(text) || [...known].some((a) => new RegExp(`(?<![\\d.])${a.replace(/\./g, "\\.")}(?![\\d])`).test(text));
+  const hits: string[] = [];
+  for (const f of textFiles()) {
+    if (!f.path.startsWith("synth/") && !f.path.startsWith("src/synth/")) continue;
+    f.lines.forEach((line, i) => { if (writesOne(line)) hits.push(`${f.path}:${i + 1}`); });
+  }
+  expect(hits).toEqual([]);
+  // the scan sees the files it is about, and what it is for
+  expect(textFiles().filter((f) => f.path.startsWith("src/synth/")).length).toBeGreaterThanOrEqual(5);
+  expect(writesOne(["host", [10, 1, 20, 7].join(".")].join(" "))).toBe(true);
+  expect(writesOne(`const net = "${[10, 2, 200].join(".")}.";`)).toBe(true);
+  expect(writesOne(`[10, site.index + 1, net, n].join(".")`)).toBe(false);
+  expect(writesOne("v10.1.2 of a library")).toBe(false);
+});

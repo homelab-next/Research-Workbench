@@ -10,7 +10,6 @@ import type { Config } from "../modules/config";
 
 export const SETUP_FORMAT = 1;
 export const SETUP_FILE = "synth.json";
-export const TRUTH_DIR = "synth-truth";
 export const SYNTH_PORT = 4757;
 export const SYNTHETIC_PREFIX = "[synthetic] ";
 
