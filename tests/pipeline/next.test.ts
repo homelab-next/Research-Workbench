@@ -567,3 +567,76 @@ test("a loop with no plan gate never waits at one", () => {
   expect(steps).toEqual(["start:frame", "start:research", "start:assemble", "finish:completed"]);
   expect(fold(b.entries).skipped).toEqual([]);
 });
+
+// ---- slice 14: the adopt gate
+
+const ROLES7 = ["select", "propose", "probe", "compose", "judge", "reflect", "adopt"] as const;
+const improvePipeline: Pipeline = {
+  id: "improve", hash: "ih",
+  stages: ROLES7.map((role, i) => sm(role, i + 1, {
+    role, runs: role === "select" || role === "probe" || role === "judge" ? "script" : role === "adopt" ? "human" : "agent",
+    gate: role === "adopt" ? "adopt" : null, on_pass: ROLES7[i + 1] ?? null,
+  })),
+};
+const improveDefs: StageDef[] = improvePipeline.stages.map(({ id, title, phase, runs, gate, reviews, model }) => ({ id, title, phase, runs, gate, reviews, model }));
+const analyst = { kind: "human", id: "analyst" } as const;
+const agentOf = (stage: string) => ({ kind: "agent", id: stage, stage, profile: "investigation", model: "m", effort: null, where: "machine" }) as const;
+const ref = (c: string) => ({ blob: c.repeat(64), bytes: 10 });
+
+/** An improve run whose six stages before Adopt passed; `chosen` the candidate Compose chose (K1, staged) or none; `decide` the files decided. */
+function improveRunAt(chosen: "K1" | null, decide: number[] = [], after: (b: EntryBuilder) => void = () => {}): CaseState {
+  const b = new EntryBuilder();
+  b.add("case.created", { id: "case-1", title: "t", asked: "a", why: "w", starting: [], window: { from: null, to: null }, objective: null, marking: "TLP:GREEN" }, { actor: analyst });
+  b.add("case.loop_set", { loop: "improve" }, { actor: analyst });
+  b.add("improve.requested", { target: "investigation", case_type: "unknown-device", tasks: 1, candidates: 1 }, { actor: analyst });
+  b.add("run.started", { run: "run-1", pipeline: "improve", pipeline_hash: "ih", stages: improveDefs });
+  for (const role of ROLES7.slice(0, 6)) {
+    started(b, role);
+    if (role === "select") b.add("improve.selected", { target: "investigation", version: 1, loop_hash: "e".repeat(64), lock: ref("1"), case_type: "unknown-device", scale: ["unlikely", "likely"], left_out: [] });
+    if (role === "propose") {
+      b.add("builder.proposed", {
+        change: "chg-1", title: "Change", why: "fewer misses", root: "sample",
+        files: [{ path: "skills/a.md", kind: "skill", id: "a", before: "4".repeat(64), after: "5".repeat(64) }, { path: "skills/b.md", kind: "skill", id: "b", before: "6".repeat(64), after: "7".repeat(64) }],
+        bundle: ref("2"),
+      }, { actor: agentOf("propose") });
+      b.add("improve.candidate", { candidate: "K1", change: "chg-1", status: "staged", loop_hash: "a1".repeat(32), lock: ref("3"), reason: "" });
+    }
+    if (role === "compose" && chosen !== null) b.add("compose.chosen", { candidate: chosen, why: "fewer misses", contrasts: ref("4") }, { actor: agentOf("compose") });
+    finished(b, role, "pass");
+  }
+  started(b, "adopt");
+  finished(b, "adopt", "pass");
+  for (const file of decide) b.add("builder.decided", { change: "chg-1", file, accepted: false, written: null }, { actor: analyst });
+  after(b);
+  return fold(b.entries);
+}
+
+test("a passed adopt stage waits at the adopt gate while the chosen candidate has an undecided file", () => {
+  const none = improveRunAt("K1");
+  expect(none.skipped).toEqual([]);
+  expect(nextStep(none, improvePipeline)).toEqual({ kind: "gate", gate: "adopt" });
+  expect(nextStep(improveRunAt("K1", [0]), improvePipeline)).toEqual({ kind: "gate", gate: "adopt" });
+});
+
+test("with nothing chosen, or every file of the chosen change decided, a passed adopt stage finishes completed", () => {
+  const nothing = improveRunAt(null);
+  expect(nothing.skipped).toEqual([]);
+  expect(nextStep(nothing, improvePipeline)).toEqual({ kind: "finish", outcome: "completed" });
+  const decided = improveRunAt("K1", [0, 1]);
+  expect(decided.skipped).toEqual([]);
+  expect(nextStep(decided, improvePipeline)).toEqual({ kind: "finish", outcome: "completed" });
+});
+
+test("the adopt gate waited at and passed by a person leaves the run to finish completed", () => {
+  const state = improveRunAt("K1", [], (b) => {
+    b.add("gate.waiting", { gate: "adopt" });
+    b.add("builder.decided", { change: "chg-1", file: 0, accepted: false, written: null }, { actor: analyst });
+    b.add("builder.decided", { change: "chg-1", file: 1, accepted: false, written: null }, { actor: analyst });
+    b.add("gate.passed", { gate: "adopt" }, { actor: analyst });
+  });
+  expect(state.skipped).toEqual([]);
+  expect(state.run.status).toBe("running");
+  expect(nextStep(state, improvePipeline)).toEqual({ kind: "finish", outcome: "completed" });
+  // waiting at the gate is idle
+  expect(nextStep(improveRunAt("K1", [], (b) => { b.add("gate.waiting", { gate: "adopt" }); }), improvePipeline)).toEqual({ kind: "idle" });
+});

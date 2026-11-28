@@ -3,7 +3,7 @@ import type { Json } from "../core/canonical";
 import { canonical } from "../core/canonical";
 import type { CaseSession } from "../core/session";
 import type { CaseState, RunState } from "../core/state";
-import { CASE_TYPE_ID, gateChanges, latestDraft, loopOf, runQuestions, waitingOn } from "../core/state";
+import { CASE_TYPE_ID, gateChanges, latestDraft, loopOf, PROBE_ACTOR_ID, runQuestions, waitingOn } from "../core/state";
 import type { Actor, Draft, EntryInput, LessonOrigin, Marking, ModelChoice, Product, RunHold } from "../core/types";
 import type { LessonDraft, StoreState } from "../core/lessons";
 import type { CaseType } from "../modules/case-types";
@@ -43,6 +43,9 @@ import { publishRunner } from "./stages/publish";
 import { subloopRunner } from "./stages/subloop";
 import { childRefOf, childWaitReason, outputsOf } from "./subloop";
 import type { ChildCases } from "./subloop";
+import { improveOf } from "./improve/host";
+import type { ImproveHost } from "./improve/host";
+import { IMPROVE_RUNNERS } from "./improve/runners";
 
 export interface EngineDeps {
   config: Config; registry: Registry; runner: RunnerDeps; seeker: Seeker; providers: Providers; pipeline: Pipeline; profile: Profile;
@@ -67,6 +70,8 @@ export interface EngineDeps {
   lock?: LoopLock;
   memory?: MemoryHost;
   case_types?: readonly CaseType[];
+  /** How the improve loop reaches its tasks, its staging store and its probe children: the host's. A probe child's engine reads its staged version through it. */
+  improve?: ImproveHost;
 }
 /** How the engine reaches the shared store: the host's. It reads at a bind and files proposals; it never accepts. */
 export interface MemoryHost {
@@ -100,6 +105,10 @@ export class RunRefused extends Refused {
 }
 
 const ENGINE: Actor = { kind: "system", id: "engine" };
+/** The one actor code passes a probe child's plan gate as, and resumes or ends a probe child's run as. */
+const PROBE: Actor = { kind: "system", id: PROBE_ACTOR_ID };
+/** Why the host ends a probe child whose improve run has ended before the probe finished. */
+const IMPROVE_RUN_ENDED = "its improve run ended";
 /** A guard against a pipeline that loops without end; real runs are far below it (every cycle is capped by the send-back rule). */
 const MAX_STEPS = 500;
 /** Sessions this process has already recovered, so a second engine on the same open session does not close work begun since. */
@@ -132,7 +141,7 @@ export class Engine {
 
   /** Builds an engine and writes nothing: a read (a status, a replay) can use one. A command that acts opens it with Engine.open. */
   constructor(private readonly session: CaseSession, private readonly deps: EngineDeps, opts: { runners?: Partial<Record<Role, StageRunner>> } = {}) {
-    this.runners = { frame: frameRunner, plan: planRunner, research: researchRunner, assemble: assembleRunner, checks: checksRunner, evaluate: evaluateRunner, challenge: challengeRunner, publish: publishRunner, feedback: feedbackRunner, subloop: subloopRunner, ...opts.runners };
+    this.runners = { frame: frameRunner, plan: planRunner, research: researchRunner, assemble: assembleRunner, checks: checksRunner, evaluate: evaluateRunner, challenge: challengeRunner, publish: publishRunner, feedback: feedbackRunner, subloop: subloopRunner, ...IMPROVE_RUNNERS, ...opts.runners };
     this.bind();
   }
 
@@ -188,7 +197,8 @@ export class Engine {
 
   /**
    * Binds the run in progress to the version its loop.bound names, rebuilt from its lock and the content store, once per run; lets go of a run
-   * that has ended. A run with no loop.bound is legacy and binds nothing.
+   * that has ended. A run with no loop.bound is legacy and binds nothing. A probe child's lock is read through its improve case's staging store
+   * (a staged candidate's bytes are there and nowhere else); no other case is given that store.
    */
   private bind(): void {
     const loops = this.deps.loops;
@@ -201,7 +211,11 @@ export class Engine {
     let made: ResolvedLoop | string;
     try {
       const lock = loops.readLock(this.session.blobs.get(s.loop.bound.lock.blob));
-      made = lock === null ? NOT_IN_WORKBENCH : loops.fromLock(lock);
+      const probe = s.improve.probe_of;
+      const host = this.deps.improve;
+      if (lock === null) made = NOT_IN_WORKBENCH;
+      else if (probe !== null && host !== undefined) made = loops.fromLock(lock, host.staged({ case: probe.improve, origin: probe.origin }));
+      else made = loops.fromLock(lock);
     } catch {
       made = NOT_IN_WORKBENCH;
     }
@@ -377,13 +391,64 @@ export class Engine {
   stop(actor: Actor, reason: string): void {
     if (actor.kind !== "human") throw new RunRefused("only a person may stop a run");
     if (typeof reason !== "string" || reason.trim() === "") throw new RunRefused("stopping a run needs a reason");
-    this.session.commit((state) => {
+    const pipeline = this.bound.pipeline;
+    const written = this.session.commit((state) => {
       const { status } = state.run;
       if (status === "none" || status === "finished") throw new RunRefused("there is no run in progress to stop");
       return [{ type: "run.finished", actor, run: state.run.id, payload: { outcome: "stopped", reason } }];
     });
     this.anchorCase("closed");
+    this.improveEnded(written[0]?.run ?? null, pipeline);
     this.bind();
+  }
+
+  /** In a probe child: run.resumed by improve-probe when its run is interrupted (a stopped process), and only then. True when it wrote. Throws RunRefused elsewhere. */
+  resumeProbe(): boolean {
+    this.mustBeProbe();
+    const written = this.session.commit((s) => (s.run.status === "interrupted" ? [{ type: "run.resumed", actor: PROBE, payload: {}, run: s.run.id }] : []));
+    return written.length > 0;
+  }
+
+  /** In a probe child: ends the run in progress as stopped, by improve-probe, with the reason, and anchors the case closed; nothing when it has none. Throws RunRefused elsewhere. */
+  endProbe(reason: string): void {
+    this.mustBeProbe();
+    if (typeof reason !== "string" || reason.trim() === "") throw new RunRefused("ending a probe needs a reason");
+    const written = this.session.commit((s) => (inProgress(s) ? [{ type: "run.finished", actor: PROBE, run: s.run.id, payload: { outcome: "stopped", reason: clipReason(reason) } }] : []));
+    if (written.length > 0) this.anchorCase("closed");
+    this.bind();
+  }
+
+  private mustBeProbe(): void {
+    if (this.session.state.improve.probe_of === null) throw new RunRefused("only a probe child's run is resumed or ended by improve-probe");
+  }
+
+  /**
+   * After the run `run` of an improve case has ended: each probe child of that run whose probe started and did not finish is ended by the host,
+   * then the improve case's staging store is cleared. A failure of the host's is reported and stops neither. Nothing for any other case.
+   */
+  private improveEnded(run: string | null, pipeline: Pipeline): void {
+    const host = this.deps.improve;
+    const s = this.session.state;
+    if (host === undefined || run === null || s.improve.request === null) return;
+    const report = this.deps.onError ?? logToStderr("improve");
+    const { selected, probes, probe_order } = s.improve;
+    const stage = pipeline.stages.find((x) => x.role === "probe")?.id ?? null;
+    if (selected !== null && selected.run === run && stage !== null) {
+      for (const id of probe_order) {
+        const p = Object.hasOwn(probes, id) ? probes[id]! : null;
+        if (p === null || p.finished !== null) continue;
+        try {
+          host.probes.end({ id: p.child, origin: p.origin, parent: this.session.id, run, stage, attempt: 1, input_hash: p.input_hash, probe: p.probe }, IMPROVE_RUN_ENDED);
+        } catch (err) {
+          report(err);
+        }
+      }
+    }
+    try {
+      host.clear(improveOf(this.session));
+    } catch (err) {
+      report(err);
+    }
   }
 
   /** A person accepts the proposed plan, whole or in part, with budgets for its costly steps. Throws PlanRefused; advances nothing. */
@@ -686,6 +751,7 @@ export class Engine {
     // a published run was anchored when the person approved the product; only a run that ends without one is anchored here
     if (outcome === "stopped") this.anchorCase("closed");
     else if (written.length > 0) this.outputs(d, loop, written[0]!.run ?? before.run.id ?? "", outcome, declared);
+    if (written.length > 0) this.improveEnded(written[0]!.run ?? before.run.id, d.pipeline);
     this.bind();
   }
 

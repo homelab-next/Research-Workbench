@@ -1,5 +1,5 @@
 import type { CaseState, StageState } from "../core/state";
-import { blockers, latestDraft, publishable } from "../core/state";
+import { adoptOffer, blockers, latestDraft, publishable } from "../core/state";
 import type { RunHold } from "../core/types";
 import { pointsOf, reviewConflict, uncitableNote } from "./conflict";
 import type { ConflictFound } from "./conflict";
@@ -16,7 +16,7 @@ export type Step =
   | { kind: "idle" }
   | { kind: "start"; stage: string; attempt: number; sent_back: { from: string; to: string; reason: string; count: number } | null }
   | { kind: "exec"; stage: string }
-  | { kind: "gate"; gate: "plan" | "publish" }
+  | { kind: "gate"; gate: "plan" | "publish" | "adopt" }
   /** `conflicts`: reviewers' disagreements found now, to be recorded with the pause; `hold`: what a person's resume of it does besides. */
   | { kind: "pause"; reason: string; conflicts?: ConflictFound[]; hold?: RunHold }
   | { kind: "finish"; outcome: "published" | "completed" | "stopped" };
@@ -114,6 +114,11 @@ export function nextStep(state: Readonly<CaseState>, pipeline: Pipeline, opts: {
       case "none": return { kind: "pause", reason: "the plan stage finished without a plan" };
       case "accepted": break;
     }
+  }
+  // the person decides the chosen candidate's files at Adopt; with nothing chosen, or every file decided, the run goes on
+  if (m.gate === "adopt") {
+    const offer = adoptOffer(state);
+    if (offer !== null && offer.undecided > 0) return { kind: "gate", gate: "adopt" };
   }
   const draft = latestDraft(state as CaseState);
   if (m.gate === "publish" && !(draft !== null && state.published.some((p) => p.draft_hash === draft.hash))) {
