@@ -3,7 +3,7 @@ import type { Json } from "../core/canonical";
 import { canonical } from "../core/canonical";
 import type { CaseSession } from "../core/session";
 import type { CaseState, RunState } from "../core/state";
-import { CASE_TYPE_ID, gateChanges, latestDraft, loopOf, PROBE_ACTOR_ID, runQuestions, waitingOn } from "../core/state";
+import { CASE_TYPE_ID, gateChanges, latestDraft, loopOf, runQuestions, waitingOn } from "../core/state";
 import type { Actor, Draft, EntryInput, LessonOrigin, Marking, ModelChoice, Product, RunHold } from "../core/types";
 import type { LessonDraft, StoreState } from "../core/lessons";
 import type { CaseType } from "../modules/case-types";
@@ -22,7 +22,7 @@ import type { LoopCatalog, LoopLock, LoopOutput, ResolvedLoop } from "./loops";
 import type { BlobStore } from "../core/blobs";
 import { firstUnpassedReview, nextStep } from "./next";
 import type { Step } from "./next";
-import { acceptPlan, denyPlan, requestReplan, spendPlanBudget } from "./plans";
+import { acceptPlan, denyPlan, requestReplan, PROBE_ACTOR, spendPlanBudget } from "./plans";
 import { answerChallenge, reviseDraft } from "./revise";
 import { gateSendBack, overrule, overruleSendBack } from "./overrule";
 import { preparedAnswer, waitingReason } from "./questions";
@@ -105,8 +105,6 @@ export class RunRefused extends Refused {
 }
 
 const ENGINE: Actor = { kind: "system", id: "engine" };
-/** The one actor code passes a probe child's plan gate as, and resumes or ends a probe child's run as. */
-const PROBE: Actor = { kind: "system", id: PROBE_ACTOR_ID };
 /** Why the host ends a probe child whose improve run has ended before the probe finished. */
 const IMPROVE_RUN_ENDED = "its improve run ended";
 /** A guard against a pipeline that loops without end; real runs are far below it (every cycle is capped by the send-back rule). */
@@ -405,7 +403,7 @@ export class Engine {
   /** In a probe child: run.resumed by improve-probe when its run is interrupted (a stopped process), and only then. True when it wrote. Throws RunRefused elsewhere. */
   resumeProbe(): boolean {
     this.mustBeProbe();
-    const written = this.session.commit((s) => (s.run.status === "interrupted" ? [{ type: "run.resumed", actor: PROBE, payload: {}, run: s.run.id }] : []));
+    const written = this.session.commit((s) => (s.run.status === "interrupted" ? [{ type: "run.resumed", actor: PROBE_ACTOR, payload: {}, run: s.run.id }] : []));
     return written.length > 0;
   }
 
@@ -413,7 +411,7 @@ export class Engine {
   endProbe(reason: string): void {
     this.mustBeProbe();
     if (typeof reason !== "string" || reason.trim() === "") throw new RunRefused("ending a probe needs a reason");
-    const written = this.session.commit((s) => (inProgress(s) ? [{ type: "run.finished", actor: PROBE, run: s.run.id, payload: { outcome: "stopped", reason: clipReason(reason) } }] : []));
+    const written = this.session.commit((s) => (inProgress(s) ? [{ type: "run.finished", actor: PROBE_ACTOR, run: s.run.id, payload: { outcome: "stopped", reason: clipReason(reason) } }] : []));
     if (written.length > 0) this.anchorCase("closed");
     this.bind();
   }

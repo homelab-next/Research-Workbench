@@ -2,17 +2,11 @@ import type { BlobStore } from "../../core/blobs";
 import type { CaseSession } from "../../core/session";
 import type { CaseState } from "../../core/state";
 import type { Entry } from "../../core/types";
-import type { ChildLink, NewCase } from "../../core/workbench";
+import type { ChildLink, NewCase, ProbeMark } from "../../core/workbench";
 import type { ChangeCheck, ManifestFile } from "../../modules/loop-write";
 import type { RunSummary } from "../engine";
 import type { ResolvedLoop } from "../loops";
 import type { ChildRef, ChildView } from "../subloop";
-
-/**
- * The mark a probe child is made with: probe.child's payload and the child's token budget. Task 7 defines it as `ProbeMark` in
- * src/core/workbench.ts beside createCase's `probe` option; this is the same shape, until that lands and this becomes its import.
- */
-export interface ProbeMark { improve: string; origin: string; probe: string; candidate: string; task: string; plan_gate: "accept"; max_lookups: number; max_tokens: number }
 
 /** A task Select named: its case and the hash of that case's first entry. */
 export interface TaskRef { case: string; origin: string }

@@ -6,7 +6,7 @@ import type { CaseFacts, LessonDraft, StoreState } from "../../src/core/lessons"
 import { fold } from "../../src/core/state";
 import type { Actor, Card, Finding, LessonOrigin, Marking, Payloads, Product, Trigger } from "../../src/core/types";
 import type { MemoryUse } from "../../src/pipeline/loops";
-import { buildMemoryLock, factsOf, matches, selectLessons } from "../../src/pipeline/memory";
+import { buildMemoryLock, factsOf, improveLock, matches, selectLessons } from "../../src/pipeline/memory";
 import { EntryBuilder, card } from "../helpers/entries";
 
 const person: Actor = { kind: "human", id: "analyst" };
@@ -322,4 +322,40 @@ test("with no shared use there are no lessons", () => {
   const lock = buildMemoryLock({ state: store, origin: null, head: { seq: store.seq, hash: "c".repeat(64) } }, facts(), [], { max: 12 });
   expect(lock.lessons).toEqual([]);
   expect(lock.left_out).toEqual([]);
+});
+
+// ---------- an improve run reads every lesson of the type (slice 14)
+
+const HEAD = { origin: null, head: { seq: 9, hash: "d".repeat(64) } };
+
+test("improveLock holds every shared lesson of the type not stricter than the case, newest acceptance first, triggered or not, each matched by the one sentence", () => {
+  const store = storeOf([
+    { propose: "LESSON-1" }, { accept: "LESSON-1" },
+    { propose: "LESSON-2", d: { triggers: [{ source: "never-used" }] } }, { accept: "LESSON-2" }, // a trigger that no improve case could meet
+    { propose: "LESSON-3", d: { marking: "TLP:RED" } }, { accept: "LESSON-3" }, // stricter than the case
+    { propose: "LESSON-4", d: { case_type: "phishing" } }, { accept: "LESSON-4" }, // another type
+    { propose: "LESSON-5" }, // proposed only
+  ]);
+  const lock = improveLock({ state: store, ...HEAD }, "unknown-device", "TLP:AMBER", ["propose", "reflect"], { max: 12 });
+  expect(ids(lock)).toEqual(["LESSON-2", "LESSON-1"]);
+  expect(lock.left_out).toEqual([{ lesson: "LESSON-3", why: "marking" }]);
+  for (const l of lock.lessons) {
+    expect(l.matched).toEqual(["every lesson of the type: an improve run reads them all"]);
+    expect(l.stages).toEqual(["propose", "reflect"]);
+  }
+  expect(lock.case_type).toBe("unknown-device");
+  expect(lock.store).toEqual({ origin: null, head: HEAD.head });
+  expect(lock.facts).toEqual({ type: "unknown-device", marking: "TLP:AMBER", observables: [], sources: [], findings: [] });
+  // it is a lock a run can read back
+  expect(readMemoryLock(new TextEncoder().encode(canonical(lock as unknown as Json)))).toEqual(lock);
+});
+
+test("improveLock cuts at max, the rest left out as cap, and holds nothing for a type with no lesson", () => {
+  const store = storeOf([{ propose: "LESSON-1" }, { accept: "LESSON-1" }, { propose: "LESSON-2" }, { accept: "LESSON-2" }, { propose: "LESSON-3" }, { accept: "LESSON-3" }]);
+  const cut = improveLock({ state: store, ...HEAD }, "unknown-device", "TLP:GREEN", ["propose"], { max: 2 });
+  expect(ids(cut)).toEqual(["LESSON-3", "LESSON-2"]);
+  expect(cut.left_out).toEqual([{ lesson: "LESSON-1", why: "cap" }]);
+  const none = improveLock({ state: store, ...HEAD }, "phishing", "TLP:GREEN", ["propose"], { max: 2 });
+  expect(none.lessons).toEqual([]);
+  expect(none.left_out).toEqual([]);
 });

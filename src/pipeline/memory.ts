@@ -114,6 +114,35 @@ export function buildMemoryLock(
   };
 }
 
+/** What an improve run's lock says of why each lesson is in it. */
+const IMPROVE_MATCHED = "every lesson of the type: an improve run reads them all";
+
+/**
+ * The lock an improve run reads: every shared lesson of the type that is not stricter than the case, newest acceptance first, cut at `max`; a
+ * trigger is not asked (an improve case has no observables of its own to meet it). `stages` are those that read shared memory.
+ */
+export function improveLock(
+  store: { state: Readonly<StoreState>; origin: string | null; head: { seq: number; hash: string } }, type: string, marking: Marking, stages: readonly string[], opts: { max: number },
+): MemoryLock {
+  const at = sortedOnce(stages);
+  const lessons: LockedLesson[] = [];
+  const left_out: LeftOut[] = [];
+  for (const l of shared(store.state)) {
+    if (l.case_type !== type || l.decided === null) continue;
+    if (tooStrict(l.marking, marking)) left_out.push({ lesson: l.id, why: "marking" });
+    else if (lessons.length >= opts.max) left_out.push({ lesson: l.id, why: "cap" });
+    else lessons.push({ ...locked(l, l.decided, type, [...at]), matched: [IMPROVE_MATCHED] });
+  }
+  return {
+    format: MEMORY_LOCK_FORMAT,
+    store: { origin: store.origin, head: { seq: store.head.seq, hash: store.head.hash } },
+    case_type: type,
+    facts: { type, marking, observables: [], sources: [], findings: [] },
+    lessons,
+    left_out: left_out.sort((a, b) => lt(a.lesson, b.lesson)),
+  };
+}
+
 /** What a run binds when there is no store to read: no origin, an empty head, so no lesson. */
 const NO_STORE = { origin: null, head: { seq: 0, hash: "" } } as const;
 
