@@ -235,7 +235,7 @@ const noAgentMovesCases: Rule = (path, text) =>
   /^src\/(agents|pipeline)\//.test(path) && CASE_MOVES.test(text) ? [`${path} names ${text.match(CASE_MOVES)![0]}`] : [];
 const sampleNamesNoMove: Rule = (path, text) => (path.startsWith("sample/") && CASE_MOVES.test(text) ? [`${path} names ${text.match(CASE_MOVES)![0]}`] : []);
 /** The case file, the store, the tar code they share and the loop file are server-side core: neither the browser's code nor the fold imports them. */
-const SERVER_CORE = ["src/core/casefile", "src/core/store", "src/core/tar"].flatMap((d) => [d, `${d}.ts`]);
+const SERVER_CORE = ["src/core/casefile", "src/core/packfile", "src/core/redact", "src/core/store", "src/core/tar"].flatMap((d) => [d, `${d}.ts`]);
 /** Every file whose name starts with this is server-side core too: the loop file and anything beside it named for it. */
 const LOOPFILE = "src/core/loopfile";
 const reachesLoopFile = (path: string, spec: string): boolean =>

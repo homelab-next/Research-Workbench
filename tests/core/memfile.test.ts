@@ -120,7 +120,9 @@ test("a file whose first member is not memory.json, with a symlink member, a nam
     ["not-a-manifest", [{ name: "memory.json", body: "{}" }, { name: "ledger.sqlite", body: ledger }], "memory.json is not a memory manifest"],
     ["no-ledger", [{ name: "memory.json", body: manifest([{ path: "blobs/a", sha256: sha256Hex("a"), bytes: 1 }]) }, { name: "blobs/a", body: "a" }], "memory.json is not a memory manifest"],
     ["other-member", [{ name: "memory.json", body: manifest([entry, { path: "run.sh", sha256: sha256Hex("a"), bytes: 1 }]) }, { name: "ledger.sqlite", body: ledger }, { name: "run.sh", body: "a" }], "memory.json is not a memory manifest"],
-    ["journal", [{ name: "memory.json", body: manifest([entry, { path: "ledger.sqlite-journal", sha256: sha256Hex("a"), bytes: 1 }]) }, { name: "ledger.sqlite", body: ledger }, { name: "ledger.sqlite-journal", body: "a" }], "memory.json is not a memory manifest"],
+    // final review I3 (Minor 5): casefile's rule that no path is the folder of another holds for a memory file too
+    ["folder-of-another", [{ name: "memory.json", body: manifest([{ path: "blobs/a", sha256: sha256Hex("a"), bytes: 1 }, { path: "blobs/a/b", sha256: sha256Hex("b"), bytes: 1 }, entry]) }, { name: "blobs/a", body: "a" }, { name: "blobs/a/b", body: "b" }, { name: "ledger.sqlite", body: ledger }], "memory.json is not a memory manifest"],
+    ["journal", [{ name: "memory.json", body: manifest([entry, { path: "ledger.sqlite-journal", sha256: sha256Hex("a"), bytes: 1 }]) }, { name: "ledger.sqlite", body: ledger }, { name: "ledger.sqlite-journal", body: "a" }], "the memory file holds ledger.sqlite-journal, a ledger journal; a memory file holds none"],
   ];
   for (const [name, members, says] of hostile) {
     const file = join(d, `${name}.tar.gz`);
@@ -169,4 +171,16 @@ test("extractMemoryFile writes the members under a new folder and removes it whe
   symlinkSync("/etc/hostname", join(linked, "blobs", "x"));
   expect(await refusal(writeMemoryFile(linked, join(d, "linked.tar.gz"), header))).toContain("is a link");
   expect(existsSync(join(d, "linked.tar.gz"))).toBe(false);
+});
+
+// ---------- final review I3: one reader for case files and memory files ----------
+
+test("a case file and a memory file are packed and read by one reader, packfile.ts: neither file holds a reader of its own", () => {
+  const src = (name: string): string => readFileSync(join(import.meta.dir, "..", "..", "src", "core", name), "utf8");
+  const reader = /\b(readTarGz|writeTarGz|openSync|readSync|readdirSync|lstatSync|fsyncSync|mkdirSync|rmSync)\b|function (openRegular|readPieces|readArchive|filePieces)|class Extraction/;
+  for (const name of ["casefile.ts", "memfile.ts"]) {
+    expect(reader.test(src(name)), name).toBe(false);
+    expect(src(name), name).toContain('from "./packfile"');
+  }
+  expect(reader.test(src("packfile.ts"))).toBe(true);
 });
