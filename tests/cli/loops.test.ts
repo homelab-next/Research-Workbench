@@ -47,11 +47,13 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 test("list prints investigation with its version, its hash and nine stages", async () => {
   expect(await run(a, "list")).toBe(0);
   expect(err).toEqual([]);
-  // the sample's second loop, triage (Task 14), is listed after it, and its third, unknown-device (slice 13), after that
-  expect(out).toHaveLength(3);
-  expect(out[0]).toMatch(/^investigation {2}v1 {2}[0-9a-f]{12} {2}9 stages {2}Investigation$/);
-  expect(out[1]).toMatch(/^triage {2}v1 {2}[0-9a-f]{12} {2}2 stages {2}Triage$/);
-  expect(out[2]).toMatch(/^unknown-device {2}v1 {2}[0-9a-f]{12} {2}9 stages {2}Unknown device$/);
+  // by id: slice 14's device-check and improve, then investigation, triage (Task 14) and unknown-device (slice 13)
+  expect(out).toHaveLength(5);
+  expect(out[0]).toMatch(/^device-check {2}v1 {2}[0-9a-f]{12} {2}6 stages {2}Device check$/);
+  expect(out[1]).toMatch(/^improve {2}v1 {2}[0-9a-f]{12} {2}7 stages {2}Improve$/);
+  expect(out[2]).toMatch(/^investigation {2}v1 {2}[0-9a-f]{12} {2}9 stages {2}Investigation$/);
+  expect(out[3]).toMatch(/^triage {2}v1 {2}[0-9a-f]{12} {2}2 stages {2}Triage$/);
+  expect(out[4]).toMatch(/^unknown-device {2}v1 {2}[0-9a-f]{12} {2}9 stages {2}Unknown device$/);
 });
 
 test("show prints the stages in order with their gates and send-back edges, and each stage's three groups with source and hash", async () => {

@@ -1,0 +1,6 @@
+kind: schema
+id: judge-output
+title: Judge output
+# For a Judge stage that runs an agent: which free produced finding states each expected finding code left unmatched, and, for an answer
+# with no expected finding, whether the product agrees with its text. The sample's Judge is a script and asks no model.
+schema: {"type": "object", "additionalProperties": false, "required": ["matches", "texts"], "properties": {"matches": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["probe", "expected", "produced"], "properties": {"probe": {"type": "string"}, "expected": {"type": "integer"}, "produced": {"type": ["string", "null"]}}}}, "texts": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["probe", "verdict"], "properties": {"probe": {"type": "string"}, "verdict": {"type": "string", "enum": ["agrees", "partly", "disagrees"]}}}}}}

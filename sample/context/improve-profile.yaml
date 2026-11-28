@@ -1,0 +1,21 @@
+kind: profile
+id: improve
+title: Improve
+rules: base-rules
+framework: intel-cycle
+standard: icd203
+# The improve loop's three agent stages. Propose is given the shared lessons of the case type the run improves for.
+stages:
+  propose:
+    agent: proposer
+    persona: proposer
+    goal: Propose changes to the loop that would make its cases more correct, each as one builder proposal.
+    references: [shared-lessons]
+  compose:
+    agent: composer
+    persona: composer
+    goal: Choose the one change whose outputs are most worth a person's look, or none, and say why.
+  reflect:
+    agent: reflector
+    persona: reflector
+    goal: Say what the run's scores teach about cases of this type, as lessons for later cases.

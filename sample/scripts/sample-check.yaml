@@ -1,0 +1,395 @@
+kind: script
+id: sample-check
+title: Scripted device-check runs of the sample story
+# The device-check loop on three addresses of the sample's data, each a case of its own:
+#   192.0.2.14  a lease names ws-14.example.net, and the asset list agrees;
+#   192.0.2.61  no lease and no asset; only the WiFi log's connection message names ws-17.example.net;
+#   192.0.2.62  no lease and no asset; only the WiFi log's connection message names pr-2.example.net.
+# A turn with `when` is one of its actor's turns only for a request whose messages hold every string of it. Each address's turns carry
+# that address, so one script serves the three cases. The turns that also carry words of the sentence candidate K1 adds to the skill
+# find-the-device ("plan the lookup in the WiFi log in place of the lease records") are written before the address's own: with that
+# sentence in the pack they come first, so for 192.0.2.61 and 192.0.2.62 the planner asks the asset list and the WiFi log, and the
+# analyst names the device; without it only the address's own turns are left. For 192.0.2.14 the turns are the same either way.
+# (The WiFi lookup takes the lease's place: a lease sub-goal left open would send the device the connection message names back to Plan.)
+# Card titles are "<pivot title>: <value>", which is how {{card:...}} finds a card in what a tool returned.
+turns:
+  # Frame: one goal, the sample window, and the lease records allowed (they are not confirmed)
+  - actor: orchestrator
+    reply:
+      content: |
+        {"goals": [{"title": "Which device held the address", "question": "Which device held the address in the question?", "want": "asset"}],
+         "window": {"from": "2026-11-17T00:00:00.000Z", "to": "2026-11-24T00:00:00.000Z"},
+         "limits": {"allow_unconfirmed": true, "max_weight": null},
+         "notes": "The lease records are not confirmed; the skill says to ask them, so they are allowed."}
+
+  # Plan, with the candidate's sentence: the asset list and the WiFi log in place of the lease records
+  - actor: planner
+    when: ["192.0.2.61", "plan the lookup in the WiFi log in place of the lease records"]
+    reply:
+      content: |
+        {"goal": "Find which device held 192.0.2.61",
+         "subgoals": [
+           {"title": "The address in the asset list", "question": "Is 192.0.2.61 an internal host in the asset list?", "have": [{"type": "address", "value": "192.0.2.61"}], "want": "asset", "route": ["address_to_asset"]},
+           {"title": "The WiFi log for the address", "question": "Which device joined the WiFi at 192.0.2.61?", "have": [{"type": "address", "value": "192.0.2.61"}], "want": "host", "route": ["address_to_wifi"]}
+         ]}
+  - actor: planner
+    when: ["192.0.2.62", "plan the lookup in the WiFi log in place of the lease records"]
+    reply:
+      content: |
+        {"goal": "Find which device held 192.0.2.62",
+         "subgoals": [
+           {"title": "The address in the asset list", "question": "Is 192.0.2.62 an internal host in the asset list?", "have": [{"type": "address", "value": "192.0.2.62"}], "want": "asset", "route": ["address_to_asset"]},
+           {"title": "The WiFi log for the address", "question": "Which device joined the WiFi at 192.0.2.62?", "have": [{"type": "address", "value": "192.0.2.62"}], "want": "host", "route": ["address_to_wifi"]}
+         ]}
+  # Plan, as the skill is: the lease and the asset list
+  - actor: planner
+    when: ["192.0.2.14"]
+    reply:
+      content: |
+        {"goal": "Find which device held 192.0.2.14",
+         "subgoals": [
+           {"title": "The lease for the address", "question": "Which device does a lease for 192.0.2.14 name?", "have": [{"type": "address", "value": "192.0.2.14"}], "want": "asset", "route": ["address_to_asset_by_lease"]},
+           {"title": "The address in the asset list", "question": "Is 192.0.2.14 an internal host in the asset list?", "have": [{"type": "address", "value": "192.0.2.14"}], "want": "asset", "route": ["address_to_asset"]}
+         ]}
+  - actor: planner
+    when: ["192.0.2.61"]
+    reply:
+      content: |
+        {"goal": "Find which device held 192.0.2.61",
+         "subgoals": [
+           {"title": "The lease for the address", "question": "Which device does a lease for 192.0.2.61 name?", "have": [{"type": "address", "value": "192.0.2.61"}], "want": "asset", "route": ["address_to_asset_by_lease"]},
+           {"title": "The address in the asset list", "question": "Is 192.0.2.61 an internal host in the asset list?", "have": [{"type": "address", "value": "192.0.2.61"}], "want": "asset", "route": ["address_to_asset"]}
+         ]}
+  - actor: planner
+    when: ["192.0.2.62"]
+    reply:
+      content: |
+        {"goal": "Find which device held 192.0.2.62",
+         "subgoals": [
+           {"title": "The lease for the address", "question": "Which device does a lease for 192.0.2.62 name?", "have": [{"type": "address", "value": "192.0.2.62"}], "want": "asset", "route": ["address_to_asset_by_lease"]},
+           {"title": "The address in the asset list", "question": "Is 192.0.2.62 an internal host in the asset list?", "have": [{"type": "address", "value": "192.0.2.62"}], "want": "asset", "route": ["address_to_asset"]}
+         ]}
+
+  # Research: the accepted steps ran in code before each researcher was asked; each reports what its step returned.
+  # With the candidate's sentence: g1 is the asset list and g2 the WiFi log
+  - actor: researcher-g1
+    when: ["192.0.2.61", "plan the lookup in the WiFi log in place of the lease records"]
+    reply:
+      content: |
+        {"outcome": "answered", "found": [], "note": "The asset list, complete for internal hosts, has no row for the address: it is not an internal host."}
+  - actor: researcher-g1
+    when: ["192.0.2.62", "plan the lookup in the WiFi log in place of the lease records"]
+    reply:
+      content: |
+        {"outcome": "answered", "found": [], "note": "The asset list, complete for internal hosts, has no row for the address: it is not an internal host."}
+  - actor: researcher-g2
+    when: ["192.0.2.61", "plan the lookup in the WiFi log in place of the lease records"]
+    reply:
+      content: |
+        {"outcome": "answered", "found": [{"type": "host", "value": "ap-3"}], "note": "The connection message names ws-17.example.net, which joined ap-3 and later ap-4."}
+  - actor: researcher-g2
+    when: ["192.0.2.62", "plan the lookup in the WiFi log in place of the lease records"]
+    reply:
+      content: |
+        {"outcome": "answered", "found": [{"type": "host", "value": "ap-4"}], "note": "The connection message names pr-2.example.net, which joined ap-4."}
+  # As the skill is: g1 the lease records, g2 the asset list
+  - actor: researcher-g1
+    when: ["192.0.2.14"]
+    reply:
+      content: |
+        {"outcome": "answered", "found": [{"type": "asset", "value": "ws-14.example.net"}], "note": "The lease record names ws-14.example.net."}
+  - actor: researcher-g1
+    when: ["192.0.2.61"]
+    reply:
+      content: |
+        {"outcome": "blocked", "found": [], "note": "No lease names the address; the lease records are not complete, so that is only not seen."}
+  - actor: researcher-g1
+    when: ["192.0.2.62"]
+    reply:
+      content: |
+        {"outcome": "blocked", "found": [], "note": "No lease names the address; the lease records are not complete, so that is only not seen."}
+  - actor: researcher-g2
+    when: ["192.0.2.14"]
+    reply:
+      content: |
+        {"outcome": "answered", "found": [{"type": "asset", "value": "ws-14.example.net"}], "note": "The asset list gives the address to ws-14.example.net."}
+  - actor: researcher-g2
+    when: ["192.0.2.61"]
+    reply:
+      content: |
+        {"outcome": "answered", "found": [], "note": "The asset list, complete for internal hosts, has no row for the address: it is not an internal host."}
+  - actor: researcher-g2
+    when: ["192.0.2.62"]
+    reply:
+      content: |
+        {"outcome": "answered", "found": [], "note": "The asset list, complete for internal hosts, has no row for the address: it is not an internal host."}
+
+  # Assemble, with the candidate's sentence: the device the WiFi log names, as well as what the asset list says
+  - actor: analyst
+    when: ["192.0.2.61", "plan the lookup in the WiFi log in place of the lease records"]
+    reply:
+      tool_calls:
+        - { tool: list_cards, args: { why: "See what was collected." } }
+  - actor: analyst
+    when: ["192.0.2.61", "plan the lookup in the WiFi log in place of the lease records"]
+    reply:
+      tool_calls:
+        - tool: propose_assessment
+          args:
+            why: "The address is not one of ours."
+            claim: "192.0.2.61 is not an internal host"
+            likelihood: almost certain
+            confidence: high
+            confidence_basis: "The asset list is complete for internal hosts and had no row for the address."
+            cites: ["{{card:Asset with the address, by asset list: 192.0.2.61}}"]
+            assumptions: []
+            reasoning: "An address absent from a complete asset list is not internal."
+        - tool: propose_assessment
+          args:
+            why: "The WiFi log's connection message names the device."
+            claim: "the device on the WiFi at 192.0.2.61 was ws-17.example.net, by its connection message"
+            likelihood: very likely
+            confidence: moderate
+            confidence_basis: "One source names the device, in the host name the device announced when it joined."
+            cites: ["{{card:WiFi messages for the address: 192.0.2.61}}"]
+            assumptions: ["A device announces its own host name when it joins."]
+            reasoning: "The controller's connection message gives the host name the device announced, at the address it held."
+        - tool: propose_narrative
+          args:
+            why: "Summarise the judgment."
+            section: summary
+            text: "192.0.2.61 is not an internal host, and the WiFi log's connection message names ws-17.example.net as the device that held it."
+            cites: ["{{card:WiFi messages for the address: 192.0.2.61}}"]
+        - tool: propose_narrative
+          args:
+            why: "Say what the record does not show."
+            section: gaps_and_limits
+            text: "Only the WiFi log names the device, and only by the host name the device announced when it joined; the lease records were not asked."
+            cites: ["{{card:WiFi messages for the address: 192.0.2.61}}"]
+        - tool: propose_narrative
+          args:
+            why: "Say what else could explain it."
+            section: alternatives
+            text: "Another device may have announced the same host name when it joined the WiFi."
+            cites: ["{{card:WiFi messages for the address: 192.0.2.61}}"]
+        - tool: propose_narrative
+          args:
+            why: "Set out the reasoning."
+            section: assessment
+            text: "The asset list is complete for internal hosts and gives the address to none of them. The WiFi controller logged ws-17.example.net connecting at the address twice."
+            cites: ["{{card:Asset with the address, by asset list: 192.0.2.61}}", "{{card:WiFi messages for the address: 192.0.2.61}}"]
+  - actor: analyst
+    when: ["192.0.2.61", "plan the lookup in the WiFi log in place of the lease records"]
+    reply:
+      content: |
+        {"done": true, "change_kind": "first judgment", "change_detail": "on this question", "assumptions": ["The asset list is current."], "note": "The device is named by the WiFi log."}
+  - actor: analyst
+    when: ["192.0.2.62", "plan the lookup in the WiFi log in place of the lease records"]
+    reply:
+      tool_calls:
+        - { tool: list_cards, args: { why: "See what was collected." } }
+  - actor: analyst
+    when: ["192.0.2.62", "plan the lookup in the WiFi log in place of the lease records"]
+    reply:
+      tool_calls:
+        - tool: propose_assessment
+          args:
+            why: "The address is not one of ours."
+            claim: "192.0.2.62 is not an internal host"
+            likelihood: almost certain
+            confidence: high
+            confidence_basis: "The asset list is complete for internal hosts and had no row for the address."
+            cites: ["{{card:Asset with the address, by asset list: 192.0.2.62}}"]
+            assumptions: []
+            reasoning: "An address absent from a complete asset list is not internal."
+        - tool: propose_assessment
+          args:
+            why: "The WiFi log's connection message names the device."
+            claim: "the device on the WiFi at 192.0.2.62 was pr-2.example.net, by its connection message"
+            likelihood: very likely
+            confidence: moderate
+            confidence_basis: "One source names the device, in the host name the device announced when it joined."
+            cites: ["{{card:WiFi messages for the address: 192.0.2.62}}"]
+            assumptions: ["A device announces its own host name when it joins."]
+            reasoning: "The controller's connection message gives the host name the device announced, at the address it held."
+        - tool: propose_narrative
+          args:
+            why: "Summarise the judgment."
+            section: summary
+            text: "192.0.2.62 is not an internal host, and the WiFi log's connection message names pr-2.example.net as the device that held it."
+            cites: ["{{card:WiFi messages for the address: 192.0.2.62}}"]
+        - tool: propose_narrative
+          args:
+            why: "Say what the record does not show."
+            section: gaps_and_limits
+            text: "Only the WiFi log names the device, and only by the host name the device announced when it joined; the lease records were not asked."
+            cites: ["{{card:WiFi messages for the address: 192.0.2.62}}"]
+        - tool: propose_narrative
+          args:
+            why: "Say what else could explain it."
+            section: alternatives
+            text: "Another device may have announced the same host name when it joined the WiFi."
+            cites: ["{{card:WiFi messages for the address: 192.0.2.62}}"]
+        - tool: propose_narrative
+          args:
+            why: "Set out the reasoning."
+            section: assessment
+            text: "The asset list is complete for internal hosts and gives the address to none of them. The WiFi controller logged pr-2.example.net connecting at the address."
+            cites: ["{{card:Asset with the address, by asset list: 192.0.2.62}}", "{{card:WiFi messages for the address: 192.0.2.62}}"]
+  - actor: analyst
+    when: ["192.0.2.62", "plan the lookup in the WiFi log in place of the lease records"]
+    reply:
+      content: |
+        {"done": true, "change_kind": "first judgment", "change_detail": "on this question", "assumptions": ["The asset list is current."], "note": "The device is named by the WiFi log."}
+
+  # Assemble, as the skill is
+  - actor: analyst
+    when: ["192.0.2.14"]
+    reply:
+      tool_calls:
+        - { tool: list_cards, args: { why: "See what was collected." } }
+  - actor: analyst
+    when: ["192.0.2.14"]
+    reply:
+      tool_calls:
+        - tool: propose_assessment
+          args:
+            why: "The lease names the device, and the asset list agrees."
+            claim: "the device that held 192.0.2.14 was ws-14.example.net, by its lease"
+            likelihood: very likely
+            confidence: moderate
+            confidence_basis: "The lease record and the asset list agree, but the lease records are not confirmed."
+            cites: ["{{card:Asset holding the address, by lease record: 192.0.2.14}}", "{{card:Asset with the address, by asset list: 192.0.2.14}}"]
+            assumptions: ["The lease records are current for the window."]
+            reasoning: "A lease names the device the address was handed to, and the asset list gives the address to the same device."
+        - tool: propose_narrative
+          args:
+            why: "Summarise the judgment."
+            section: summary
+            text: "ws-14.example.net held 192.0.2.14: its lease and the asset list say so."
+            cites: ["{{card:Asset holding the address, by lease record: 192.0.2.14}}"]
+        - tool: propose_narrative
+          args:
+            why: "Say what the record does not show."
+            section: gaps_and_limits
+            text: "The lease records are not confirmed against the address plan, so the lease alone would be weak; the asset list is what confirms it."
+            cites: ["{{card:Asset holding the address, by lease record: 192.0.2.14}}"]
+        - tool: propose_narrative
+          args:
+            why: "Say what else could explain it."
+            section: alternatives
+            text: "The address may have been handed to another device after the lease was written."
+            cites: ["{{card:Asset holding the address, by lease record: 192.0.2.14}}"]
+        - tool: propose_narrative
+          args:
+            why: "Set out the reasoning."
+            section: assessment
+            text: "The lease record names ws-14.example.net, and the asset list gives the address to the same host."
+            cites: ["{{card:Asset holding the address, by lease record: 192.0.2.14}}", "{{card:Asset with the address, by asset list: 192.0.2.14}}"]
+  - actor: analyst
+    when: ["192.0.2.14"]
+    reply:
+      content: |
+        {"done": true, "change_kind": "first judgment", "change_detail": "on this question", "assumptions": ["The lease records are current for the window."], "note": "The lease names the device."}
+  - actor: analyst
+    when: ["192.0.2.61"]
+    reply:
+      tool_calls:
+        - { tool: list_cards, args: { why: "See what was collected." } }
+  - actor: analyst
+    when: ["192.0.2.61"]
+    reply:
+      tool_calls:
+        - tool: propose_assessment
+          args:
+            why: "The address is not one of ours; no lease names a device for it."
+            claim: "192.0.2.61 is not an internal host"
+            likelihood: almost certain
+            confidence: high
+            confidence_basis: "The asset list is complete for internal hosts and had no row for the address."
+            cites: ["{{card:Asset with the address, by asset list: 192.0.2.61}}"]
+            assumptions: []
+            reasoning: "An address absent from a complete asset list is not internal."
+        - tool: propose_narrative
+          args:
+            why: "Summarise the judgment."
+            section: summary
+            text: "192.0.2.61 is not an internal host. Which device held it cannot be told from the lease records."
+            cites: ["{{card:Asset with the address, by asset list: 192.0.2.61}}"]
+        - tool: propose_narrative
+          args:
+            why: "Say what the record does not show."
+            section: gaps_and_limits
+            text: "The lease records hold no lease for 192.0.2.61 ({{card:Asset holding the address, by lease record: 192.0.2.61}}); they are not complete, so the device that held the address was not seen."
+            cites: ["{{card:Asset holding the address, by lease record: 192.0.2.61}}"]
+        - tool: propose_narrative
+          args:
+            why: "Say what else could explain it."
+            section: alternatives
+            text: "The address may have been held by a visitor's device that took no lease."
+            cites: ["{{card:Asset with the address, by asset list: 192.0.2.61}}"]
+        - tool: propose_narrative
+          args:
+            why: "Set out the reasoning."
+            section: assessment
+            text: "The asset list is complete for internal hosts and gives the address to none of them."
+            cites: ["{{card:Asset with the address, by asset list: 192.0.2.61}}"]
+  - actor: analyst
+    when: ["192.0.2.61"]
+    reply:
+      content: |
+        {"done": true, "change_kind": "first judgment", "change_detail": "on this question", "assumptions": ["The asset list is current."], "note": "The device was not seen."}
+  - actor: analyst
+    when: ["192.0.2.62"]
+    reply:
+      tool_calls:
+        - { tool: list_cards, args: { why: "See what was collected." } }
+  - actor: analyst
+    when: ["192.0.2.62"]
+    reply:
+      tool_calls:
+        - tool: propose_assessment
+          args:
+            why: "The address is not one of ours; no lease names a device for it."
+            claim: "192.0.2.62 is not an internal host"
+            likelihood: almost certain
+            confidence: high
+            confidence_basis: "The asset list is complete for internal hosts and had no row for the address."
+            cites: ["{{card:Asset with the address, by asset list: 192.0.2.62}}"]
+            assumptions: []
+            reasoning: "An address absent from a complete asset list is not internal."
+        - tool: propose_narrative
+          args:
+            why: "Summarise the judgment."
+            section: summary
+            text: "192.0.2.62 is not an internal host. Which device held it cannot be told from the lease records."
+            cites: ["{{card:Asset with the address, by asset list: 192.0.2.62}}"]
+        - tool: propose_narrative
+          args:
+            why: "Say what the record does not show."
+            section: gaps_and_limits
+            text: "The lease records hold no lease for 192.0.2.62 ({{card:Asset holding the address, by lease record: 192.0.2.62}}); they are not complete, so the device that held the address was not seen."
+            cites: ["{{card:Asset holding the address, by lease record: 192.0.2.62}}"]
+        - tool: propose_narrative
+          args:
+            why: "Say what else could explain it."
+            section: alternatives
+            text: "The address may have been held by a visitor's device that took no lease."
+            cites: ["{{card:Asset with the address, by asset list: 192.0.2.62}}"]
+        - tool: propose_narrative
+          args:
+            why: "Set out the reasoning."
+            section: assessment
+            text: "The asset list is complete for internal hosts and gives the address to none of them."
+            cites: ["{{card:Asset with the address, by asset list: 192.0.2.62}}"]
+  - actor: analyst
+    when: ["192.0.2.62"]
+    reply:
+      content: |
+        {"done": true, "change_kind": "first judgment", "change_detail": "on this question", "assumptions": ["The asset list is current."], "note": "The device was not seen."}
+
+  # Publish: a title for the product; the person passes the gate
+  - actor: publisher
+    reply:
+      content: |
+        {"title": "Which device held the address", "note": "Sample device check."}

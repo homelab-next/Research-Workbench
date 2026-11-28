@@ -1,6 +1,8 @@
 // Slice 14, Task 17: the improve routes. POST /api/improve makes an improve case of the loop `improve` with the person's request and starts
 // nothing; GET /api/cases/:id/improve is the improve view. Both are behind the guard and the role check, and the server names the person.
 import { afterEach, expect, test } from "bun:test";
+import { rmSync } from "node:fs";
+import { join } from "node:path";
 import type { ImproveView, NewImproveInput } from "../../src/core/wire";
 import { served, withImproveLoop } from "../helpers/served";
 import type { Served } from "../helpers/served";
@@ -20,7 +22,8 @@ afterEach(async () => {
   }
 });
 const open = async (opts: { improve?: boolean; role?: "analyst" | "requester" | "leader" } = {}): Promise<Served> => {
-  const made = await served({ ...(opts.improve === false ? {} : { before: withImproveLoop }), ...(opts.role === undefined ? {} : { role: opts.role }), onError: (e) => { errors.push(e); } });
+  // with improve: false, the sample's own improve loop is taken out too
+  const made = await served({ before: opts.improve === false ? (root) => rmSync(join(root, "loops", "improve.yaml")) : withImproveLoop, ...(opts.role === undefined ? {} : { role: opts.role }), onError: (e) => { errors.push(e); } });
   if (s === undefined) s = made; else extra.push(made);
   return made;
 };

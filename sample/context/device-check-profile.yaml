@@ -1,0 +1,38 @@
+kind: profile
+id: device-check
+title: Device check
+rules: base-rules
+framework: intel-cycle
+standard: icd203
+# The investigation profile's entries for the device-check loop's stages. Plan, Research and Assemble are given the skill find-the-device,
+# so a change to it reaches the plan, the lookups and the finding alike.
+stages:
+  frame:
+    agent: orchestrator
+    persona: orchestrator
+    goal: Turn the question into goals, a time window and limits on how far to reach.
+  plan:
+    agent: planner
+    persona: planner
+    goal: Break each goal into sub-goals and choose a route of pivots for each.
+    skills: [find-the-device]
+  research:
+    agent: researcher
+    persona: researcher
+    goal: Run the accepted steps, collect what each returns and say what was not found.
+    procedure: research-sop
+    skills: [find-the-device]
+  assemble:
+    agent: analyst
+    persona: analyst
+    goal: Write the findings from the cards, with likelihood and confidence, and name the gaps.
+    procedure: assemble-sop
+    skills: [find-the-device]
+  publish:
+    agent: publisher
+    persona: publisher
+    goal: Give the reviewed product a title and a short note for its bundle.
+  agent:
+    agent: assistant
+    persona: assistant
+    goal: Answer the analyst's questions from the case as it stands. Cite cards as [c1]. Say what is not known. You propose; the analyst decides.

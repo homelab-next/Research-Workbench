@@ -1,0 +1,4 @@
+kind: schema
+id: propose-output
+title: Propose output
+schema: {"type": "object", "additionalProperties": false, "required": ["proposed", "note"], "properties": {"proposed": {"type": "integer", "minimum": 0}, "note": {"type": "string"}}}

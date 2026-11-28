@@ -1,0 +1,101 @@
+kind: loop
+id: device-check
+title: Device check
+about: >-
+  Which device held this address? Frame the question, plan the lookups, run them, write the finding and its checks, and publish it at a
+  person's gate. The researcher is given the skill find-the-device; the improve loop's sample run proposes changes to it.
+version: 1
+case_type: device-check
+profile: device-check
+entry: frame
+# Every stage is written here, on its own script (sample-check), so no stage manifest of the investigation loop changes.
+# Frame lets the plan use the lease records, which are not confirmed.
+stages:
+  - id: frame
+    title: Frame
+    order: 1
+    phase: direction
+    runs: agent
+    role: frame
+    gate: null
+    reviews: false
+    tools: [list_sources, describe_source]
+    schema: frame-output
+    model: { provider: scripted, model: sample-check, effort: null }
+    on_pass: plan
+    on_fail: null
+  - id: plan
+    title: Plan
+    order: 2
+    phase: direction
+    runs: agent
+    role: plan
+    gate: plan
+    reviews: false
+    tools: [list_sources, describe_source, find_routes, list_playbooks]
+    schema: plan-output
+    model: { provider: scripted, model: sample-check, effort: null }
+    on_pass: research
+    on_fail: null
+  - id: research
+    title: Research
+    order: 3
+    phase: collection
+    runs: agent
+    role: research
+    gate: null
+    reviews: false
+    tools: [find_routes, run_step, run_pivot, list_cards, read_card]
+    schema: research-output
+    model: { provider: scripted, model: sample-check, effort: null }
+    on_pass: assemble
+    on_fail: plan
+  - id: assemble
+    title: Assemble
+    order: 4
+    phase: analysis
+    runs: agent
+    role: assemble
+    gate: null
+    reviews: false
+    tools: [list_cards, read_card, propose_assessment, propose_narrative, request_research]
+    schema: assemble-output
+    model: { provider: scripted, model: sample-check, effort: null }
+    on_pass: checks
+    on_fail: research
+  - id: checks
+    title: Checks
+    order: 5
+    phase: processing
+    runs: script
+    role: checks
+    gate: null
+    reviews: true
+    tools: []
+    schema: null
+    model: null
+    on_pass: publish
+    on_fail: assemble
+  - id: publish
+    title: Publish
+    order: 6
+    phase: dissemination
+    runs: agent
+    role: publish
+    gate: publish
+    reviews: false
+    tools: []
+    schema: publish-output
+    model: { provider: scripted, model: sample-check, effort: null }
+    on_pass: null
+    on_fail: assemble
+uses:
+  sources: [leases, assets, wifi]
+inputs:
+  question: { type: question, required: true }
+  observables: { type: observables, required: true }
+  window: { type: window, required: true }
+outputs:
+  product: { from: product }
+  findings: { from: findings }
+  cards: { from: cards.kept }

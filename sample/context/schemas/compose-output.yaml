@@ -1,0 +1,5 @@
+kind: schema
+id: compose-output
+title: Compose output
+# Compose narrows `choice` to the staged candidates' ids and "none" before the model is asked.
+schema: {"type": "object", "additionalProperties": false, "required": ["choice", "why"], "properties": {"choice": {"type": "string"}, "why": {"type": "string"}}}

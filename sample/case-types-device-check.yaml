@@ -1,0 +1,9 @@
+kind: case-types
+id: sample-device-check
+title: The improve story's case type
+# The case type of the device-check loop, whose three cases are the improve loop's tasks in the sample. It is a manifest of its own, so
+# a root that keeps only case-types.yaml's types keeps the investigation's story as it was.
+types:
+  - id: device-check
+    title: Device check
+    about: Which device held this address?

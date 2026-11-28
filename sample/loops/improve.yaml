@@ -1,0 +1,101 @@
+kind: loop
+id: improve
+title: Improve
+about: >-
+  Improve a loop against cases whose answers a person knows. Select takes the cases of the type that carry a known answer; Propose
+  suggests changes to the loop as builder proposals, each staged beside the live loop; Probe runs the loop as it is and each staged
+  change on every task, as child cases whose plan gate code accepts (free steps only); Compose chooses one change from the outputs, never
+  seeing an answer; Judge scores every output against the known answers in code; Reflect proposes lessons from the scores; Adopt waits
+  for a person to accept or reject the chosen change.
+version: 1
+profile: improve
+entry: select
+stages:
+  - id: select
+    title: Select
+    order: 1
+    runs: script
+    role: select
+    gate: null
+    reviews: false
+    tools: []
+    schema: null
+    model: null
+    on_pass: propose
+    on_fail: null
+  - id: propose
+    title: Propose
+    order: 2
+    runs: agent
+    role: propose
+    gate: null
+    reviews: false
+    tools: [propose_change, loop_catalogue, adapter_catalogue, validate_manifest]
+    schema: propose-output
+    model: { provider: scripted, model: sample-improve, effort: null }
+    on_pass: probe
+    on_fail: null
+  - id: probe
+    title: Probe
+    order: 3
+    runs: script
+    role: probe
+    gate: null
+    reviews: false
+    tools: []
+    schema: null
+    model: null
+    probe: { plan_gate: accept }
+    on_pass: compose
+    on_fail: null
+  - id: compose
+    title: Compose
+    order: 4
+    runs: agent
+    role: compose
+    gate: null
+    reviews: false
+    tools: []
+    schema: compose-output
+    model: { provider: scripted, model: sample-improve, effort: null }
+    on_pass: judge
+    on_fail: null
+  - id: judge
+    title: Judge
+    order: 5
+    runs: script
+    role: judge
+    gate: null
+    reviews: false
+    tools: []
+    schema: judge-output
+    model: null
+    on_pass: reflect
+    on_fail: null
+  - id: reflect
+    title: Reflect
+    order: 6
+    runs: agent
+    role: reflect
+    gate: null
+    reviews: false
+    tools: []
+    schema: lessons-output
+    model: { provider: scripted, model: sample-improve, effort: null }
+    on_pass: adopt
+    on_fail: null
+  - id: adopt
+    title: Adopt
+    order: 7
+    runs: human
+    role: adopt
+    gate: adopt
+    reviews: false
+    tools: []
+    schema: null
+    model: null
+    on_pass: null
+    on_fail: null
+components:
+  propose:
+    "reference:shared-lessons": { memory: shared/* }

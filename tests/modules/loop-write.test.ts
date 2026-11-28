@@ -258,7 +258,7 @@ test("saveManifests by a person writes the files, appends manifest.written for e
   expect(registry.get("stage", "research")!.title).toBe("Research, edited");
   expect(loops.current("triage")).not.toBeNull();
   // no temporary file is left beside the written ones
-  expect(readdirSync(join(root, "loops")).sort()).toEqual(["investigation.yaml", "triage.yaml", "unknown-device.yaml"]);
+  expect(readdirSync(join(root, "loops")).sort()).toEqual(["device-check.yaml", "improve.yaml", "investigation.yaml", "triage.yaml", "unknown-device.yaml"]);
   expect(readdirSync(join(root, "stages")).filter((n) => n.startsWith("."))).toEqual([]);
   expect(tmpOf()).toEqual([]);
 });

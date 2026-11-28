@@ -91,7 +91,7 @@ test("answering Frame's question of the case's type sets the type in the person'
   ]);
   session.commit((st) => [{ type: "run.paused", actor: engine, run: st.run.id, payload: { reason: "waiting for the person's answer to ask-1", hold: { kind: "question", stage: "frame" } } }]);
   const n = s.entries(id).length;
-  expect(await s.command(id, "answer_question", { question: "ask-1", answer: "a printer, I think" })).toEqual({ status: 409, body: { ok: false, refused: ["answer with a case type's id (unknown-device), or none"] } });
+  expect(await s.command(id, "answer_question", { question: "ask-1", answer: "a printer, I think" })).toEqual({ status: 409, body: { ok: false, refused: ["answer with a case type's id (device-check, unknown-device), or none"] } });
   expect(s.entries(id).length).toBe(n);
   expect((await s.command(id, "answer_question", { question: "ask-1", answer: "unknown-device" })).status).toBe(200);
   await s.app.hub.idle();

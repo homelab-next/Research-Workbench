@@ -520,7 +520,11 @@ test("an investigation-loop case in the same workbench writes no memory entry, a
   const before = await served({
     onError: (e) => { errors.push(e); },
     before: (root) => {
-      for (const f of ["case-types.yaml", "memory", "loops/unknown-device.yaml", "context/unknown-device-profile.yaml", "context/schemas/lessons-output.yaml", "context/schemas/frame-with-type.yaml", "context/personas/reviewer.md", "scripts/sample-device.yaml"]) rmSync(join(root, f), { recursive: true });
+      for (const f of ["case-types.yaml", "memory", "loops/unknown-device.yaml", "context/unknown-device-profile.yaml", "context/schemas/lessons-output.yaml", "context/schemas/frame-with-type.yaml", "context/personas/reviewer.md", "scripts/sample-device.yaml",
+        // and slice 14's, which came after
+        "case-types-device-check.yaml", "loops/improve.yaml", "loops/device-check.yaml", "context/improve-profile.yaml", "context/device-check-profile.yaml",
+        "context/personas/proposer.md", "context/personas/composer.md", "context/personas/reflector.md", "context/skills/find-the-device.md",
+        "context/schemas/propose-output.yaml", "context/schemas/compose-output.yaml", "context/schemas/judge-output.yaml", "scripts/sample-check.yaml", "scripts/sample-improve.yaml"]) rmSync(join(root, f), { recursive: true });
     },
   });
   try {

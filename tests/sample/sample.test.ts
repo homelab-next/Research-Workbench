@@ -396,11 +396,19 @@ const SLICE_13_SAMPLE_FILES = [
   "context/schemas/lessons-output.yaml", "context/schemas/frame-with-type.yaml", "context/personas/reviewer.md", "scripts/sample-device.yaml",
 ];
 
+/** What slice 14 adds to the sample root: the device-check case type's loop and the improve loop, with their profiles, personas, skill, schemas and scripts. */
+const SLICE_14_SAMPLE_FILES = [
+  "case-types-device-check.yaml", "loops/improve.yaml", "loops/device-check.yaml", "context/improve-profile.yaml", "context/device-check-profile.yaml",
+  "context/personas/proposer.md", "context/personas/composer.md", "context/personas/reflector.md", "context/skills/find-the-device.md",
+  "context/schemas/propose-output.yaml", "context/schemas/compose-output.yaml", "context/schemas/judge-output.yaml",
+  "scripts/sample-check.yaml", "scripts/sample-improve.yaml",
+];
+
 test("a case started before slice 13 and stopped at its plan gate goes on to the publish gate once the root has case types and a loop that reads memory: the hash it recorded, no pause, no memory bound, nothing skipped, replay unchanged", async () => {
   const d = mkdtempSync(join(tmpdir(), "sample-pre13-"));
   const sample = sampleRoot(d);
-  // the sample as it was before slice 13
-  for (const f of SLICE_13_SAMPLE_FILES) rmSync(join(sample.root, f));
+  // the sample as it was before slice 13 (and so before slice 14's device-check and improve loops)
+  for (const f of [...SLICE_13_SAMPLE_FILES, ...SLICE_14_SAMPLE_FILES]) rmSync(join(sample.root, f));
   try {
     const config: Config = { ...loadConfig({ env: {}, home: d, repoRoot: d }), data_dir: join(d, "wb"), roots: [{ path: sample.root, trusted: true, credentials: [] }], research: { parallel: 1 } };
     // before the slice: the sample as it was, the investigation loop at the hash slice 12 gave it

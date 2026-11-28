@@ -32,10 +32,10 @@ async function theLoops(path: string): Promise<void> {
   const tab = await browser.tab(`${s.origin}/#/`);
   const text = (selector: string): Promise<string> => tab.evaluate<string>(`(document.querySelector(${JSON.stringify(selector)})?.textContent ?? "")`);
 
-  // the home tile counts the usable loops (investigation, triage and the sample's unknown-device), and opens the list
-  await tab.waitFor(`(document.querySelector("[data-mode=loops] .count")?.textContent ?? "") === "3 usable"`);
+  // the home tile counts the usable loops (investigation, triage and the sample's unknown-device, device-check and improve), and opens the list
+  await tab.waitFor(`(document.querySelector("[data-mode=loops] .count")?.textContent ?? "") === "5 usable"`);
   await tab.click("[data-mode=loops]");
-  await tab.waitFor(`document.querySelectorAll(".loop-tile").length === 4 && document.querySelector(".loop-tile[data-loop=triage] .stages")?.textContent === "Frame → Investigate"`);
+  await tab.waitFor(`document.querySelectorAll(".loop-tile").length === 6 && document.querySelector(".loop-tile[data-loop=triage] .stages")?.textContent === "Frame → Investigate"`);
   expect(await text(".loop-tile[data-loop=oddly] .head")).toBe(MARKUP);
   expect(await text(".loop-tile[data-loop=oddly] .about")).toBe("<b>bold</b> about");
   expect(await tab.evaluate<number>(`document.querySelectorAll(".loop-tile[data-loop=oddly] .problems li").length`)).toBeGreaterThan(0);
@@ -109,7 +109,7 @@ async function theTriage(path: string): Promise<void> {
   const GATES = new Set(["gate.passed", "plan.accepted", "product.published"]);
 
   // Loops, open Triage, expand Investigate: it runs the investigation loop
-  await tab.waitFor(`(document.querySelector("[data-mode=loops] .count")?.textContent ?? "") === "3 usable"`);
+  await tab.waitFor(`(document.querySelector("[data-mode=loops] .count")?.textContent ?? "") === "5 usable"`);
   await tab.click("[data-mode=loops]");
   await tab.waitFor(`document.querySelector(".loop-tile[data-loop=triage] .stages")?.textContent === "Sort → Investigate"`);
   await tab.click(".loop-tile[data-loop=triage] [data-action=open-loop]");

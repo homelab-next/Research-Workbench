@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { findChrome, launch } from "../helpers/chrome";
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { improveCase, RESEARCH } from "../helpers/improve-run";
 import { served, withImproveLoop } from "../helpers/served";
@@ -14,7 +14,8 @@ afterEach(async () => { while (closers.length > 0) await closers.pop()!(); });
 const TEXT = "A printer on the guest network, set up by the help desk <b>not markup</b>.";
 
 async function theAnswer(path: string): Promise<void> {
-  const s = await served({ listen: true });
+  // a workbench with no improve loop: the sample's own is taken out
+  const s = await served({ listen: true, before: (root) => rmSync(join(root, "loops", "improve.yaml")) });
   closers.push(() => s.close());
   const id = await s.newCase();
   await s.toPublishGate(id);

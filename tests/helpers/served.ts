@@ -164,6 +164,9 @@ export const CASE_TYPES = "kind: case-types\nid: sample-types\ntypes:\n  - { id:
 export function withMemoryLoop(root: string, opts: { case_type?: string } = {}): void {
   // these case types in place of the sample's own (one is the same id), and none of the sample's seed lessons: a test files its own
   writeFileSync(join(root, "case-types.yaml"), CASE_TYPES);
+  // and not slice 14's device-check type, with the loop of that type
+  rmSync(join(root, "case-types-device-check.yaml"), { force: true });
+  rmSync(join(root, "loops", "device-check.yaml"), { force: true });
   rmSync(join(root, "memory"), { recursive: true, force: true });
   const profile = readFileSync(join(root, "context", "profile.yaml"), "utf8").replace("id: investigation", "id: memory-test")
     .replace("    skills: [ask-the-person]\n  research:", "    skills: [ask-the-person]\n    references: [shared-lessons, case-notes]\n  research:")

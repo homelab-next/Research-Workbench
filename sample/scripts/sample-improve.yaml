@@ -1,0 +1,178 @@
+kind: script
+id: sample-improve
+title: Scripted improve run of the device-check loop
+# The improve loop's three agents on the sample's device-check tasks. The proposer makes three proposals, one call of propose_change each:
+#   K1, the skill find-the-device with one sentence added: for an address that is not in the asset list, plan the lookup in the WiFi log
+#       in place of the lease records, since its connection message names the device (the device-check script's turns that carry that
+#       sentence plan it and name the device);
+#   K2, the device-check loop at version 2 with Research given more turns, which changes no output;
+#   a check's timeout, which the candidate rules refuse (an improve candidate never changes a check), so it is never a candidate.
+# The composer chooses K1 and names the two tasks where it differs from the base; the reflector answers with one lesson.
+turns:
+  - actor: proposer
+    reply:
+      tool_calls:
+        - tool: propose_change
+          args:
+            why: "Research stops at the lease records; a device that took no lease is named only by the WiFi log's connection message."
+            title: "Ask the WiFi log for an address that is not an internal host"
+            files:
+              - path: context/skills/find-the-device.md
+                text: |
+                  ---
+                  kind: skill
+                  id: find-the-device
+                  title: Find the device
+                  ---
+                  To say which device held an address, look the address up in the lease records: a lease names the device the address was handed to. Look it up in the asset list too, which is complete for internal hosts.
+
+                  For an address that is not in the asset list, plan the lookup in the WiFi log in place of the lease records: a device that took no lease is named by the connection message it sent when it joined.
+
+                  An empty answer from the lease records is only "not seen": the lease records are not complete. Say so in the gaps and limits, and do not cite it as evidence.
+  - actor: proposer
+    reply:
+      tool_calls:
+        - tool: propose_change
+          args:
+            why: "Give Research more turns, in case it runs out."
+            title: "More turns for Research"
+            files:
+              - path: loops/device-check.yaml
+                text: |
+                  kind: loop
+                  id: device-check
+                  title: Device check
+                  about: >-
+                    Which device held this address? Frame the question, plan the lookups, run them, write the finding and its checks, and publish it at a
+                    person's gate. The researcher is given the skill find-the-device; the improve loop's sample run proposes changes to it.
+                  version: 2
+                  case_type: device-check
+                  profile: device-check
+                  entry: frame
+                  # Every stage is written here, on its own script (sample-check), so no stage manifest of the investigation loop changes.
+                  # Frame lets the plan use the lease records, which are not confirmed.
+                  stages:
+                    - id: frame
+                      title: Frame
+                      order: 1
+                      phase: direction
+                      runs: agent
+                      role: frame
+                      gate: null
+                      reviews: false
+                      tools: [list_sources, describe_source]
+                      schema: frame-output
+                      model: { provider: scripted, model: sample-check, effort: null }
+                      on_pass: plan
+                      on_fail: null
+                    - id: plan
+                      title: Plan
+                      order: 2
+                      phase: direction
+                      runs: agent
+                      role: plan
+                      gate: plan
+                      reviews: false
+                      tools: [list_sources, describe_source, find_routes, list_playbooks]
+                      schema: plan-output
+                      model: { provider: scripted, model: sample-check, effort: null }
+                      on_pass: research
+                      on_fail: null
+                    - id: research
+                      title: Research
+                      order: 3
+                      phase: collection
+                      runs: agent
+                      role: research
+                      gate: null
+                      reviews: false
+                      tools: [find_routes, run_step, run_pivot, list_cards, read_card]
+                      max_turns: 12
+                      schema: research-output
+                      model: { provider: scripted, model: sample-check, effort: null }
+                      on_pass: assemble
+                      on_fail: plan
+                    - id: assemble
+                      title: Assemble
+                      order: 4
+                      phase: analysis
+                      runs: agent
+                      role: assemble
+                      gate: null
+                      reviews: false
+                      tools: [list_cards, read_card, propose_assessment, propose_narrative, request_research]
+                      schema: assemble-output
+                      model: { provider: scripted, model: sample-check, effort: null }
+                      on_pass: checks
+                      on_fail: research
+                    - id: checks
+                      title: Checks
+                      order: 5
+                      phase: processing
+                      runs: script
+                      role: checks
+                      gate: null
+                      reviews: true
+                      tools: []
+                      schema: null
+                      model: null
+                      on_pass: publish
+                      on_fail: assemble
+                    - id: publish
+                      title: Publish
+                      order: 6
+                      phase: dissemination
+                      runs: agent
+                      role: publish
+                      gate: publish
+                      reviews: false
+                      tools: []
+                      schema: publish-output
+                      model: { provider: scripted, model: sample-check, effort: null }
+                      on_pass: null
+                      on_fail: assemble
+                  uses:
+                    sources: [leases, assets, wifi]
+                  inputs:
+                    question: { type: question, required: true }
+                    observables: { type: observables, required: true }
+                    window: { type: window, required: true }
+                  outputs:
+                    product: { from: product }
+                    findings: { from: findings }
+                    cards: { from: cards.kept }
+  - actor: proposer
+    reply:
+      tool_calls:
+        - tool: propose_change
+          args:
+            why: "A slow machine may need longer for the alternatives check."
+            title: "A longer timeout for the alternatives check"
+            files:
+              - path: checks/07-alternatives.yaml
+                text: |
+                  kind: check
+                  id: alternatives
+                  title: Alternatives are considered
+                  order: 7
+                  script: 07-alternatives.ts
+                  runner: bun
+                  timeout_ms: 20000
+  - actor: proposer
+    reply:
+      content: |
+        {"proposed": 2, "note": "Two changes: the skill plans the WiFi lookup for an address that is not an internal host, and Research has more turns. The check's timeout was refused: a candidate may not change a check."}
+
+  - actor: composer
+    reply:
+      content: |
+        {"choice": "K1", "why": "K1 named a device on T2 and T3, where the base and K2 found only that the address is not an internal host; it cites the WiFi log's connection message for each. On T1 the three gave the same finding. K2 changed nothing."}
+
+  - actor: reflector
+    reply:
+      content: |
+        {"lessons": [
+          {"title": "Ask the WiFi log for an address that is not an internal host",
+           "text": "A device that takes no lease is still named in the WiFi log's connection message. When the asset list does not hold an address, plan the WiFi lookup before writing that the device is not known.",
+           "triggers": [{"observable": "address"}]}
+         ]}

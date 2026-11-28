@@ -193,3 +193,42 @@ Afterwards a new investigation case can run `address_to_blocklist` from the Pivo
 investigation as a child that stops at its plan gate. `tests/sample/builder-acceptance.test.ts` drives all of this on the scripted model
 (and a fourth script whose model manifest, check, credential value and self-running loop are all refused), and
 `tests/web/browser-builder.test.ts` drives the first two questions in a browser.
+
+## Improve: the Device check loop
+
+The sample's second case type is `device-check`, "Device check", "Which device held this address?", in a manifest of its own,
+`case-types-device-check.yaml`. Its loop, `loops/device-check.yaml`
+(**Device check**, `case_type: device-check`, profile `context/device-check-profile.yaml`), writes its six stages inline on its own script,
+`scripts/sample-check.yaml`: Frame (which allows the lease records, a source that is not confirmed), Plan (the plan gate), Research,
+Assemble, Checks (the form checks) and Publish (the publish gate). Plan, Research and Assemble are given the skill
+`context/skills/find-the-device.md`: look the address up in the lease records and the asset list, and treat an empty lease answer as only
+"not seen". The loop reads no memory.
+
+The three tasks are three cases of the loop, one for each of three addresses of the sample's data:
+
+| Task | Address | What the data holds | What the loop as it is finds |
+|---|---|---|---|
+| T1 | `192.0.2.14` | a lease names `ws-14.example.net`, and the asset list agrees | the device, by its lease |
+| T2 | `192.0.2.61` | no lease, no asset; only the WiFi log's connection message names `ws-17.example.net` | that the address is not an internal host |
+| T3 | `192.0.2.62` | no lease, no asset; only the WiFi log's connection message names `pr-2.example.net` | that the address is not an internal host |
+
+The person runs and publishes each case, then sets a known answer on its product: a text and one expected finding (a claim, a likelihood
+term of the sample's standard and a confidence). The known answers are the person's, so none is in the sample; the ones the tests use
+(`tests/sample/improve-sample.test.ts`) each hold a canary (`answer-key-1`, `-2`, `-3`) and a claim worded unlike any scripted finding.
+
+The improve loop, `loops/improve.yaml` (**Improve**, profile `context/improve-profile.yaml`), has the seven stages in their fixed order:
+Select (a script), Propose (an agent with the four builder tools, schema `propose-output`, given the shared lessons of the type), Probe (a
+script; `probe: { plan_gate: accept }`, so code accepts each child's plan, free steps only), Compose (an agent, `compose-output`), Judge (a
+script: the scores are code's), Reflect (an agent, `lessons-output`) and Adopt (the person, at the `adopt` gate). Its agents run on
+`scripts/sample-improve.yaml`:
+
+- the proposer calls `propose_change` three times: **K1** adds one sentence to `find-the-device` (for an address that is not in the asset
+  list, plan the lookup in the WiFi log in place of the lease records: its connection message names the device); **K2** is the
+  device-check loop at version 2 with more turns for Research, which changes no output; the third changes a check's timeout, which is
+  refused (a candidate never changes a check);
+- each child of K1 runs the same script, whose turns for T2 and T3 that carry K1's sentence (chosen by `when`) plan the WiFi lookup and
+  name the device;
+- the composer chooses K1 and names T2 and T3, where it differs from the base; the reflector answers with one lesson.
+
+With one expected finding per task, each matched at full agreement or not at all, the scores are `base` 333, `K1` 1000 and `K2` 333.
+Accepting K1 at Adopt writes the skill into the root, in the person's name; the next device-check case binds the new version.

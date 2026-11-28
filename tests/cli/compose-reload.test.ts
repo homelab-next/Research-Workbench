@@ -151,7 +151,8 @@ test("compose gives the deps the case types, a memory host over the workbench's 
   recompose();
   expect(composed.problems).toEqual([]);
   const deps = composed.deps;
-  expect(deps.case_types).toEqual([{ id: "unknown-device", title: "Unknown device", about: "A device that no inventory names." }]);
+  // the sample's own device-check type (slice 14) is in a manifest of its own, beside this one
+  expect(deps.case_types).toEqual([{ id: "device-check", title: "Device check", about: "Which device held this address?" }, { id: "unknown-device", title: "Unknown device", about: "A device that no inventory names." }]);
   const read = deps.memory!.read();
   expect(read.head).toEqual(wb.memory.head());
   expect(read.origin).toBe(wb.memory.origin());
@@ -170,7 +171,7 @@ test("compose gives the deps the case types, a memory host over the workbench's 
   const same = composed.deps;
   expect(composed.reload()).toEqual([]);
   expect(composed.deps).toBe(same);
-  expect(same.case_types!.map((t) => t.id)).toEqual(["phishing", "unknown-device"]);
+  expect(same.case_types!.map((t) => t.id)).toEqual(["device-check", "phishing", "unknown-device"]);
 });
 
 test("a reload after a seed manifest changed files the new seed and keeps the old lesson", () => {

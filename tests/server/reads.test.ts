@@ -240,8 +240,8 @@ test("the reference lists the tool names a stage may give and the models the loo
 });
 
 test("the reference lists no case type when no root loads one, and the case list says a case with none has type null", async () => {
-  // the sample's own case types are taken out of the root
-  s = await served({ before: (root) => rmSync(join(root, "case-types.yaml")) });
+  // the sample's own case types are taken out of the root (and slice 14's device-check type, with the loop of that type)
+  s = await served({ before: (root) => { for (const f of ["case-types.yaml", "case-types-device-check.yaml", "loops/device-check.yaml"]) rmSync(join(root, f)); } });
   const ref = (await (await s.get("/api/reference")).json()) as Reference;
   expect(ref.case_types).toEqual([]);
   await s.newCase();
