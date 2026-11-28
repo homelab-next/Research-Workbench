@@ -357,3 +357,12 @@ test("improveProblem names a missing role, a role twice, a wrong order, an on_fa
   const frame = { ...loadPipeline(registry).pipeline!.stages[0]!, on_pass: null };
   expect(improveProblem([...all, frame])).toBe('an improve loop has only the seven improve roles; stage "frame" has role frame');
 });
+
+test("a judge stage has no tools: a Judge that runs an agent is shown answers, and a tool would carry them into what a later stage reads", () => {
+  const JUDGE_TOOLS = "a judge stage has no tools: it is shown the known answers, and nothing it is shown may reach a later stage";
+  for (const tools of [["ask_person"], ["note_memory"], ["ask_person", "note_memory"], ["list_cards"]]) {
+    expect(stageFrom(improveBody("judge", { runs: "agent", model: MODEL, tools }), H64, "judge", true)).toBe(JUDGE_TOOLS);
+    expect(stageFrom(improveBody("judge", { tools }), H64, "judge", true)).toBe(JUDGE_TOOLS);
+  }
+  expect(typeof stageFrom(improveBody("judge", { runs: "agent", model: MODEL, tools: [] }), H64, "judge", true)).toBe("object");
+});

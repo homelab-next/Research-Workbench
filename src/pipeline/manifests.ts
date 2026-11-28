@@ -135,6 +135,9 @@ function returnsOf(raw: Record<string, Record<string, Json>>): Record<string, Re
   return out;
 }
 
+/** A judge stage is shown the known answers, so it may have no tool. */
+export const JUDGE_HAS_NO_TOOLS = "a judge stage has no tools: it is shown the known answers, and nothing it is shown may reach a later stage";
+
 /** One stage from a parsed body: what toStage did, without the registry. `trusted` is whether the bytes came from a trusted root or the content store. */
 export function stageFrom(body: Record<string, Json>, hash: string, title: string, trusted: boolean): StageManifest | string {
   if (!trusted) return "a stage manifest is accepted only from a trusted root";
@@ -168,6 +171,8 @@ export function stageFrom(body: Record<string, Json>, hash: string, title: strin
   const runsProblem = improveRunsProblem(b);
   if (runsProblem !== null) return runsProblem;
   const tools = b.tools ?? [];
+  // the Judge is shown the known answers: a tool would let it write them where a later stage's pack reads (a question, a note, memory)
+  if (b.role === "judge" && tools.length > 0) return JUDGE_HAS_NO_TOOLS;
   if (b.role === "propose") {
     const other = tools.find((t) => !(PROPOSE_TOOL_NAMES as readonly string[]).includes(t));
     if (other !== undefined) return `"${other}" is not one of a propose stage's tools: ${PROPOSE_TOOL_NAMES.join(", ")}`;
