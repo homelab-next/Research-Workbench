@@ -1,4 +1,4 @@
-import type { LoopSummaryView, Me } from "../../core/wire";
+import type { LoopSummaryView, Me, MemoryView } from "../../core/wire";
 import { parseCommand, perform } from "../commands";
 import type { Route, Shell, Screen } from "../app";
 
@@ -17,6 +17,7 @@ export const MODES: readonly Mode[] = [
   { id: "actors", column: "work", label: "Actors", roles: A, live: false },
   { id: "folders", column: "work", label: "My folders", roles: A, live: false },
   { id: "loops", column: "resources", label: "Loops", roles: A, live: true },
+  { id: "memory", column: "resources", label: "Memory", roles: ["analyst"], live: true },
   { id: "strategy", column: "resources", label: "Strategy", roles: AL, live: false },
   { id: "requirements", column: "resources", label: "Requirements", roles: AL, live: false },
   { id: "gaps", column: "resources", label: "Gaps", roles: AL, live: false },
@@ -28,7 +29,7 @@ export const MODES: readonly Mode[] = [
 /** Where a mode's tile goes: a live mode to its own screen, the rest to the honest "not built yet". */
 export function modeRoute(m: Mode): Route {
   if (!m.live) return { screen: "soon", mode: m.id };
-  return m.id === "loops" ? { screen: "loops" } : { screen: "pick" };
+  return m.id === "loops" ? { screen: "loops" } : m.id === "memory" ? { screen: "memory" } : { screen: "pick" };
 }
 
 const COLUMNS: { id: Mode["column"]; title: string; subtitle: string }[] = [
@@ -44,10 +45,13 @@ export function homeView(shell: Shell): Screen {
   const open = (): number => shell.cases().filter((c) => c.run_status !== "finished").length;
   /** The loops the server listed (an analyst's read only): null until it answers, "failed" when it did not. */
   let loops: LoopSummaryView[] | null | "failed" = null;
+  /** The proposals the Memory page has to review: null until the store's read answers, "failed" when it did not. */
+  let toReview: number | null | "failed" = null;
   let destroyed = false;
-  /** Investigate's and Loops' counts are the server's answers: "…" until they come, nothing when the read failed. */
+  /** Investigate's, Loops' and Memory's counts are the server's answers: "…" until they come, nothing when the read failed. */
   const count = (m: Mode): string => {
     if (!m.live) return "soon";
+    if (m.id === "memory") return toReview === null ? "…" : toReview === "failed" ? "" : `${toReview} to review`;
     if (m.id === "loops") return loops === null ? "…" : loops === "failed" ? "" : `${loops.filter((l) => l.usable).length} usable`;
     const status = shell.casesStatus();
     return status === "loading" ? "…" : status === "failed" && shell.cases().length === 0 ? "" : `${open()} open`;
@@ -92,7 +96,7 @@ export function homeView(shell: Shell): Screen {
     command === null ? null : h("div", { class: "home-command" }, command, say),
     h("p", { class: "hint" }, "Press ? for keys"));
 
-  /** The live counts are Investigate's and Loops': replace those tiles, keeping focus where it was. */
+  /** The live counts are Investigate's, Loops' and Memory's: replace those tiles, keeping focus where it was. */
   const repaint = (id: string): void => {
     const old = el.querySelector(`[data-mode=${id}]`);
     if (old === null) return;
@@ -104,6 +108,10 @@ export function homeView(shell: Shell): Screen {
   };
   if (MODES.some((m) => m.id === "loops" && m.roles.includes(role))) {
     ui.api.loops().then((list) => { if (destroyed) return; loops = list; repaint("loops"); }, () => { if (destroyed) return; loops = "failed"; repaint("loops"); });
+  }
+  if (MODES.some((m) => m.id === "memory" && m.roles.includes(role))) {
+    const proposals = (v: MemoryView): number => v.groups.reduce((n, g) => n + g.lessons.filter((l) => l.status === "proposed").length, 0);
+    Promise.resolve().then(() => ui.api.memory()).then((v) => { if (destroyed) return; toReview = proposals(v); repaint("memory"); }, () => { if (destroyed) return; toReview = "failed"; repaint("memory"); });
   }
   return {
     el,

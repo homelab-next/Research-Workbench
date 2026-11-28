@@ -10,6 +10,7 @@ import { caseStoreView } from "./views/casestore";
 import { loopsView } from "./views/loops";
 import { loopView } from "./views/loop";
 import { loopEditView } from "./views/loopedit";
+import { memoryView } from "./views/memory";
 import { topBar } from "./views/topbar";
 import { caseScreenFor } from "./views/workarea";
 import { AT_GATE, makeSend } from "./ui";
@@ -20,7 +21,7 @@ import { nextThing } from "./derive";
 
 export type LensId = "agent" | "steps" | "timeline" | "graph" | "narrative" | "worklog" | "discarded" | "jobs" | "pipeline" | "replay";
 export type Route = { screen: "home" } | { screen: "pick" } | { screen: "new"; loop?: string } | { screen: "store" } | { screen: "soon"; mode: string } | { screen: "case"; id: string }
-  | { screen: "loops" } | { screen: "loop"; id: string } | { screen: "loop_edit"; id: string };
+  | { screen: "loops" } | { screen: "loop"; id: string } | { screen: "loop_edit"; id: string } | { screen: "memory" };
 
 /** A loop's id as the server takes one: letters, digits, ".", "_" and "-", starting with a letter or digit, at most 64, never "..". */
 const LOOP_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -28,7 +29,7 @@ const loopId = (s: string | undefined): s is string => s !== undefined && LOOP_I
 
 /**
  * "#/" · "#/investigate" · "#/investigate/new" · "#/investigate/new/<loop>" · "#/investigate/store" · "#/soon/<mode>" · "#/case/CASE-1" · "#/loops" ·
- * "#/loops/<loop>" · "#/loops/<loop>/edit". Anything else is home.
+ * "#/loops/<loop>" · "#/loops/<loop>/edit" · "#/memory". Anything else is home.
  */
 export function parseRoute(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/").filter((p) => p !== "");
@@ -47,6 +48,7 @@ export function parseRoute(hash: string): Route {
     if (parts.length === 3 && loopId(parts[1]) && parts[2] === "edit") return { screen: "loop_edit", id: parts[1] };
     return home;
   }
+  if (parts[0] === "memory" && parts.length === 1) return { screen: "memory" };
   if (parts[0] === "case" && parts.length === 2 && /^CASE-[1-9][0-9]{0,8}$/.test(parts[1]!)) return { screen: "case", id: parts[1]! };
   return home;
 }
@@ -62,6 +64,7 @@ export function routeHash(route: Route): string {
     case "loops": return "#/loops";
     case "loop": return `#/loops/${route.id}`;
     case "loop_edit": return `#/loops/${route.id}/edit`;
+    case "memory": return "#/memory";
   }
 }
 
@@ -215,6 +218,7 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
       case "loops": view = loopsView(shell); break;
       case "loop": view = loopView(shell, next.id); break;
       case "loop_edit": view = loopEditView(shell, next.id); break;
+      case "memory": view = memoryView(shell); break;
       case "case": view = (opts.caseScreen ?? caseScreenFor(ui))({ store: store!, nav }, (hs) => { handlers = hs; }); break;
     }
     clear(stage);

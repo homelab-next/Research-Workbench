@@ -101,6 +101,8 @@ test("the scan catches each banned form", () => {
 
 test("the lint's own file list holds every web file, and nothing outside src/web is read", () => {
   expect(files(WEB).map((f) => relative(WEB, f))).toContain("dom.ts");
+  // the Memory page (slice 13) is scanned like every other view
+  expect(files(WEB).map((f) => relative(WEB, f))).toContain("views/memory.ts");
   expect(dirname(join(WEB, "dom.ts"))).toBe(WEB);
 });
 

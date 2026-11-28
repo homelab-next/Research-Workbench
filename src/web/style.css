@@ -502,3 +502,36 @@ button.danger:not(:disabled) { border-color: var(--tlp-red); color: var(--tlp-re
 .probe-actions input[type="number"] { width: 8em; }
 .probe-card { border-top: 1px solid var(--line); padding-top: 6px; }
 .probe-card .card-title { font-weight: 600; }
+/* Slice 13: the Memory page. Simple lists of lessons by case type: no graph, no ring. */
+.memory-groups { display: flex; flex-direction: column; gap: 16px; width: 100%; }
+.memory-group h2 { margin: 0; overflow-wrap: anywhere; }
+.memory-group .about { margin: 2px 0 8px; overflow-wrap: anywhere; }
+.lesson-list { display: flex; flex-direction: column; gap: 6px; }
+details.lesson { border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px; background: var(--panel); }
+details.lesson.status-proposed { border-style: dashed; }
+details.lesson.status-rejected, details.lesson.status-retired, details.lesson.status-superseded { color: var(--muted); }
+details.lesson > summary { cursor: pointer; overflow-wrap: anywhere; }
+details.lesson > summary .id { font-family: var(--mono); }
+details.lesson > summary .title { font-weight: 600; }
+details.lesson > summary .status { font-size: 12px; }
+details.lesson .lesson-body { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+details.lesson .lesson-body p { margin: 0; overflow-wrap: anywhere; }
+details.lesson .text { white-space: pre-wrap; }
+details.lesson ul.triggers, details.lesson ul.history { margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
+details.lesson ul.history { color: var(--muted); font-size: 12px; }
+.lesson-actions { display: flex; flex-direction: column; gap: 6px; }
+.memory .act { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.memory .act .refusal { flex-basis: 100%; }
+.memory-propose, .memory-files { margin-top: 24px; width: 100%; display: flex; flex-direction: column; gap: 8px; }
+.memory-propose .field { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.memory-propose .field > p { margin: 0; }
+.memory-propose textarea { min-height: 6em; flex: 1 1 320px; }
+.memory-propose .count { font-family: var(--mono); color: var(--muted); font-size: 12px; }
+.memory-propose .count.over { color: var(--amber); }
+.memory-propose .trigger-rows { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; flex-basis: 100%; }
+.trigger-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.memory-export, .memory-file-head, .memory-file-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.memory-file-list { display: flex; flex-direction: column; gap: 8px; }
+.memory-file { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius); }
+.memory-file p { margin: 0; overflow-wrap: anywhere; }
+.memory-file .file, .memory-file .head { font-family: var(--mono); overflow-wrap: anywhere; }

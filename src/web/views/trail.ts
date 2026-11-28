@@ -11,6 +11,7 @@ function modeOf(route: Route): string | null {
     case "home": return null;
     case "soon": return route.mode;
     case "loops": case "loop": case "loop_edit": return "loops";
+    case "memory": return "memory";
     default: return "investigate";
   }
 }

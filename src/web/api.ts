@@ -1,5 +1,5 @@
-import type { Entry, Marking, ModelChoice } from "../core/types";
-import type { AgentView, BuilderSummaryView, BuilderView, CaseSummaryView, CommandResult, Custody, Difference, LoopFileView, LoopSummaryView, LoopView, Me, ModelView, NewCaseInput, Preview, Reference, RouteView, StoreView } from "../core/wire";
+import type { Entry, Marking, ModelChoice, Trigger } from "../core/types";
+import type { AgentView, BuilderSummaryView, BuilderView, CaseSummaryView, CommandResult, Custody, Difference, LoopFileView, LoopSummaryView, LoopView, Me, MemoryView, ModelView, NewCaseInput, Preview, Reference, RouteView, StoreView } from "../core/wire";
 
 export type Fetcher = (req: Request) => Promise<Response>;
 /**
@@ -62,6 +62,20 @@ export interface Api {
   /** The person's decision on a probe; `budget` for a costly one, else null. */
   builderProbe(id: string, probe: string, approve: boolean, budget: number | null): Promise<CommandResult>;
   builderModel(id: string, choice: ModelChoice): Promise<CommandResult>;
+  /** The shared lessons store as the Memory page shows it (slice 13). */
+  memory(): Promise<MemoryView>;
+  /** Files a proposal; the server names the person who proposed it. */
+  proposeLesson(input: { case_type: string; title: string; text: string; triggers: Trigger[]; marking: Marking; supersedes?: string; case?: string; item?: string }): Promise<{ id: string } | { refused: string[] }>;
+  /** Accepts the proposal whose hash the person saw, at its marking or a stricter one. */
+  acceptLesson(id: string, hash: string, marking?: Marking): Promise<Refusable>;
+  rejectLesson(id: string, reason: string): Promise<Refusable>;
+  retireLesson(id: string, reason: string): Promise<Refusable>;
+  /** Writes the store's file into the memory files folder. */
+  exportMemory(): Promise<{ file: string } | { refused: string[] }>;
+  /** Loads a memory file, by its name; `typed` is what the person typed, which the server requires to be the first 12 hex of its head. */
+  loadMemory(file: string, typed: string): Promise<{ lessons: number } | { refused: string[] }>;
+  /** Where a memory file is downloaded from. */
+  memoryFilePath(file: string): string;
   entries: EntrySource;
 }
 
@@ -98,6 +112,11 @@ export function makeApi(fetcher: Fetcher, origin: string, entries: EntrySource):
     try { res = await post(path, body); } catch { return { refused: ["The server did not answer."] }; }
     if (res.ok) return (await res.json()) as T;
     return { refused: await refusedOf(res) };
+  };
+  /** A decision on a lesson: the server answers the lesson's id and status, or a refusal. */
+  const decided = async (path: string, body: unknown): Promise<Refusable> => {
+    const r = await answered<{ id: string; status: string }>(path, body);
+    return "refused" in r ? { ok: false, refused: r.refused } : { ok: true };
   };
   return {
     me: () => read<Me>("/api/me"),
@@ -158,6 +177,14 @@ export function makeApi(fetcher: Fetcher, origin: string, entries: EntrySource):
     builderProbe: (id, probe, approve, budget) => refusable<{ seq: number }>(`/api/builders/${seg(id)}/probe`, { probe, approve, budget }) as Promise<CommandResult>,
     builderModel: (id, choice) => refusable<{ seq: number }>(`/api/builders/${seg(id)}/model`, { choice }) as Promise<CommandResult>,
     saveLoop: (id, draft, version) => answered<{ id: string; version: number; hash: string }>(`/api/loops/${seg(id)}/save`, { draft, version }),
+    memory: () => read<MemoryView>("/api/memory"),
+    proposeLesson: (input) => answered<{ id: string }>("/api/memory/lessons", input),
+    acceptLesson: (id, hash, marking) => decided(`/api/memory/lessons/${seg(id)}/accept`, marking === undefined ? { hash } : { hash, marking }),
+    rejectLesson: (id, reason) => decided(`/api/memory/lessons/${seg(id)}/reject`, { reason }),
+    retireLesson: (id, reason) => decided(`/api/memory/lessons/${seg(id)}/retire`, { reason }),
+    exportMemory: () => answered<{ file: string }>("/api/memory/export", {}),
+    loadMemory: (file, typed) => answered<{ lessons: number }>("/api/memory/load", { file, typed }),
+    memoryFilePath: (file) => `/api/memory/files/${seg(file)}`,
     entries,
   };
 }

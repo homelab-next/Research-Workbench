@@ -388,3 +388,20 @@ test("the case list shows a case's loop when it is not the default, and child of
   expect(tile("CASE-3").querySelector(".chip.loop, .chip.parent, .chip.waiting-on")).toBeNull();
   for (const id of ["CASE-1", "CASE-2", "CASE-3"]) expect(q.s.app.hub.read(id).state.skipped).toEqual([]);
 });
+
+test("the Memory tile counts the store's proposals, and the Memory page accepts one through the server", async () => {
+  const p = await open();
+  const person = { kind: "human" as const, id: p.s.config.user };
+  p.s.wb.memory.propose({ case_type: "unknown-device", title: "Read the lease table first", text: "The lease table names a lobby device.", triggers: [], marking: "TLP:GREEN", supersedes: null }, { kind: "person" }, person);
+  p.click("[data-mode=loops]"); await p.settle();
+  p.click(".trail .home"); await p.settle();
+  expect(p.q("[data-column=resources] [data-mode=memory]").textContent).toBe("Memory1 to review");
+  p.click("[data-mode=memory]"); await p.settle();
+  expect(p.win.location.hash).toBe("#/memory");
+  expect(p.q("details.lesson[data-lesson=LESSON-1] > summary .status").textContent).toBe("proposed");
+  p.click("details.lesson[data-lesson=LESSON-1] [data-action=accept]");
+  await p.settle();
+  expect(p.s.wb.memory.state.lessons["LESSON-1"]!.status).toBe("accepted");
+  expect(p.q("details.lesson[data-lesson=LESSON-1] > summary .status").textContent).toBe("shared");
+  expect(p.s.wb.memory.state.skipped).toEqual([]);
+});
