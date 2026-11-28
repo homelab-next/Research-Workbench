@@ -264,3 +264,22 @@ test("a memory block in the file is read, its folders placed against the file's 
     expect(() => loadConfig({ path: file(dir, n, text), env: {}, home: "/h", repoRoot: "/repo" })).toThrow(ConfigError);
   }
 });
+
+// ---------- slice 14: the improve block ----------
+test("the improve block defaults to 3 tasks, 3 candidates, 240 lookups, 1200000 and 400000 tokens, and <data_dir>/staged", () => {
+  const c = loadConfig({ path: undefined, env: {}, home: "/h", repoRoot: "/repo" });
+  expect(c.improve).toEqual({ max_tasks: 3, max_candidates: 3, probe_lookups: 240, probe_tokens: 1200000, own_tokens: 400000, staged: "/h/.local/share/research-workbench/staged" });
+  const dir = tmp();
+  const p = file(dir, "conf/c.yaml", "data_dir: /d\nimprove:\n  max_tasks: 8\n  staged: ./cache\n");
+  expect(loadConfig({ path: p, env: {}, home: "/h", repoRoot: "/repo" }).improve).toEqual({ max_tasks: 8, max_candidates: 3, probe_lookups: 240, probe_tokens: 1200000, own_tokens: 400000, staged: join(dir, "conf/cache") });
+  expect(loadConfig({ path: file(dir, "d.yaml", "data_dir: /d\n"), env: {}, home: "/h", repoRoot: "/repo" }).improve.staged).toBe("/d/staged");
+});
+
+test("max_tasks above 8, max_candidates above 4, or a budget below 1 is a ConfigError naming the field", () => {
+  const dir = tmp();
+  const bad = ["max_tasks: 9", "max_tasks: 0", "max_candidates: 5", "max_candidates: 0", "probe_lookups: 0", "probe_tokens: 0", "own_tokens: 0", "own_tokens: 1.5"];
+  bad.forEach((line, i) => {
+    const field = line.split(":")[0]!;
+    expect(() => loadConfig({ path: file(dir, `i${i}.yaml`, `improve:\n  ${line}\n`), env: {}, home: "/h", repoRoot: "/repo" })).toThrow(new RegExp(field));
+  });
+});

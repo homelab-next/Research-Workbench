@@ -71,6 +71,20 @@ export interface Config {
     /** The most notes a case's notebook holds at once. */
     max_notes: number;
   };
+  improve: {
+    /** The most tasks one improve run selects. */
+    max_tasks: number;
+    /** The most candidates one improve run composes. */
+    max_candidates: number;
+    /** The lookups shared among the probe children, divided evenly. */
+    probe_lookups: number;
+    /** The tokens shared among the probe children, divided evenly. */
+    probe_tokens: number;
+    /** The improve case's own run budget, in tokens. */
+    own_tokens: number;
+    /** The folder staged candidates are built in; a cache. */
+    staged: string;
+  };
 }
 
 const whereList: Schema = { type: "array", items: { type: "string", enum: [...WHERES] } };
@@ -134,6 +148,18 @@ const CONFIG_SCHEMA: Schema = {
         max_notes: { type: "integer", minimum: 1 },
       },
     },
+    improve: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        max_tasks: { type: "integer", minimum: 1, maximum: 8 },
+        max_candidates: { type: "integer", minimum: 1, maximum: 4 },
+        probe_lookups: { type: "integer", minimum: 1 },
+        probe_tokens: { type: "integer", minimum: 1 },
+        own_tokens: { type: "integer", minimum: 1 },
+        staged: { type: "string", minLength: 1 },
+      },
+    },
   },
 };
 
@@ -188,6 +214,7 @@ export function loadConfig(opts: { path?: string; env?: Record<string, string | 
     cases?: { store?: string; on_complete?: "keep" | "unload"; max_bytes?: number };
     loops?: { default?: string; max_depth?: number; max_children?: number; store?: string; imports?: string };
     memory?: { store?: string; files?: string; max_lessons?: number; max_notes?: number };
+    improve?: { max_tasks?: number; max_candidates?: number; probe_lookups?: number; probe_tokens?: number; own_tokens?: number; staged?: string };
   };
 
   const base = path === null ? process.cwd() : dirname(path);
@@ -230,6 +257,14 @@ export function loadConfig(opts: { path?: string; env?: Record<string, string | 
       files: given.memory?.files !== undefined ? place(given.memory.files) : join(data_dir, "memory-files"),
       max_lessons: given.memory?.max_lessons ?? 12,
       max_notes: given.memory?.max_notes ?? 40,
+    },
+    improve: {
+      max_tasks: given.improve?.max_tasks ?? 3,
+      max_candidates: given.improve?.max_candidates ?? 3,
+      probe_lookups: given.improve?.probe_lookups ?? 240,
+      probe_tokens: given.improve?.probe_tokens ?? 1200000,
+      own_tokens: given.improve?.own_tokens ?? 400000,
+      staged: given.improve?.staged !== undefined ? place(given.improve.staged) : join(data_dir, "staged"),
     },
   };
 }

@@ -10,12 +10,23 @@ export type ScriptReply =
   | { content?: string; reasoning?: string; tool_calls?: { tool: string; args: Record<string, Json> }[]; usage?: Partial<Usage> }
   | { declined: string }
   | { error: string };
-export interface ScriptTurn { actor: string; reply: ScriptReply }
+export interface ScriptTurn {
+  actor: string;
+  reply: ScriptReply;
+  /** Every string must be in the text of the request's messages for this turn to be one of the actor's turns for this request. */
+  when?: string[];
+}
 export interface Script { id: string; turns: ScriptTurn[] }
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 const PLACEHOLDER = /\{\{card:(.+?)\}\}/g;
+/** True with no `when`; else every string of it is in the concatenation of the request's messages' contents. */
+const whenHolds = (t: ScriptTurn, req: TurnRequest): boolean => {
+  if (t.when === undefined) return true;
+  const seen = req.messages.map(m => m.content).join("\n");
+  return t.when.every(w => seen.includes(w));
+};
 const chars = (n: number): number => Math.ceil(n / 4);
 
 class Unresolved extends Error {
@@ -122,7 +133,10 @@ export function toScript(manifest: LoadedManifest): Script {
       const where = `turns[${i}]`;
       if (!isPlainObject(t)) throw new ManifestError(`${where}: must be a mapping`);
       if (!isNonEmptyString(t.actor)) throw new ManifestError(`${where}: missing actor`);
-      return { actor: t.actor, reply: checkReply(t.reply, where) };
+      const reply = checkReply(t.reply, where);
+      if (t.when === undefined) return { actor: t.actor, reply };
+      if (!Array.isArray(t.when) || t.when.length === 0 || !t.when.every(isNonEmptyString)) throw new ManifestError(`${where}: when must be a list of non-empty strings`);
+      return { actor: t.actor, reply, when: [...t.when] as string[] };
     }),
   };
 }
@@ -159,7 +173,7 @@ export class ScriptedProvider implements Provider {
     const missing = (): TurnResult => ({ kind: "error", message: `script ${req.model} has no turn ${req.ordinal + 1} for ${req.key}`, raw: null });
     const script = this.#scripts.get(req.model);
     if (script === undefined) return missing();
-    const turn = script.turns.filter(t => t.actor === req.key)[req.ordinal];
+    const turn = script.turns.filter(t => t.actor === req.key && whenHolds(t, req))[req.ordinal];
     if (turn === undefined) return missing();
     const reply = turn.reply;
     if ("declined" in reply) return { kind: "declined", reason: reply.declined, served_by: script.id, raw: enc.encode(canonical(reply)) };

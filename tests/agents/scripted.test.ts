@@ -121,3 +121,31 @@ test("a placeholder left unresolved (a title with a newline) is an error", async
 test("every model a script provider lists counts as loaded", async () => {
   expect(await make([{ actor: "planner", reply: { content: "x" } }]).models()).toEqual([{ id: "s", context: null, efforts: [], loaded: true, parallel: null }]);
 });
+
+// ---------- slice 14: a turn that answers by what it was shown ----------
+const shown = (s: string): TurnRequest => ({ ...req, key: "researcher", messages: [{ role: "system", content: "sys" }, { role: "user", content: `look at ${s}` }] });
+const variants = (): ScriptedProvider => make([
+  { actor: "researcher", when: ["192.0.2.21"], reply: { content: "first variant" } },
+  { actor: "researcher", when: ["192.0.2.22"], reply: { content: "second variant" } },
+]);
+
+test("a turn with when is one of the actor's turns only for a request whose messages hold every string of it", async () => {
+  const p = variants();
+  expect(await p.turn(shown("192.0.2.22"))).toMatchObject({ kind: "answer", content: "second variant" });
+  expect(await p.turn(shown("192.0.2.21"))).toMatchObject({ kind: "answer", content: "first variant" });
+  expect(await p.turn(shown("192.0.2.23"))).toMatchObject({ kind: "error" });
+  const both = make([{ actor: "researcher", when: ["192.0.2.21", "skill-b"], reply: { content: "x" } }]);
+  expect(await both.turn(shown("192.0.2.21"))).toMatchObject({ kind: "error" });
+  expect(await both.turn(shown("192.0.2.21 skill-b"))).toMatchObject({ kind: "answer", content: "x" });
+});
+
+test("a turn with no when is a turn for every request, as before", async () => {
+  const p = make([{ actor: "researcher", reply: { content: "any" } }]);
+  expect(await p.turn(shown("anything"))).toMatchObject({ kind: "answer", content: "any" });
+});
+
+test("when must be a list of non-empty strings", () => {
+  const m = (when: unknown) => ({ id: "s", body: { turns: [{ actor: "a", when, reply: { content: "x" } }] } }) as unknown as Parameters<typeof toScript>[0];
+  for (const bad of ["x", [], [""], [1], {}, null]) expect(() => toScript(m(bad))).toThrow(/turns\[0\]: when/);
+  expect(toScript(m(["a", "b"])).turns[0]!.when).toEqual(["a", "b"]);
+});

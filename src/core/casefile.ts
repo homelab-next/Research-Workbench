@@ -9,7 +9,7 @@ import { memberProblem } from "./tar";
 import { isMarking } from "./types";
 import type { Marking, Observable } from "./types";
 
-export const WORKBENCH_VERSION = "0.13.0";
+export const WORKBENCH_VERSION = "0.14.0";
 export const CASE_FILE_FORMAT = 1;
 export const DEFAULT_MAX_CASE_BYTES = 2147483648;
 
