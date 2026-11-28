@@ -14,7 +14,7 @@ import type { Config } from "../modules/config";
 import { Engine } from "../pipeline/engine";
 import type { EngineDeps } from "../pipeline/engine";
 import { AnswerRefused, answerScale, setKnownAnswer } from "../pipeline/improve/answers";
-import { SynthRefused } from "./setup";
+import { labelOf, SynthRefused } from "./setup";
 import type { SynthContext } from "./setup";
 import { truthPath } from "./tasks";
 import type { TruthFile } from "./tasks";
@@ -72,7 +72,7 @@ export async function synthAnswer(ctx: SynthContext, opts: { case: string; produ
     const looking = new Engine(session, composed.deps);
     try {
       const set = answerFromTruth(session, looking.bound, config, human, opts.product);
-      io.log(`known answer set for product ${set.product} of ${session.id} from storyline ${truthOfCase(session, config).storyline} (${set.marking})`);
+      io.log(`known answer set for product ${set.product} of ${session.id} from ${labelOf(ctx.setup, truthOfCase(session, config).storyline)} (${set.marking})`);
       return 0;
     } catch (err) {
       if (err instanceof SynthRefused) { io.error(err.message); return 1; }

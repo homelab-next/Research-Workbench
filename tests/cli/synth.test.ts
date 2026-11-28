@@ -100,7 +100,8 @@ test("show prints the tables' rows and sizes and the storylines, and opens no wo
     for (const t of ["signins", "group_members", "process_start", "dns", "proxy", "flows", "dhcp_leases", "wifi_events", "email", "cloud_audit", "vuln_findings", "assets", "reputation"]) {
       expect(r.out).toMatch(new RegExp(`^  ${t} +[1-9][0-9]* rows +[0-9.]+ [kMGT]?B$`, "m"));
     }
-    for (const st of s.storylines) expect(r.out).toContain(st.id);
+    for (const st of s.storylines) expect(r.out).not.toContain(st.id);
+    for (let i = 1; i <= s.storylines.length; i++) expect(r.out).toMatch(new RegExp(`^  story-${i} \\([a-z-]+\\): no case yet$`, "m"));
     expect(r.out).toContain("left out: none");
     expect(r.out).toContain("model: scripted (synth-run)");
     expect(r.out).toContain("port: 4757");
@@ -118,6 +119,7 @@ test("build and show print no verdict, no storyline title and no truth summary; 
   const spoils = (text: string): string[] => [
     ...["malicious", "benign"].filter((w) => text.toLowerCase().includes(w)),
     ...s.storylines.filter((st) => text.includes(st.title)).map((st) => st.title),
+    ...s.storylines.filter((st) => text.includes(st.id)).map((st) => st.id),
     ...summaries.filter((x) => text.includes(x)),
   ];
   expect(spoils(built.out)).toEqual([]);
@@ -129,7 +131,7 @@ test("build and show print no verdict, no storyline title and no truth summary; 
   expect(shown.code).toBe(0);
   expect(spoils(shown.out)).toEqual([]);
   expect(shown.out).toContain(`cases: ${s.storylines.length} task, 0 seeded`);
-  for (const st of s.storylines) expect(shown.out).toMatch(new RegExp(`^  ${st.id} \\([a-z-]+\\): task CASE-[0-9]+$`, "m"));
+  for (let i = 1; i <= s.storylines.length; i++) expect(shown.out).toMatch(new RegExp(`^  story-${i} \\([a-z-]+\\): task CASE-[0-9]+$`, "m"));
   const revealed = run(["show", "--config", cfg, "--reveal"]);
   expect(revealed.code).toBe(0);
   expect(revealed.out).toContain("--reveal: this spoils the synthetic cases");

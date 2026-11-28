@@ -15,7 +15,7 @@ import type { Config } from "../../src/modules/config";
 import { synthAnswer } from "../../src/synth/answer";
 import { buildSetup } from "../../src/synth/build";
 import type { Built } from "../../src/synth/build";
-import { setupOf } from "../../src/synth/setup";
+import { setupOf, storyLabels } from "../../src/synth/setup";
 import type { SynthContext } from "../../src/synth/setup";
 import { readIndex, synthTasks, truthPath } from "../../src/synth/tasks";
 import type { TruthFile } from "../../src/synth/tasks";
@@ -88,7 +88,7 @@ beforeEach(async () => {
   out = [];
   err = [];
   const ids = built.setup.storylines.map((s) => s.id).sort();
-  expect(await synthTasks(ctx(), { only: ids.slice(0, 2), marking: "TLP:GREEN" })).toBe(0);
+  expect(await synthTasks(ctx(), { only: ids.slice(0, 2).map((id) => storyLabels(built.setup).get(id)!), marking: "TLP:GREEN" })).toBe(0);
   const index = readIndex(config).cases;
   first = index.find((c) => c.storyline === ids[0])!.case;
   second = index.find((c) => c.storyline === ids[1])!.case;
@@ -112,7 +112,7 @@ test("answer on a published task case writes answer.known by the person: the tru
   // the floor: the strictest of the case's (TLP:GREEN) and the product's (TLP:AMBER)
   expect(p.marking).toBe("TLP:AMBER");
   expect(r.skipped).toEqual([]);
-  expect(out).toEqual([`known answer set for product 1 of ${first} from storyline ${t.storyline} (TLP:AMBER)`]);
+  expect(out).toEqual([`known answer set for product 1 of ${first} from ${storyLabels(built.setup).get(t.storyline)} (TLP:AMBER)`]);
 });
 
 test("answer before the case is published is refused with the sentence and writes nothing", async () => {

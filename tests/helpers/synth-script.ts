@@ -14,7 +14,7 @@ import { loadRegistry } from "../../src/modules/registry-record";
 import type { Config } from "../../src/modules/config";
 import type { EngineDeps } from "../../src/pipeline/engine";
 import { buildSetup, SYNTH_RUN } from "../../src/synth/build";
-import { setupOf } from "../../src/synth/setup";
+import { setupOf, storyLabels } from "../../src/synth/setup";
 import { readIndex, synthTasks } from "../../src/synth/tasks";
 
 /** The build's ground truth of one storyline: `<synth>/truth/<storyline>.json`. */
@@ -162,7 +162,7 @@ export function synthRun(storyline: string): { dir: string; config: Config; wb: 
     const { setup } = setupOf(config);
     const said: string[] = [];
     const io = { log: (l: string) => said.push(l), error: (l: string) => said.push(`error: ${l}`) };
-    void synthTasks({ config, dir: built.dir, setup, human: { kind: "human", id: config.user }, io }, { only: [storyline], marking: "TLP:GREEN" });
+    void synthTasks({ config, dir: built.dir, setup, human: { kind: "human", id: config.user }, io }, { only: [storyLabels(setup).get(storyline)!], marking: "TLP:GREEN" });
     if (!readIndex(config).cases.some((c) => c.storyline === storyline && c.made_by === "tasks")) throw new Error(`synth tasks made no case of ${storyline}: ${said.join("; ")}`);
     const wb = Workbench.open(config.data_dir, { store: config.cases.store, max_case_bytes: config.cases.max_bytes, memory: config.memory.store, onError: () => {} });
     const composed = compose(config, wb);

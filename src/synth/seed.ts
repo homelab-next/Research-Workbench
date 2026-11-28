@@ -9,9 +9,9 @@ import type { Marking } from "../core/types";
 import { Workbench, WorkbenchLockedError } from "../core/workbench";
 import type { Engine } from "../pipeline/engine";
 import { answerFromTruth } from "./answer";
-import { SynthRefused } from "./setup";
+import { labelOf, onlyIds, SynthRefused } from "./setup";
 import type { SynthContext } from "./setup";
-import { caseInput, readIndex, readTruths, recordTruth, unknownOnly } from "./tasks";
+import { badLine, caseInput, readIndex, readTruths, recordTruth } from "./tasks";
 
 export const SEED_LOOP = "synth-seed";
 /** The objective of a seeded case, the overlay's: the checks ask that a product state one. */
@@ -63,14 +63,16 @@ async function seedOne(engine: Engine, session: CaseSession, ctx: SynthContext, 
   }
 }
 
+/** `opts.only` names storylines by their labels (story-1, ...), as every output but show --reveal does. */
 export async function synthSeed(ctx: SynthContext, opts: { only: string[] | null; marking: Marking }): Promise<number> {
   const { config, io, human } = ctx;
-  const unknown = unknownOnly(ctx, opts.only);
-  if (unknown !== null) { io.error(unknown); return 1; }
-  const asked = (id: string): boolean => opts.only === null || opts.only.includes(id);
+  const only = onlyIds(ctx.setup, opts.only);
+  if ("error" in only) { io.error(only.error); return 1; }
+  const asked = (id: string): boolean => only.ids === null || only.ids.includes(id);
+  const label = (id: string): string => labelOf(ctx.setup, id);
   const { truths, bad } = readTruths(ctx);
   let code = 0;
-  for (const b of bad.filter((x) => asked(x.storyline))) { io.error(`${b.storyline}: ${b.why}`); code = 1; }
+  for (const b of bad.filter((x) => asked(x.storyline))) { io.error(badLine(ctx.setup, b)); code = 1; }
   const seeded = new Set(readIndex(config).cases.filter((c) => c.made_by === "seed-tasks").map((c) => c.storyline));
   const wanted = truths.filter((t) => asked(t.storyline) && !seeded.has(t.storyline));
   if (wanted.length === 0) {
@@ -101,19 +103,19 @@ export async function synthSeed(ctx: SynthContext, opts: { only: string[] | null
     for (const truth of wanted) {
       const { task } = truth;
       if (!types.includes(task.case_type)) {
-        io.error(`${truth.storyline}: "${task.case_type}" is not a case type${types.length === 0 ? "; none is loaded" : `; one of ${types.join(", ")}`}`);
+        io.error(`${label(truth.storyline)}: "${task.case_type}" is not a case type${types.length === 0 ? "; none is loaded" : `; one of ${types.join(", ")}`}`);
         code = 1;
         continue;
       }
       const wrong = task.starting.find((o) => !deps.runner.observables.matches(o.type, o.value));
-      if (wrong !== undefined) { io.error(`${truth.storyline}: ${wrong.value} is not a ${wrong.type}`); code = 1; continue; }
+      if (wrong !== undefined) { io.error(`${label(truth.storyline)}: ${wrong.value} is not a ${wrong.type}`); code = 1; continue; }
       const session = wb.createCase({ ...caseInput(truth, opts.marking), objective: SEED_OBJECTIVE }, human, { loop: SEED_LOOP, type: task.case_type });
       recordTruth(config, truth, session, "seed-tasks");
       const done = await seedOne(host.engine(session.id), session, ctx, anchor);
       if ("product" in done) {
-        io.log(`seeded ${session.id} for ${truth.storyline}: product ${done.product} published, known answer set (synthetic)`);
+        io.log(`seeded ${session.id} for ${label(truth.storyline)}: product ${done.product} published, known answer set (synthetic)`);
       } else {
-        io.error(`${session.id} for ${truth.storyline} stopped at ${done.where}: ${done.why}`);
+        io.error(`${session.id} for ${label(truth.storyline)} stopped at ${done.where}: ${done.why}`);
         code = 1;
       }
     }

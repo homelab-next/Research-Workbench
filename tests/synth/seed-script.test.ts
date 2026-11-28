@@ -150,7 +150,7 @@ async function seedRuns(): Promise<Seen[]> {
     for (const t of truths) {
       const task = t.task;
       const session = wb.createCase(
-        { title: `[synthetic] ${task.title}`, asked: task.question, why: `synthetic task: storyline ${task.storyline}`, starting: task.starting, window: task.window, objective: "synth-objective", marking: "TLP:GREEN" },
+        { title: `[synthetic] ${task.title}`, asked: task.question, why: `synthetic task, seed ${t.seed}`, starting: task.starting, window: task.window, objective: "synth-objective", marking: "TLP:GREEN" },
         human, { loop: "synth-seed", type: task.case_type },
       );
       const engine = host.engine(session.id);

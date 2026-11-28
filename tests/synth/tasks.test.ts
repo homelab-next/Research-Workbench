@@ -13,7 +13,7 @@ import { loadConfig } from "../../src/modules/config";
 import type { Config } from "../../src/modules/config";
 import { buildSetup } from "../../src/synth/build";
 import type { Built } from "../../src/synth/build";
-import { setupOf } from "../../src/synth/setup";
+import { setupOf, storyLabels } from "../../src/synth/setup";
 import type { SynthContext } from "../../src/synth/setup";
 import { caseInput, readIndex, synthTasks, truthPath } from "../../src/synth/tasks";
 import type { TruthFile } from "../../src/synth/tasks";
@@ -86,7 +86,7 @@ test("tasks makes one case a storyline, by the person of the configuration, titl
     const p = created.payload as Record<string, unknown>;
     expect(p.title).toBe(`[synthetic] ${t.task.title}`);
     expect(p.asked).toBe(t.task.question);
-    expect(p.why).toBe(`synthetic task: storyline ${t.storyline}, seed ${t.seed}`);
+    expect(p.why).toBe(`synthetic task, seed ${t.seed}`);
     expect(p.starting).toEqual(t.task.starting);
     expect(p.window).toEqual(t.task.window);
     expect(p.marking).toBe("TLP:GREEN");
@@ -95,7 +95,7 @@ test("tasks makes one case a storyline, by the person of the configuration, titl
     expect(typed.payload).toEqual({ type: t.task.case_type });
     expect(typed.actor).toEqual(human());
     expect(c.skipped).toEqual([]);
-    expect(out).toContain(`${c.id} ${t.storyline} (${t.task.case_type}): ${t.task.question}`);
+    expect(out).toContain(`${c.id} ${storyLabels(built.setup).get(t.storyline)} (${t.task.case_type}): ${t.task.question}`);
   }
   expect(caseInput(truths[0]!, "TLP:AMBER").marking).toBe("TLP:AMBER");
   // the two commands that follow, last; no run is started
@@ -146,16 +146,21 @@ test("no case has a run, a known answer or a query; its ledger holds only what c
   }
 });
 
-test("a second tasks makes no case; --only makes the named ones; an unknown id exits 1 and makes nothing", async () => {
+test("a second tasks makes no case; --only makes the ones named by label; an unknown label or a storyline's id exits 1 and makes nothing", async () => {
   const [a, b] = [truths[0]!.storyline, truths[1]!.storyline];
-  expect(await synthTasks(ctx(), { only: ["no-such-storyline", a], marking: "TLP:GREEN" })).toBe(1);
+  const label = (id: string): string => storyLabels(built.setup).get(id)!;
+  expect(await synthTasks(ctx(), { only: ["no-such-storyline", label(a)], marking: "TLP:GREEN" })).toBe(1);
   expect(err.join("\n")).toContain("no-such-storyline");
   expect(cases()).toEqual([]);
   err = [];
-  expect(await synthTasks(ctx(), { only: [b, a], marking: "TLP:GREEN" })).toBe(0);
+  expect(await synthTasks(ctx(), { only: [a], marking: "TLP:GREEN" })).toBe(1);
+  expect(err).toEqual([`no storyline ${a} in this setup; name one by its label: ${built.setup.storylines.map((_, i) => `story-${i + 1}`).join(", ")}`]);
+  expect(cases()).toEqual([]);
+  err = [];
+  expect(await synthTasks(ctx(), { only: [label(b), label(a)], marking: "TLP:GREEN" })).toBe(0);
   expect(cases().length).toBe(2);
   expect(readIndex(config).cases.map((c) => c.storyline).sort()).toEqual([a, b].sort());
-  expect(await synthTasks(ctx(), { only: [a], marking: "TLP:GREEN" })).toBe(0);
+  expect(await synthTasks(ctx(), { only: [label(a)], marking: "TLP:GREEN" })).toBe(0);
   expect(cases().length).toBe(2);
   expect(await synthTasks(ctx(), { only: null, marking: "TLP:GREEN" })).toBe(0);
   expect(cases().length).toBe(truths.length);
@@ -179,7 +184,7 @@ test("no entry and no blob of any case made holds the truth's summary or a claim
   for (const c of cases()) for (const e of c.entries) for (const s of secrets) expect(JSON.stringify(e).includes(s)).toBe(false);
 });
 
-test("a truth file that is not a ground truth is named and the others are still made", async () => {
+test("a truth file that is not a ground truth is named by its storyline's label, not its file, and the others are still made", async () => {
   const bad = truths[2]!.storyline;
   const file = join(built.dir, "truth", `${bad}.json`);
   const before = readFileSync(file);
@@ -189,8 +194,7 @@ test("a truth file that is not a ground truth is named and the others are still 
   } finally {
     writeFileSync(file, before);
   }
-  expect(err.join("\n")).toContain(file);
-  expect(err.join("\n")).toContain("is not a ground truth");
+  expect(err).toEqual([`${storyLabels(built.setup).get(bad)}: its truth file is not a ground truth; synth show --reveal names the file`]);
   expect(cases().length).toBe(truths.length - 1);
   expect(readIndex(config).cases.map((c) => c.storyline)).not.toContain(bad);
 });

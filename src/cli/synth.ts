@@ -13,7 +13,7 @@ import { synthAnswer } from "../synth/answer";
 import { ambientConfig, buildSetup, SYNTH_RUN } from "../synth/build";
 import type { BuildOptions } from "../synth/build";
 import { synthSeed } from "../synth/seed";
-import { setupOf, SynthRefused } from "../synth/setup";
+import { setupOf, storyLabels, SynthRefused } from "../synth/setup";
 import type { SynthContext, SynthSetup } from "../synth/setup";
 import { readIndex, readTruths, synthTasks } from "../synth/tasks";
 import type { TruthIndex } from "../synth/tasks";
@@ -23,11 +23,12 @@ const USAGE = [
   "  bun run synth build <dir> (--scripted | --base-url URL --model ID [--provider ID] [--where machine|network|hosted])",
   "                            [--seed N] [--start YYYY-MM-DD] [--days N] [--users N] [--hosts N] [--sites N] [--volume X] [--scale N] [--only id,id] [--port N]",
   "  bun run synth show        --config <dir>/config.yaml [--reveal]",
-  "  bun run synth tasks       --config <dir>/config.yaml [--only id,id] [--marking M]",
+  "  bun run synth tasks       --config <dir>/config.yaml [--only story-N,story-N] [--marking M]",
   "  bun run synth answer CASE-N --config <dir>/config.yaml [--product N]",
-  "  bun run synth seed-tasks  --config <dir>/config.yaml [--only id,id] [--marking M]",
+  "  bun run synth seed-tasks  --config <dir>/config.yaml [--only story-N,story-N] [--marking M]",
   "build writes only inside <dir>. Every other form needs --config and a synth.json beside it, and (but show) the server stopped.",
-  "show --reveal prints each storyline's verdict and truth summary: it spoils the synthetic cases.",
+  "Every form names a storyline by its neutral label (story-N); build --only takes storyline ids, as it places them.",
+  "show --reveal maps each label to its storyline, verdict and truth summary: it spoils the synthetic cases.",
 ].join("\n");
 
 class UsageError extends Error {}
@@ -147,20 +148,24 @@ function tableLines(tables: { name: string; rows: number; bytes: number }[]): st
 }
 
 /**
- * The storylines placed, by id and case type, with the cases each became when `index` is given. Neither whether a storyline is malicious nor
- * its title (which may say so) is printed: that would spoil the cases. show --reveal prints them apart, under a warning.
+ * The storylines placed, by neutral label (story-1, ...) and case type, with the cases each became when `index` is given. Neither a
+ * storyline's id nor its title nor whether it is malicious is printed: each would say what the case will be found to be. show --reveal
+ * maps the labels to the storylines, apart and under a warning. Why one was left out is told there too: the reason may name a cast role.
  */
 function storylineLines(setup: SynthSetup, index: TruthIndex | null = null): string[] {
+  const labels = storyLabels(setup);
+  const n = (id: string): number => Number(labels.get(id)!.slice(6));
   const casesOf = (id: string): string => {
     const rows = index!.cases.filter((c) => c.storyline === id);
     if (rows.length === 0) return ": no case yet";
     return `: ${rows.map((c) => `${c.made_by === "tasks" ? "task" : "seeded"} ${c.case}`).join(", ")}`;
   };
+  const placed = [...setup.storylines].sort((a, b) => n(a.id) - n(b.id));
+  const out = [...setup.left_out].sort((a, b) => n(a.id) - n(b.id));
   return [
-    `storylines placed: ${setup.storylines.length}`,
-    ...setup.storylines.map((s) => `  ${s.id} (${s.case_type})${index === null ? "" : casesOf(s.id)}`),
-    setup.left_out.length === 0 ? "left out: none" : `left out: ${setup.left_out.length}`,
-    ...setup.left_out.map((s) => `  ${s.id}: ${s.why}`),
+    `storylines placed: ${placed.length}`,
+    ...placed.map((s) => `  ${labels.get(s.id)} (${s.case_type})${index === null ? "" : casesOf(s.id)}`),
+    out.length === 0 ? "left out: none" : `left out: ${out.length} (${out.map((s) => labels.get(s.id)).join(", ")}); synth show --reveal says why`,
   ];
 }
 
@@ -189,17 +194,20 @@ function build(p: Parsed): number {
   return 0;
 }
 
-/** Each storyline's verdict, title and truth summary, under a warning that this spoils the cases. */
+/** Each storyline's label, id, verdict, title and truth summary, and why any was left out, under a warning that this spoils the cases. */
 function revealLines(dir: string, setup: SynthSetup): string[] {
+  const labels = storyLabels(setup);
+  const n = (id: string): number => Number(labels.get(id)!.slice(6));
   const lines = ["", "--reveal: this spoils the synthetic cases; do not show it to whoever works them", "verdicts:"];
   // the truths are read by src/synth/tasks.ts, the one reader of a storyline's truth file
   const { truths, bad } = readTruths({ dir, setup });
-  for (const s of setup.storylines) {
-    lines.push(`  ${s.id}: ${s.malicious ? "malicious" : "benign"}, ${s.title}`);
+  for (const s of [...setup.storylines].sort((a, b) => n(a.id) - n(b.id))) {
+    lines.push(`  ${labels.get(s.id)}: ${s.id}, ${s.malicious ? "malicious" : "benign"}, ${s.title}`);
     const truth = truths.find((t) => t.storyline === s.id);
-    const why = bad.find((b) => b.storyline === s.id)?.why ?? "";
-    lines.push(`    ${truth !== undefined ? truth.summary : why.endsWith("cannot be read") ? "(its truth file cannot be read)" : "(its truth file is not a ground truth)"}`);
+    const b = bad.find((x) => x.storyline === s.id);
+    lines.push(`    ${truth !== undefined ? truth.summary : `(its truth file ${b?.file ?? ""} ${b?.why ?? "is missing"})`}`);
   }
+  for (const s of [...setup.left_out].sort((a, b) => n(a.id) - n(b.id))) lines.push(`  ${labels.get(s.id)}: ${s.id}, left out: ${s.why}`);
   return lines;
 }
 

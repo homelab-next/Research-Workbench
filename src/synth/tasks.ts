@@ -12,7 +12,7 @@ import type { Marking } from "../core/types";
 import { Workbench } from "../core/workbench";
 import type { NewCase } from "../core/workbench";
 import type { Config } from "../modules/config";
-import { SYNTHETIC_PREFIX } from "./setup";
+import { labelOf, onlyIds, SYNTHETIC_PREFIX } from "./setup";
 import type { SynthContext } from "./setup";
 
 export type { SynthContext } from "./setup";
@@ -67,46 +67,48 @@ export function recordTruth(config: Config, truth: GroundTruth, session: CaseSes
 /** The objective every synthetic case carries, the overlay's `synth/root/context/synth-objective.yaml`: the checks ask that a product state one. It names no verdict and no storyline. */
 export const SYNTH_OBJECTIVE = "synth-objective";
 
-/** The case input of a storyline's task, as both forms make it, with the setup's objective. */
+/**
+ * The case input of a storyline's task, as both forms make it, with the setup's objective. Every agent of the case is told its title, question
+ * and why, so none of them names the storyline: its id (phish-chain, smart-tv) or its title would say what the case will be found to be.
+ */
 export function caseInput(truth: GroundTruth, marking: Marking): NewCase {
   const { task } = truth;
   return {
-    title: SYNTHETIC_PREFIX + task.title, asked: task.question, why: `synthetic task: storyline ${truth.storyline}, seed ${truth.seed}`,
+    title: SYNTHETIC_PREFIX + task.title, asked: task.question, why: `synthetic task, seed ${truth.seed}`,
     starting: task.starting.map((o) => ({ type: o.type, value: o.value })), window: { from: task.window.from, to: task.window.to }, objective: SYNTH_OBJECTIVE, marking,
   };
 }
 
-/** The ground truths of the setup's storylines by id, each `<synth>/truth/<id>.json`; a file that is not one is named in `bad`. Shared with seed-tasks. */
-export function readTruths(ctx: Pick<SynthContext, "dir" | "setup">): { truths: GroundTruth[]; bad: { storyline: string; why: string }[] } {
+/** The ground truths of the setup's storylines by id, each `<synth>/truth/<id>.json`; a file that is not one is in `bad`, with what is wrong with it. Shared with seed-tasks. */
+export function readTruths(ctx: Pick<SynthContext, "dir" | "setup">): { truths: GroundTruth[]; bad: { storyline: string; why: string; file: string }[] } {
   const truths: GroundTruth[] = [];
-  const bad: { storyline: string; why: string }[] = [];
+  const bad: { storyline: string; why: string; file: string }[] = [];
   for (const id of ctx.setup.storylines.map((s) => s.id).sort(byText)) {
     const file = join(ctx.dir, "truth", `${id}.json`);
     let bytes: Uint8Array;
-    try { bytes = readFileSync(file); } catch { bad.push({ storyline: id, why: `${file} cannot be read` }); continue; }
+    try { bytes = readFileSync(file); } catch { bad.push({ storyline: id, why: "cannot be read", file }); continue; }
     const truth = readGroundTruth(bytes);
-    if (truth === null || truth.storyline !== id) { bad.push({ storyline: id, why: `${file} is not a ground truth` }); continue; }
+    if (truth === null || truth.storyline !== id) { bad.push({ storyline: id, why: "is not a ground truth", file }); continue; }
     truths.push(truth);
   }
   return { truths, bad };
 }
 
-/** The ids `only` names that the setup did not place, as a sentence; null when it names none such. Shared with seed-tasks. */
-export function unknownOnly(ctx: SynthContext, only: string[] | null): string | null {
-  if (only === null) return null;
-  const placed = ctx.setup.storylines.map((s) => s.id).sort(byText);
-  const unknown = only.filter((id) => !placed.includes(id));
-  return unknown.length === 0 ? null : `no storyline ${unknown.join(", ")} in this setup; it placed ${placed.join(", ")}`;
+/** The line that names a truth file that is not one, by the storyline's label: the file's name is the storyline's id, so only show --reveal prints it. Shared with seed-tasks. */
+export function badLine(setup: SynthContext["setup"], b: { storyline: string; why: string }): string {
+  return `${labelOf(setup, b.storyline)}: its truth file ${b.why}; synth show --reveal names the file`;
 }
 
+/** `opts.only` names storylines by their labels (story-1, ...), as every output but show --reveal does. */
 export async function synthTasks(ctx: SynthContext, opts: { only: string[] | null; marking: Marking }): Promise<number> {
   const { config, io, human } = ctx;
-  const unknown = unknownOnly(ctx, opts.only);
-  if (unknown !== null) { io.error(unknown); return 1; }
-  const asked = (id: string): boolean => opts.only === null || opts.only.includes(id);
+  const only = onlyIds(ctx.setup, opts.only);
+  if ("error" in only) { io.error(only.error); return 1; }
+  const asked = (id: string): boolean => only.ids === null || only.ids.includes(id);
+  const label = (id: string): string => labelOf(ctx.setup, id);
   const { truths, bad } = readTruths(ctx);
   let code = 0;
-  for (const b of bad.filter((x) => asked(x.storyline))) { io.error(`${b.storyline}: ${b.why}`); code = 1; }
+  for (const b of bad.filter((x) => asked(x.storyline))) { io.error(badLine(ctx.setup, b)); code = 1; }
   const made = new Set(readIndex(config).cases.filter((c) => c.made_by === "tasks").map((c) => c.storyline));
   const wanted = truths.filter((t) => asked(t.storyline) && !made.has(t.storyline));
   let count = 0;
@@ -120,16 +122,16 @@ export async function synthTasks(ctx: SynthContext, opts: { only: string[] | nul
         for (const truth of wanted) {
           const { task } = truth;
           if (!types.includes(task.case_type)) {
-            io.error(`${truth.storyline}: "${task.case_type}" is not a case type${types.length === 0 ? "; none is loaded" : `; one of ${types.join(", ")}`}`);
+            io.error(`${label(truth.storyline)}: "${task.case_type}" is not a case type${types.length === 0 ? "; none is loaded" : `; one of ${types.join(", ")}`}`);
             code = 1;
             continue;
           }
           const wrong = task.starting.find((o) => !deps.runner.observables.matches(o.type, o.value));
-          if (wrong !== undefined) { io.error(`${truth.storyline}: ${wrong.value} is not a ${wrong.type}`); code = 1; continue; }
+          if (wrong !== undefined) { io.error(`${label(truth.storyline)}: ${wrong.value} is not a ${wrong.type}`); code = 1; continue; }
           const session = wb.createCase(caseInput(truth, opts.marking), human, { default_loop: config.loops.default, type: task.case_type });
           recordTruth(config, truth, session, "tasks");
           count++;
-          io.log(`${session.id} ${truth.storyline} (${task.case_type}): ${task.question}`);
+          io.log(`${session.id} ${label(truth.storyline)} (${task.case_type}): ${task.question}`);
         }
       } finally {
         composed.close();

@@ -21,7 +21,7 @@ import { buildSetup } from "../../src/synth/build";
 import type { Built } from "../../src/synth/build";
 import { SEED_FINDING } from "../../src/synth/seed-script";
 import { synthSeed } from "../../src/synth/seed";
-import { setupOf } from "../../src/synth/setup";
+import { setupOf, storyLabels } from "../../src/synth/setup";
 import type { SynthContext } from "../../src/synth/setup";
 import { readIndex } from "../../src/synth/tasks";
 
@@ -95,7 +95,7 @@ test("seed-tasks makes, for each storyline, a case of the loop synth-seed that i
     const human: Actor = { kind: "human", id: config.user };
     expect(cases.map((c) => c.storyline).sort()).toEqual(truths.map((t) => t.storyline).sort());
     for (const { storyline, session } of cases) {
-      expect(first.out).toContain(`seeded ${session.id} for ${storyline}: product 1 published, known answer set (synthetic)`);
+      expect(first.out).toContain(`seeded ${session.id} for ${storyLabels(full.setup).get(storyline)}: product 1 published, known answer set (synthetic)`);
       const s = session.state;
       expect(s.skipped).toEqual([]);
       expect(session.entries().find((e) => e.type === "case.loop_set")?.payload).toEqual({ loop: "synth-seed" });
@@ -177,7 +177,7 @@ test("a second seed-tasks seeds nothing; --only seeds the named ones", async () 
   expect(withCases(broken, (cases) => cases.length)).toBe(0);
 
   const only = ctxOf(broken);
-  expect(await synthSeed(only.ctx, { only: ["cloud-key", "vpn-travel"], marking: "TLP:GREEN" })).toBe(0);
+  expect(await synthSeed(only.ctx, { only: ["cloud-key", "vpn-travel"].map((id) => storyLabels(broken.setup).get(id)!), marking: "TLP:GREEN" })).toBe(0);
   expect(only.err).toEqual([]);
   expect(withCases(broken, (cases) => cases.map((c) => c.storyline).sort())).toEqual(["cloud-key", "vpn-travel"]);
 }, 120_000);
@@ -186,7 +186,7 @@ test("a seed that stops elsewhere (the script's planner turn removed for one sto
   const c = ctxOf(broken);
   expect(await synthSeed(c.ctx, { only: null, marking: "TLP:GREEN" })).toBe(1);
   expect(c.err.length).toBe(1);
-  expect(c.err[0]).toMatch(new RegExp(`^CASE-\\d+ for ${BROKEN} stopped at .+: .+`));
+  expect(c.err[0]).toMatch(new RegExp(`^CASE-\\d+ for ${storyLabels(broken.setup).get(BROKEN)} stopped at .+: .+`));
   expect(c.err[0]).toContain("planner");
   expect(c.out.length).toBe(6);
   withCases(broken, (cases) => {
