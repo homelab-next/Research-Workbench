@@ -384,3 +384,72 @@ test("a case started before slice 12 and stopped at its plan gate goes on to the
     rmSync(d, { recursive: true, force: true });
   }
 });
+
+/** The sample investigation loop's version-2 hash as slice 12's code computed it on the sample as it was before slice 13. */
+const SAMPLE_INVESTIGATION_HASH = "ec2e79367acfc215dbbc23642eb0039c9d2f67971ab12618618fd04f68b35c1c";
+/** The twelve entry types slice 13 adds; a ledger written before it holds none of them. */
+const SLICE_13_TYPES = ["case.type_set", "case.type_proposed", "memory.noted", "memory.revised", "memory.dropped", "memory.bound", "lesson.proposed", "lesson.accepted", "lesson.rejected", "lesson.retired", "memory.exported", "memory.loaded"];
+
+test("a case started before slice 13 and stopped at its plan gate goes on to the publish gate once the root has case types and a loop that reads memory: the hash it recorded, no pause, no memory bound, nothing skipped, replay unchanged", async () => {
+  const d = mkdtempSync(join(tmpdir(), "sample-pre13-"));
+  const sample = sampleRoot(d);
+  try {
+    const config: Config = { ...loadConfig({ env: {}, home: d, repoRoot: d }), data_dir: join(d, "wb"), roots: [{ path: sample.root, trusted: true, credentials: [] }], research: { parallel: 1 } };
+    // before the slice: the sample as it was, the investigation loop at the hash slice 12 gave it
+    let wb = Workbench.open(config.data_dir, { onError: () => {} });
+    let composed = compose(config, wb);
+    expect(composed.deps.pipeline.hash).toBe(SAMPLE_INVESTIGATION_HASH);
+    const first = wb.createCase({ title: "Sample", asked: "Who is behind the traffic to 198.51.100.77?", why: "test", starting: [SAMPLE_START], window: SAMPLE_WINDOW, objective: "sample-objective", marking: "TLP:GREEN" }, human);
+    const engine0 = Engine.open(first, composed.deps);
+    engine0.start(human);
+    expect((await engine0.advance()).waiting).toBe("plan");
+    const before = first.entries();
+    expect(before.some((e) => SLICE_13_TYPES.includes(e.type))).toBe(false);
+    const started = before.find((e) => e.type === "run.started")!;
+    expect(started.type === "run.started" && [started.payload.pipeline, started.payload.pipeline_hash]).toEqual(["investigation", SAMPLE_INVESTIGATION_HASH]);
+    const id = first.id;
+    wb.close();
+    composed.close();
+
+    // the root gains what this slice brings: a case-types manifest, a profile that lists memory references and a loop that reads them
+    writeFileSync(join(sample.root, "context", "case-types.yaml"), "kind: case-types\nid: sample-types\ntypes:\n  - { id: unknown-device, title: Unknown device }\n");
+    const profile = readFileSync(join(sample.root, "context", "profile.yaml"), "utf8").replace("id: investigation", "id: memory-test").replace("    procedure: research-sop\n", "    procedure: research-sop\n    references: [shared-lessons, case-notes]\n");
+    writeFileSync(join(sample.root, "context", "memory-profile.yaml"), profile);
+    const loopBody = Bun.YAML.parse(readFileSync(join(sample.root, "loops", "investigation.yaml"), "utf8")) as Record<string, unknown>;
+    writeFileSync(join(sample.root, "loops", "memo.yaml"), JSON.stringify({
+      ...loopBody, id: "memo", title: "Memo", profile: "memory-test", case_type: "unknown-device",
+      components: { research: { "reference:shared-lessons": { memory: "shared/unknown-device" }, "reference:case-notes": { memory: "case/notes" } } },
+    }));
+
+    wb = Workbench.open(config.data_dir, { onError: () => {} });
+    composed = compose(config, wb);
+    try {
+      expect(composed.problems.filter((p) => p.startsWith("loop "))).toEqual([]);
+      expect(composed.deps.loops!.current("memo")).not.toBeNull();
+      expect(composed.deps.pipeline.hash).toBe(SAMPLE_INVESTIGATION_HASH);
+      const again = wb.session(id);
+      const engine = Engine.open(again, composed.deps);
+      engine.acceptPlan({ budgets: { s3: 1 }, actor: human });
+      expect(await engine.advance()).toMatchObject({ status: "waiting", waiting: "publish" });
+      const entries = again.entries();
+      expect(entries.slice(0, before.length)).toEqual(before);
+      expect(entries.some((e) => e.type === "run.paused")).toBe(false);
+      expect(entries.some((e) => SLICE_13_TYPES.includes(e.type))).toBe(false);
+      expect(entries.filter((e) => e.type === "run.started").length).toBe(1);
+      expect(again.state.memory).toEqual({ type: null, type_by: null, proposed_type: null, notes: {}, order: [], pending: null, bound: null });
+      expect(again.state.skipped).toEqual([]);
+      expect(verifyCase(again.dir).ok).toBe(true);
+      for (let n = 1; n <= entries.length; n++) {
+        const at = fold(entries, n);
+        if (n <= before.length) expect(at).toEqual(fold(before, n));
+        expect(at.skipped).toEqual([]);
+      }
+    } finally {
+      wb.close();
+      composed.close();
+    }
+  } finally {
+    sample.close();
+    rmSync(d, { recursive: true, force: true });
+  }
+});

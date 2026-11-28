@@ -208,7 +208,7 @@ const loopFileOf = (raw: string): string | Response => {
 // ---------- the drafts a person sends ----------
 
 const DRAFT_STRINGS = ["id", "title", "about", "profile", "entry"] as const;
-const DRAFT_FIELDS = [...DRAFT_STRINGS, "stages", "inputs", "outputs", "components", "uses"];
+const DRAFT_FIELDS = [...DRAFT_STRINGS, "stages", "inputs", "outputs", "components", "uses", "case_type"];
 /** A draft from a body, or why it is not one. */
 function draftFrom(x: unknown, id: string): LoopDraft | string {
   if (!isPlainObject(x)) return "the draft must be a JSON object";
@@ -217,10 +217,12 @@ function draftFrom(x: unknown, id: string): LoopDraft | string {
   for (const f of DRAFT_STRINGS) if (typeof x[f] !== "string") return `the draft's ${f} must be text`;
   if (!Array.isArray(x.stages) || !x.stages.every((s) => isPlainObject(s))) return "the draft's stages must be a list of stages";
   if (x.id !== id) return `the draft is of loop "${String(x.id).slice(0, 64)}", not "${id}"`;
+  if (x.case_type !== undefined && x.case_type !== null && typeof x.case_type !== "string") return "the draft's case_type must be text or null";
   const at = (k: string): Json => (Object.hasOwn(x, k) ? (x[k] as Json) : {});
   return {
     id: x.id as string, title: x.title as string, about: x.about as string, profile: x.profile as string, entry: x.entry as string,
     stages: x.stages as Record<string, Json>[], inputs: at("inputs"), outputs: at("outputs"), components: at("components"), uses: at("uses"),
+    case_type: typeof x.case_type === "string" ? x.case_type : null,
   };
 }
 

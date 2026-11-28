@@ -3,6 +3,7 @@ import { canonical } from "../core/canonical";
 import type { Ledger } from "../core/ledger";
 import type { Workbench } from "../core/workbench";
 import { loadProviders } from "../agents/providers";
+import { loadCaseTypes } from "../modules/case-types";
 import { rootsOf } from "../modules/config";
 import type { Config } from "../modules/config";
 import { ConnectorPool } from "../modules/connectors";
@@ -132,9 +133,11 @@ function build(config: Config, wb: Workbench, opts: { refuse_hosts?: () => reado
   try {
     const loaded = loadProviders(registry, secrets, opts.refuse_hosts ? { refuse_hosts: opts.refuse_hosts } : {});
     problems.push(...loaded.problems.map((p) => `${p.path}: ${p.error}`));
+    const caseTypes = loadCaseTypes(registry);
+    problems.push(...caseTypes.problems);
     const ctx: ResolveContext = {
       registry, content: wb.chainBlobs, chain: wb.chain, trusted: roots.filter((r) => r.trusted).map((r) => r.path),
-      output: (loop, output) => latestOutput(wb.chain, wb.chainBlobs, loop, output),
+      output: (loop, output) => latestOutput(wb.chain, wb.chainBlobs, loop, output), caseTypes: caseTypes.types.map((t) => t.id),
     };
     const loops = loadLoops(registry, ctx, { max_depth: config.loops.max_depth, max_children: config.loops.max_children });
     const id = config.loops.default;

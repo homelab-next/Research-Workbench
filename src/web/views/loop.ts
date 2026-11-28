@@ -11,7 +11,7 @@ import { hashChip, problemList, versionLine } from "./loops";
 export let editButton: ((shell: Shell, loop: LoopView) => HTMLElement[]) | null = null;
 export function setEditButton(make: typeof editButton): void { editButton = make; }
 
-const SOURCE_WORDS: Record<ItemView["source"], string> = { root: "root", pinned: "pinned", "loop-output": "loop output", inline: "inline", "built-in": "built in" };
+const SOURCE_WORDS: Record<ItemView["source"], string> = { root: "root", pinned: "pinned", "loop-output": "loop output", inline: "inline", memory: "memory", "built-in": "built in" };
 const modelWords = (m: ModelChoice): string => `${m.provider} ${m.model} · effort ${m.effort ?? "default"}`;
 
 /**

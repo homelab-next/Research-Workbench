@@ -10,6 +10,7 @@ import type { Ledger } from "../core/ledger";
 import { Refused } from "../core/refused";
 import type { Actor } from "../core/types";
 import { guardProblems, latestOutput } from "../cli/compose";
+import { loadCaseTypes } from "./case-types";
 import { rootsOf } from "./config";
 import type { Config, RootConfig } from "./config";
 import { parseManifestFile } from "./manifests";
@@ -37,7 +38,11 @@ export const WRITABLE_KINDS: readonly string[] = ["loop", "stage", "source", "pi
 export interface ChangeCheck { ok: boolean; problems: string[]; files: { path: string; kind: string; id: string; hash: string; before: string | null }[] }
 export interface SaveDeps { config: Config; chain: Ledger; content: BlobStore; secrets: readonly string[] }
 /** A loop as the forms edit it: the manifest's fields, every stage inline. */
-export interface LoopDraft { id: string; title: string; about: string; profile: string; entry: string; stages: Record<string, Json>[]; inputs: Json; outputs: Json; components: Json; uses: Json }
+export interface LoopDraft {
+  id: string; title: string; about: string; profile: string; entry: string; stages: Record<string, Json>[]; inputs: Json; outputs: Json; components: Json; uses: Json;
+  /** The case type a case made on the loop takes when the person names none; absent or null: none. */
+  case_type?: string | null;
+}
 
 /** The first line of a loop file the workbench writes. */
 export const WRITTEN_HEADER = "# written by the workbench; edit it in the Loops page or by hand";
@@ -200,6 +205,7 @@ function plan(deps: SaveDeps, root: string, files: ManifestFile[]): { check: Cha
     const content = new Overlay(join(scratch, "blobs"), deps.content);
     const ctx = (registry: Registry): ResolveContext => ({
       registry, content, chain: deps.chain, trusted, output: (loop, output) => latestOutput(deps.chain, deps.content, loop, output),
+      caseTypes: loadCaseTypes(registry).types.map((t) => t.id),
     });
     const before = loadRegistry(roots);
     const beforeLoops = loadLoops(before, ctx(before), caps);
@@ -404,7 +410,7 @@ export function copyOf(loop: ResolvedLoop, id: string, title: string): LoopDraft
   const clone = (x: unknown): Json => JSON.parse(JSON.stringify(x)) as Json;
   return {
     id, title, about: m.about, profile: m.profile, entry: loop.pipeline.stages[0]!.id, stages,
-    inputs: clone(m.inputs), outputs: clone(m.outputs), components: clone(m.components), uses: clone(m.uses),
+    inputs: clone(m.inputs), outputs: clone(m.outputs), components: clone(m.components), uses: clone(m.uses), case_type: m.case_type,
   };
 }
 
@@ -442,6 +448,8 @@ export function loopText(draft: LoopDraft, version: number, current: ResolvedLoo
   return `${WRITTEN_HEADER}\n${toYaml({
     kind: "loop", id: draft.id, title: draft.title, about: draft.about, version, profile: draft.profile, entry: draft.entry, stages: keptStages(draft, current),
     inputs: draft.inputs, outputs: draft.outputs, components: draft.components, uses: draft.uses,
+    // the key is written only when there is a case type, so a loop saved before slice 13 is written as it was
+    ...(typeof draft.case_type === "string" ? { case_type: draft.case_type } : {}),
   })}`;
 }
 

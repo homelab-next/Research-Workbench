@@ -34,7 +34,7 @@ export interface NewCaseInput { title: string; asked: string; why: string; start
   loop?: string }
 
 /** One component, check or built-in rule of a loop's stage: where it comes from and its hash (null for what is built in). */
-export interface ItemView { kind: string; id: string; title: string; source: "root" | "pinned" | "loop-output" | "inline" | "built-in"; hash: string | null }
+export interface ItemView { kind: string; id: string; title: string; source: "root" | "pinned" | "loop-output" | "inline" | "memory" | "built-in"; hash: string | null }
 export interface LoopStageView {
   id: string; title: string; runs: StageDef["runs"]; role: string; gate: StageDef["gate"]; reviews: boolean; on_pass: string | null; on_fail: string | null; hash: string; inline: boolean;
   /** persona, rules, goal, procedure, skills, references, gate guides, schema, framework, standard, memory sources (none in this slice) */

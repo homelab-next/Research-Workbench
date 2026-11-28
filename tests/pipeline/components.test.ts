@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BlobStore } from "../../src/core/blobs";
 import { Ledger } from "../../src/core/ledger";
 import type { Registry } from "../../src/modules/registry";
 import { loadRegistry } from "../../src/modules/registry-record";
-import { ComponentError, resolveComponent, rootComponents } from "../../src/pipeline/components";
+import { ComponentError, MEMORY_SOURCE, memoryItemHash, memoryManifest, memorySpecOf, parseSource, resolveComponent, rootComponents } from "../../src/pipeline/components";
 import type { ResolveContext } from "../../src/pipeline/components";
 import { copySample } from "../helpers/sample-root";
 
@@ -104,7 +104,77 @@ test("loop-output with no such output recorded is refused by name", () => {
   expect(refusal(() => resolveComponent(ctx, "frame", "reference", "brief", { "loop-output": "triage.cards" }))).toBe('reference "brief": there is no published output "cards" of loop "triage"');
 });
 
-test("memory is refused: memory sources arrive in slice 13", () => {
-  const ctx = ctxOf(load());
-  expect(refusal(() => resolveComponent(ctx, "research", "skill", "ask-the-person", { memory: "notes/latest" }))).toBe('skill "ask-the-person": memory sources arrive in slice 13');
+// ---- slice 13: memory sources
+
+test("parseSource takes shared/unknown-device, shared/* and case/notes, and nothing else under memory", () => {
+  for (const v of ["shared/unknown-device", "shared/*", "case/notes"]) expect(parseSource({ memory: v })).toEqual({ memory: v });
+  for (const v of ["shared/", "shared/Unknown", "case/other", "other/x", "shared/a/b", "notes/latest", " shared/*", "shared/-x", `shared/${"a".repeat(65)}`, ""]) {
+    expect(parseSource({ memory: v })).toBeNull();
+    expect(MEMORY_SOURCE.test(v)).toBe(false);
+  }
+  expect(parseSource({ memory: "shared/*", pinned: "a".repeat(64) })).toBeNull();
+  expect(parseSource({ memory: 1 })).toBeNull();
+});
+
+test("a memory source resolves a reference to a marker item: source memory, the hash of the selector, no path, and the selector on the item", () => {
+  const ctx = ctxOf(load(), { caseTypes: ["unknown-device"] });
+  const { manifest, item } = resolveComponent(ctx, "research", "reference", "shared-lessons", { memory: "shared/unknown-device" });
+  expect(item).toEqual({ stage: "research", kind: "reference", id: "shared-lessons", title: "shared-lessons", source: "memory", hash: memoryItemHash("shared/unknown-device"), path: null, memory: "shared/unknown-device" });
+  expect(memorySpecOf(manifest)).toBe("shared/unknown-device");
+  expect(manifest.text).toBe("");
+  expect(manifest).toEqual(memoryManifest("shared-lessons", "shared/unknown-device"));
+  expect(manifest).toEqual({
+    kind: "reference", id: "shared-lessons", title: "shared-lessons", hash: memoryItemHash("shared/unknown-device"), root: "", path: "", dir: "",
+    body: { kind: "reference", id: "shared-lessons", title: "shared-lessons", memory: "shared/unknown-device" }, text: "",
+  });
+  expect(memoryItemHash("shared/unknown-device")).not.toBe(memoryItemHash("shared/*"));
+  // shared/* and case/notes need no loaded case type
+  expect(resolveComponent(ctx, "research", "reference", "any", { memory: "shared/*" }).item.memory).toBe("shared/*");
+  expect(resolveComponent(ctxOf(load(), { caseTypes: [] }), "research", "reference", "notes", { memory: "case/notes" }).item).toMatchObject({ source: "memory", memory: "case/notes", path: null });
+  // with no list of case types, any id resolves
+  expect(resolveComponent(ctxOf(load()), "research", "reference", "x", { memory: "shared/phishing" }).item.memory).toBe("shared/phishing");
+});
+
+test("a memory source for rules, a persona, a procedure, a skill, a gate, a schema, a standard, a framework, a profile, a check or a check script is refused: memory may only be a reference", () => {
+  const ctx = ctxOf(load(), { caseTypes: ["unknown-device"] });
+  for (const kind of ["rules", "persona", "procedure", "skill", "gate", "schema", "standard", "framework", "profile", "check", "check-script"]) {
+    for (const memory of ["shared/unknown-device", "shared/*", "case/notes"]) {
+      expect(refusal(() => resolveComponent(ctx, "research", kind, "x", { memory })))
+        .toBe(`${kind} "x": memory may only be a reference: a lesson is a note, never rules, a persona, a procedure, a skill, a gate guide, a schema or a check`);
+    }
+  }
+});
+
+test("shared/<type> for a case type that is not loaded is refused: there is no case type", () => {
+  const ctx = ctxOf(load(), { caseTypes: ["unknown-device"] });
+  expect(refusal(() => resolveComponent(ctx, "research", "reference", "shared-lessons", { memory: "shared/phishing" }))).toBe('reference "shared-lessons": there is no case type "phishing"');
+  expect(refusal(() => resolveComponent(ctxOf(load(), { caseTypes: [] }), "research", "reference", "shared-lessons", { memory: "shared/unknown-device" }))).toBe('reference "shared-lessons": there is no case type "unknown-device"');
+});
+
+test("resolving a memory source puts nothing in the content store and reads no store", () => {
+  const registry = load();
+  const held = readdirSync(join(dir, "blobs")).sort();
+  const touched: string[] = [];
+  const watch = <T extends object>(name: string, o: T): T => new Proxy(o, { get: (t, k) => { touched.push(`${name}.${String(k)}`); return Reflect.get(t, k) as unknown; } });
+  const ctx: ResolveContext = {
+    registry: watch("registry", registry), content: watch("content", content), chain: watch("chain", chain), trusted: [root], caseTypes: ["unknown-device"],
+    output: () => { touched.push("output"); return null; },
+  };
+  for (const memory of ["shared/unknown-device", "shared/*", "case/notes"]) resolveComponent(ctx, "research", "reference", "m", { memory });
+  expect(touched).toEqual([]);
+  expect(readdirSync(join(dir, "blobs")).sort()).toEqual(held);
+});
+
+test("memorySpecOf is null for a root reference, a loop output and a manifest whose body has memory: 1", () => {
+  writeFileSync(join(root, "context", "lessons-ref.md"), "---\nkind: reference\nid: lessons-ref\ntitle: Lessons\nmemory: shared/*\n---\nA hand-written reference.\n");
+  const registry = load();
+  const ctx = ctxOf(registry, {}, () => ({ case: "CASE-3", head: "c".repeat(64), marking: "TLP:GREEN", hash: "d".repeat(64), text: "An output." }));
+  const rootRef = resolveComponent(ctx, "research", "reference", "lessons-ref", "root").manifest;
+  expect(rootRef.body.memory).toBe("shared/*");
+  expect(memorySpecOf(rootRef)).toBeNull();
+  expect(memorySpecOf(resolveComponent(ctx, "frame", "reference", "brief", { "loop-output": "investigation.product" }).manifest)).toBeNull();
+  const marker = memoryManifest("m", "shared/*");
+  expect(memorySpecOf({ ...marker, body: { ...marker.body, memory: 1 } })).toBeNull();
+  expect(memorySpecOf({ ...marker, kind: "skill" })).toBeNull();
+  expect(memorySpecOf(marker)).toBe("shared/*");
 });

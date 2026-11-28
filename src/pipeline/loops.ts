@@ -6,12 +6,13 @@ import { sha256Hex } from "../core/hash";
 import type { Schema } from "../core/schema";
 import { validate } from "../core/schema";
 import type { Marking } from "../core/types";
+import { CASE_TYPE_ID } from "../core/state/memory";
 import { loadProfile } from "../agents/context";
 import type { Profile } from "../agents/context";
 import { describeErrors, parseManifestFile } from "../modules/manifests";
 import type { LoadedManifest } from "../modules/manifests";
 import type { Registry } from "../modules/registry";
-import { CHECK_SCRIPT, ComponentError, ItemComponents, manifestFromBytes, parseSource, resolveComponent, rootRelative, scriptManifest } from "./components";
+import { CHECK_SCRIPT, ComponentError, ItemComponents, MEMORY_SOURCE, manifestFromBytes, memoryManifest, parseSource, resolveComponent, rootRelative, scriptManifest } from "./components";
 import type { Components, ResolveContext, ResolvedItem, SourceSpec } from "./components";
 import { INPUT_SELECTORS, legacyHash, loadChecks, loadPipeline, pipelineProblem, stageFrom } from "./manifests";
 import type { Pipeline, StageManifest } from "./manifests";
@@ -26,6 +27,8 @@ export interface LoopManifest {
   profile: string; entry: string; stages: (string | Record<string, Json>)[]; inputs: Record<string, LoopInput>; outputs: Record<string, LoopOutput>;
   components: Record<string, Record<string, SourceSpec>>; // stage (or "*") → "kind:id" → source
   uses: { playbooks: string[]; pivots: string[]; sources: string[] };
+  /** The case type a case made on this loop takes when the person names none; null when the loop names none. */
+  case_type: string | null;
 }
 export interface LoopLock {
   format: 1; loop: string; version: number; title: string; about: string; hash: string; legacy_hash: string | null;
@@ -80,6 +83,7 @@ const LOOP_SCHEMA: Schema = {
     outputs: { type: "object", additionalProperties: { type: "object", additionalProperties: false, required: ["from"], properties: { from: { type: "string", enum: [...OUTPUT_FROM] } } } },
     components: { type: "object", additionalProperties: { type: "object" } },
     uses: { type: "object", additionalProperties: false, properties: { playbooks: strList, pivots: strList, sources: strList } },
+    case_type: { type: "string", pattern: CASE_TYPE_ID.source },
   },
 };
 
@@ -99,7 +103,7 @@ export function parseLoop(m: LoadedManifest): LoopManifest | string {
   const b = m.body as unknown as {
     id: string; title: string; about?: string; version: number; profile: string; entry: string; stages: (string | Record<string, Json>)[];
     inputs?: Record<string, { type: LoopInput["type"]; required?: boolean }>; outputs?: Record<string, LoopOutput>; components?: Record<string, Record<string, Json>>;
-    uses?: { playbooks?: string[]; pivots?: string[]; sources?: string[] };
+    uses?: { playbooks?: string[]; pivots?: string[]; sources?: string[] }; case_type?: string;
   };
   const ids: string[] = [];
   for (const s of b.stages) {
@@ -129,8 +133,21 @@ export function parseLoop(m: LoadedManifest): LoopManifest | string {
   return {
     id: b.id, title: b.title, about: b.about ?? "", version: b.version, hash: m.hash, path: m.root === "" ? null : rootRelative(m.root, m.path), root: m.root === "" ? null : m.root,
     implicit: false, profile: b.profile, entry: b.entry, stages: b.stages, inputs, outputs: { ...(b.outputs ?? {}) }, components,
-    uses: { playbooks: [...(b.uses?.playbooks ?? [])], pivots: [...(b.uses?.pivots ?? [])], sources: [...(b.uses?.sources ?? [])] },
+    uses: { playbooks: [...(b.uses?.playbooks ?? [])], pivots: [...(b.uses?.pivots ?? [])], sources: [...(b.uses?.sources ?? [])] }, case_type: b.case_type ?? null,
   };
+}
+
+/** What one memory item of a loop's lock reads: the stage, the component, the store and its selector. */
+export interface MemoryUse { stage: string; component: string; store: "shared" | "case"; selector: string }
+/** The memory a loop's stages read, from its lock: one per memory item, sorted by stage then component with `<`. */
+export function memoryUses(lock: Pick<LoopLock, "items">): MemoryUse[] {
+  const out: MemoryUse[] = [];
+  for (const i of lock.items) {
+    if (i.source !== "memory" || typeof i.memory !== "string" || !MEMORY_SOURCE.test(i.memory)) continue;
+    const slash = i.memory.indexOf("/");
+    out.push({ stage: i.stage, component: i.id, store: i.memory.slice(0, slash) === "case" ? "case" : "shared", selector: i.memory.slice(slash + 1) });
+  }
+  return out.sort((a, b) => lt(a.stage, b.stage) || lt(a.component, b.component));
 }
 
 /** The version-2 hash of "How the hard questions are answered". */
@@ -222,7 +239,7 @@ export function loadLoops(registry: Registry, ctx: ResolveContext, caps: LoopCap
     const s = slot(DEFAULT_LOOP);
     s.manifest = {
       id: DEFAULT_LOOP, title: "Investigation", about: "", version: 1, hash: sha256Hex(canonical({ implicit: DEFAULT_LOOP })), path: null, root: null, implicit: true,
-      profile: DEFAULT_LOOP, entry: "", stages: [], ...IMPLICIT_IO, components: {}, uses: { playbooks: [], pivots: [], sources: [] },
+      profile: DEFAULT_LOOP, entry: "", stages: [], ...IMPLICIT_IO, components: {}, uses: { playbooks: [], pivots: [], sources: [] }, case_type: null,
     };
     s.problems.push(IMPLICIT_NOTE);
   }
@@ -299,6 +316,7 @@ export function loadLoops(registry: Registry, ctx: ResolveContext, caps: LoopCap
   /** The loop resolved, or the problems that stop it; `notes` takes what does not (an implicit loop's left-out stage manifests). */
   const resolveLoop = (man: LoopManifest, notes: string[]): ResolvedLoop | string[] => {
     const problems: string[] = [];
+    if (man.case_type !== null && ctx.caseTypes !== undefined && !ctx.caseTypes.includes(man.case_type)) problems.push(`case_type "${man.case_type}" is not a case type here`);
     // the stages, in the order listed
     let stages: StageManifest[] = [];
     const stageItems: { manifest: LoadedManifest | null; item: ResolvedItem; body: Json }[] = [];
@@ -465,7 +483,7 @@ function fromLock(ctx: ResolveContext, lock: LoopLock): ResolvedLoop | string {
     } else {
       man = {
         id: lock.loop, title: lock.title, about: lock.about, version: lock.version, hash: lock.manifest.hash, path: null, root: null, implicit: true,
-        profile: lock.profile, entry: lock.entry, stages: [], ...IMPLICIT_IO, components: {}, uses: { playbooks: [], pivots: [], sources: [] },
+        profile: lock.profile, entry: lock.entry, stages: [], ...IMPLICIT_IO, components: {}, uses: { playbooks: [], pivots: [], sources: [] }, case_type: null,
       };
       listed = [...stageItem.keys()];
     }
@@ -491,7 +509,11 @@ function fromLock(ctx: ResolveContext, lock: LoopLock): ResolvedLoop | string {
     for (const item of lock.items) {
       if (item.kind === "stage") continue;
       let m: LoadedManifest;
-      if (item.source === "loop-output") {
+      if (item.source === "memory") {
+        m = memoryManifest(item.id, item.memory!);
+        // the item's hash is its selector's: a lock whose selector was changed under its hash is not the loop it names
+        if (m.hash !== item.hash) return `the lock of loop "${lock.loop}": ${item.kind} "${item.id}" of stage ${item.stage} does not hash to its memory source`;
+      } else if (item.source === "loop-output") {
         const text = new TextDecoder().decode(bytesOf(item.hash, `reference "${item.id}"`));
         const marking: Marking | null = item.origin?.marking ?? null;
         m = { kind: "reference", id: item.id, title: item.title, hash: item.hash, root: "", path: "", dir: "", body: { kind: "reference", id: item.id, title: item.title, marking }, text };
@@ -514,13 +536,15 @@ function fromLock(ctx: ResolveContext, lock: LoopLock): ResolvedLoop | string {
 }
 
 const HEX64 = /^[0-9a-f]{64}$/;
-const SOURCES: readonly string[] = ["root", "pinned", "loop-output", "inline"];
+const SOURCES: readonly string[] = ["root", "pinned", "loop-output", "inline", "memory"];
 function isItem(x: unknown): x is ResolvedItem {
   if (!isPlainObject(x)) return false;
   const o = x as Record<string, unknown>;
   if (!["stage", "kind", "id", "title"].every((k) => typeof o[k] === "string")) return false;
   if (typeof o.source !== "string" || !SOURCES.includes(o.source) || typeof o.hash !== "string" || !HEX64.test(o.hash)) return false;
   if (o.path !== null && typeof o.path !== "string") return false;
+  // a memory item names its selector, and no other item names one
+  if (o.source === "memory" ? typeof o.memory !== "string" || !MEMORY_SOURCE.test(o.memory) : o.memory !== undefined) return false;
   if (o.origin !== undefined) {
     if (!isPlainObject(o.origin)) return false;
     const g = o.origin as Record<string, unknown>;

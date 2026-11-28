@@ -17,7 +17,8 @@ import { exportFiles, exportLoop, importLoop, planImport, sameContent, sourceSha
 import type { Registry } from "../../src/modules/registry";
 import { loadRegistry } from "../../src/modules/registry-record";
 import { Secrets } from "../../src/modules/secrets";
-import { loadLoops } from "../../src/pipeline/loops";
+import { loadLoops, memoryUses } from "../../src/pipeline/loops";
+import { loadCaseTypes } from "../../src/modules/case-types";
 import type { LoopCatalog } from "../../src/pipeline/loops";
 import { copySample } from "../helpers/sample-root";
 
@@ -410,4 +411,52 @@ test("an exported lock carries no loop-output item's origin: the case it came fr
   expect(text).not.toContain("d".repeat(64));
   expect(JSON.stringify(manifest)).not.toContain("CASE-77");
   expect((manifest.lock as unknown as { items: { id: string }[] }).items.some((i) => i.id === "planner")).toBe(true);
+});
+
+test("exportLoop of a loop that reads memory writes its manifests and no member for a memory item; the file imports and resolves", async () => {
+  const CASE_TYPES = "kind: case-types\nid: sample-types\ntypes:\n  - { id: unknown-device, title: Unknown device }\n";
+  writeFileSync(join(root, "context", "case-types.yaml"), CASE_TYPES);
+  const profile = readFileSync(join(root, "context", "profile.yaml"), "utf8").replace("id: investigation", "id: memory-test").replace("    procedure: research-sop\n", "    procedure: research-sop\n    references: [shared-lessons, case-notes]\n");
+  writeFileSync(join(root, "context", "memory-profile.yaml"), profile);
+  const body = Bun.YAML.parse(readFileSync(join(root, "loops", "investigation.yaml"), "utf8")) as Record<string, Json>;
+  const components = { research: { "reference:shared-lessons": { memory: "shared/unknown-device" }, "reference:case-notes": { memory: "case/notes" } } };
+  writeFileSync(join(root, "loops", "memo.yaml"), JSON.stringify({ ...body, id: "memo", title: "Memo", profile: "memory-test", case_type: "unknown-device", components }));
+  const { registry, loops } = sampleWb();
+  expect(loops.problems("memo")).toEqual([]);
+  const loop = loops.current("memo")!;
+  const { path, manifest } = await exportLoop({ loops, registry, secrets }, "memo", join(dir, "out"));
+  expect(manifest.hash).toBe(loop.pipeline.hash);
+  const paths = manifest.files.map((f) => f.path);
+  expect(paths).toContain("loops/memo.yaml");
+  expect(paths).toContain("context/memory-profile.yaml");
+  expect(paths).not.toContain("context/case-types.yaml");
+  // every member is a file of the lock or of uses; a memory item has none
+  const withPath = loop.lock.items.filter((i) => i.path !== null).map((i) => i.path);
+  for (const p of withPath) expect(paths).toContain(p!);
+  expect(manifest.files.some((f) => f.id === "shared-lessons" || f.id === "case-notes")).toBe(false);
+  expect(manifest.lock).toEqual(JSON.parse(JSON.stringify(loop.lock)));
+
+  // another workbench, whose own root names the case type, imports the file and resolves the loop to the same hash
+  const { config, own } = emptyWorkbench();
+  writeFileSync(join(own, "case-types.yaml"), CASE_TYPES);
+  const { root: folder } = await importLoop(path, loadRegistry(rootsOf(config)), config.loops.imports);
+  const roots: RootConfig[] = [{ path: own, trusted: true, credentials: [] }, { path: folder, trusted: true, credentials: [] }];
+  const chain = Ledger.open(join(dir, "importer.db"), "workbench");
+  open.push(chain);
+  const content = new BlobStore(join(dir, "importer-blobs"));
+  const there = loadRegistry(roots, { chain, content });
+  const caseTypes = loadCaseTypes(there).types.map((t) => t.id);
+  expect(caseTypes).toEqual(["unknown-device"]);
+  const theirs = loadLoops(there, { registry: there, content, chain, trusted: roots.map((r) => r.path), output: () => null, caseTypes }, { max_depth: 2, max_children: 8 });
+  expect(theirs.problems("memo")).toEqual([]);
+  const back = theirs.current("memo")!;
+  expect(back.pipeline.hash).toBe(manifest.hash);
+  expect(back.manifest.case_type).toBe("unknown-device");
+  expect(memoryUses(back.lock)).toEqual(memoryUses(loop.lock));
+  // without the case type there, the loop is not usable, and says why
+  rmSync(join(own, "case-types.yaml"));
+  const bare = loadRegistry(roots, { chain, content });
+  const none = loadLoops(bare, { registry: bare, content, chain, trusted: roots.map((r) => r.path), output: () => null, caseTypes: loadCaseTypes(bare).types.map((t) => t.id) }, { max_depth: 2, max_children: 8 });
+  expect(none.current("memo")).toBeNull();
+  expect(none.problems("memo")).toContain('case_type "unknown-device" is not a case type here');
 });

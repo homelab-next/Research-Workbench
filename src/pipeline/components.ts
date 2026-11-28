@@ -1,8 +1,9 @@
-// Where a loop's components come from: the root, an exact version in the content store, a published loop output, or (later) memory.
+// Where a loop's components come from: the root, an exact version in the content store, a published loop output, or memory.
 import { readFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import type { BlobStore } from "../core/blobs";
 import type { Json } from "../core/canonical";
+import { canonical } from "../core/canonical";
 import { sha256Hex } from "../core/hash";
 import type { Ledger } from "../core/ledger";
 import { Refused } from "../core/refused";
@@ -14,14 +15,18 @@ import { recordedAs } from "../modules/registry-record";
 
 export type SourceSpec = "root" | { pinned: string } | { "loop-output": string } | { memory: string };
 export interface ResolvedItem {
-  stage: string; kind: string; id: string; title: string; source: "root" | "pinned" | "loop-output" | "inline"; hash: string; path: string | null;
+  stage: string; kind: string; id: string; title: string; source: "root" | "pinned" | "loop-output" | "inline" | "memory"; hash: string; path: string | null;
   origin?: { case: string; head: string; marking: Marking };
+  /** Set exactly when source is "memory": the store and selector. */
+  memory?: string;
 }
 /** What the context and the checks read a loop's manifests through: the manifest of a kind and id for a stage ("*" for the profile's own), or why there is none. */
 export interface Components { get(stage: string, kind: string, id: string): LoadedManifest | null; items(): ResolvedItem[] }
 export interface ResolveContext {
   registry: Registry; content: BlobStore; chain: Ledger; trusted: readonly string[];
   output(loop: string, output: string): { case: string; head: string; marking: Marking; hash: string; text: string } | null;
+  /** The loaded case types' ids; absent: any id resolves. */
+  caseTypes?: readonly string[];
 }
 
 export class ComponentError extends Refused {
@@ -30,6 +35,23 @@ export class ComponentError extends Refused {
     this.name = "ComponentError";
   }
 }
+
+/** A memory source as a loop writes it: shared/<case-type>, shared/* or case/notes. */
+export const MEMORY_SOURCE = /^(shared\/(\*|[a-z0-9][a-z0-9-]{0,63})|case\/notes)$/;
+/** The hash a memory item has in a loop's lock: of its selector, never of what the store holds. */
+export const memoryItemHash = (spec: string): string => sha256Hex(canonical({ memory: spec }));
+/** The marker a memory component is in a loop's components: a reference with no text, whose body names the source. */
+export function memoryManifest(id: string, spec: string): LoadedManifest {
+  return { kind: "reference", id, title: id, hash: memoryItemHash(spec), root: "", path: "", dir: "", body: { kind: "reference", id, title: id, memory: spec }, text: "" };
+}
+/** The memory source a component's manifest stands for; null for any other manifest. */
+export const memorySpecOf = (m: LoadedManifest): string | null => {
+  const spec = m.body.memory;
+  if (m.kind !== "reference" || typeof spec !== "string" || !MEMORY_SOURCE.test(spec)) return null;
+  return m.hash === memoryItemHash(spec) && m.path === "" && m.text === "" ? spec : null;
+};
+/** Why a memory source may not stand for this component, as resolveComponent refuses it. */
+const NOT_A_REFERENCE = "memory may only be a reference: a lesson is a note, never rules, a persona, a procedure, a skill, a gate guide, a schema or a check";
 
 /** The kind of a check's script file: it is exported beside its check, under the check's id. */
 export const CHECK_SCRIPT = "check-script";
@@ -46,7 +68,7 @@ export function parseSource(x: unknown): SourceSpec | null {
   switch (keys[0]) {
     case "pinned": return HEX64.test(v) ? { pinned: v } : null;
     case "loop-output": return /^[^.\s]+\.[^.\s]+$/.test(v) ? { "loop-output": v } : null;
-    case "memory": return v.trim() !== "" ? { memory: v } : null;
+    case "memory": return MEMORY_SOURCE.test(v) ? { memory: v } : null;
     default: return null;
   }
 }
@@ -123,7 +145,7 @@ function loadedEntry(ctx: ResolveContext, hash: string, kind: string, id: string
 /** One component from its source. Throws ComponentError with the reason of the table in "The version-2 pipeline hash". */
 export function resolveComponent(ctx: ResolveContext, stage: string, kind: string, id: string, spec: SourceSpec): { manifest: LoadedManifest; item: ResolvedItem } {
   const what = `${kind} "${id}"`;
-  if (typeof spec === "object" && "memory" in spec) throw new ComponentError(`${what}: memory sources arrive in slice 13`);
+  if (typeof spec === "object" && "memory" in spec) return memoryComponent(ctx, stage, kind, id, spec.memory);
   if ((kind === "check" || kind === CHECK_SCRIPT) && spec !== "root") throw new ComponentError(`${what}: a check and its script are read from a trusted root`);
   if (spec === "root") {
     if (kind === CHECK_SCRIPT) return rootScript(ctx, stage, id);
@@ -156,6 +178,17 @@ export function resolveComponent(ctx: ResolveContext, stage: string, kind: strin
   const body: Record<string, Json> = { kind: "reference", id, title: id, marking: out.marking };
   const m: LoadedManifest = { kind: "reference", id, title: id, hash: ref.blob, root: "", path: "", dir: "", body, text: out.text };
   return { manifest: m, item: { stage, kind, id, title: id, source: "loop-output", hash: ref.blob, path: null, origin: { case: out.case, head: out.head, marking: out.marking } } };
+}
+
+/** A memory marker: refused for any kind but a reference, and for a case type that is not loaded; reads no store and puts nothing in the content store. */
+function memoryComponent(ctx: ResolveContext, stage: string, kind: string, id: string, spec: string): { manifest: LoadedManifest; item: ResolvedItem } {
+  const what = `${kind} "${id}"`;
+  if (kind !== "reference") throw new ComponentError(`${what}: ${NOT_A_REFERENCE}`);
+  if (!MEMORY_SOURCE.test(spec)) throw new ComponentError(`${what}: "${spec}" is not a memory source: shared/<case-type>, shared/* or case/notes`);
+  const type = spec.startsWith("shared/") ? spec.slice("shared/".length) : null;
+  if (type !== null && type !== "*" && ctx.caseTypes !== undefined && !ctx.caseTypes.includes(type)) throw new ComponentError(`${what}: there is no case type "${type}"`);
+  const manifest = memoryManifest(id, spec);
+  return { manifest, item: { stage, kind: "reference", id, title: id, source: "memory", hash: manifest.hash, path: null, memory: spec } };
 }
 
 /** A root check's script: the file its manifest names, beside it, its bytes put in the content store. */

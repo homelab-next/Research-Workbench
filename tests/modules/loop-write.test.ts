@@ -415,3 +415,74 @@ test("a save through a linked folder inside the root is refused, and nothing is 
   expect(r.problems).toContain("linked/note.md: linked is a link; a save writes through no link");
   expect(readdirSync(outside)).toEqual([]);
 });
+
+// ---- slice 13: a loop's case type and its memory components
+
+/** A case-types manifest and a profile whose research entry lists two references, beside the sample. */
+function memoryRoot(): void {
+  writeFileSync(join(root, "context", "case-types.yaml"), "kind: case-types\nid: sample-types\ntypes:\n  - { id: unknown-device, title: Unknown device }\n");
+  const profile = readFileSync(join(root, "context", "profile.yaml"), "utf8").replace("id: investigation", "id: memory-test").replace("    procedure: research-sop\n", "    procedure: research-sop\n    references: [shared-lessons, case-notes]\n");
+  writeFileSync(join(root, "context", "memory-profile.yaml"), profile);
+}
+const MEMORY_COMPONENTS = { research: { "reference:shared-lessons": { memory: "shared/unknown-device" }, "reference:case-notes": { memory: "case/notes" } } };
+/** The sample's investigation loop as loop "memo": the memory profile, the two memory references and the case type. */
+function memoLoop(): void {
+  const body = Bun.YAML.parse(readFileSync(join(root, "loops", "investigation.yaml"), "utf8")) as Record<string, Json>;
+  writeFileSync(join(root, "loops", "memo.yaml"), JSON.stringify({ ...body, id: "memo", title: "Memo", profile: "memory-test", case_type: "unknown-device", components: MEMORY_COMPONENTS }));
+}
+const memoryItems = (loop: ResolvedLoop) => loop.lock.items.filter((i) => i.source === "memory");
+
+test("draftOf carries a loop's case_type and its memory components, and saving the draft back writes both", () => {
+  memoryRoot();
+  memoLoop();
+  const { loops } = load();
+  expect(loops.problems("memo")).toEqual([]);
+  const loop = loops.current("memo")!;
+  const draft = draftOf(loop);
+  expect(draft.case_type).toBe("unknown-device");
+  expect(draft.components).toEqual(MEMORY_COMPONENTS);
+  expect(saveLoop({ ...deps(), loops }, { ...draft, about: "edited" }, 1, { actor: human }).ok).toBe(true);
+  const text = readFileSync(join(root, "loops", "memo.yaml"), "utf8");
+  expect(text).toContain(`case_type: "unknown-device"`);
+  const saved = load().loops.current("memo")!;
+  expect(saved.manifest.version).toBe(2);
+  expect(saved.manifest.case_type).toBe("unknown-device");
+  expect(saved.manifest.components).toEqual(MEMORY_COMPONENTS);
+  expect(memoryItems(saved)).toEqual(memoryItems(loop));
+  // a save that names a case type no root loads is refused with the loop's own problem
+  const { loops: now } = load();
+  const bad = saveLoop({ ...deps(), loops: now }, { ...draftOf(now.current("memo")!), case_type: "phishing" }, 2, { actor: human });
+  expect(bad.ok).toBe(false);
+  expect(bad.problems).toContain('loop "memo": case_type "phishing" is not a case type here');
+});
+
+test("loopText of a draft with no case type has no case_type key: a loop saved before this slice is written as it was", () => {
+  const loop = investigation();
+  const draft = draftOf(loop);
+  expect(draft.case_type).toBeNull();
+  const { case_type: _c, ...before } = draft; // a draft as the forms made it before this slice
+  const text = loopText(draft, 2);
+  expect(text).not.toContain("case_type");
+  expect(loopText(before, 2)).toBe(text);
+  expect(loopText({ ...draft, case_type: undefined }, 2)).toBe(text);
+  expect(loopText({ ...draft, case_type: "unknown-device" }, 2)).toBe(`${text}case_type: "unknown-device"\n`);
+  // an unchanged save leaves the loop's legacy hash, and the stages it names, as they were
+  const saved = loopText(draft, 2, loop);
+  expect(saved).not.toContain("case_type");
+  expect(Bun.YAML.parse(saved)).toMatchObject({ stages: ["frame", "plan", "research", "assemble", "checks", "evaluate", "challenge", "publish", "feedback"] });
+});
+
+test("copyOf keeps the case type and the memory components", () => {
+  memoryRoot();
+  memoLoop();
+  const { loops } = load();
+  const source = loops.current("memo")!;
+  const draft = copyOf(source, "memo-copy", "Memo, copied");
+  expect(draft.case_type).toBe("unknown-device");
+  expect(draft.components).toEqual(MEMORY_COMPONENTS);
+  expect(copyLoop({ ...deps(), loops }, "memo", "memo-copy", "Memo, copied", { actor: human }).ok).toBe(true);
+  const copied = load().loops.current("memo-copy")!;
+  expect(copied.manifest.case_type).toBe("unknown-device");
+  expect(memoryItems(copied)).toEqual(memoryItems(source));
+  expect(copied.components.items()).toEqual(source.components.items());
+});

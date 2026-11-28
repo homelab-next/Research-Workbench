@@ -15,7 +15,9 @@ import { compose } from "../../src/cli/compose";
 import { Workbench } from "../../src/core/workbench";
 import { loadConfig } from "../../src/modules/config";
 import type { Config } from "../../src/modules/config";
-import { IMPLICIT_NOTE, loadLoops, parseLoop, readLock } from "../../src/pipeline/loops";
+import { IMPLICIT_NOTE, loadLoops, memoryUses, parseLoop, readLock } from "../../src/pipeline/loops";
+import { memoryItemHash, memorySpecOf } from "../../src/pipeline/components";
+import { loadCaseTypes } from "../../src/modules/case-types";
 import { loadPipeline } from "../../src/pipeline/manifests";
 import type { LoopCaps, LoopCatalog, LoopManifest } from "../../src/pipeline/loops";
 import { copySample } from "../helpers/sample-root";
@@ -231,7 +233,8 @@ test("a component key is kind:id of a component the stage has; a source is root,
   const withComponents = (components: Record<string, unknown>): string | LoopManifest => parseLoop(manifestOf(mini({ components })));
   expect(typeof withComponents({ frame: { "persona:orchestrator": "root" }, "*": { "rules:base-rules": { pinned: "a".repeat(64) } } })).toBe("object");
   expect(typeof withComponents({ frame: { "reference:brief": { "loop-output": "investigation.product" } } })).toBe("object");
-  expect(typeof withComponents({ frame: { "skill:ask-the-person": { memory: "notes/latest" } } })).toBe("object");
+  expect(typeof withComponents({ frame: { "skill:ask-the-person": { memory: "case/notes" } } })).toBe("object");
+  expect(withComponents({ frame: { "reference:x": { memory: "notes/latest" } } })).toContain("frame.reference:x: a source is root");
   expect(withComponents({ frame: { persona: "root" } })).toContain('"persona" is not kind:id');
   expect(withComponents({ frame: { "persona:orchestrator": { pinned: "abc" } } })).toContain("frame.persona:orchestrator");
   expect(withComponents({ frame: { "persona:orchestrator": { "loop-output": "investigation" } } })).toContain("frame.persona:orchestrator");
@@ -504,4 +507,195 @@ test("compose does not fail when the default loop is not usable: the problem nam
       } finally { made.close(); }
     } finally { wb.close(); }
   }
+});
+
+// ---- slice 13: a default case type and memory sources
+
+/** The sample's investigation loop with its research stage reading two memory references, under a profile whose research entry lists them; a case-types manifest beside it. */
+const MEMORY_COMPONENTS = { research: { "reference:shared-lessons": { memory: "shared/unknown-device" }, "reference:case-notes": { memory: "case/notes" } } };
+function memoryFixture(opts: { references?: boolean } = {}): void {
+  writeFileSync(join(root, "context", "case-types.yaml"), "kind: case-types\nid: sample-types\ntypes:\n  - { id: unknown-device, title: Unknown device, about: A device on the network nobody can name }\n");
+  const profile = readFileSync(join(root, "context", "profile.yaml"), "utf8").replace("id: investigation", "id: memory-test").replace("title: Investigation", "title: Memory test");
+  const listed = opts.references === false ? profile : profile.replace("    procedure: research-sop\n", "    procedure: research-sop\n    references: [shared-lessons, case-notes]\n");
+  if (opts.references !== false && listed === profile) throw new Error("the profile's research entry was not found");
+  writeFileSync(join(root, "context", "memory-profile.yaml"), listed);
+}
+const memoryLoop = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ ...sampleLoop(), id: "memo", title: "Memo", profile: "memory-test", components: MEMORY_COMPONENTS, ...over });
+/** A catalog whose context lists the loaded case types, as compose's does. */
+function typedCatalog(): { registry: Registry; loops: LoopCatalog } {
+  const registry = loadRegistry([{ path: root, trusted: true, credentials: [] }], { chain, content });
+  const { types, problems } = loadCaseTypes(registry);
+  expect(problems).toEqual([]);
+  return { registry, loops: loadLoops(registry, { ...ctxOf(registry), caseTypes: types.map((t) => t.id) }, CAPS) };
+}
+/** The pipeline hashes of the sample's loops as the workbench computed them before this slice (slice 12's code on the unchanged sample). */
+const SAMPLE_INVESTIGATION_HASH = "ec2e79367acfc215dbbc23642eb0039c9d2f67971ab12618618fd04f68b35c1c";
+const SAMPLE_TRIAGE_HASH = "a355a2cb8ccf568944042d0db18e5bd8e775bbdd196a8ab9c4f62519b3b642b2";
+
+test("a loop whose research stage names memory for two references is usable, and memoryUses lists them", () => {
+  memoryFixture();
+  writeLoop("memo", memoryLoop());
+  const { loops } = typedCatalog();
+  expect(loops.problems("memo")).toEqual([]);
+  const loop = loops.current("memo")!;
+  expect(memoryUses(loop.lock)).toEqual([{ stage: "research", component: "case-notes", store: "case", selector: "notes" }, { stage: "research", component: "shared-lessons", store: "shared", selector: "unknown-device" }]);
+  const items = loop.lock.items.filter((i) => i.source === "memory");
+  expect(items).toEqual([
+    { stage: "research", kind: "reference", id: "case-notes", title: "case-notes", source: "memory", hash: memoryItemHash("case/notes"), path: null, memory: "case/notes" },
+    { stage: "research", kind: "reference", id: "shared-lessons", title: "shared-lessons", source: "memory", hash: memoryItemHash("shared/unknown-device"), path: null, memory: "shared/unknown-device" },
+  ]);
+  expect(memorySpecOf(loop.components.get("research", "reference", "shared-lessons")!)).toBe("shared/unknown-device");
+  expect(loop.components.get("research", "reference", "case-notes")!.text).toBe("");
+  // the stages that read no memory, and the sample's own loops, list none
+  expect(memoryUses(loops.current("investigation")!.lock)).toEqual([]);
+  expect(memoryUses({ items: [] })).toEqual([]);
+});
+
+test("the loop's hash covers the selector: shared/* in place of shared/unknown-device is another hash", () => {
+  memoryFixture();
+  writeLoop("memo", memoryLoop());
+  const first = typedCatalog().loops.current("memo")!.pipeline.hash;
+  writeLoop("memo", memoryLoop({ components: { research: { ...MEMORY_COMPONENTS.research, "reference:shared-lessons": { memory: "shared/*" } } } }));
+  const { loops } = typedCatalog();
+  const now = loops.current("memo")!;
+  expect(now.pipeline.hash).not.toBe(first);
+  expect(memoryUses(now.lock)).toContainEqual({ stage: "research", component: "shared-lessons", store: "shared", selector: "*" });
+});
+
+test("the loop's hash is the same whatever a memory store holds", () => {
+  memoryFixture();
+  writeLoop("memo", memoryLoop());
+  const first = typedCatalog().loops.current("memo")!;
+  // a store beside the workbench, then another store: resolving reads the registry and nothing else
+  mkdirSync(join(dir, "memory"), { recursive: true });
+  writeFileSync(join(dir, "memory", "ledger.sqlite"), "not a store");
+  const second = typedCatalog().loops.current("memo")!;
+  writeFileSync(join(dir, "memory", "ledger.sqlite"), "another store altogether");
+  const third = typedCatalog().loops.current("memo")!;
+  expect(second.pipeline.hash).toBe(first.pipeline.hash);
+  expect(third.pipeline.hash).toBe(first.pipeline.hash);
+  expect(third.lock).toEqual(first.lock);
+});
+
+test("the same loop without the references in its profile, or naming memory for one, has a root reference that is not loaded as its problem", () => {
+  memoryFixture();
+  // naming memory for only one: the other is a root reference, which no root holds
+  writeLoop("memo", memoryLoop({ components: { research: { "reference:shared-lessons": { memory: "shared/unknown-device" } } } }));
+  let { loops } = typedCatalog();
+  expect(loops.current("memo")).toBeNull();
+  expect(loops.problems("memo")).toContain('stage "research": reference "case-notes" is not loaded');
+  // naming memory for none
+  writeLoop("memo", memoryLoop({ components: {} }));
+  ({ loops } = typedCatalog());
+  expect(loops.problems("memo")).toContain('stage "research": reference "case-notes" is not loaded');
+  expect(loops.problems("memo")).toContain('stage "research": reference "shared-lessons" is not loaded');
+  // a profile that does not list them: the components name what is no component of the stage
+  rmSync(join(root, "context", "memory-profile.yaml"));
+  memoryFixture({ references: false });
+  writeLoop("memo", memoryLoop());
+  ({ loops } = typedCatalog());
+  expect(loops.current("memo")).toBeNull();
+  expect(loops.problems("memo")).toContain('components.research: "reference:shared-lessons" is not a component of stage research');
+  expect(loops.problems("memo")).toContain('components.research: "reference:case-notes" is not a component of stage research');
+});
+
+test("fromLock rebuilds the loop from the content store with its memory items, and its hash is the lock's", () => {
+  memoryFixture();
+  writeLoop("memo", memoryLoop());
+  const first = typedCatalog().loops.current("memo")!;
+  // the root changes and the case types go: the lock still rebuilds, from the content store alone
+  rmSync(join(root, "context", "case-types.yaml"));
+  editFile("context/personas/researcher.md", "You are the researcher.", "You are someone else.");
+  const back = typedCatalog().loops.fromLock(first.lock);
+  if (typeof back === "string") throw new Error(back);
+  expect(back.pipeline).toEqual(first.pipeline);
+  expect(back.pipeline.hash).toBe(first.lock.hash);
+  expect(back.lock).toEqual(first.lock);
+  expect(back.manifest.case_type).toBe(first.manifest.case_type);
+  expect(back.components.items()).toEqual(first.components.items());
+  expect(back.components.get("research", "reference", "shared-lessons")).toEqual(first.components.get("research", "reference", "shared-lessons"));
+  expect(memorySpecOf(back.components.get("research", "reference", "case-notes")!)).toBe("case/notes");
+  // a memory item whose selector was changed in the lock no longer hashes to it
+  const forged = { ...first.lock, items: first.lock.items.map((i) => (i.id === "shared-lessons" ? { ...i, memory: "shared/*" } : i)) };
+  expect(typedCatalog().loops.fromLock(forged)).toBe('the lock of loop "memo": reference "shared-lessons" of stage research does not hash to its memory source');
+});
+
+test("readLock refuses an item of source memory with no memory field, with one that is not a memory source, and a root item that has one", () => {
+  memoryFixture();
+  writeLoop("memo", memoryLoop());
+  const { loops } = typedCatalog();
+  const lock = loops.current("memo")!.lock;
+  const bytes = (x: unknown): Uint8Array => new TextEncoder().encode(JSON.stringify(x));
+  expect(loops.readLock(bytes(lock))).toEqual(lock);
+  const withItem = (f: (i: (typeof lock.items)[number]) => Record<string, unknown>): Uint8Array =>
+    bytes({ ...lock, items: lock.items.map((i) => (i.id === "shared-lessons" || (i.kind === "persona" && i.id === "researcher") ? f(i) : i)) });
+  expect(loops.readLock(withItem(({ memory: _m, ...i }) => (i.source === "memory" ? i : { ...i })))).toBeNull();
+  for (const bad of ["notes/latest", "shared/", "", 7, null]) expect(loops.readLock(withItem((i) => (i.source === "memory" ? { ...i, memory: bad } : { ...i })))).toBeNull();
+  expect(loops.readLock(withItem((i) => (i.source === "root" ? { ...i, memory: "case/notes" } : { ...i })))).toBeNull();
+  expect(loops.readLock(withItem((i) => (i.source === "root" ? { ...i, memory: undefined } : { ...i })))).toEqual(lock);
+});
+
+test("case_type on a loop is read; one that is no case type here makes the loop unusable with the reason", () => {
+  memoryFixture();
+  writeLoop("memo", memoryLoop({ case_type: "unknown-device" }));
+  writeLoop("other", memoryLoop({ id: "other", case_type: "phishing" }));
+  const { loops } = typedCatalog();
+  expect(loops.problems("memo")).toEqual([]);
+  expect(loops.current("memo")!.manifest.case_type).toBe("unknown-device");
+  expect(loops.current("other")).toBeNull();
+  expect(loops.problems("other")).toContain('case_type "phishing" is not a case type here');
+  expect(loops.current("investigation")!.manifest.case_type).toBeNull();
+  // the case type is part of the loop's manifest, so of its hash
+  writeLoop("memo", memoryLoop());
+  expect(typedCatalog().loops.current("memo")!.pipeline.hash).not.toBe(loops.current("memo")!.pipeline.hash);
+  // with no list of case types, any well-formed id is usable; an ill-formed one is not a loop
+  expect(catalog().loops.current("other")!.manifest.case_type).toBe("phishing");
+  for (const bad of ["Unknown", "", "a/b", 3]) {
+    const got = parseLoop(manifestOf(mini({ case_type: bad })));
+    expect(typeof got).toBe("string");
+    expect(got as string).toContain("case_type");
+  }
+  expect((parseLoop(manifestOf(mini())) as LoopManifest).case_type).toBeNull();
+  // the implicit loop has none
+  rmSync(join(root, "loops"), { recursive: true });
+  expect(catalog().loops.current("investigation")!.manifest.case_type).toBeNull();
+});
+
+test("sample/loops/investigation.yaml resolves to the two hashes it had before this slice", () => {
+  // the literals: slice 12's code on the sample as it was, so a run that recorded them goes on under the same loop version
+  const plain = catalog().loops;
+  expect(plain.current("investigation")!.pipeline.hash).toBe(SAMPLE_INVESTIGATION_HASH);
+  expect(plain.current("investigation")!.pipeline.legacy_hash).toBe(SAMPLE_LEGACY_HASH);
+  expect(plain.current("triage")!.pipeline.hash).toBe(SAMPLE_TRIAGE_HASH);
+  // and so with case types loaded and a loop that reads memory beside it; it reads no memory, so its runs bind none
+  memoryFixture();
+  writeLoop("memo", memoryLoop({ case_type: "unknown-device" }));
+  const typed = typedCatalog().loops;
+  const loop = typed.current("investigation")!;
+  expect([loop.pipeline.hash, loop.pipeline.legacy_hash]).toEqual([SAMPLE_INVESTIGATION_HASH, SAMPLE_LEGACY_HASH]);
+  expect(typed.current("triage")!.pipeline.hash).toBe(SAMPLE_TRIAGE_HASH);
+  expect(memoryUses(loop.lock)).toEqual([]);
+  expect(loop.lock.items.every((i) => i.source !== "memory" && !("memory" in i))).toBe(true);
+  expect(loop.manifest.case_type).toBeNull();
+  expect(typed.atHash("investigation", SAMPLE_INVESTIGATION_HASH)).toBe(loop);
+});
+
+test("compose resolves loops against the loaded case types, and a case-types problem is one of compose's", () => {
+  memoryFixture();
+  writeLoop("memo", memoryLoop({ case_type: "unknown-device" }));
+  writeLoop("other", memoryLoop({ id: "other", case_type: "phishing" }));
+  writeFileSync(join(root, "context", "more-types.yaml"), "kind: case-types\nid: more-types\ntypes:\n  - { id: Bad_Id, title: Bad }\n");
+  const config = configFor();
+  const wb = Workbench.open(config.data_dir, { onError: () => {} });
+  try {
+    const made = compose(config, wb);
+    try {
+      expect(made.deps.loops!.current("memo")!.manifest.case_type).toBe("unknown-device");
+      expect(made.deps.loops!.current("other")).toBeNull();
+      expect(made.problems).toContain('loop "other": case_type "phishing" is not a case type here');
+      expect(made.problems.some((p) => p.startsWith('case-types "more-types": type Bad_Id: its id must be'))).toBe(true);
+      // the default loop is the sample's, as it was
+      expect(made.deps.pipeline.hash).toBe(SAMPLE_INVESTIGATION_HASH);
+    } finally { made.close(); }
+  } finally { wb.close(); }
 });
