@@ -154,8 +154,10 @@ test("a run waiting at the adopt gate is not said to wait at its plan, and no ke
   b.add("gate.waiting", { gate: "adopt" });
   const s = fold(b.entries);
   expect(s.run.waiting).toBe("adopt");
-  expect(runButton(s)).toEqual({ label: "Waiting at Adopt", command: null, lens: null, disabled: true });
-  expect(nextThing(s)).toBeNull();
+  // the run button and the next thing both open the Improve lens, where only the gate's own button passes it
+  expect(runButton(s)).toEqual({ label: "Decide the candidate", command: null, lens: "improve", disabled: false });
+  expect(nextThing(s)).toEqual({ label: "Decide the candidate", lens: "improve" });
+  expect(briefButtons(s)).toEqual({ run: null, next: { label: "Decide the candidate", lens: "improve" } });
 });
 
 test("while reviewers disagree, the run button opens the Narrative to settle it instead of resuming", () => {

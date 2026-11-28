@@ -14,6 +14,8 @@ import type { Ui, View } from "../ui";
 
 const WHERE: Record<Where, string> = { machine: "this machine", network: "your network", hosted: "hosted" };
 const MARK_WORDS: Record<string, string> = { idle: "not started" };
+/** The three gates a stage may wait at (slice 14 adds adopt, an improve loop's). */
+const GATE_WORDS: Record<NonNullable<StageState["gate"]>, string> = { plan: "plan gate", publish: "publish gate", adopt: "adopt gate" };
 
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 const size = (chars: number): string => (chars >= 1000 ? `${Math.round(chars / 1000)}k chars` : `${chars} chars`);
@@ -330,6 +332,7 @@ export function makePipeline(ui: Ui, open: Open, arg: string | null): View {
       markTag.classList.add("mark");
       return h("span", { class: "summary-line" },
         h("span", { class: "title" }, stage.title), " ", markTag,
+        stage.gate === null ? null : [" ", h("span", { class: "stage-gate chip", title: `This stage waits at the ${GATE_WORDS[stage.gate]} for a person` }, GATE_WORDS[stage.gate])],
         " ", h("span", { class: "attempts" }, stage.attempts === 0 ? "no attempts" : plural(stage.attempts, "attempt", "attempts")),
         stage.last_reason === null ? null : [" ", h("span", { class: "last-reason" }, stage.last_reason)]);
     });

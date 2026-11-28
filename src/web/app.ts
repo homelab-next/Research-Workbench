@@ -19,8 +19,8 @@ import { makeHelp } from "./views/help";
 import { dispatchKey } from "./keys";
 import { nextThing } from "./derive";
 
-export type LensId = "agent" | "steps" | "timeline" | "graph" | "narrative" | "worklog" | "memory" | "discarded" | "jobs" | "pipeline" | "replay";
-export type Route = { screen: "home" } | { screen: "pick" } | { screen: "new"; loop?: string } | { screen: "store" } | { screen: "soon"; mode: string } | { screen: "case"; id: string }
+export type LensId = "agent" | "steps" | "timeline" | "graph" | "narrative" | "worklog" | "memory" | "discarded" | "jobs" | "pipeline" | "improve" | "replay";
+export type Route = { screen: "home" } | { screen: "pick" } | { screen: "new"; loop?: string } | { screen: "store" } | { screen: "soon"; mode: string } | { screen: "case"; id: string; at?: number }
   | { screen: "loops" } | { screen: "loop"; id: string } | { screen: "loop_edit"; id: string } | { screen: "memory" };
 
 /** A loop's id as the server takes one: letters, digits, ".", "_" and "-", starting with a letter or digit, at most 64, never "..". */
@@ -29,7 +29,7 @@ const loopId = (s: string | undefined): s is string => s !== undefined && LOOP_I
 
 /**
  * "#/" · "#/investigate" · "#/investigate/new" · "#/investigate/new/<loop>" · "#/investigate/store" · "#/soon/<mode>" · "#/case/CASE-1" · "#/loops" ·
- * "#/loops/<loop>" · "#/loops/<loop>/edit" · "#/memory". Anything else is home.
+ * "#/case/CASE-1/at/<seq>" (the case, replayed at that entry once it has arrived) · "#/loops/<loop>" · "#/loops/<loop>/edit" · "#/memory". Anything else is home.
  */
 export function parseRoute(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/").filter((p) => p !== "");
@@ -50,6 +50,9 @@ export function parseRoute(hash: string): Route {
   }
   if (parts[0] === "memory" && parts.length === 1) return { screen: "memory" };
   if (parts[0] === "case" && parts.length === 2 && /^CASE-[1-9][0-9]{0,8}$/.test(parts[1]!)) return { screen: "case", id: parts[1]! };
+  if (parts[0] === "case" && parts.length === 4 && /^CASE-[1-9][0-9]{0,8}$/.test(parts[1]!) && parts[2] === "at" && /^(?:0|[1-9][0-9]{0,8})$/.test(parts[3]!)) {
+    return { screen: "case", id: parts[1]!, at: Number(parts[3]) };
+  }
   return home;
 }
 
@@ -60,7 +63,7 @@ export function routeHash(route: Route): string {
     case "new": return route.loop === undefined ? "#/investigate/new" : `#/investigate/new/${route.loop}`;
     case "store": return "#/investigate/store";
     case "soon": return `#/soon/${route.mode}`;
-    case "case": return `#/case/${route.id}`;
+    case "case": return route.at === undefined ? `#/case/${route.id}` : `#/case/${route.id}/at/${route.at}`;
     case "loops": return "#/loops";
     case "loop": return `#/loops/${route.id}`;
     case "loop_edit": return `#/loops/${route.id}/edit`;
@@ -118,6 +121,8 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
   let store: CaseStore | null = null;
   let stopFollow: (() => void) | null = null;
   let stopWatch: (() => void) | null = null;
+  /** A wait for the entry a "#/case/<id>/at/<seq>" address names, to replay the case there once it has arrived. */
+  let stopSeek: (() => void) | null = null;
   let handlers: CaseHandlers = {};
   let route: Route = { screen: "home" };
   let routeKey = "";
@@ -127,8 +132,8 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
   let casesStatus: "loading" | "ready" | "failed" = "loading";
 
   const dropStore = (): void => {
-    stopWatch?.(); stopFollow?.();
-    stopWatch = null; stopFollow = null; store = null;
+    stopSeek?.(); stopWatch?.(); stopFollow?.();
+    stopSeek = null; stopWatch = null; stopFollow = null; store = null;
   };
   const nav: Nav = {
     go(next) { win.location.hash = routeHash(next); render(); },
@@ -207,6 +212,14 @@ export function startApp(ui: Ui, root: HTMLElement, opts: AppOptions = {}): { de
         };
         stopWatch = s.subscribe(watch);
         if (s.connection === "gone") void Promise.resolve().then(watch);   // said while opening: acted on once this render is done
+      }
+      // an address with an entry (a probe's link to its child, slice 14): replay the case there once that entry has arrived
+      stopSeek?.(); stopSeek = null;
+      const at = next.at;
+      if (at !== undefined) {
+        const s = store!;
+        const seek = (): boolean => { if (s.live.seq < at) return false; s.goTo(at); return true; };
+        if (!seek()) { const off = s.subscribe(() => { if (seek()) { off(); stopSeek = null; } }); stopSeek = off; }
       }
     } else dropStore();
     switch (next.screen) {

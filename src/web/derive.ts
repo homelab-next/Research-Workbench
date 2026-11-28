@@ -123,6 +123,7 @@ export function stageMark(state: CaseState, stage: StageState): StageMark {
   return review !== null && review.passed_stages.includes(stage.id) ? "passed" : "passed earlier draft";
 }
 
+const ADOPT_LABEL = "Decide the candidate";
 export type NextThing = { label: string; command: "accept_plan" | "approve" | "resume" } | { label: string; lens: LensId };
 /** What Shift+Enter does now, with the words its button carries; null when the run waits on nothing a single key should do. */
 export function nextThing(state: CaseState): NextThing | null {
@@ -135,6 +136,8 @@ export function nextThing(state: CaseState): NextThing | null {
     const costly = steps.filter((s) => !s.free).length;
     return costly === 0 ? { label: "Review the plan", command: "accept_plan" } : { label: `Review plan: ${costly} steps need a budget`, lens: "steps" };
   }
+  // the adopt gate is passed only by its own button in the Improve lens: the key takes the person there
+  if (run.waiting === "adopt") return { label: ADOPT_LABEL, lens: "improve" };
   if (run.waiting === "publish") {
     const latest = latestDraft(state);
     if (latest === null) return null;
@@ -159,8 +162,8 @@ export function runButton(state: CaseState): { label: string; command: "start_ru
     case "paused": case "interrupted": return { label: "Resume", command: "resume", lens: null, disabled: false };
     case "waiting":
       if (run.waiting === "publish") return { label: "Review draft", command: null, lens: "narrative", disabled: false };
-      // the adopt gate is decided file by file in the improve case's own view, never by this button
-      if (run.waiting === "adopt") return { label: "Waiting at Adopt", command: null, lens: null, disabled: true };
+      // the adopt gate is decided in the Improve lens, the whole candidate at once, never by this button
+      if (run.waiting === "adopt") return { label: ADOPT_LABEL, command: null, lens: "improve", disabled: false };
       return { label: "Review plan", command: null, lens: "steps", disabled: false };
     case "finished": return { label: "Run again", command: "start_run", lens: null, disabled: false };
   }

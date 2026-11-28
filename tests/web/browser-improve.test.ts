@@ -1,6 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 import { findChrome, launch } from "../helpers/chrome";
-import { served } from "../helpers/served";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { improveCase, RESEARCH } from "../helpers/improve-run";
+import { served, withImproveLoop } from "../helpers/served";
 
 // Task 19 in a real browser: a person sets a known answer on the sample's published product, and it is there after a reload. Nothing passes a gate.
 const chrome = findChrome();
@@ -89,4 +92,50 @@ if (chrome === null) {
   else test.skip("a known answer set in a browser is there after a reload", () => {});
 } else {
   test("a known answer set in a browser is there after a reload", async () => { await theAnswer(chrome); }, 120_000);
+}
+
+/** Task 20: an improve case at its adopt gate; the person opens the Improve lens, accepts the candidate's one file, and the run finishes. */
+async function theAdopt(path: string): Promise<void> {
+  const s = await served({ listen: true, before: withImproveLoop });
+  closers.push(() => s.close());
+  const id = await improveCase(s, { files: 1 });
+  expect(s.app.hub.read(id).state.run).toMatchObject({ status: "waiting", waiting: "adopt" });
+  const file = join(s.config.roots[0]!.path, ...RESEARCH.split("/"));
+  expect(readFileSync(file, "utf8")).not.toContain("Say what was not found, and why.");
+
+  const browser = await launch(path);
+  closers.push(() => browser.close());
+  const tab = await browser.tab(`${s.origin}/#/case/${id}`);
+  await tab.reducedMotion(true);
+  const text = (selector: string): Promise<string> => tab.evaluate<string>(`(document.querySelector(${JSON.stringify(selector)})?.textContent ?? "")`);
+  await tab.waitFor(`document.querySelector("[data-area=incoming]") !== null`);
+  await tab.press("i");
+  // the gate is drawn once the server's view (the diff, whether a file is stale) has come in: Accept is on only then
+  await tab.waitFor(`document.querySelector(".lens-improve [data-action=adopt-accept]:not([disabled])") !== null`);
+  expect(await text(".lens-improve [data-part=adopt] h3")).toBe("Adopt K1 · Say why");
+  expect(await text(".lens-improve [data-part=adopt] .adopt-whole")).toBe("The score shown is the whole candidate's: K1 scored 875 of 1000, the unchanged loop 500. Its 1 file is accepted or rejected together.");
+  expect(await tab.evaluate<number>(`document.querySelectorAll(".lens-improve [data-candidate=K1] .diff-added").length`)).toBeGreaterThan(0);
+  const before = s.entries(id).filter((e) => e.type === "gate.passed").length;
+  await tab.click(".lens-improve [data-action=adopt-accept]");
+  await tab.waitFor(`document.querySelector(".lens-improve [data-part=adopt]") === null && document.querySelector(".lens-improve [data-candidate=K1] .file-decided") !== null`);
+  await s.app.hub.idle();
+  const st = s.app.hub.read(id).state;
+  expect(st.run).toMatchObject({ status: "finished", outcome: "completed" });
+  expect(readFileSync(file, "utf8")).toContain("Say what was not found, and why.");
+  const passed = s.entries(id).filter((e) => e.type === "gate.passed");
+  expect(passed.length).toBe(before + 1);
+  expect(passed.at(-1)).toMatchObject({ actor: { kind: "human", id: s.config.user }, payload: { gate: "adopt" } });
+  expect(await text(".lens-improve [data-candidate=K1] .file-decided")).toBe("Accepted");
+
+  expect(await tab.evaluate<number>(`document.querySelectorAll("script:not([src]), style, [style], [onclick]").length`)).toBe(0);
+  expect(tab.requests().filter((u) => !u.startsWith(s.origin))).toEqual([]);
+  expect(tab.problems()).toEqual([]);
+  expect(st.skipped).toEqual([]);
+}
+
+if (chrome === null) {
+  if (process.env.WORKBENCH_REQUIRE_BROWSER === "1") test("accepting the candidate at the adopt gate in a browser writes its file and the run finishes", () => { throw new Error(NONE); });
+  else test.skip("accepting the candidate at the adopt gate in a browser writes its file and the run finishes", () => {});
+} else {
+  test("accepting the candidate at the adopt gate in a browser writes its file and the run finishes", async () => { await theAdopt(chrome); }, 120_000);
 }

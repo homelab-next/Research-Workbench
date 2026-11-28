@@ -580,3 +580,20 @@ details.lesson ul.history { color: var(--muted); font-size: 12px; }
 .improve-form h2 { margin: 0; font-size: 1.1em; }
 .improve-form .improve-fields, .improve-form .improve-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .improve-form input[type=number] { width: 5em; }
+/* the Improve lens (slice 14) */
+.lens-improve { display: flex; flex-direction: column; gap: 14px; }
+.lens-improve .improve-part { display: flex; flex-direction: column; gap: 6px; }
+.lens-improve .improve-part h3 { margin: 0; }
+.lens-improve .improve-part p { margin: 0; overflow-wrap: anywhere; }
+.lens-improve .improve-tasks, .lens-improve .improve-lessons, .lens-improve .adopt-files, .lens-improve .output-findings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.lens-improve .improve-candidate { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 6px; }
+.lens-improve .candidate-title { font-weight: 600; overflow-wrap: anywhere; }
+.lens-improve .probe-table, .lens-improve .score-summary { border-collapse: collapse; width: max-content; max-width: 100%; }
+.lens-improve .probe-table th, .lens-improve .probe-table td, .lens-improve .score-summary th, .lens-improve .score-summary td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
+.lens-improve .probe-table .probe-incomplete { border-color: var(--amber); }
+.lens-improve .improve-output { border-top: 1px solid var(--line); padding-top: 4px; }
+.lens-improve .output-score { font-family: var(--mono); }
+.lens-improve .improve-adopt { border: 1px solid var(--amber); border-radius: var(--radius); padding: 8px 10px; }
+.lens-improve .adopt-file .file-path { font-family: var(--mono); overflow-wrap: anywhere; }
+.lens-improve .adopt-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.stage-gate { margin-left: 4px; }

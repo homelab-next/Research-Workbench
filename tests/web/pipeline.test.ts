@@ -6,6 +6,8 @@ import type { Actor, Entry, Marking, Payloads } from "../../src/core/types";
 import { page } from "../helpers/dom";
 import type { Page } from "../helpers/dom";
 import { startModelStandin } from "../helpers/model-standin";
+import { improveCase } from "../helpers/improve-run";
+import { withImproveLoop } from "../helpers/served";
 
 let p: Page;
 let standin: { url: string; stop(): void } | undefined;
@@ -456,4 +458,27 @@ test("a failed model list is asked for again when a stage row is opened", async 
   openRow("frame");
   await modelsIn();
   expect(calls).toBe(3);
+});
+
+test("the pipeline lens names the third gate, and next at the adopt gate opens the Improve lens", async () => {
+  p = await page({ before: withImproveLoop });
+  const id = await improveCase(p.s);
+  expect(id).toBe("CASE-1");
+  p.win.location.hash = `#/case/${id}`;
+  await p.settle();
+  p.q(".workarea").focus();
+  p.press("q");
+  await settled();
+  expect(p.q(".lens-pipeline .run-status").textContent).toBe("waiting at the adopt gate");
+  expect(p.q(`${row("adopt")} .stage-gate`).textContent).toBe("adopt gate");
+  expect(p.all(".lens-pipeline .stage-gate").map((g) => g.textContent)).toEqual(["adopt gate"]);
+  // Shift+Enter takes the person to the Improve lens; it passes nothing
+  const before = p.s.entries(id).length;
+  p.q(".workarea").focus();
+  p.press("Enter", { shift: true });
+  await settled();
+  expect(p.q(".lens-dock .lens-improve")).toBeDefined();
+  expect(p.q(".lens-improve [data-part=adopt] [data-action=adopt-accept]")).toBeDefined();
+  expect(p.s.entries(id).length).toBe(before);
+  expect(state().run).toMatchObject({ status: "waiting", waiting: "adopt" });
 });

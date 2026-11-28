@@ -18,7 +18,7 @@ export type Intent =
   | { kind: "playbook"; id: string; value: string }
   | { kind: "store" } | { kind: "unload" } | { kind: "load"; id: string };
 
-const LENSES: readonly LensId[] = ["agent", "steps", "timeline", "graph", "narrative", "worklog", "discarded", "jobs", "pipeline", "replay"];
+const LENSES: readonly LensId[] = ["agent", "steps", "timeline", "graph", "narrative", "worklog", "discarded", "jobs", "pipeline", "improve", "replay"];
 const NEEDS_CASE = "Open a case first: investigate CASE-1";
 const CASE_ID = /^case-([0-9]+)$/;
 

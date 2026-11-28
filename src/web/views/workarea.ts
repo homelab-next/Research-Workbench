@@ -5,6 +5,7 @@ import { clear } from "../dom";
 import type { CaseHandlers, CaseScreen, LensId, Open } from "../app";
 import { dropCommand, enableDrag } from "../drag";
 import { LENSES } from "../lenses";
+import type { LensDef } from "../lenses";
 import { flip } from "../motion";
 import { changedBy } from "../replay";
 import type { Ui, View } from "../ui";
@@ -110,11 +111,14 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
   let dock: Dock = ui.prefs.get<unknown>("dock", "bottom") === "right" ? "right" : "bottom";
   let lensId: LensId | null = null;
   let lensView: View | null = null;
+  /** A lens offered only in some cases (the Improve lens, in an improve case) is on the shelf and opens only there. */
+  const offered = (l: LensDef): boolean => l.offered === undefined || l.offered(store.live);
   const shelf = makeShelf(ui, {
     open: (id) => area.openLens(id),
     dock: () => dock,
     toggleDock: () => toggleDock(),
     current: () => lensId,
+    offered: (l) => offered(l),
   });
   const toggleDock = (): void => { dock = dock === "bottom" ? "right" : "bottom"; ui.prefs.set("dock", dock); layout(); shelf.update(); };
   const bannerText = h("span", { class: "banner-text" });
@@ -229,7 +233,7 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
     lens: () => lensId,
     openLens(id, arg) {
       const def = LENSES.find((l) => l.id === id);
-      if (def === undefined) return;
+      if (def === undefined || !offered(def)) return;
       lensView?.destroy?.();
       clear(lensBox);
       lensId = id;
@@ -303,7 +307,7 @@ export function makeWorkArea(ui: Ui, open: Open): WorkArea {
   };
   const withCard = (fn: (card: string, c: NonNullable<ReturnType<typeof currentState>>) => void) => (): void => { const c = currentState(); if (c !== null) fn(c.id, c); };
   const lensKeys: Record<string, () => void> = {};
-  for (const id of ["agent", "steps", "timeline", "graph", "narrative", "worklog", "memory", "discarded", "jobs", "pipeline", "replay"] as const) lensKeys[`lens_${id}`] = () => area.openLens(id);
+  for (const id of ["agent", "steps", "timeline", "graph", "narrative", "worklog", "memory", "discarded", "jobs", "pipeline", "improve", "replay"] as const) lensKeys[`lens_${id}`] = () => area.openLens(id);
   const targetKeys: Record<string, () => void> = {};
   for (let n = 1; n <= 9; n++) {
     targetKeys[`target_${n}`] = () => {

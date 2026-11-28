@@ -29,7 +29,7 @@ const EXPECTED = [
   "columns:Tab,l,]:next_column", "columns:Shift+Tab,h,[:prev_column", "columns:0:focus_incoming",
   ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `columns:${n}:target_${n}`),
   "lanes:j,ArrowDown:next_card", "lanes:k,ArrowUp:prev_card", "lanes:Shift+H:card_left", "lanes:Shift+L:card_right", "lanes:F2:rename_lane", "lanes:Enter:open_card", "lanes:x,Backspace:discard", "lanes:u:undo", "lanes:c:cite",
-  ...[["a", "agent"], ["s", "steps"], ["t", "timeline"], ["g", "graph"], ["r", "narrative"], ["w", "worklog"], ["m", "memory"], ["d", "discarded"], ["b", "jobs"], ["q", "pipeline"], ["e", "replay"]].map(([k, id]) => `lenses:${k}:lens_${id}`),
+  ...[["a", "agent"], ["s", "steps"], ["t", "timeline"], ["g", "graph"], ["r", "narrative"], ["w", "worklog"], ["m", "memory"], ["d", "discarded"], ["b", "jobs"], ["q", "pipeline"], ["i", "improve"], ["e", "replay"]].map(([k, id]) => `lenses:${k}:lens_${id}`),
   "lenses:v:dock_side", "replay:j,ArrowDown:replay_next", "replay:k,ArrowUp:replay_prev",
 ];
 
