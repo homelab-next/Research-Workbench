@@ -4,16 +4,20 @@ import { join, relative } from "node:path";
 import type { Json } from "../../src/core/canonical";
 import { parseJson } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
-import type { Entry, EntryType, Marking, Where } from "../../src/core/types";
+import type { Actor, Entry, EntryType, Marking, Where } from "../../src/core/types";
+import type { CaseSession } from "../../src/core/session";
 import { MARKINGS } from "../../src/core/types";
 import { loadProfile, partOf } from "../../src/agents/context";
 import { runAgent } from "../../src/agents/loop";
 import { assemblePack } from "../../src/agents/pack";
 import { ScriptedProvider } from "../../src/agents/providers/scripted";
 import { BUILDER_TOOL_NAMES, execTool, parseCall, STAGE_TOOL_NAMES, TOOL_NAMES, TOOLS } from "../../src/agents/tools";
-import type { ToolResult } from "../../src/agents/tools";
+import type { ToolContext, ToolName, ToolResult } from "../../src/agents/tools";
 import { BUILDER_TOOLS } from "../../src/agents/tools/builder";
 import { copyOf, loopText } from "../../src/modules/loop-write";
+import { checkCandidate } from "../../src/modules/loop-stage";
+import type { EngineDeps } from "../../src/pipeline/engine";
+import { proposerTools } from "../../src/pipeline/improve/propose";
 import { builderAgent, builderFixture, fixture, INJECTED, PLANTED } from "../helpers/tools-fixture";
 import type { BuilderFixture } from "../helpers/tools-fixture";
 
@@ -466,4 +470,102 @@ test("a secret value in any text a builder tool shows is hidden from its view, t
   expect(text).not.toContain(PLANTED.file);
   expect(text).not.toContain(PLANTED.vault);
   expect(text).toContain("Loop holding");
+});
+
+// ---------- in an improve case (slice 14): the proposer's propose_change ----------
+
+const proposer: Extract<Actor, { kind: "agent" }> = { kind: "agent", id: "proposer", stage: "propose", profile: "improve", model: "scripted-m", effort: null, where: "machine" };
+const IMPROVE_TARGET = "unknown-device";
+const ASK_SKILL = "context/skills/ask-the-person.md";
+const caseInput = { title: "Improve", asked: "Make unknown-device cases more correct", why: "test", starting: [], window: { from: null, to: null }, objective: null, marking: "TLP:CLEAR" as const };
+
+/** An improve case of f's workbench, with the tool context Propose gives its agent: proposerTools over checkCandidate, at most `max` changes. */
+function improveCase(max: number): { s: CaseSession; ctx: ToolContext; call(name: ToolName, args: Record<string, Json>): Promise<ToolResult> } {
+  const s = f.wb.createCase(caseInput, { kind: "human", id: "analyst" }, {
+    loop: IMPROVE_TARGET, type: IMPROVE_TARGET, improve: { target: IMPROVE_TARGET, case_type: IMPROVE_TARGET, tasks: 1, candidates: max },
+  });
+  const secrets = f.ctx.builder!.secrets;
+  const host = { check: (root: string, files: { path: string; text: string }[], target: string) => checkCandidate({ config: f.config, chain: f.wb.chain, content: f.wb.chainBlobs, secrets, loops: f.loops, registry: f.registry }, root, files, target) };
+  const deps = { config: f.config, loops: f.loops, registry: f.registry, runner: { ...f.ctx.deps, secrets: () => secrets }, improve: host } as unknown as EngineDeps;
+  const ctx: ToolContext = { ...f.ctx, session: s, actor: proposer, link: { run: null, stage: "propose", job: null }, builder: proposerTools(s, deps) };
+  return { s, ctx, call: (name, args) => execTool(ctx, parseCall(BUILDER_TOOL_NAMES, name, JSON.stringify(args))) };
+}
+const askEdit = (from: string, to: string): { path: string; text: string } => {
+  const text = readFileSync(join(f.root, ...ASK_SKILL.split("/")), "utf8");
+  if (!text.includes(from)) throw new Error(`the skill does not hold ${from}`);
+  return { path: ASK_SKILL, text: text.replace(from, to) };
+};
+const proposedIn = (s: CaseSession) => s.entries().filter((e): e is Extract<Entry, { type: "builder.proposed" }> => e.type === "builder.proposed");
+
+test("in an improve case set up by Propose, propose_change checks with the candidate rules and writes builder.proposed with its bundle", async () => {
+  const c = improveCase(2);
+  expect(c.ctx.builder!.improve).toEqual({ target: IMPROVE_TARGET, max: 2 });
+  const file = askEdit("Ask one thing at a time, and ask early.", "Ask one thing at a time.");
+  const r = await c.call("propose_change", { why: "fewer questions", title: "A shorter skill", files: [file] });
+  expect(r.ok).toBe(true);
+  expect(r.summary).toContain("chg-1");
+  const proposed = proposedIn(c.s);
+  expect(proposed.length).toBe(1);
+  expect(proposed[0]!.actor).toEqual(proposer);
+  expect(proposed[0]!.payload).toMatchObject({ change: "chg-1", title: "A shorter skill", why: "fewer questions", root: "sample" });
+  expect(proposed[0]!.payload.files).toEqual([{ path: ASK_SKILL, kind: "skill", id: "ask-the-person", before: sha256Hex(new TextEncoder().encode(readFileSync(join(f.root, ...ASK_SKILL.split("/")), "utf8"))), after: sha256Hex(new TextEncoder().encode(file.text)) }]);
+  const bundle = parseJson(c.s.blobs.text(proposed[0]!.payload.bundle.blob))!.value;
+  expect(bundle).toEqual({ files: [file] });
+  // the read tools answer there too
+  expect((await c.call("loop_catalogue", { why: "see" })).ok).toBe(true);
+  expect(c.s.state.skipped).toEqual([]);
+});
+
+test("a change the candidate rules refuse is a tool refusal with the reason, and nothing is written", async () => {
+  const c = improveCase(2);
+  const head = c.s.head().seq;
+  // a skill the target does not read: the save's check passes it, the candidate rules do not
+  const other = "context/skills/building-loops.md";
+  const text = readFileSync(join(f.root, ...other.split("/")), "utf8");
+  const r = await c.call("propose_change", { why: "w", title: "Another skill", files: [{ path: other, text: `${text}\nOne more line.\n` }] });
+  expect(r.ok).toBe(false);
+  expect(r.summary).toBe(`${other} is not part of loop ${IMPROVE_TARGET}`);
+  // a new file is refused too
+  const added = await c.call("propose_change", { why: "w", title: "A new stage", files: [{ path: "stages/x.yaml", text: stageText("x") }] });
+  expect(added.ok).toBe(false);
+  expect(added.summary).toContain("a candidate changes what the loop has; it adds no file");
+  expect(c.s.head().seq).toBe(head);
+  expect(proposedIn(c.s)).toEqual([]);
+});
+
+test("the change after the last one allowed is refused with the sentence", async () => {
+  const c = improveCase(2);
+  expect((await c.call("propose_change", { why: "w", title: "One", files: [askEdit("Ask one thing at a time, and ask early.", "Ask one thing at a time.")] })).ok).toBe(true);
+  expect((await c.call("propose_change", { why: "w", title: "Two", files: [askEdit("Ask one thing at a time, and ask early.", "Ask early.")] })).ok).toBe(true);
+  const head = c.s.head().seq;
+  const third = await c.call("propose_change", { why: "w", title: "Three", files: [askEdit("Ask one thing at a time, and ask early.", "Ask.")] });
+  expect(third).toEqual({ ok: false, summary: "this improve run takes at most 2 candidates", view: { error: "this improve run takes at most 2 candidates" }, marking: null });
+  expect(c.s.head().seq).toBe(head);
+  expect(proposedIn(c.s).map((e) => e.payload.change)).toEqual(["chg-1", "chg-2"]);
+});
+
+test("request_probe is refused in an improve case; in a case with no improve request every builder tool is refused as before", async () => {
+  const c = improveCase(1);
+  const head = c.s.head().seq;
+  const r = await c.call("request_probe", { why: "w", kind: "pivot", source: "flows", pivot: "address_to_internal_peers", value: "198.51.100.77" });
+  expect(r).toEqual({ ok: false, summary: "a probe is the improve loop's own", view: { error: "a probe is the improve loop's own" }, marking: null });
+  expect(c.s.head().seq).toBe(head);
+  // the same tools on a case with no improve request
+  const plain = f.wb.createCase(caseInput, { kind: "human", id: "analyst" }, { loop: IMPROVE_TARGET });
+  const ctx: ToolContext = { ...c.ctx, session: plain };
+  const args: Record<string, Record<string, Json>> = {
+    loop_catalogue: {}, adapter_catalogue: {}, list_connectors: {}, list_roots: {},
+    validate_manifest: { path: ASK_SKILL, text: "x" },
+    propose_change: { title: "t", files: [askEdit("Ask one thing at a time, and ask early.", "Ask early.")] },
+    request_probe: { kind: "pivot", source: "flows", pivot: "address_to_internal_peers", value: "198.51.100.77" },
+  };
+  for (const name of BUILDER_TOOL_NAMES) {
+    const got = await execTool(ctx, parseCall(BUILDER_TOOL_NAMES, name, JSON.stringify({ why: "w", ...args[name] })));
+    expect({ name, summary: got.summary }).toEqual({ name, summary: "this tool is the loop builder's" });
+  }
+  expect(plain.entries().some((e) => e.type === "builder.proposed" || e.type === "builder.probe_asked")).toBe(false);
+  expect(plain.state.builder.changes).toEqual({});
+  // and the builder session's own builder, without improve, is refused in the improve case
+  const borrowed: ToolContext = { ...c.ctx, builder: f.ctx.builder! };
+  expect((await execTool(borrowed, parseCall(BUILDER_TOOL_NAMES, "loop_catalogue", JSON.stringify({ why: "w" })))).summary).toBe("this tool is the loop builder's");
 });

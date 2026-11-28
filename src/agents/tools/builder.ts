@@ -8,6 +8,7 @@ import type { Json } from "../../core/canonical";
 import type { Schema } from "../../core/schema";
 import { canonical, isPlainObject } from "../../core/canonical";
 import { builderOpen } from "../../core/state";
+import type { CaseState } from "../../core/state";
 import type { Observable, TimeWindow } from "../../core/types";
 import { parseManifestFile } from "../../modules/manifests";
 import { MIN_SECRET_LENGTH } from "../../modules/secrets";
@@ -19,6 +20,7 @@ export const CREDENTIAL_REFUSAL = "a credential is named by reference; set its v
 const NOT_HERE = "this tool is the loop builder's";
 const ONE_PROBE = "one probe at a time; the person has not decided the last";
 const WAITING = "waiting for the person's approval";
+const IMPROVE_PROBES = "a probe is the improve loop's own";
 const HIDDEN = "[hidden]";
 /** The marks that stand for text kept from the model: scrub's and the redaction of a secret a person or a model wrote. */
 const MARKS = [HIDDEN, "[redacted secret]"] as const;
@@ -33,11 +35,27 @@ const MAX_FILES = 12;
 const MAX_FILE_TEXT = 65536;
 const MAX_PATH = 512;
 
-/** The builder's context, or the refusal every builder tool gives elsewhere: in a case, or in a builder session the server did not set up. */
+/**
+ * The builder's context, or the refusal every builder tool gives elsewhere: in a case, or in a builder session the server did not set up. An
+ * improve run's proposer (`improve` set) is taken only in a case that has an improve request, and never in a builder session.
+ */
 function need(ctx: ToolContext): BuilderTools {
-  if (ctx.builder === undefined || !BUILD_ID.test(ctx.session.state.meta?.id ?? "")) throw new ToolError(NOT_HERE);
-  return ctx.builder;
+  const b = ctx.builder;
+  if (b === undefined) throw new ToolError(NOT_HERE);
+  if (b.improve !== undefined) {
+    if (ctx.session.state.improve.request === null) throw new ToolError(NOT_HERE);
+    return b;
+  }
+  if (!BUILD_ID.test(ctx.session.state.meta?.id ?? "")) throw new ToolError(NOT_HERE);
+  return b;
 }
+
+/** The changes proposed in this improve run: those after its selection (every one, before a selection). */
+const proposedInRun = (s: Readonly<CaseState>): number => {
+  const after = s.improve.selected?.seq ?? 0;
+  return Object.values(s.builder.changes).filter((c) => c.seq > after).length;
+};
+const atMost = (n: number): string => `this improve run takes at most ${n} candidates`;
 
 const holdsSecret = (text: string, secrets: readonly string[]): boolean => secrets.some((s) => s.length >= MIN_SECRET_LENGTH && text.includes(s));
 
@@ -178,6 +196,8 @@ async function validateManifest(ctx: ToolContext, args: Record<string, Json>): P
 
 async function proposeChange(ctx: ToolContext, args: Record<string, Json>): Promise<ToolResult> {
   const b = need(ctx);
+  const limit = b.improve?.max ?? null;
+  if (limit !== null && proposedInRun(ctx.session.state) >= limit) throw new ToolError(atMost(limit));
   const files = filesOf(args);
   const title = str(args.title);
   if (holdsSecret(title, b.secrets) || holdsSecret(str(args.why), b.secrets)) throw new ToolError(CREDENTIAL_REFUSAL);
@@ -191,7 +211,9 @@ async function proposeChange(ctx: ToolContext, args: Record<string, Json>): Prom
   });
   const bundle = ctx.session.blobs.put(canonical({ files: files.map((f) => ({ path: f.path, text: f.text })) } as Json), "application/json");
   let change = "";
-  ctx.session.commit((_s, ids) => {
+  ctx.session.commit((s, ids) => {
+    // checked again in the commit: two calls of one reply cannot both take the last candidate
+    if (limit !== null && proposedInRun(s) >= limit) throw new ToolError(atMost(limit));
     change = ids.next("change");
     return [{ type: "builder.proposed", actor: ctx.actor, payload: { change, title, why: str(args.why), root: b.root, files: proposed, bundle } }];
   });
@@ -213,6 +235,7 @@ function windowOf(ctx: ToolContext, raw: Json | undefined): TimeWindow {
 
 async function requestProbe(ctx: ToolContext, args: Record<string, Json>): Promise<ToolResult> {
   const b = need(ctx);
+  if (b.improve !== undefined) throw new ToolError(IMPROVE_PROBES);
   if (builderOpen(ctx.session.state).probes.length > 0) throw new ToolError(ONE_PROBE);
   const kind = str(args.kind) as "pivot" | "query";
   const sourceId = str(args.source);

@@ -54,6 +54,8 @@ export interface BuilderTools {
   check(files: ManifestFile[]): ChangeCheck;
   /** The value of every secret the workbench holds: a file or a question that holds one is refused, and no view shows one. */
   secrets: readonly string[];
+  /** Set for an improve run's proposer: the target loop, and the most changes one run may propose. */
+  improve?: { target: string; max: number };
 }
 
 export interface ToolContext {

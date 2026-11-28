@@ -14,7 +14,7 @@ import { DEFAULT_CONTEXT } from "../../agents/providers/local";
 import type { ModelInfo, Provider } from "../../agents/providers/types";
 import type { DraftWork, Forced } from "../../agents/draft";
 import { citedOf } from "../../agents/draft";
-import type { ToolContext, ToolName } from "../../agents/tools";
+import type { BuilderTools, ToolContext, ToolName } from "../../agents/tools";
 import type { SeekLimits } from "../../modules/seeker";
 import { DEFAULT_LIMITS } from "../../modules/seeker";
 import type { StageEnd, StageEnv } from "../engine";
@@ -79,6 +79,8 @@ export async function stageAgent(env: StageEnv, opts: {
   force?: (missing: string[]) => Forced | null;
   /** Cards the task is about (a reviewer's draft's cited cards): one the pack leaves out is named in the task. */
   cited?: readonly string[];
+  /** The builder's reader and check, handed to the ToolContext: an improve run's proposer. */
+  builder?: BuilderTools;
 }): Promise<AgentStageEnd> {
   const { session, deps, stage } = env;
   const title = titleOf(env);
@@ -139,6 +141,7 @@ export async function stageAgent(env: StageEnv, opts: {
       draft: opts.draft ?? null, draft_hash: opts.draft_hash ?? null, subgoal: opts.subgoal ?? null, window, limits,
       ...(opts.onNeedsBudget === undefined ? {} : { onNeedsBudget: opts.onNeedsBudget }),
       max_open_questions: deps.config.questions.max_open, max_notes: deps.config.memory.max_notes,
+      ...(opts.builder === undefined ? {} : { builder: opts.builder }),
     },
   });
   switch (end.kind) {
