@@ -364,7 +364,8 @@ test("driveProbe goes on past a blocking question to the person as improve-probe
   expect(resumed.map((e) => e.actor)).toEqual([PROBE]);
   expect(c.state.questions["ask-1"]).toMatchObject({ text: "Is the device expected on that access point?", answer: null, waived: { by: "improve-probe", seq: resumed[0]!.seq } });
   expect(c.state.skipped).toEqual([]);
-  expect(probeOutputOf(c.state).outcome).toBe("drafted");
+  // drafted, and carrying the question for the Judge to credit
+  expect(probeOutputOf(c.state)).toMatchObject({ outcome: "drafted", asked: ["Is the device expected on that access point?"] });
   expect(c.entries().some((e) => e.actor.kind === "human")).toBe(false);
 });
 

@@ -60,8 +60,11 @@ export function setKnownAnswer(session: CaseSession, deps: Pick<EngineDeps, "run
   const clean = (t: unknown): string => (typeof t === "string" ? redactSecrets(t, secrets) : (t as string));
   // redacted before the checks, so the checks are of what is written
   const findings: ExpectedFinding[] = Array.isArray(input.findings)
-    ? input.findings.map((f) => ({ claim: clean(f?.claim), likelihood: clean(f?.likelihood), confidence: f?.confidence }))
+    // `asks` only when true, so an answer that marks none is written as one was before
+    ? input.findings.map((f) => ({ claim: clean(f?.claim), likelihood: clean(f?.likelihood), confidence: f?.confidence, ...(f?.asks === true ? { asks: true as const } : {}) }))
     : input.findings;
+  const asksBad = Array.isArray(input.findings) && input.findings.some((f) => f?.asks !== undefined && typeof f.asks !== "boolean");
+  if (asksBad) throw new AnswerRefused("an expected finding's asks is true or false");
   const given = { product: input.product, text: clean(input.text), findings, marking: input.marking };
   // the checks and the append in one builder, so the product and the marking checked are the ones the entry is folded against
   session.commit((state) => {
@@ -100,7 +103,8 @@ export function knownAnswerOf(entries: readonly Entry[], at: { seq: number; hash
   const held = Object.values(fold(entries as Entry[], at.seq).answers).find((a) => a.seq === at.seq && a.hash === at.hash);
   if (held === undefined) return null;
   return {
-    text: held.text, findings: held.findings.map((f) => ({ claim: f.claim, likelihood: f.likelihood, confidence: f.confidence })), marking: held.marking, product: held.product,
+    text: held.text, findings: held.findings.map((f) => ({ claim: f.claim, likelihood: f.likelihood, confidence: f.confidence, ...(f.asks === true ? { asks: true as const } : {}) })),
+    marking: held.marking, product: held.product,
   };
 }
 

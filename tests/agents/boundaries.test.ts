@@ -189,6 +189,8 @@ test("an answer's text and findings are read only in src/pipeline/improve/answer
   expect(readsAnAnswer("src/pipeline/improve/select.ts", `const have = Object.keys(state.answers).length;`)).toEqual([]);
   expect(readsAnAnswer("src/pipeline/improve/select.ts", `// state.answers holds the text; knownAnswerOf reads it\nconst x = 1;`)).toEqual([]);
   expect(readsAnAnswer("src/pipeline/improve/judge.ts", `const k = knownAnswerOf(entries, at);`)).toEqual([]);
+  // which expected finding is the person's to say is part of the answer: read only where its findings are
+  expect(all.filter((f) => !ANSWER_READERS.includes(relOf(f)) && /\.asks\s*[!=]==/.test(codeOf(readFileSync(f, "utf8")))).map(relOf)).toEqual([]);
 });
 
 /** Whether an import specifier of `file` lands in src/server. */

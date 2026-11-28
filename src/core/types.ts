@@ -96,7 +96,11 @@ export interface Finding {
   cites: string[]; assumptions: string[]; reasoning: string;
 }
 /** One finding a person expects a product to hold (slice 14): a claim in their words, a likelihood term and a confidence. */
-export interface ExpectedFinding { claim: string; likelihood: string; confidence: Finding["confidence"] }
+/**
+ * A claim a known answer expects. `asks`: the claim is the person's to say (only they know it): a probe that asks the person about it gets the
+ * credit a finding stating it would. Present only when true; an answer recorded without it is as it was.
+ */
+export interface ExpectedFinding { claim: string; likelihood: string; confidence: Finding["confidence"]; asks?: true }
 export interface Product {
   objective: string; question: string; marking: Marking;
   summary: string; key_findings: Finding[]; gaps_and_limits: string; alternatives: string; assessment: string;

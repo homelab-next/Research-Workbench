@@ -87,6 +87,7 @@ const JUDGE_SCHEMA = {
     properties: {
       matches: { type: "array", items: { type: "object", additionalProperties: false, required: ["probe", "expected", "produced"], properties: { probe: { type: "string" }, expected: { type: "integer" }, produced: { type: ["string", "null"] } } } },
       texts: { type: "array", items: { type: "object", additionalProperties: false, required: ["probe", "verdict"], properties: { probe: { type: "string" }, verdict: { type: "string", enum: ["agrees", "partly", "disagrees"] } } } },
+      asked: { type: "array", items: { type: "object", additionalProperties: false, required: ["probe", "expected", "question"], properties: { probe: { type: "string" }, expected: { type: "integer" }, question: { type: "integer" } } } },
     },
   },
 };
@@ -580,4 +581,70 @@ test("matcherParts lists, per output, the claims code left unmatched by number a
   expect(text).toContain("1: second claim here");
   expect(text).toContain("f1: the host calls out to a rare address on a timer");
   expect(parts[0]!.marking).not.toBeNull();
+});
+
+// ---- credit for asking: an expected finding that is the person's to say
+
+const OWNER = "the device belongs to the owner";
+/** One task whose answer holds a claim that is the person's to say; base asked a question code matches, K1 one only a model can. */
+function askingTask(r: Rig): Record14 {
+  taskCase(r, 0, [{ claim: OWNER, likelihood: "likely", confidence: "high", asks: true }]);
+  return {
+    outputs: {
+      "base/T1": { ...outputOf([finding("f1", UNRELATED)]), asked: ["Does the device belong to the owner?"] },
+      "K1/T1": { ...outputOf([finding("f1", UNRELATED)]), asked: ["Which network is this?", "Is this yours?"] },
+    },
+    chosen: true, candidate: true,
+  };
+}
+
+test("with a script stage a question code matches to a claim that is the person's to say scores 1000, shown as asked; an unmatched one scores 0", async () => {
+  const r = rig(false);
+  const sc = askingTask(r);
+  const s = improveCase(r, 1);
+  const engine = engineFor(r, s, { select: recorded(r, 1, sc) });
+  engine.start(human);
+  await engine.advance();
+  const sheet = readScoreSheet(s.blobs.get(s.state.improve.scored!.scores.blob))!;
+  expect(sheet.outputs.find((o) => o.probe === "base/T1")!.findings[0]).toEqual({
+    expected: 0, produced: null, asked: 0, by: "code", similarity: 571, likelihood_distance: null, confidence_distance: null, score: 1000,
+  });
+  expect(sheet.outputs.find((o) => o.probe === "K1/T1")!.score).toBe(0);
+  expect(s.state.improve.scored!.summary).toEqual([{ candidate: "base", score: 1000, drafted: 1, tasks: 1 }, { candidate: "K1", score: 0, drafted: 1, tasks: 1 }]);
+});
+
+test("with an agent stage the model is shown the questions code left and the claims that are the person's to say, and its question match scores 1000", async () => {
+  const r = rig(true);
+  const sc = askingTask(r);
+  const s = improveCase(r, 1);
+  // K1's second question asks about the claim in other words; a match naming a question that is not there, or base's matched claim, is dropped
+  const reply = { matches: [], texts: [], asked: [{ probe: "K1/T1", expected: 0, question: 1 }, { probe: "K1/T1", expected: 0, question: 7 }, { probe: "base/T1", expected: 0, question: 0 }] };
+  const engine = engineFor(r, s, { select: recorded(r, 1, sc) }, providersOf([turn("judge", reply)]));
+  engine.start(human);
+  await engine.advance();
+  const reqs = requestsOf(s);
+  expect(reqs.length).toBe(1);
+  const asked = s.blobs.text((reqs[0]!.payload as { messages: { blob: string } }).messages.blob);
+  expect(asked).toContain("K1/T1");
+  expect(asked).toContain(`0: ${OWNER}`);
+  expect(asked).toContain("q1: Is this yours?");
+  const sheet = readScoreSheet(s.blobs.get(s.state.improve.scored!.scores.blob))!;
+  const k1 = sheet.outputs.find((o) => o.probe === "K1/T1")!;
+  expect(k1.findings[0]).toMatchObject({ expected: 0, produced: null, asked: 1, by: "model", score: 1000 });
+  expect(sheet.outputs.find((o) => o.probe === "base/T1")!.findings[0]).toMatchObject({ asked: 0, by: "code" });
+  expect(s.state.improve.scored!.matcher).toBe("code+model");
+});
+
+test("matcherParts lists the questions no claim took, by number, under the claims that are the person's to say", () => {
+  const r = rig(false);
+  const s = improveCase(r, 1);
+  const copy: AnswerCopy[] = [{ task: "T1", seq: 1, hash: "x", text: "the text", marking: "TLP:GREEN", findings: [{ claim: OWNER, likelihood: "likely", confidence: "high", asks: true }] }];
+  const parts = matcherParts(s, copy, {
+    "base/T1": { ...outputOf([finding("f1", UNRELATED)]), asked: ["Is this yours?"] },
+    // nothing left: code matched the question
+    "K1/T1": { ...outputOf([finding("f1", UNRELATED)]), asked: ["Does the device belong to the owner?"] },
+  });
+  expect(parts.map((p) => p.id)).toEqual(["base/T1"]);
+  expect(parts[0]!.text).toContain("q0: Is this yours?");
+  expect(parts[0]!.text).toContain(`0: ${OWNER}`);
 });

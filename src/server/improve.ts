@@ -122,7 +122,7 @@ function sheetOf(session: CaseSession, ref: BlobRef, said: (t: string) => string
       probe: o.probe, candidate: o.candidate, task: o.task, outcome: o.outcome, score: o.score, text: o.text,
       findings: o.findings.map((f) => ({
         expected: f.expected, produced: f.produced === null ? null : said(f.produced), by: f.by, similarity: f.similarity,
-        likelihood_distance: f.likelihood_distance, confidence_distance: f.confidence_distance, score: f.score,
+        likelihood_distance: f.likelihood_distance, confidence_distance: f.confidence_distance, score: f.score, ...(f.asked === undefined ? {} : { asked: f.asked }),
       })),
       left_over: o.left_over.map(said),
     })),

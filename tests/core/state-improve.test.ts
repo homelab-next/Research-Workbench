@@ -694,3 +694,30 @@ test("each blob of an improve case has a reader that gives null for bytes that a
   expect(readScoreSheet(enc({ ...sheet, format: 2 }))).toBeNull();
   expect(readAnswers(enc([{ ...answers[0], findings: [{ claim: "", likelihood: "likely", confidence: "low" }] }]))).toBeNull();
 });
+
+test("probeOutputOf carries the texts of the questions the child asked the person, in order; a child that asked none has no asked key", () => {
+  const b = heldOnQuestion(atPlanGate(probeChild()));
+  b.add("run.resumed", {}, { actor: probeActor });
+  b.add("question.asked", { question: { id: "ask-2", text: "Does the device belong to the owner?", why: "w", cards: [], about: [], blocking: false } }, { actor: assembler, stage: "assemble" });
+  const s = fold(b.entries);
+  expect(s.skipped).toEqual([]);
+  const o = probeOutputOf(s);
+  expect(o.asked).toEqual(["Is the device expected on that access point?", "Does the device belong to the owner?"]);
+  expect(readProbeOutput(new TextEncoder().encode(canonical(o as never)))).toEqual(o);
+  const none = probeOutputOf(fold(atPublishGate(atPlanGate(probeChild())).b.entries));
+  expect(Object.hasOwn(none, "asked")).toBe(false);
+  // an empty list is no output a probe gives
+  expect(readProbeOutput(new TextEncoder().encode(canonical({ ...none, asked: [] } as never)))).toBeNull();
+});
+
+test("an expected finding with asks: true folds with it; asks of any other value is malformed; one without it folds as before", () => {
+  const t = investigated();
+  t.b.add("answer.known", answer(t.draft.hash, { findings: [{ ...findings[0]!, asks: true }, findings[0]!] }), { actor: human });
+  const s = fold(t.b.entries);
+  expect(s.skipped).toEqual([]);
+  expect(s.answers["1"]!.findings).toEqual([{ ...findings[0]!, asks: true }, findings[0]!]);
+  expect(Object.hasOwn(s.answers["1"]!.findings[1]!, "asks")).toBe(false);
+  const bad = investigated();
+  bad.b.add("answer.known", answer(bad.draft.hash, { findings: [{ ...findings[0]!, asks: false } as unknown as ExpectedFinding] }), { actor: human });
+  expect(reasons(fold(bad.b.entries))).toEqual(["malformed answer.known"]);
+});

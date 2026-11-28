@@ -92,6 +92,7 @@ function outputText(id: string, o: ProbeOutput): string {
     for (const f of p.key_findings) lines.push(`- ${f.statement} (likelihood ${f.likelihood}, confidence ${f.confidence})`);
     lines.push(`Assessment: ${p.assessment}`, `Gaps and limits: ${p.gaps_and_limits}`);
   }
+  if (o.asked !== undefined) lines.push("Asked the person:", ...o.asked.map((q) => `- ${q}`));
   const st = o.stats;
   lines.push(`Stats: ${st.lookups} lookups, ${st.tokens} tokens, ${st.model_calls} model calls; stages: ${st.stages.map((x) => `${x.id} ${x.status} (${x.attempts})`).join(", ")}`);
   return lines.join("\n");

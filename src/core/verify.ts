@@ -13,6 +13,7 @@ import { rescore } from "./score";
 import { apply, fold, initial, probeOutputOf } from "./state";
 import { isObj } from "./state/guards";
 import { readAnswers, readProbeOutput, readScoreSheet } from "./state/improve";
+import type { ProbeOutput } from "./state/improve";
 import type { LedgerRow, RowFault } from "./ledger";
 import type { CaseState } from "./state";
 import { BLOB_FIELDS, blobFieldNullable } from "./types";
@@ -369,7 +370,8 @@ function blobOf(caseDir: string, ref: unknown): Uint8Array | null {
  * staged candidate's otherwise); and, when the child is in `casesDir`, its ledger holds an entry of the recorded seq and hash, its probe.child and
  * subloop.child name this case, probe, candidate and task, its first entry is the origin probe.started recorded, the run it ran bound the loop version
  * probe.started names, no entry of improve-probe in it passes any gate but the plan gate, and the output the case recorded is the output of the
- * child's fold at that head (both the blob's bytes and output_hash). A child that is not in `casesDir` is not_loaded and does not fail the report.
+ * child's fold at that head (both the blob's bytes and output_hash); an output recorded without `asked` (before outputs carried the child's
+ * questions to the person) is compared without it. A child that is not in `casesDir` is not_loaded and does not fail the report.
  * Reads only. The first failing check names the status.
  */
 export function verifyProbes(caseDir: string, casesDir: string): ProbeReport {
@@ -413,13 +415,18 @@ export function verifyProbes(caseDir: string, casesDir: string): ProbeReport {
       if (head === null || there === undefined || there.hash !== head.hash) return "head_differs";
       const bytes = blobOf(caseDir, p.output);
       if (bytes === null || typeof p.output_hash !== "string" || sha256Hex(bytes) !== p.output_hash) return "output_differs";
-      let again: string;
+      let again: ProbeOutput;
       try {
-        again = canonical(probeOutputOf(fold(entriesOf(ledgerPath), head.seq)) as unknown as Json);
+        again = probeOutputOf(fold(entriesOf(ledgerPath), head.seq));
       } catch {
         return "output_differs";
       }
-      return sha256Hex(again) === p.output_hash ? "matches" : "output_differs";
+      if (sha256Hex(canonical(again as unknown as Json)) === p.output_hash) return "matches";
+      // an output recorded before outputs carried the child's questions to the person is that output without them
+      const recorded = readProbeOutput(bytes);
+      if (again.asked === undefined || recorded === null || recorded.asked !== undefined) return "output_differs";
+      const { asked: _later, ...older } = again;
+      return sha256Hex(canonical(older as unknown as Json)) === p.output_hash ? "matches" : "output_differs";
     })();
     probes.push({ probe: p.probe, child: p.child, status });
   }

@@ -47,7 +47,7 @@ class UsageError extends Error {}
 
 const CASE_ID = /^CASE-[1-9][0-9]{0,8}$/;
 const LOOP_ID = /^[a-z][a-z0-9_-]*$/;
-const FINDINGS_SHAPE = "the findings file holds no list of findings: a JSON list of { claim, likelihood, confidence }";
+const FINDINGS_SHAPE = "the findings file holds no list of findings: a JSON list of { claim, likelihood, confidence }, each with asks: true when the claim is the person's to say";
 export const WAITS_AT_ADOPT = "decide the whole candidate in the browser: the case's Improve lens";
 
 type Form = "answer" | "withdraw" | "start" | "show";

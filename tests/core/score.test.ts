@@ -262,3 +262,63 @@ test("every number in a sheet is an integer", () => {
   for (const n of numbers) expect(Number.isInteger(n)).toBe(true);
   for (const o of sheet.outputs) if (o.score !== null) expect(o.score >= 0 && o.score <= 1000).toBe(true);
 });
+
+// ---------- credit for asking: an expected finding that is the person's to say ----------
+
+const theirs = (claim: string): ExpectedFinding => ({ claim, likelihood: "likely", confidence: "moderate", asks: true });
+const asking = (findings: Finding[], asked: string[]): ProbeOutput => ({ ...drafted(findings), asked });
+
+test("an expected finding that is the person's to say scores 1000 when the probe asked a question code matches to its claim", () => {
+  // "the device belongs to the owner" vs "does the device belong to the owner": the, device, to, owner shared of 7 words = 571
+  const a = answer("T1", [theirs("the device belongs to the owner"), expected("the host beacons")]);
+  const o = asking([found("F1", "the host beacons")], ["Which network is this?", "Does the device belong to the owner?"]);
+  const s = scoreOutput(probe("base", "T1"), o, a, SEVEN);
+  expect(s.findings[0]).toEqual({ expected: 0, produced: null, asked: 1, by: "code", similarity: 571, likelihood_distance: null, confidence_distance: null, score: 1000 });
+  expect(s.findings[1]).toMatchObject({ expected: 1, produced: "F1", by: "code", score: 1000 });
+  expect(s.score).toBe(1000);
+  // the same question does not count for a finding that is not the person's to say
+  const plain = scoreOutput(probe("base", "T1"), o, answer("T1", [expected("the device belongs to the owner")]), SEVEN);
+  expect(plain.findings[0]).toMatchObject({ produced: null, by: null, score: 0 });
+  expect(plain.findings[0]).not.toHaveProperty("asked");
+  // a question far from the claim is no match
+  expect(scoreOutput(probe("base", "T1"), asking([], ["Which network is this?"]), answer("T1", [theirs("the device belongs to the owner")]), SEVEN).score).toBe(0);
+  // an incomplete output scores 0 whatever it asked
+  expect(scoreOutput(probe("base", "T1"), { ...incomplete, asked: ["Does the device belong to the owner?"] }, a, SEVEN).score).toBe(0);
+});
+
+test("a produced finding that states the person's claim counts as before; each question is matched once, greatest similarity first", () => {
+  const a = answer("T1", [theirs("the device belongs to the owner"), theirs("the owner set the device up")]);
+  const o = asking([found("F1", "the device belongs to the owner", "very likely")], ["Did the owner set the device up?", "Did the owner set the device up?"]);
+  const s = scoreOutput(probe("base", "T1"), o, a, SEVEN);
+  // stated: scored on its likelihood and confidence as any finding is
+  expect(s.findings[0]).toMatchObject({ expected: 0, produced: "F1", by: "code", score: 500 + Math.round(250 * (5 / 6)) + 250 });
+  expect(s.findings[0]).not.toHaveProperty("asked");
+  // asked: the first of two equal questions
+  expect(s.findings[1]).toMatchObject({ expected: 1, produced: null, asked: 0, by: "code", score: 1000 });
+  const one = scoreOutput(probe("base", "T1"), asking([], ["Does the device belong to the owner, and did the owner set the device up?"]), a, SEVEN);
+  expect(one.findings.filter((f) => f.asked !== undefined)).toHaveLength(1);
+});
+
+test("a model's question match is used only for a finding that is the person's to say, unmatched, and a question still free", () => {
+  const a = answer("T1", [theirs("the device belongs to the owner"), expected("traffic every minute"), theirs("the printer is on the guest network")]);
+  const o = asking([], ["Is this yours?", "Is the printer on the guest network?"]);
+  const extra = [
+    { expected: 0, produced: null, asked: 0 }, // used
+    { expected: 1, produced: null, asked: 0 }, // not the person's to say
+    { expected: 2, produced: null, asked: 1 }, // code matched it already
+    { expected: 0, produced: null, asked: 9 }, // no such question
+  ];
+  const s = scoreOutput(probe("base", "T1"), o, a, SEVEN, extra);
+  expect(s.findings.map((f) => [f.expected, f.asked ?? null, f.by, f.score])).toEqual([[0, 0, "model", 1000], [1, null, null, 0], [2, 1, "code", 1000]]);
+  expect(s.findings[0]!.similarity).toBe(claimSimilarity("the device belongs to the owner", "Is this yours?"));
+});
+
+test("rescore recomputes a sheet whose matches include questions, from the code and the model's recorded matches", () => {
+  const a = [answer("T1", [theirs("the device belongs to the owner"), theirs("the printer is on the guest network")])];
+  const outputs = { "base/T1": asking([], ["Is this yours?", "Is the printer on the guest network?"]) };
+  const o = scoreOutput(probe("base", "T1"), outputs["base/T1"], a[0]!, SEVEN, [{ expected: 0, produced: null, asked: 0 }]);
+  const sheet = scoreSheet([o], SEVEN, ["base"]);
+  expect(rescore(sheet, outputs, a)).toEqual(sheet);
+  // without the questions in the output, the recorded asks no longer hold
+  expect(rescore(sheet, { "base/T1": drafted([]) }, a)).not.toEqual(sheet);
+});

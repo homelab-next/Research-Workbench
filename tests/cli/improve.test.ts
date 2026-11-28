@@ -162,7 +162,7 @@ test("answer with findings from a file that is not a list of findings is refused
   const file = join(e.dir, "findings.json");
   writeFileSync(file, JSON.stringify({ claim: "not a list" }));
   expect(await run(e, ["answer", "CASE-1", "--product", "1", "--text", "x", "--findings", file])).toBe(1);
-  expect(err.join("\n")).toBe("the findings file holds no list of findings: a JSON list of { claim, likelihood, confidence }");
+  expect(err.join("\n")).toBe("the findings file holds no list of findings: a JSON list of { claim, likelihood, confidence }, each with asks: true when the claim is the person's to say");
   writeFileSync(file, JSON.stringify([{ claim: "c", likelihood: "likely" }]));
   expect(await run(e, ["answer", "CASE-1", "--product", "1", "--text", "x", "--findings", file])).toBe(1);
   expect(err.join("\n")).toContain("confidence");

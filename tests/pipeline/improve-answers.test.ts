@@ -223,3 +223,23 @@ test("knownAnswerOf is null for a seq whose entry is not an answer.known, or who
   // the test's own skipped entry is not left for afterEach to see
   s.close();
 });
+
+test("an expected finding marked the person's to say is written with asks: true and read back with it; unmarked, the key is absent; asks other than a boolean is refused", () => {
+  const { s } = published();
+  const mixed = [
+    { claim: "the device belongs to the owner", likelihood: "likely", confidence: "high", asks: true },
+    { claim: "the host beacons", likelihood: "likely", confidence: "moderate", asks: false },
+    { claim: "the printer is on the guest network", likelihood: "likely", confidence: "moderate" },
+  ] as unknown as ExpectedFinding[];
+  setKnownAnswer(s, deps, input({ findings: mixed }), SCALE);
+  const e = answersOf(s)[0]!;
+  const written = (e.payload as Payloads["answer.known"]).findings;
+  expect(written[0]).toEqual({ claim: "the device belongs to the owner", likelihood: "likely", confidence: "high", asks: true });
+  expect(written[1]).toEqual({ claim: "the host beacons", likelihood: "likely", confidence: "moderate" });
+  expect(Object.hasOwn(written[2]!, "asks")).toBe(false);
+  expect(s.state.answers["1"]!.findings).toEqual(written);
+  expect(knownAnswerOf(s.entries(), { seq: e.seq, hash: e.hash })!.findings).toEqual(written);
+  const n = s.entries().length;
+  expect(() => setKnownAnswer(s, deps, input({ findings: [{ ...findings[0]!, asks: "yes" }] as unknown as ExpectedFinding[] }), SCALE)).toThrow("an expected finding's asks is true or false");
+  expect(s.entries().length).toBe(n);
+});

@@ -25,10 +25,13 @@ export function claimSimilarity(a: string, b: string): number {
   return Math.round((1000 * shared) / (A.size + B.size - shared));
 }
 
-/** A model's matching for an expected finding code left unmatched: the produced finding's id, or null for none. */
-export interface ModelMatch { expected: number; produced: string | null }
+/**
+ * A model's matching for an expected finding code left unmatched: the produced finding's id, or null for none; or, with `asked`, the index of
+ * the probe's question to the person that asks about a claim that is the person's to say (produced is then null).
+ */
+export interface ModelMatch { expected: number; produced: string | null; asked?: number }
 
-type Match = { expected: number; produced: string | null; by: "code" | "model" | null; similarity: number | null };
+type Match = { expected: number; produced: string | null; by: "code" | "model" | null; similarity: number | null; asked?: number };
 
 /**
  * One row per expected finding, in order. Code first: every pair at or above CLAIM_MATCH, greatest similarity first (ties: the earlier
@@ -36,6 +39,13 @@ type Match = { expected: number; produced: string | null; by: "code" | "model" |
  * and its produced finding are both still free. A row's similarity is the pair's, whoever matched it; null when unmatched.
  */
 export function matchClaims(expected: readonly ExpectedFinding[], produced: readonly Finding[], extra: readonly ModelMatch[] = []): Match[] {
+  return claimRows(expected, produced, extra).rows;
+}
+
+/** The positions of the produced findings code matched to a claim. */
+const codeUsed = (expected: readonly ExpectedFinding[], produced: readonly Finding[]): Set<number> => claimRows(expected, produced, []).used;
+
+function claimRows(expected: readonly ExpectedFinding[], produced: readonly Finding[], extra: readonly ModelMatch[]): { rows: Match[]; used: Set<number> } {
   const pairs: { e: number; p: number; sim: number }[] = [];
   expected.forEach((ef, e) => produced.forEach((pf, p) => {
     const sim = claimSimilarity(ef.claim, pf.statement);
@@ -50,12 +60,57 @@ export function matchClaims(expected: readonly ExpectedFinding[], produced: read
     used.add(p);
   }
   for (const m of extra) {
-    if (m.produced === null || !Number.isInteger(m.expected) || m.expected < 0 || m.expected >= expected.length) continue;
+    if (m.asked !== undefined || m.produced === null || !Number.isInteger(m.expected) || m.expected < 0 || m.expected >= expected.length) continue;
     if (rows[m.expected]!.by !== null) continue;
     const p = produced.findIndex((pf, i) => pf.id === m.produced && !used.has(i));
     if (p < 0) continue;
     rows[m.expected] = { expected: m.expected, produced: m.produced, by: "model", similarity: claimSimilarity(expected[m.expected]!.claim, produced[p]!.statement) };
     used.add(p);
+  }
+  return { rows, used };
+}
+
+/**
+ * matchClaims, then each expected finding that is the person's to say (`asks`) and still unmatched is matched to a question the probe asked the
+ * person: code first (every pair at or above CLAIM_MATCH, greatest similarity first, ties to the earlier expected, then the earlier question, each
+ * question used once), then the entries of `extra` with `asked`, in order, each used only when both are still free. In that order exactly: the
+ * code's claims, the code's questions, the model's claims, the model's questions; so a recorded sheet's matches give the same rows again.
+ */
+export function matchAll(expected: readonly ExpectedFinding[], produced: readonly Finding[], asked: readonly string[] = [], extra: readonly ModelMatch[] = []): Match[] {
+  const rows = matchClaims(expected, produced);
+  const taken = new Set<number>();
+  const free = (e: number): boolean => expected[e]?.asks === true && rows[e]!.by === null;
+  const pairs: { e: number; q: number; sim: number }[] = [];
+  expected.forEach((ef, e) => {
+    if (!free(e)) return;
+    asked.forEach((text, q) => {
+      const sim = claimSimilarity(ef.claim, text);
+      if (sim >= CLAIM_MATCH) pairs.push({ e, q, sim });
+    });
+  });
+  pairs.sort((x, y) => y.sim - x.sim || x.e - y.e || x.q - y.q);
+  for (const { e, q, sim } of pairs) {
+    if (!free(e) || taken.has(q)) continue;
+    rows[e] = { expected: e, produced: null, asked: q, by: "code", similarity: sim };
+    taken.add(q);
+  }
+  // the model's claims, over the rows code left: a row code matched to a question is not free
+  // as matchClaims takes them: by position, so two findings of one id are two findings
+  const used = new Set<number>(codeUsed(expected, produced));
+  for (const m of extra) {
+    if (m.asked !== undefined || m.produced === null || !Number.isInteger(m.expected) || m.expected < 0 || m.expected >= expected.length) continue;
+    if (rows[m.expected]!.by !== null) continue;
+    const p = produced.findIndex((pf, i) => pf.id === m.produced && !used.has(i));
+    if (p < 0) continue;
+    rows[m.expected] = { expected: m.expected, produced: m.produced, by: "model", similarity: claimSimilarity(expected[m.expected]!.claim, produced[p]!.statement) };
+    used.add(p);
+  }
+  for (const m of extra) {
+    const q = m.asked;
+    if (q === undefined || !Number.isInteger(q) || q < 0 || q >= asked.length || taken.has(q)) continue;
+    if (!Number.isInteger(m.expected) || m.expected < 0 || m.expected >= expected.length || !free(m.expected)) continue;
+    rows[m.expected] = { expected: m.expected, produced: null, asked: q, by: "model", similarity: claimSimilarity(expected[m.expected]!.claim, asked[q]!) };
+    taken.add(q);
   }
   return rows;
 }
@@ -96,11 +151,13 @@ export function scoreOutput(
     return { ...head, score: 0, text: null, findings, left_over: [] };
   }
   const produced = output.product.key_findings;
-  const rows = matchClaims(answer.findings, produced, extra);
+  const rows = matchAll(answer.findings, produced, output.asked ?? [], extra);
   const taken = new Set(rows.map((r) => r.produced));
   const left_over = produced.map((f) => f.id).filter((id) => !taken.has(id));
   if (answer.findings.length === 0) return { ...head, score: text === null ? null : TEXT_SCORE[text], text, findings: [], left_over };
   const findings: FindingScore[] = rows.map((r) => {
+    // asked the person about a claim that is theirs to say: the full credit, with nothing of likelihood or confidence to weigh
+    if (r.asked !== undefined) return { ...r, produced: null, likelihood_distance: null, confidence_distance: null, score: 1000 };
     const pf = r.produced === null ? undefined : produced.find((f) => f.id === r.produced);
     if (pf === undefined) return { ...r, produced: null, by: null, similarity: null, likelihood_distance: null, confidence_distance: null, score: 0 };
     const ef = answer.findings[r.expected]!;
@@ -133,7 +190,7 @@ export function rescore(recorded: ScoreSheet, outputs: Record<string, ProbeOutpu
     const output = Object.hasOwn(outputs, o.probe) ? outputs[o.probe] : undefined;
     const answer = answers.find((a) => a.task === o.task);
     if (output === undefined || answer === undefined) return [];
-    const extra = o.findings.filter((f) => f.by === "model").map((f) => ({ expected: f.expected, produced: f.produced }));
+    const extra = o.findings.filter((f) => f.by === "model").map((f): ModelMatch => (f.asked === undefined ? { expected: f.expected, produced: f.produced } : { expected: f.expected, produced: null, asked: f.asked }));
     return [scoreOutput({ probe: o.probe, candidate: o.candidate, task: o.task }, output, answer, recorded.scale, extra, o.text)];
   });
   return scoreSheet(again, recorded.scale, recorded.summary.map((r) => r.candidate));

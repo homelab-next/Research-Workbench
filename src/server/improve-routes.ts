@@ -87,7 +87,7 @@ export function improveRoutes(d: ImproveRouteDeps): ImproveRoute[] {
 const str: Schema = { type: "string" };
 const finding: Schema = {
   type: "object", additionalProperties: false, required: ["claim", "likelihood", "confidence"],
-  properties: { claim: str, likelihood: str, confidence: { enum: ["low", "moderate", "high"] } },
+  properties: { claim: str, likelihood: str, confidence: { enum: ["low", "moderate", "high"] }, asks: { type: "boolean" } },
 };
 const product: Schema = { type: "integer", minimum: 1 };
 

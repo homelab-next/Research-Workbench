@@ -32,9 +32,10 @@ const isId = (x: unknown): x is string => isStr(x) && x !== "";
 const isPositive = (x: unknown): x is number => isCount(x) && x >= 1;
 const isTextUpTo = (x: unknown, max: number): x is string => isStr(x) && x !== "" && x.length <= max;
 const isExpected = (x: unknown): x is ExpectedFinding =>
-  isObj(x) && isTextUpTo(x.claim, CLAIM_MAX) && isId(x.likelihood) && isOneOf(x.confidence, CONFIDENCES);
+  isObj(x) && isTextUpTo(x.claim, CLAIM_MAX) && isId(x.likelihood) && isOneOf(x.confidence, CONFIDENCES) && (x.asks === undefined || x.asks === true);
 const isExpectedList = (x: unknown): x is ExpectedFinding[] => Array.isArray(x) && x.length <= ANSWER_FINDINGS_MAX && x.every(isExpected);
-const copyExpected = (f: ExpectedFinding): ExpectedFinding => ({ claim: f.claim, likelihood: f.likelihood, confidence: f.confidence });
+const copyExpected = (f: ExpectedFinding): ExpectedFinding =>
+  (f.asks === true ? { claim: f.claim, likelihood: f.likelihood, confidence: f.confidence, asks: true } : { claim: f.claim, likelihood: f.likelihood, confidence: f.confidence });
 
 const isKnown = (x: unknown): x is Payloads["answer.known"] =>
   isObj(x) && isPositive(x.product) && isId(x.draft_hash) && isTextUpTo(x.text, ANSWER_TEXT_MAX) && isExpectedList(x.findings) && isMarking(x.marking);
@@ -331,9 +332,11 @@ export interface TaskRecord {
   queries: { source: string; pivot: string | null; outcome: string; rows: number | null }[]; questions: number; sendbacks: number; usage: { input: number; output: number; calls: number };
 }
 /** What a probe child gave, from its state alone. */
+/** `asked`: the texts of the questions the child asked the person, in the order asked; present only when it asked one (an older output has none). */
 export interface ProbeOutput {
   format: 1; outcome: "drafted" | "incomplete"; reason: string; draft_hash: string | null; product: Product | null;
   stats: { lookups: number; tokens: number; model_calls: number; stages: { id: string; status: string; attempts: number }[] };
+  asked?: string[];
 }
 /** How a candidate's output on a task differs from the base's. */
 export interface Contrast {
@@ -342,8 +345,10 @@ export interface Contrast {
 }
 /** A known answer as the Judge copied it into the improve case. */
 export interface AnswerCopy { task: string; seq: number; hash: string; text: string; findings: ExpectedFinding[]; marking: Marking }
+/** `asked`: for an expected finding that is the person's to say, the index in the output's `asked` of the question matched to it; present only then. */
 export interface FindingScore {
   expected: number; produced: string | null; by: "code" | "model" | null; similarity: number | null; likelihood_distance: number | null; confidence_distance: number | null; score: number;
+  asked?: number;
 }
 export interface OutputScore {
   probe: string; candidate: string; task: string; outcome: "drafted" | "incomplete"; score: number | null; text: "agrees" | "partly" | "disagrees" | null; findings: FindingScore[];
@@ -369,7 +374,8 @@ const isProbeOutput = (x: unknown): x is ProbeOutput =>
   isObj(x) && x.format === PROBE_OUTPUT_FORMAT && isOneOf(x.outcome, PROBE_OUTCOMES) && isStr(x.reason)
   && (x.outcome === "drafted" ? isId(x.draft_hash) && isProduct(x.product) : x.draft_hash === null && x.product === null)
   && isObj(x.stats) && isCount(x.stats.lookups) && isCount(x.stats.tokens) && isCount(x.stats.model_calls)
-  && Array.isArray(x.stats.stages) && x.stats.stages.every((st) => isObj(st) && isStr(st.id) && isStr(st.status) && isCount(st.attempts));
+  && Array.isArray(x.stats.stages) && x.stats.stages.every((st) => isObj(st) && isStr(st.id) && isStr(st.status) && isCount(st.attempts))
+  && (x.asked === undefined || (isStrList(x.asked) && x.asked.length > 0));
 const isContrast = (x: unknown): x is Contrast =>
   isObj(x) && isId(x.task) && isId(x.candidate) && isOneOf(x.base, PROBE_OUTCOMES) && isOneOf(x.now, PROBE_OUTCOMES) && isStrList(x.added) && isStrList(x.removed)
   && Array.isArray(x.changed) && x.changed.every((c) => isObj(c) && isStr(c.statement) && (c.likelihood === null || isPair(c.likelihood, isStr)) && (c.confidence === null || isPair(c.confidence, isStr)))
@@ -378,7 +384,7 @@ const isAnswerCopy = (x: unknown): x is AnswerCopy =>
   isObj(x) && isId(x.task) && isCount(x.seq) && isStr(x.hash) && isTextUpTo(x.text, ANSWER_TEXT_MAX) && isExpectedList(x.findings) && isMarking(x.marking);
 const isFindingScore = (x: unknown): x is FindingScore =>
   isObj(x) && isCount(x.expected) && isStrOrNull(x.produced) && (x.by === null || isOneOf(x.by, BY)) && (x.similarity === null || isScore(x.similarity))
-  && isDistance(x.likelihood_distance) && isDistance(x.confidence_distance) && isScore(x.score);
+  && isDistance(x.likelihood_distance) && isDistance(x.confidence_distance) && isScore(x.score) && (x.asked === undefined || (isCount(x.asked) && x.produced === null));
 const isOutputScore = (x: unknown): x is OutputScore =>
   isObj(x) && isId(x.probe) && isId(x.candidate) && isId(x.task) && isOneOf(x.outcome, PROBE_OUTCOMES) && (x.score === null || isScore(x.score))
   && (x.text === null || isOneOf(x.text, TEXT_VERDICTS)) && Array.isArray(x.findings) && x.findings.every(isFindingScore) && isStrList(x.left_over);
@@ -425,6 +431,9 @@ export function probeOutputOf(child: Readonly<CaseState>): ProbeOutput {
   };
   const draft = latestDraft(child as CaseState);
   const ended = (run.status === "waiting" && run.waiting === "publish") || (run.status === "finished" && run.outcome === "completed");
-  if (draft !== null && ended) return { format: PROBE_OUTPUT_FORMAT, outcome: "drafted", reason: "", draft_hash: draft.hash, product: draft.product, stats };
-  return { format: PROBE_OUTPUT_FORMAT, outcome: "incomplete", reason: incompleteReason(child), draft_hash: null, product: null, stats };
+  // the questions it asked the person, for the Judge to credit; the key only when there is one, so an output that asked none is as it was
+  const texts = Object.values(child.questions).sort((a, b) => a.seq - b.seq).map((q) => q.text);
+  const asked = texts.length === 0 ? {} : { asked: texts };
+  if (draft !== null && ended) return { format: PROBE_OUTPUT_FORMAT, outcome: "drafted", reason: "", draft_hash: draft.hash, product: draft.product, stats, ...asked };
+  return { format: PROBE_OUTPUT_FORMAT, outcome: "incomplete", reason: incompleteReason(child), draft_hash: null, product: null, stats, ...asked };
 }

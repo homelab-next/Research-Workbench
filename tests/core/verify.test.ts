@@ -762,7 +762,8 @@ interface Probed { improve: CaseSession; children: Record<string, CaseSession>; 
  * An improve case with a base probe and a K1 probe on task T1, each with a child that bound its loop version and a probe.finished that records the
  * child's head and output as they are when the entries are written. `over` changes what a probe's child holds or what its probe.finished says.
  */
-function probedCase(wb: Workbench, over: { child?: (probe: string) => Record<string, unknown>; finished?: (probe: string, c: CaseSession) => Record<string, unknown>; bound?: (probe: string) => string; started?: (probe: string) => Record<string, unknown>; output?: (probe: string) => string | undefined } = {}): Probed {
+function probedCase(wb: Workbench, over: { child?: (probe: string) => Record<string, unknown>; finished?: (probe: string, c: CaseSession) => Record<string, unknown>; bound?: (probe: string) => string; started?: (probe: string) => Record<string, unknown>; output?: (probe: string) => string | undefined;
+  before?: (probe: string, c: CaseSession) => void; outputOf?: (probe: string, c: CaseSession) => string } = {}): Probed {
   const improve = wb.createCase(improveWords, human, { loop: "improve", type: "beaconing", improve: improveRequest });
   improve.commit((_s, ids) => [
     { type: "run.started", actor: human, payload: { run: ids.next("run"), pipeline: "improve", pipeline_hash: "a".repeat(64), stages: linkStages } },
@@ -781,7 +782,8 @@ function probedCase(wb: Workbench, over: { child?: (probe: string) => Record<str
       { type: "run.started", actor: engineActor, payload: { run: ids.next("run"), pipeline: "investigation", pipeline_hash: loopHash, stages: linkStages } },
     ]);
     children[probe] = child;
-    const output = over.output?.(probe) ?? canonical(probeOutputOf(child.state) as never);
+    over.before?.(probe, child);
+    const output = over.output?.(probe) ?? over.outputOf?.(probe, child) ?? canonical(probeOutputOf(child.state) as never);
     improve.commit(() => [
       { type: "probe.started", actor: engineActor, payload: { probe, candidate, task, child: child.id, origin: child.entries()[0]!.hash, loop_hash: loopHash, input_hash: link.input_hash, budgets: { lookups: 5, tokens: 5000 }, ...(over.started?.(probe) ?? {}) } },
     ]);
@@ -960,6 +962,28 @@ test("the verify command prints the probes' and the scores' lines for an improve
   const plain = run(dir).stdout.toString();
   expect(plain).not.toContain("probe ");
   expect(plain).not.toContain("scores:");
+});
+
+test("a probe's output carries the questions its child asked; one recorded before outputs carried them still matches, and a changed list does not", () => {
+  const asker = { kind: "agent", id: "analyst", stage: "frame", profile: "investigation", model: "m", effort: null, where: "machine" } as const;
+  const before = (_probe: string, c: CaseSession): void => {
+    c.commit((s, ids) => [{ type: "question.asked", actor: asker, run: s.run.id, stage: "frame", payload: { question: { id: ids.next("question"), text: "Does the device belong to the owner?", why: "w", cards: [], about: [], blocking: false } } }]);
+  };
+  const wb = Workbench.open(join(root, "wb"), { onError: () => {} });
+  try {
+    // base/T1's output recorded as this workbench takes it, K1/T1's as one taken before outputs carried the questions
+    const p = probedCase(wb, { before, outputOf: (probe, c) => {
+      const o = probeOutputOf(c.state);
+      expect(o.asked).toEqual(["Does the device belong to the owner?"]);
+      const { asked: _left, ...older } = o;
+      return canonical((probe === "base/T1" ? o : older) as never);
+    } });
+    expect(verifyProbes(p.improve.dir, p.cases).probes.map((x) => x.status)).toEqual(["matches", "matches"]);
+    const changed = probedCase(wb, { before, outputOf: (_probe, c) => canonical({ ...probeOutputOf(c.state), asked: ["Another question?"] } as never) });
+    expect(verifyProbes(changed.improve.dir, changed.cases).probes.map((x) => x.status)).toEqual(["output_differs", "output_differs"]);
+  } finally {
+    wb.close();
+  }
 });
 
 test("a probe child holding a gate passed by improve-probe other than its plan gate is not_its_child", () => {
