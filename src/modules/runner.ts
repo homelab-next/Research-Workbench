@@ -36,9 +36,10 @@ export function previewCell(v: Json): Json {
 /**
  * `lease`, when set, holds the pool the deps name (compose's reference count): runQuery takes it before a connector runs a request and lets it
  * go when the request ends, so a reload that replaces the pool closes it only once every query in flight on it has ended. Deps without one
- * (a test's) run the same, holding nothing.
+ * (a test's) run the same, holding nothing. `secrets`, when set, gives the value of every secret the workbench holds: what a person or an
+ * agent writes into a case as text of their own (a note, a statement, an answer) is written with each one redacted.
  */
-export type RunnerDeps = PlanDeps & { lease?: () => () => void };
+export type RunnerDeps = PlanDeps & { lease?: () => () => void; secrets?: () => readonly string[] };
 
 export interface RunQueryInput {
   source: string; text: string; bound: Bound; window: TimeWindow; why: string; actor: Actor;

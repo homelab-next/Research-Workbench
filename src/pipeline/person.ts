@@ -1,4 +1,5 @@
 // A statement by the person: what they know, recorded as a card of theirs in Incoming (slice 8).
+import { redactSecrets } from "../core/redact";
 import { Refused } from "../core/refused";
 import type { CaseSession } from "../core/session";
 import { BASIS_TEXT } from "../core/state";
@@ -47,8 +48,12 @@ export function checkStatement(session: CaseSession, deps: RunnerDeps, input: { 
   return strictest(caseMarking, ...floor, ...(input.marking === null ? [] : [input.marking]));
 }
 
-/** Records what the person knows as a card in Incoming and returns its id. Throws PersonRefused. */
-export function addStatement(session: CaseSession, deps: RunnerDeps, input: { actor: Actor; statement: string; basis: PersonBasis; detail: string; about: Observable[]; marking: Marking | null }): string {
+/** A person's text as a statement card holds it: each secret value the workbench holds (`deps.secrets`) redacted. */
+export const cleanText = (deps: RunnerDeps, text: string): string => (typeof text === "string" ? redactSecrets(text, deps.secrets?.() ?? []) : text);
+
+/** Records what the person knows as a card in Incoming and returns its id. A secret value in the statement or the detail is written redacted. Throws PersonRefused. */
+export function addStatement(session: CaseSession, deps: RunnerDeps, given: { actor: Actor; statement: string; basis: PersonBasis; detail: string; about: Observable[]; marking: Marking | null }): string {
+  const input = { ...given, statement: cleanText(deps, given.statement), detail: cleanText(deps, given.detail) };
   const marking = checkStatement(session, deps, input);
   const detail = input.detail.trim();
   let id = "";

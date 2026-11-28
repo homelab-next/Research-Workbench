@@ -9,7 +9,7 @@ import { idArg, params, str } from "./kit";
 
 async function noteTool(ctx: ToolContext, a: Record<string, Json>): Promise<ToolResult> {
   const cards = Array.isArray(a.cards) ? a.cards.filter((c): c is string => typeof c === "string") : [];
-  const id = noteMemory(ctx.session, { kind: str(a.kind) as NoteKind, text: str(a.text), cards, actor: ctx.actor, link: ctx.link, max_notes: ctx.max_notes });
+  const id = noteMemory(ctx.session, { kind: str(a.kind) as NoteKind, text: str(a.text), cards, actor: ctx.actor, link: ctx.link, max_notes: ctx.max_notes, secrets: ctx.deps.secrets?.() ?? [] });
   const notes = liveNotes(ctx.session.state).length;
   return { ok: true, summary: `noted ${id}`, view: { noted: id, notes }, marking: null };
 }

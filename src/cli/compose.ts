@@ -167,7 +167,7 @@ function build(config: Config, wb: Workbench, opts: { refuse_hosts?: () => reado
     seedStore(config, wb, registry, caseTypes.types, problems);
     const built: Built = {
       case_types: caseTypes.types,
-      registry, runner: { registry, pool, observables }, seeker: makeSeeker(registry), providers: loaded.providers,
+      registry, runner: { registry, pool, observables, secrets: () => secretValues(config, registry) }, seeker: makeSeeker(registry), providers: loaded.providers,
       pipeline: loop?.pipeline ?? unusablePipeline(id), profile: loop?.profile ?? UNUSABLE_PROFILE, loops, components: loop?.components ?? rootComponents(registry),
     };
     return { built, pool, problems };

@@ -65,3 +65,12 @@ test("STAGE_TOOL_NAMES has seventeen names and note_memory is the last", () => {
   expect(STAGE_TOOL_NAMES.at(-1)).toBe("note_memory");
   expect([...TOOL_NAMES]).toEqual([...STAGE_TOOL_NAMES, ...BUILDER_TOOL_NAMES]);
 });
+
+test("an agent's note holding a secret value the workbench holds is written redacted", async () => {
+  const value = "s3cr3t-Value-0123456789";
+  f.ctx.deps = { ...f.ctx.deps, secrets: () => [value] };
+  const r = await note(`the key is ${value}`);
+  expect(r.ok).toBe(true);
+  expect(JSON.stringify(f.s.entries())).not.toContain(value);
+  expect(liveNotes(f.s.state).map((x) => x.text)).toEqual(["the key is [redacted secret]"]);
+});

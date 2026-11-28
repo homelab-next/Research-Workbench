@@ -79,3 +79,26 @@ test("set_case_type to a type that is not loaded is refused", async () => {
   expect(s.entries(id).slice(n).map((e) => [e.type, e.payload, e.actor])).toEqual([["case.type_set", { type: "phishing" }, person(s)], ["case.type_set", { type: null }, person(s)]]);
   expect(s.app.hub.read(id).state.memory.type).toBeNull();
 });
+
+// ---------- final review I5: no credential's value in a note or a statement ----------
+
+test("a credential's value in a note, its revision, a drop's reason or a statement is redacted before the ledger", async () => {
+  const value = "s3cr3t-Value-0123456789";
+  s = await served({ credential: { name: "PROBE_CRED", value } });
+  const id = await s.newCase();
+  const n = s.entries(id).length;
+  expect((await s.command(id, "note_memory", { kind: "fact", text: `the key is ${value}` })).status).toBe(200);
+  expect((await s.command(id, "revise_memory", { item: "m1", kind: "fact", text: `still ${value}` })).status).toBe(200);
+  expect((await s.command(id, "drop_memory", { item: "m1", reason: `it held ${value}` })).status).toBe(200);
+  expect((await s.command(id, "add_statement", { statement: `the password is ${value}`, basis: "saw", detail: `typed ${value}` })).status).toBe(200);
+  const written = s.entries(id).slice(n);
+  expect(JSON.stringify(written)).not.toContain(value);
+  expect(written.map((e) => e.type)).toEqual(["memory.noted", "memory.revised", "memory.dropped", "card.created"]);
+  expect(written[0]!.payload).toMatchObject({ text: "the key is [redacted secret]" });
+  expect(written[1]!.payload).toMatchObject({ text: "still [redacted secret]" });
+  expect(written[2]!.payload).toMatchObject({ reason: "it held [redacted secret]" });
+  const card = (written[3]!.payload as { card: { body: string; title: string; why: string } }).card;
+  expect(card.body).toBe("the password is [redacted secret]");
+  expect(card.title).not.toContain(value);
+  expect(card.why).toContain("typed [redacted secret]");
+});

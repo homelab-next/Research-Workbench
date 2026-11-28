@@ -11,7 +11,7 @@ import { MARKINGS, strictest } from "../core/types";
 import type { Actor, Entry, EntryInput, Marking, Observable, PersonBasis } from "../core/types";
 import type { Registry } from "../modules/registry";
 import type { RunnerDeps } from "../modules/runner";
-import { checkStatement, personCard, PersonRefused } from "./person";
+import { checkStatement, cleanText, personCard, PersonRefused } from "./person";
 
 const TITLE_CHARS = 60;
 
@@ -42,7 +42,9 @@ type AnswerInput = { actor: Actor; question: string; answer: string; basis: Pers
  * The person's answer, checked, as what writes it: `entries` gives the statement card that answers the question and question.answered naming
  * it, for a commit the caller makes (checking again that the question is still unanswered), with the card's id. Throws PersonRefused.
  */
-export function preparedAnswer(session: CaseSession, deps: RunnerDeps, input: AnswerInput): { entries: (s: Readonly<CaseState>, ids: Pick<IdAllocator, "next">) => { card: string; entries: EntryInput[] } } {
+export function preparedAnswer(session: CaseSession, deps: RunnerDeps, given: AnswerInput): { entries: (s: Readonly<CaseState>, ids: Pick<IdAllocator, "next">) => { card: string; entries: EntryInput[] } } {
+  // a secret value in the answer or the detail is written redacted, as in a statement
+  const input = { ...given, answer: cleanText(deps, given.answer), detail: cleanText(deps, given.detail) };
   if (input.actor.kind !== "human") throw new PersonRefused("only a person may answer a question");
   const state = session.state;
   const q = Object.hasOwn(state.questions, input.question) ? state.questions[input.question]! : null;

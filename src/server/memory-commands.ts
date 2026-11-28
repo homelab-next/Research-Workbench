@@ -16,22 +16,22 @@ defineCommand("note_memory", {
   args: { type: "object", additionalProperties: false, required: ["kind", "text"], properties: { kind, text: str, cards } },
   then: "nothing",
   perform: ({ session, deps, actor }, a) => {
-    noteMemory(session, { kind: a.kind as NoteKind, text: a.text as string, ...(a.cards === undefined ? {} : { cards: a.cards as string[] }), actor, max_notes: deps.config.memory.max_notes });
+    noteMemory(session, { kind: a.kind as NoteKind, text: a.text as string, ...(a.cards === undefined ? {} : { cards: a.cards as string[] }), actor, max_notes: deps.config.memory.max_notes, secrets: deps.runner.secrets?.() ?? [] });
   },
 });
 
 defineCommand("revise_memory", {
   args: { type: "object", additionalProperties: false, required: ["item", "kind", "text"], properties: { item: str, kind, text: str, cards } },
   then: "nothing",
-  perform: ({ session, actor }, a) => {
-    reviseMemory(session, { item: a.item as string, kind: a.kind as NoteKind, text: a.text as string, ...(a.cards === undefined ? {} : { cards: a.cards as string[] }), actor });
+  perform: ({ session, deps, actor }, a) => {
+    reviseMemory(session, { item: a.item as string, kind: a.kind as NoteKind, text: a.text as string, ...(a.cards === undefined ? {} : { cards: a.cards as string[] }), actor, secrets: deps.runner.secrets?.() ?? [] });
   },
 });
 
 defineCommand("drop_memory", {
   args: { type: "object", additionalProperties: false, required: ["item", "reason"], properties: { item: str, reason: str } },
   then: "nothing",
-  perform: ({ session, actor }, a) => { dropMemory(session, { item: a.item as string, reason: a.reason as string, actor }); },
+  perform: ({ session, deps, actor }, a) => { dropMemory(session, { item: a.item as string, reason: a.reason as string, actor, secrets: deps.runner.secrets?.() ?? [] }); },
 });
 
 defineCommand("set_case_type", {

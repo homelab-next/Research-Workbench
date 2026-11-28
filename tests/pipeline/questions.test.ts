@@ -187,3 +187,12 @@ test("the note sits before the form exceptions note and leaves it whole", () => 
 test("a card id in a question is written so that it cites no card", () => {
   expect(withOpenQuestions("", [{ id: "ask-1", text: "is c3 the TV?" }])).toBe("Questions the person has not answered:\n- ask-1: is card 3 the TV?");
 });
+
+test("an answer holding a secret value the workbench holds is written redacted: its card's body and how they know", () => {
+  startRun();
+  const value = "s3cr3t-Value-0123456789";
+  const q = ask(Q1);
+  const id = answerQuestion(f.s, { ...f.sample.deps, secrets: () => [value] }, { actor: person, question: q, answer: `use ${value}`, basis: "saw", detail: `typed ${value}`, about: null, marking: null });
+  expect(JSON.stringify(f.s.entries())).not.toContain(value);
+  expect(f.s.state.cards[id]!.body).toBe("use [redacted secret]");
+});
