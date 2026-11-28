@@ -24,6 +24,8 @@ export const lessonHash = (d: LessonDraft): string =>
   sha256Hex(canonical({ case_type: d.case_type, title: d.title, text: d.text, triggers: d.triggers, marking: d.marking, supersedes: d.supersedes } as unknown as Json));
 
 const TRIGGER_KEYS = ["observable", "source", "finding"] as const;
+/** A line break or a control character: a title holding one could start a line of its own where it is shown to a model. */
+const BREAKS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 const HASH = /^[0-9a-f]{64}$/;
 const isHash = (x: unknown): x is string => isStr(x) && HASH.test(x);
 const lt = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -55,6 +57,7 @@ export function draftProblem(d: unknown): string | null {
   if (!isPlainObject(d)) return "a lesson is a mapping";
   if (!isStr(d.case_type) || !CASE_TYPE_ID.test(d.case_type)) return "a lesson names a case type";
   if (!isStr(d.title) || d.title.trim() === "" || d.title.length > LESSON_TITLE_MAX) return `a lesson needs a title of 1 to ${LESSON_TITLE_MAX} characters`;
+  if (BREAKS.test(d.title)) return "a lesson's title is one line, with no control characters";
   if (!isStr(d.text) || d.text.trim() === "" || d.text.length > LESSON_TEXT_MAX) return `a lesson needs text of 1 to ${LESSON_TEXT_MAX} characters`;
   if (!isMarking(d.marking)) return "unknown marking";
   const TRIGGER = `a trigger is { observable: <type> }, { source: <id> } or { finding: <${FINDING_MIN} to ${FINDING_MAX} characters> }`;
