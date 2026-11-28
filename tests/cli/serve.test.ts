@@ -1,9 +1,10 @@
 import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { SAMPLE_START, SAMPLE_WINDOW } from "../../scripts/make-sample-data";
+import { memory } from "../../src/cli/memory";
 import { afterSignal, serve } from "../../src/cli/serve";
 import { Workbench, WorkbenchLockedError } from "../../src/core/workbench";
 import { cleanEnv } from "../helpers/clean-env";
@@ -185,3 +186,20 @@ test("SIGTERM stops a spawned serve cleanly: exit 0 and the lock released", asyn
   expect(await new Response(child.stderr).text()).toBe("");
   Workbench.open(e.data, { onError: () => {} }).close();
 }, 60_000);
+
+test("serve reads the memory store the configuration names, not <data>/memory", async () => {
+  const e = setup();
+  const root = join(dirname(e.config), "sample");
+  writeFileSync(join(root, "context", "case-types.yaml"), "kind: case-types\nid: sample-types\ntypes:\n  - { id: unknown-device, title: Unknown device, about: A device on the network that no inventory names. }\n");
+  const store = join(dirname(e.config), "elsewhere", "memory");
+  writeFileSync(e.config, readFileSync(e.config, "utf8") + `memory: { store: ${store} }\n`);
+  const args = ["--title", "Check the lobby access point first", "--text", "Read the lease table of AP-3 first.", "--type", "unknown-device", "--marking", "TLP:GREEN"];
+  expect(await memory(["propose", ...args, "--config", e.config], quiet)).toBe(0);
+  expect(existsSync(join(store, "ledger.sqlite"))).toBe(true);
+  expect(existsSync(join(e.data, "memory"))).toBe(false);
+  const running = await serve(["--config", e.config, "--port", "0", "--sample-fixture", String(e.fixturePort)], quiet);
+  stops.push(() => running.stop());
+  const view = await (await fetch(`${running.origin}/api/memory`)).json() as { groups: { lessons: { title: string }[] }[] };
+  expect(view.groups.flatMap((g) => g.lessons.map((l) => l.title))).toEqual(["Check the lobby access point first"]);
+  expect(existsSync(join(e.data, "memory", "ledger.sqlite"))).toBe(false);
+});

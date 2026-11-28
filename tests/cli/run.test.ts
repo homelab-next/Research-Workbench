@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanEnv } from "../helpers/clean-env";
+import { withMemoryLoop } from "../helpers/served";
 import { copySample } from "../helpers/sample-root";
 
 const REPO = join(import.meta.dir, "..", "..");
@@ -422,4 +423,21 @@ test("start --type unknown-device records the type; --type of no case type is a 
   // a person's --type wins over the loop's default
   const over = cli(e, [...START, "--loop", "typed", "--type", "unknown-device"]);
   expect(over.code).toBe(0);
+});
+
+test("run binds the lessons of the memory store the configuration names, not <data>/memory", async () => {
+  const e = setup();
+  withMemoryLoop(join(e.dir, "sample"));
+  const store = join(e.dir, "elsewhere", "memory");
+  writeFileSync(e.config, readFileSync(e.config, "utf8") + `memory: { store: ${store} }\n`);
+  const { memory } = await import("../../src/cli/memory");
+  const quiet = { log: (): void => {}, error: (): void => {} };
+  const a = ["--config", e.config];
+  expect(await memory(["propose", "--title", "Check the lobby access point first", "--text", "Read the lease table of AP-3 first.", "--type", "unknown-device", "--marking", "TLP:GREEN", ...a], quiet)).toBe(0);
+  expect(await memory(["accept", "LESSON-1", ...a], quiet)).toBe(0);
+  expect(existsSync(join(e.data, "memory"))).toBe(false);
+  const started = cli(e, [...START, "--loop", "memo", "--type", "unknown-device"]);
+  expect(started.err).toBe("");
+  expect(lines(started.out)).toContain("memory: 1 lesson");
+  expect(existsSync(join(e.data, "memory", "ledger.sqlite"))).toBe(false);
 });

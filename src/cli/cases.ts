@@ -127,7 +127,7 @@ export async function cases(argv: string[], io: CasesIO): Promise<number> {
       return 0;
     }
     wb = Workbench.open(config.data_dir, {
-      store: config.cases.store, max_case_bytes: config.cases.max_bytes,
+      store: config.cases.store, max_case_bytes: config.cases.max_bytes, memory: config.memory.store,
       onError: (e) => io.error(`workbench: ${e instanceof Error ? e.message : String(e)}`),
     });
     if (p.form === "unload") {

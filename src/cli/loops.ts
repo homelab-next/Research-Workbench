@@ -191,7 +191,7 @@ export async function loops(argv: string[], io: LoopsIO): Promise<number> {
   }
   let wb: Workbench | null = null;
   try {
-    wb = Workbench.open(config.data_dir, { store: config.cases.store, max_case_bytes: config.cases.max_bytes, onError: (e) => io.error(`workbench: ${messageOf(e)}`) });
+    wb = Workbench.open(config.data_dir, { store: config.cases.store, max_case_bytes: config.cases.max_bytes, memory: config.memory.store, onError: (e) => io.error(`workbench: ${messageOf(e)}`) });
     if (p.form === "import" || p.form === "trust") {
       if (p.form === "import") {
         const registry = loadRegistry(rootsOf(config));
