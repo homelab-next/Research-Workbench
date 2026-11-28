@@ -25,7 +25,7 @@ import { Engine } from "../../src/pipeline/engine";
 import type { EngineDeps, StageEnv, StageRunner } from "../../src/pipeline/engine";
 import { setKnownAnswer, withdrawKnownAnswer } from "../../src/pipeline/improve/answers";
 import type { ImproveHost, TaskRef, TaskView } from "../../src/pipeline/improve/host";
-import { answersOf, judgeRunner, matcherParts } from "../../src/pipeline/improve/judge";
+import { MODEL_GAVE_NONE, answersOf, judgeRunner, matcherParts } from "../../src/pipeline/improve/judge";
 import { IMPROVE_ROLES } from "../../src/pipeline/manifests";
 import type { Role } from "../../src/pipeline/manifests";
 import { sampleRoot } from "../helpers/sample-root";
@@ -463,11 +463,11 @@ test("a script stage leaves an answer with no expected finding unscored", async 
   expect(s.state.improve.scored!.summary).toEqual([{ candidate: "base", score: 0, drafted: 1, tasks: 1 }, { candidate: "K1", score: 0, drafted: 1, tasks: 1 }]);
 });
 
-test("a model that declines leaves the code's scores, matcher code, and the reason in the stage's output; the stage passes", async () => {
+test("a model that declines leaves the code's scores, matcher code, and a fixed reason (never the model's words) in the stage's output; the stage passes", async () => {
   const r = rig(true);
   const sc = oneTask(r);
   const s = improveCase(r, 1);
-  const engine = engineFor(r, s, { select: recorded(r, 1, sc) }, providersOf([], [{ declined: "I will not compare these" }]));
+  const engine = engineFor(r, s, { select: recorded(r, 1, sc) }, providersOf([], [{ declined: `I will not compare these: ${CLAIMS[0]!}` }]));
   engine.start(human);
   const done = await engine.advance();
   expect(done).toMatchObject({ status: "waiting", waiting: "adopt" });
@@ -477,7 +477,9 @@ test("a model that declines leaves the code's scores, matcher code, and the reas
   expect(fin.payload).toMatchObject({ outcome: "pass" });
   const out = JSON.parse(s.blobs.text((fin.payload as { output: { blob: string } }).output.blob)) as { reason: string; matcher: string };
   expect(out.matcher).toBe("code");
-  expect(out.reason).toContain("I will not compare these");
+  expect(out.reason).toBe(MODEL_GAVE_NONE);
+  // a decline that quotes a claim leaves it in no stage output or reason
+  expect(JSON.stringify(fin.payload)).not.toContain(CLAIMS[0]!);
 });
 
 test("a model that errors leaves the code's scores too: the Judge never holds the run", async () => {

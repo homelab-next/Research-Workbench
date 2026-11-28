@@ -23,14 +23,14 @@ export interface ImproveHost {
   task(ref: TaskRef): TaskView | null;
   /** The staging store of an improve case: made when first asked for. */
   staged(improve: { case: string; origin: string | null }): BlobStore;
-  /** stageCandidate over the roots as they are now, into this improve case's staging store. */
+  /** stageCandidate over the roots as they are now, into this improve case's staging store. `root` is the root's folder name, as a change names it. */
   stage(improve: { case: string; origin: string | null }, root: string, files: ManifestFile[], target: string): { ok: true; loop: ResolvedLoop } | { ok: false; problems: string[] };
   /**
    * What a probe child of a staged version that changed a source or a playbook queries and plans through: the registry loaded from the snapshot
    * staging kept, with a runner and a seeker over it. The reason when it cannot be had. An engine asks only for a probe child's staged lock.
    */
   registryFor?(improve: { case: string; origin: string | null }, lock: LoopLock): Pick<EngineDeps, "registry" | "runner" | "seeker"> | string;
-  /** checkCandidate over the roots as they are now. */
+  /** checkCandidate over the roots as they are now. `root` is the root's folder name, as a change names it. */
   check(root: string, files: ManifestFile[], target: string): ChangeCheck;
   /** Removes the improve case's staging folder. Never throws. */
   clear(improve: { case: string; origin: string | null }): void;

@@ -1,6 +1,6 @@
 // bun run src/cli/improve.ts <command> ...   (see USAGE)
 // Sets and withdraws the known answers of a task case, starts an improve run and shows one. Only a person, here the configuration's user, runs it.
-// It decides nothing at Adopt: that gate is passed file by file in the browser, by the person who accepts. Every form takes the workbench's lock,
+// It decides nothing at Adopt: the whole candidate is accepted or rejected in the browser, by the person who decides. Every form takes the workbench's lock,
 // so the server must be stopped.
 import { readFileSync } from "node:fs";
 import { scrub } from "../agents/tools/kit";
@@ -16,7 +16,7 @@ import type { Config } from "../modules/config";
 import { loadRegistry } from "../modules/registry-record";
 import { Engine, RunRefused } from "../pipeline/engine";
 import type { EngineDeps, StageRunner } from "../pipeline/engine";
-import { setKnownAnswer, withdrawKnownAnswer } from "../pipeline/improve/answers";
+import { answerScale, setKnownAnswer, withdrawKnownAnswer } from "../pipeline/improve/answers";
 import { targetProblem } from "../pipeline/improve/select";
 import { improveHost } from "../pipeline/improve/workbench-host";
 import type { ResolvedLoop } from "../pipeline/loops";
@@ -35,12 +35,12 @@ export interface ImproveHooks { runners?: Partial<Record<Role, StageRunner>> }
 
 const USAGE = [
   "usage:",
-  "  bun run improve answer   CASE-N --product N --text T [--findings FILE.json] [--marking M]",
+  "  bun run improve answer   CASE-N --product N (--text T | --text-file FILE) [--findings FILE.json] [--marking M]",
   "  bun run improve withdraw CASE-N --product N --reason R",
   "  bun run improve start    LOOP --type CASETYPE --marking M [--tasks N] [--candidates K]",
   "  bun run improve show     CASE-N",
   "options for every form: --config <file>",
-  "every form needs the server stopped. At the adopt gate the files are decided in the browser: the case's Improve lens.",
+  "every form needs the server stopped. At the adopt gate the whole candidate is accepted or rejected in the browser: the case's Improve lens.",
 ].join("\n");
 
 class UsageError extends Error {}
@@ -48,12 +48,12 @@ class UsageError extends Error {}
 const CASE_ID = /^CASE-[1-9][0-9]{0,8}$/;
 const LOOP_ID = /^[a-z][a-z0-9_-]*$/;
 const FINDINGS_SHAPE = "the findings file holds no list of findings: a JSON list of { claim, likelihood, confidence }";
-export const WAITS_AT_ADOPT = "decide each file in the browser: the case's Improve lens";
+export const WAITS_AT_ADOPT = "decide the whole candidate in the browser: the case's Improve lens";
 
 type Form = "answer" | "withdraw" | "start" | "show";
 interface Spec { arg: "case" | "loop"; values: string[]; required: string[] }
 const SPECS: Record<Form, Spec> = {
-  answer: { arg: "case", values: ["product", "text", "findings", "marking"], required: ["product", "text"] },
+  answer: { arg: "case", values: ["product", "text", "text-file", "findings", "marking"], required: ["product"] },
   withdraw: { arg: "case", values: ["product", "reason"], required: ["product", "reason"] },
   start: { arg: "loop", values: ["type", "marking", "tasks", "candidates"], required: ["type", "marking"] },
   show: { arg: "case", values: [], required: [] },
@@ -97,11 +97,22 @@ function parse(argv: string[]): Parsed {
   }
   if (arg === null) throw new UsageError(`${form} needs ${spec.arg === "case" ? "a case id" : "a loop id"}`);
   for (const r of spec.required) if (!Object.hasOwn(one, r)) throw new UsageError(`${form} needs --${r}`);
+  // the answer's text from a file keeps it out of the shell's history
+  if (form === "answer" && Object.hasOwn(one, "text") === Object.hasOwn(one, "text-file")) throw new UsageError("answer needs one of --text and --text-file");
   if (one.product !== undefined) whole("product", one.product, 1);
   if (one.tasks !== undefined) whole("tasks", one.tasks, 1);
   if (one.candidates !== undefined) whole("candidates", one.candidates, 1);
   if (one.marking !== undefined && !isMarking(one.marking)) throw new UsageError(`unknown marking ${one.marking}; one of ${MARKINGS.join(", ")}`);
   return { form, arg, config, one };
+}
+
+/** The text of a file, as typed; Refused when it cannot be read. */
+function textOf(path: string): string {
+  try {
+    return readFileSync(path, "utf8").replace(/\n$/, "");
+  } catch (err) {
+    throw new Refused(`the text file cannot be read: ${messageOf(err)}`);
+  }
 }
 
 /** The findings of a file: a JSON list. Throws Refused, naming what is wrong, before anything is written. */
@@ -268,7 +279,12 @@ export async function improve(argv: string[], io: ImproveIO, hooks: ImproveHooks
       const draft = published === undefined ? undefined : state.drafts.find((d) => d.hash === published.draft_hash);
       const floor = strictest(state.meta?.marking ?? "TLP:RED", draft?.product.marking);
       const marking: Marking = p.one.marking === undefined ? floor : (p.one.marking as Marking);
-      setKnownAnswer(session, { runner: deps.runner }, { product, text: p.one.text!, findings, marking, actor: human });
+      // the likelihood terms are the case's own standard's, as the server checks them
+      composed = compose(config, wb);
+      const looking = new Engine(session, composed.deps);
+      let scale: readonly string[] | null;
+      try { scale = answerScale(looking.bound); } finally { looking.close(); }
+      setKnownAnswer(session, { runner: deps.runner }, { product, text: p.one.text ?? textOf(p.one["text-file"]!), findings, marking, actor: human }, scale);
       io.log(`known answer set for product ${product} of ${session.id} (${marking})`);
       return 0;
     }

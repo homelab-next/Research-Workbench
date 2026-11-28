@@ -2,6 +2,7 @@
 // own ledger (answer.known, answer.withdrawn), the person's only. It is judge input and nothing else: knownAnswerOf, the one reader of an
 // answer's text and findings in src/pipeline and src/agents, is called by the Judge alone; answeredProducts tells Select what is answered and
 // nothing of what the answer says.
+import { termsOf } from "../../agents/draft";
 import { redactSecrets } from "../../core/redact";
 import { Refused } from "../../core/refused";
 import type { CaseSession } from "../../core/session";
@@ -59,7 +60,7 @@ export function setKnownAnswer(session: CaseSession, deps: Pick<EngineDeps, "run
   const clean = (t: unknown): string => (typeof t === "string" ? redactSecrets(t, secrets) : (t as string));
   // redacted before the checks, so the checks are of what is written
   const findings: ExpectedFinding[] = Array.isArray(input.findings)
-    ? input.findings.map((f) => ({ claim: clean(f?.claim), likelihood: f?.likelihood, confidence: f?.confidence }))
+    ? input.findings.map((f) => ({ claim: clean(f?.claim), likelihood: clean(f?.likelihood), confidence: f?.confidence }))
     : input.findings;
   const given = { product: input.product, text: clean(input.text), findings, marking: input.marking };
   // the checks and the append in one builder, so the product and the marking checked are the ones the entry is folded against
@@ -110,4 +111,12 @@ export function knownAnswerOf(entries: readonly Entry[], at: { seq: number; hash
 export function withdrawnSince(entries: readonly Entry[], at: { seq: number }, product: number): boolean {
   const skipped = new Set(fold(entries as Entry[]).skipped.map((x) => x.seq));
   return entries.some((e) => e.seq > at.seq && e.type === "answer.withdrawn" && e.payload.product === product && !skipped.has(e.seq));
+}
+
+/** The likelihood terms of the standard a case's bound loop reads, least likely first: the scale a known answer's terms are checked against; null when it has none. */
+export function answerScale(deps: Pick<EngineDeps, "profile" | "registry" | "components">): readonly string[] | null {
+  const { profile, registry, components } = deps;
+  const standard = profile.standard === null ? null : components !== undefined ? components.get("*", "standard", profile.standard) : registry.get("standard", profile.standard);
+  const terms = termsOf(standard?.body ?? null)?.likelihood ?? [];
+  return terms.length === 0 ? null : terms;
 }

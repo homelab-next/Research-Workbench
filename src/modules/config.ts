@@ -321,3 +321,10 @@ export function rootsOf(config: Config): WorkbenchRoot[] {
   const imported = names.map((n) => join(config.loops.imports, n)).filter((p) => !listed.has(resolve(p)));
   return [...config.roots, ...imported.map((path): WorkbenchRoot => ({ path, trusted: false, credentials: [], staged: true }))];
 }
+
+/** The root a save writes into: the trusted root that holds `loopRoot` (a loop's manifest), else the first trusted root; null when there is none. */
+export function saveRootOf(config: Pick<Config, "roots">, loopRoot: string | null): string | null {
+  const trusted = config.roots.filter((r) => r.trusted);
+  const holds = loopRoot === null ? undefined : trusted.find((r) => resolve(r.path) === resolve(loopRoot));
+  return holds?.path ?? trusted[0]?.path ?? null;
+}

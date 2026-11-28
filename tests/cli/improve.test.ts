@@ -172,6 +172,29 @@ test("answer with findings from a file that is not a list of findings is refused
   expect(headOf(e, "CASE-1")).toBe(before);
 });
 
+test("answer checks each likelihood term against the case's own standard, as the server does", async () => {
+  const e = fresh();
+  const before = headOf(e, "CASE-1");
+  const file = join(e.dir, "findings.json");
+  writeFileSync(file, JSON.stringify([{ claim: "The device is the lobby printer", likelihood: "somewhat", confidence: "moderate" }]));
+  expect(await run(e, ["answer", "CASE-1", "--product", "1", "--text", "x", "--findings", file])).toBe(1);
+  expect(err.join("\n")).toContain("somewhat");
+  expect(headOf(e, "CASE-1")).toBe(before);
+});
+
+test("answer takes its text from a file with --text-file, so it is not in the shell's history; one of --text and --text-file is needed", async () => {
+  const e = fresh();
+  const textFile = join(e.dir, "answer.txt");
+  writeFileSync(textFile, "It is the lobby printer, from a file.\n");
+  expect(await run(e, ["answer", "CASE-1", "--product", "1", "--text-file", textFile])).toBe(0);
+  expect(rows(e, "CASE-1", "answer.known").at(-1)!.payload.text).toBe("It is the lobby printer, from a file.");
+  const before = headOf(e, "CASE-1");
+  expect(await run(e, ["answer", "CASE-1", "--product", "1"])).toBe(2);
+  expect(await run(e, ["answer", "CASE-1", "--product", "1", "--text", "x", "--text-file", textFile])).toBe(2);
+  expect(err.join("\n")).toContain("answer needs one of --text and --text-file");
+  expect(headOf(e, "CASE-1")).toBe(before);
+});
+
 test("start makes the improve case, runs it to the adopt gate on the sample, and prints the scores and where it waits", async () => {
   const e = fresh();
   expect(await run(e, answerArgs(e))).toBe(0);
@@ -180,7 +203,7 @@ test("start makes the improve case, runs it to the adopt gate on the sample, and
   expect(code).toBe(0);
   const text = out.join("\n");
   expect(text).toContain("CASE-2 waiting waiting=adopt");
-  expect(text).toContain("decide each file in the browser: the case's Improve lens");
+  expect(text).toContain("decide the whole candidate in the browser: the case's Improve lens");
   expect(text).toMatch(/score base \d+/);
   expect(text).toMatch(/score K1 \d+/);
   expect(text).toContain("chose K1: K1 reads shorter");

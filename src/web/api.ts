@@ -85,6 +85,8 @@ export interface Api {
   createImprove(input: NewImproveInput): Promise<{ id: string } | { refused: string[] }>;
   /** An improve case's request and the record of its run, as the Improve lens shows it: no known answer, and scores only once the Judge has run. */
   improve(caseId: string): Promise<ImproveView>;
+  /** The likelihood terms a known answer of this case takes: its own loop's standard's, least likely first ([] when it names none). */
+  answerScale?(caseId: string): Promise<{ likelihood: string[] }>;
   entries: EntrySource;
 }
 
@@ -197,6 +199,7 @@ export function makeApi(fetcher: Fetcher, origin: string, entries: EntrySource):
     caseMemory: (id, at) => read<CaseMemoryView>(`/api/cases/${seg(id)}/memory${at === undefined ? "" : `?at=${at}`}`),
     createImprove: (input) => answered<{ id: string }>("/api/improve", input),
     improve: (id) => read<ImproveView>(`/api/cases/${seg(id)}/improve`),
+    answerScale: (id) => read<{ likelihood: string[] }>(`/api/cases/${seg(id)}/answer-scale`),
     entries,
   };
 }

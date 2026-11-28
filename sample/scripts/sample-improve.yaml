@@ -1,6 +1,8 @@
 kind: script
 id: sample-improve
 title: Scripted improve run of the device-check loop
+# The proposer is shown every task and every file a candidate may change: a candidate that changes a file it was not shown is dropped.
+context: 32768
 # The improve loop's three agents on the sample's device-check tasks. The proposer makes three proposals, one call of propose_change each:
 #   K1, the skill find-the-device with one sentence added: for an address that is not in the asset list, plan the lookup in the WiFi log
 #       in place of the lease records, since its connection message names the device (the device-check script's turns that carry that

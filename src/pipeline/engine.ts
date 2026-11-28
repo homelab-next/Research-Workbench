@@ -764,10 +764,11 @@ export class Engine {
     this.bind();
   }
 
-  /** Tells the host what a run that ended published or completed gives, once. A failure of the host's is reported and changes nothing here. */
+  /** Tells the host what a run that ended published or completed gives, once; nothing for a probe child. A failure of the host's is reported and changes nothing here. */
   private outputs(d: EngineDeps, loop: string, run: string, outcome: "published" | "completed", declared: Record<string, LoopOutput>): void {
     const marking = this.session.state.meta?.marking;
-    if (d.onOutputs === undefined || marking === undefined) return;
+    // a probe child's output is its improve case's to read, of a version no one adopted: it never reaches the workbench chain
+    if (d.onOutputs === undefined || marking === undefined || this.session.state.improve.probe_of !== null) return;
     try {
       d.onOutputs({ case: this.session.id, loop, run, head: this.session.head(), outcome, marking, outputs: outputsOf(this.session.state, declared) });
     } catch (err) {

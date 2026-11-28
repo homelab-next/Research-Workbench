@@ -12,7 +12,7 @@ import { Ledger } from "../../src/core/ledger";
 import type { CaseSession } from "../../src/core/session";
 import { fold, initialImprove } from "../../src/core/state";
 import type { Actor, Entry, ExpectedFinding } from "../../src/core/types";
-import { verifyCase, verifyProbes, verifyScores } from "../../src/core/verify";
+import { verifyCase, verifyGates, verifyProbes, verifyScores } from "../../src/core/verify";
 import type { NewCase } from "../../src/core/workbench";
 import { loadConfig } from "../../src/modules/config";
 import { stagedFolder } from "../../src/pipeline/improve/workbench-host";
@@ -450,8 +450,12 @@ test("after the run the staging folder is gone, and each probe child still repla
     for (let n = 1; n <= entries.length; n++) expect(fold(entries, n).skipped).toEqual([]);
     expect(fold(entries)).toEqual(child.state);
     expect([id, verifyCase(join(t.casesDir, id)).ok]).toEqual([id, true]);
+    // its only gate passed by code is its plan gate, by improve-probe
+    expect([id, verifyGates(join(t.casesDir, id))]).toEqual([id, { ok: true, checked: true, problems: [] }]);
   }
   expect(verifyProbes(join(t.casesDir, t.improve), t.casesDir).ok).toBe(true);
+  // every gate of the improve case a person's, and every file the accept wrote a file of the version that was probed
+  expect(verifyGates(join(t.casesDir, t.improve))).toEqual({ ok: true, checked: true, problems: [] });
 }, 300_000);
 
 let laterMade: Promise<string> | undefined;

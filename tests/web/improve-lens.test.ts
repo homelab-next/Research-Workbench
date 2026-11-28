@@ -200,7 +200,7 @@ test("at the adopt gate each file has Accept and Reject, which send adopt_decide
   expect(pg().s.app.hub.read(other).state.run).toMatchObject({ status: "finished", outcome: "completed" });
 });
 
-test("Finish sends adopt_finish; a reader has no button", async () => {
+test("a change with a file decided already offers only Reject, sent as adopt_decide; there is no Finish; a reader has no button", async () => {
   const id = await improvePage();
   const entries = pg().s.entries(id);
   const view = await viewOf(id);
@@ -210,10 +210,11 @@ test("Finish sends adopt_finish; a reader has no button", async () => {
   const partly = lensOver([...entries, decided], { ...view, adopt: { ...view.adopt!, undecided: 1 } });
   await partly.done();
   expect(partly.el.querySelector("[data-action=adopt-accept]")).toBeNull();
-  const finish = partly.el.querySelector("[data-action=adopt-finish]") as HTMLButtonElement;
-  expect(text(finish)).toBe("Finish: reject the rest");
-  finish.click();
-  expect(partly.sent).toEqual([["adopt_finish", {}]]);
+  expect(partly.el.querySelector("[data-action=adopt-finish]")).toBeNull();
+  const reject = partly.el.querySelector("[data-action=adopt-reject]") as HTMLButtonElement;
+  expect(text(reject)).toBe("Reject");
+  reject.click();
+  expect(partly.sent).toEqual([["adopt_decide", { change: "chg-1", accept: false }]]);
 
   for (const role of ["leader", "requester"] as const) {
     const read = lensOver(entries, view, role);

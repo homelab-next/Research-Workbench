@@ -12,7 +12,7 @@ import { Refused } from "../core/refused";
 import type { Actor } from "../core/types";
 import { guardProblems, latestOutput } from "../cli/compose";
 import { loadCaseTypes } from "./case-types";
-import { rootsOf } from "./config";
+import { rootsOf, saveRootOf } from "./config";
 import type { Config, RootConfig } from "./config";
 import { parseManifestFile } from "./manifests";
 import type { Registry } from "./registry";
@@ -53,13 +53,9 @@ const sameDir = (a: string, b: string): boolean => resolve(a) === resolve(b);
 
 /** The root a save writes into: the trusted root that holds the loop's manifest, else the first trusted root of the configuration. Throws WriteRefused when there is none. */
 export function writeRoot(config: Config, loop: LoopManifest | null): string {
-  const trusted = config.roots.filter((r) => r.trusted);
-  if (loop !== null && loop.root !== null) {
-    const holds = trusted.find((r) => sameDir(r.path, loop.root!));
-    if (holds !== undefined) return holds.path;
-  }
-  if (trusted.length === 0) throw new WriteRefused("the configuration has no trusted root to save into");
-  return trusted[0]!.path;
+  const root = saveRootOf(config, loop?.root ?? null);
+  if (root === null) throw new WriteRefused("the configuration has no trusted root to save into");
+  return root;
 }
 
 /** Why a path may not be written, or null. */

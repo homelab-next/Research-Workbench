@@ -16,7 +16,8 @@ export interface ScriptTurn {
   /** Every string must be in the text of the request's messages for this turn to be one of the actor's turns for this request. */
   when?: string[];
 }
-export interface Script { id: string; turns: ScriptTurn[] }
+/** `context`: the tokens each request has, as a model reports it; absent, none is reported (the default context is taken). */
+export interface Script { id: string; turns: ScriptTurn[]; context?: number }
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -127,8 +128,11 @@ function checkReply(reply: unknown, where: string): ScriptReply {
 export function toScript(manifest: LoadedManifest): Script {
   const turns = manifest.body.turns;
   if (!Array.isArray(turns)) throw new ManifestError("a script needs a turns list");
+  const context = manifest.body.context;
+  if (context !== undefined && !(typeof context === "number" && Number.isInteger(context) && context >= 1024)) throw new ManifestError("context must be a whole number of tokens, at least 1024");
   return {
     id: manifest.id,
+    ...(context === undefined ? {} : { context: context as number }),
     turns: turns.map((t, i): ScriptTurn => {
       const where = `turns[${i}]`;
       if (!isPlainObject(t)) throw new ManifestError(`${where}: must be a mapping`);
@@ -153,7 +157,7 @@ export class ScriptedProvider implements Provider {
   }
 
   async models(): Promise<ModelInfo[]> {
-    return [...this.#scripts.keys()].map(id => ({ id, context: null, efforts: [], loaded: true, parallel: null }));
+    return [...this.#scripts.values()].map(s => ({ id: s.id, context: s.context ?? null, efforts: [], loaded: true, parallel: null }));
   }
 
   body(req: TurnRequest): Uint8Array {

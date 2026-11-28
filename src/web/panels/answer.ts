@@ -37,7 +37,9 @@ const holdsAnswers = (s: CaseState): boolean => s.improve.probe_of === null && s
 export function answerPanel(ctx: AnswerContext, product: number): View {
   const { ui, store } = ctx;
   const { h } = ui;
-  const terms = (): readonly string[] => ui.ref.likelihood;
+  // the case's own standard's terms, as the server checks them; the profile's until they have come in
+  let scale: readonly string[] | null = null;
+  const terms = (): readonly string[] => scale ?? ui.ref.likelihood;
   /** The person may set an answer here; while replaying the controls are drawn as they would be live, and every one is off. */
   const writable = (s: CaseState): boolean => ui.me.role === "analyst" && holdsAnswers(s) && productMarking(s, product) !== null;
   const replaying = (): boolean => store.at !== null;
@@ -52,7 +54,7 @@ export function answerPanel(ctx: AnswerContext, product: number): View {
   const save = h("button", { type: "button", class: "primary", data: { action: "save-answer" }, on: { click: () => { void doSave(); } } }, "Save") as HTMLButtonElement;
   const saveRefused = h("div", { class: "refused-box" });
   const summary = h("summary", null, "Set the known answer");
-  const form = h("details", { class: "known-answer-form" }, summary,
+  const form = h("details", { class: "known-answer-form", on: { toggle: () => { if (form.open) askScale(); } } }, summary,
     h("div", { class: "form-body" },
       h("label", null, "The answer ", text),
       h("p", { class: "muted" }, "The findings you expect, each with its likelihood and confidence"),
@@ -68,6 +70,22 @@ export function answerPanel(ctx: AnswerContext, product: number): View {
 
   let dirty = false;
   let busy = false;
+  // asked for once, when the person opens the form: a case being unloaded or a reader's view asks nothing
+  let askedScale = false;
+  const askScale = (): void => {
+    if (askedScale || !writable(store.shown) || replaying()) return;
+    askedScale = true;
+    ui.api.answerScale?.(store.id).then((got) => {
+      if (!Array.isArray(got?.likelihood) || got.likelihood.join("\n") === terms().join("\n")) return;
+      scale = got.likelihood.filter((t) => typeof t === "string");
+      // the rows drawn so far are drawn again with the case's terms, keeping what was typed
+      const kept = rows.map(valueOf);
+      clear(rowsBox); rows.length = 0;
+      for (const f of kept) newRow(f);
+      if (rows.length === 0) newRow(null);
+      paintButtons();
+    }, () => { /* the profile's terms stay; the server refuses a term its standard does not have */ });
+  };
   /** The seq of the saved answer the form was last filled from (0: none), and the floor its marking list was made for. */
   let filledFrom = -1;
   let floorShown: Marking | null = null;

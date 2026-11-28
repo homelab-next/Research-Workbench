@@ -9,11 +9,12 @@
 // text a person may see: the diffs, whether a file changed on disk since, the score sheet's detail, the lessons, and every reason scrubbed.
 import { adoptOffer, BASE, plannedProbes } from "../../core/state";
 import type { CaseState, OutputScore, ScoreSheet } from "../../core/state";
-import type { DiffLine, ImproveView } from "../../core/wire";
+import type { ImproveView } from "../../core/wire";
 import type { Open } from "../app";
 import { markingChip, tag } from "../chips";
 import { clear } from "../dom";
 import type { Child } from "../dom";
+import { diffLines } from "../diff";
 import { refusalLine } from "../refusal";
 import { AT_GATE, REPLAY_REFUSAL } from "../ui";
 import type { Ui, View } from "../ui";
@@ -21,7 +22,6 @@ import type { Ui, View } from "../ui";
 type CandidateView = ImproveView["candidates"][number];
 type FileView = CandidateView["files"][number];
 
-const OP_CLASS: Record<DiffLine["op"], string> = { "+": "diff-added", "-": "diff-removed", " ": "diff-context" };
 const STALE = "This file changed on disk since it was proposed, so the candidate cannot be accepted.";
 const LEFT_OUT: Record<string, string> = { marking: "stricter than this case", cap: "over the number of tasks asked" };
 /** The entries after which what the server's view says may have changed. */
@@ -97,8 +97,6 @@ export function makeImprove(ui: Ui, open: Open, arg: string | null): View {
   };
 
   // ---------- the candidates ----------
-  const diffLines = (lines: readonly DiffLine[]): HTMLElement =>
-    h("div", { class: "diff", role: "list" }, lines.map((l) => h("div", { class: `diff-line ${OP_CLASS[l.op] ?? "diff-context"}`, role: "listitem" }, `${l.op}${l.text}`)));
   const fileBlock = (candidate: string, f: CaseState["builder"]["changes"][string]["files"][number], index: number, vf: FileView | null): HTMLElement => {
     const key = `${candidate}/${index}`;
     const decided = f.decided;
@@ -109,7 +107,7 @@ export function makeImprove(ui: Ui, open: Open, arg: string | null): View {
     h("summary", null, h("span", { class: "file-path" }, f.path), " ", h("span", { class: `chip file-state${vf?.new_file === true ? " new" : ""}` }, vf?.new_file === true ? "new file" : "changed"),
       " ", h("span", { class: "muted file-kind" }, `${f.kind} ${f.id}`)),
     decided === null ? null : h("p", { class: `file-decided tag ${decided.accepted ? "tag-done" : "tag-human"}` }, decided.accepted ? "Accepted" : "Rejected"),
-    vf !== null ? diffLines(vf.lines) : h("p", { class: failed ? "load-error say" : "muted" }, failed ? "The diff could not be read" : "Loading the diff…")) as HTMLDetailsElement;
+    vf !== null ? diffLines(h, vf.lines) : h("p", { class: failed ? "load-error say" : "muted" }, failed ? "The diff could not be read" : "Loading the diff…")) as HTMLDetailsElement;
     block.open = !(shut.get(key) ?? decided !== null);
     return block;
   };
@@ -220,7 +218,7 @@ export function makeImprove(ui: Ui, open: Open, arg: string | null): View {
   };
 
   // ---------- the adopt gate ----------
-  const decide = (command: "adopt_decide" | "adopt_finish", args: Record<string, unknown>): void => {
+  const decide = (command: "adopt_decide", args: Record<string, unknown>): void => {
     if (busy || replaying()) return;
     busy = true; refused = undefined; paint();
     void ui.send(command, args, undefined, undefined, (why) => { refused = why; }).then(() => {
@@ -249,8 +247,9 @@ export function makeImprove(ui: Ui, open: Open, arg: string | null): View {
     const off = replaying();
     const why = off ? REPLAY_REFUSAL : undefined;
     const controls = !analyst() ? null : h("div", { class: "adopt-actions" },
+      // a change with a file decided already (a ledger from before the whole-candidate rule) is no longer the version probed: it can only be rejected
       partly
-        ? h("button", { type: "button", data: { action: "adopt-finish" }, disabled: off || busy, title: why ?? "Reject every file still undecided and pass the gate", on: { click: () => decide("adopt_finish", {}) } }, "Finish: reject the rest")
+        ? h("button", { type: "button", data: { action: "adopt-reject" }, disabled: off || busy, title: why ?? "Reject the files still undecided and leave the loop as it is", on: { click: () => decide("adopt_decide", { change: offer.change, accept: false }) } }, "Reject")
         : [
           h("button", {
             type: "button", class: "primary", data: { action: "adopt-accept" }, disabled: off || busy || stale > 0 || view === null,

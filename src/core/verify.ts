@@ -496,6 +496,85 @@ export function scoreLines(r: ScoreReport): string[] {
   return [r.ok ? "scores: ok, recomputed from the case's own blobs" : `scores: BROKEN: ${r.problem ?? "they differ"}`];
 }
 
+export interface GateReport { ok: boolean; checked: boolean; problems: { seq: number; status: "code_passed_gate" | "adopted_unprobed"; detail: string }[] }
+
+/** The actor of each entry of a ledger file, by seq, read-only; null where it is not JSON. */
+function actorsOf(ledgerPath: string): Map<number, unknown> {
+  const db = new Database(ledgerPath, { readonly: true });
+  try {
+    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    return new Map((db.query("SELECT seq, actor FROM entries ORDER BY seq ASC").all() as { seq: number; actor: string }[]).map((r) => [r.seq, parseJson(r.actor)?.value ?? null]));
+  } finally {
+    db.close();
+  }
+}
+
+/** The hashes a staged lock names (its loop file and every item): what the version that was probed covers. Null when the blob is not a lock. */
+function lockHashes(bytes: Uint8Array | null): Set<string> | null {
+  if (bytes === null) return null;
+  const x = parseJson(new TextDecoder().decode(bytes))?.value;
+  if (!isObj(x) || !isObj(x.manifest) || !Array.isArray(x.items)) return null;
+  const out = new Set<string>();
+  if (typeof x.manifest.hash === "string") out.add(x.manifest.hash);
+  for (const i of x.items) if (isObj(i) && typeof i.hash === "string") out.add(i.hash);
+  return out;
+}
+
+/**
+ * Two rules of the improve loop that hold in any case's ledger. (a) A gate is passed by a person; the one exception is the plan gate of a probe child,
+ * passed by improve-probe. Any other gate.passed by an actor that is not a person is code_passed_gate. (b) In an improve case, every file a person's
+ * accept wrote (builder.decided accepted, its written hash) is of the change Compose chose in that run, and its hash is one the staged lock of that
+ * candidate names: what was probed. Anything else accepted there is adopted_unprobed. Reads only. `checked` is true for an improve case or a probe
+ * child, and for any case where a problem is found.
+ */
+export function verifyGates(caseDir: string): GateReport {
+  const ledgerPath = join(caseDir, "ledger.sqlite");
+  const { rows } = rowsOf(ledgerPath);
+  const actors = actorsOf(ledgerPath);
+  const problems: GateReport["problems"] = [];
+  // a probe child as the fold reads one: probe.child in the commit of case.created, nowhere else
+  const probeChild = rows.some((r) => r.type === "probe.child") && fold(entriesOf(ledgerPath)).improve.probe_of !== null;
+  const improveCase = rows.some((r) => r.type === "improve.requested");
+  for (const r of rows) {
+    if (r.type !== "gate.passed" || !isObj(r.payload)) continue;
+    const a = actors.get(r.seq);
+    if (isObj(a) && a.kind === "human") continue;
+    const byProbe = isObj(a) && a.kind === "system" && a.id === "improve-probe";
+    if (byProbe && probeChild && r.payload.gate === "plan") continue;
+    const who = isObj(a) && typeof a.kind === "string" ? `${a.kind}${typeof a.id === "string" ? ` ${a.id}` : ""}` : "an unreadable actor";
+    problems.push({ seq: r.seq, status: "code_passed_gate", detail: `the ${String(r.payload.gate)} gate was passed by ${who}` });
+  }
+  if (improveCase) {
+    let candidates = new Map<string, { change: string; lock: unknown }>();
+    let chosen: string | null = null;
+    for (const r of rows) {
+      const p = r.payload;
+      if (!isObj(p)) continue;
+      if (r.type === "improve.selected") { candidates = new Map(); chosen = null; continue; }
+      if (r.type === "improve.candidate" && typeof p.candidate === "string" && typeof p.change === "string") { candidates.set(p.candidate, { change: p.change, lock: p.status === "staged" ? p.lock : null }); continue; }
+      if (r.type === "compose.chosen") { chosen = typeof p.candidate === "string" ? p.candidate : null; continue; }
+      if (r.type !== "builder.decided" || p.accepted !== true) continue;
+      const c = chosen === null ? undefined : candidates.get(chosen);
+      if (c === undefined || c.change !== p.change) {
+        problems.push({ seq: r.seq, status: "adopted_unprobed", detail: `change ${String(p.change)} was accepted, and it is not the candidate Compose chose` });
+        continue;
+      }
+      const covered = lockHashes(blobOf(caseDir, c.lock));
+      if (covered === null || typeof p.written !== "string" || !covered.has(p.written)) {
+        problems.push({ seq: r.seq, status: "adopted_unprobed", detail: `file ${String(p.file)} of change ${c.change} was written as bytes the probed version of ${chosen} does not name` });
+      }
+    }
+  }
+  return { ok: problems.length === 0, checked: improveCase || probeChild || problems.length > 0, problems };
+}
+
+/** No line for a case that is neither an improve case nor a probe child and holds no problem; else `gates: ok` or one BROKEN line per problem. */
+export function gateLines(r: GateReport): string[] {
+  if (!r.checked) return [];
+  if (r.ok) return ["gates: ok, every gate a person's but a probe child's plan gate, and every adopted file the probed version's"];
+  return r.problems.map((x) => `gates: BROKEN at seq ${x.seq}: ${x.detail}`);
+}
+
 // ---------- the memory store (slice 13) ----------
 
 /** Every entry of a ledger file, read-only, as Ledger reads them: a row whose actor or payload is not JSON has them null, so the fold skips it. */

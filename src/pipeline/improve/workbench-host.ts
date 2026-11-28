@@ -39,10 +39,9 @@ const viewOf = (session: CaseSession, origin: string): TaskView => ({
   ref: { case: session.id, origin }, state: session.state, head: session.head(), entries: (from, to) => session.entries(from, to),
 });
 
-/** A root a change names, as a path: the configuration's trusted root at that path, or the one whose folder has that name; null when none is. */
+/** A root a change names by its folder's name (as builder.proposed records it), as a path: the trusted root whose folder has that name; null when none has. */
 function rootPath(config: Config, root: string): string | null {
-  const trusted = config.roots.filter((r) => r.trusted);
-  return (trusted.find((r) => resolve(r.path) === resolve(root)) ?? trusted.find((r) => basename(resolve(r.path)) === root))?.path ?? null;
+  return config.roots.find((r) => r.trusted && basename(resolve(r.path)) === root)?.path ?? null;
 }
 const notARoot = (root: string): string => `the root ${basename(root)} is not a trusted root here`;
 

@@ -11,7 +11,7 @@ import { entryHash, InvalidEntryError, Ledger } from "../../src/core/ledger";
 import { lessonHash } from "../../src/core/lessons";
 import type { LessonDraft, LessonState } from "../../src/core/lessons";
 import { MemoryStore } from "../../src/core/memstore";
-import { formatReport, linkLines, probeLines, scoreLines, UnreadableLedgerError, verifyCase, verifyLedger, verifyLinks, verifyMemory, verifyMemoryLinks, verifyProbes, verifyPublished, verifyScores } from "../../src/core/verify";
+import { formatReport, gateLines, linkLines, probeLines, scoreLines, UnreadableLedgerError, verifyCase, verifyGates, verifyLedger, verifyLinks, verifyMemory, verifyMemoryLinks, verifyProbes, verifyPublished, verifyScores } from "../../src/core/verify";
 import { scoreOutput, scoreSheet } from "../../src/core/score";
 import { fold, probeOutputOf } from "../../src/core/state";
 import type { AnswerCopy, ProbeOutput, ScoreSheet } from "../../src/core/state/improve";
@@ -970,6 +970,63 @@ test("a probe child holding a gate passed by improve-probe other than its plan g
     const c = p.children["base/T1"]!;
     c.commit(() => [{ type: "gate.passed", actor: probeActorId, payload: { gate: "publish" } }]);
     expect(verifyProbes(p.improve.dir, p.cases).probes.map((x) => x.status)).toEqual(["not_its_child", "matches"]);
+  } finally {
+    wb.close();
+  }
+});
+
+// ---------- final review I6 (T16): a gate passed by code, and an adopted file the probed version does not name ----------
+
+test("verifyGates: improve-probe passing a probe child's plan gate is ok; any other gate passed by code fails as code_passed_gate", () => {
+  // a case that is no improve case and no probe child, with only persons' gates: nothing to say
+  ledger.append({ type: "gate.passed", actor: human, payload: { gate: "plan" } } as never);
+  expect(verifyGates(dir)).toEqual({ ok: true, checked: false, problems: [] });
+  expect(gateLines(verifyGates(dir))).toEqual([]);
+  // a publish gate passed by the engine, in an ordinary case
+  const at = ledger.append({ type: "gate.passed", actor: { kind: "system", id: "engine" }, payload: { gate: "publish" } } as never).seq;
+  expect(verifyGates(dir)).toEqual({ ok: false, checked: true, problems: [{ seq: at, status: "code_passed_gate", detail: "the publish gate was passed by system engine" }] });
+  const wb = Workbench.open(join(root, "wb"), { onError: () => {} });
+  try {
+    const p = probedCase(wb);
+    const child = p.children["K1/T1"]!;
+    child.commit(() => [{ type: "gate.passed", actor: probeActorId, payload: { gate: "plan" } }]);
+    expect(verifyGates(child.dir)).toEqual({ ok: true, checked: true, problems: [] });
+    // the same actor at the improve case's own plan gate, and at a child's publish gate
+    p.improve.commit(() => [{ type: "gate.passed", actor: probeActorId, payload: { gate: "plan" } }]);
+    child.commit(() => [{ type: "gate.passed", actor: probeActorId, payload: { gate: "publish" } }]);
+    const improve = verifyGates(p.improve.dir);
+    expect(improve.ok).toBe(false);
+    expect(improve.problems.map((x) => [x.status, x.detail])).toEqual([["code_passed_gate", "the plan gate was passed by system improve-probe"]]);
+    expect(verifyGates(child.dir).problems.map((x) => [x.status, x.detail])).toEqual([["code_passed_gate", "the publish gate was passed by system improve-probe"]]);
+    expect(gateLines(improve)[0]).toStartWith("gates: BROKEN at seq ");
+  } finally {
+    wb.close();
+  }
+});
+
+test("verifyGates: a file an accept wrote in an improve case is ok only as bytes the chosen candidate's staged lock names", () => {
+  const wb = Workbench.open(join(root, "wb"), { onError: () => {} });
+  try {
+    const NAMED = "1".repeat(64);
+    const improve = wb.createCase(improveWords, human, { loop: "improve", type: "beaconing", improve: improveRequest });
+    const lock = improve.blobs.put(JSON.stringify({ manifest: { path: "loops/investigation.yaml", hash: "2".repeat(64) }, items: [{ kind: "skill", id: "s", hash: NAMED }] }));
+    improve.commit((_s, ids) => [
+      { type: "run.started", actor: human, payload: { run: ids.next("run"), pipeline: "improve", pipeline_hash: "a".repeat(64), stages: linkStages } },
+      { type: "improve.selected", actor: engineActor, payload: { target: "investigation", version: 1, loop_hash: BASE_HASH, lock: improve.blobs.put("{}"), case_type: "beaconing", scale: ["unlikely", "likely"], left_out: [] } },
+      { type: "improve.candidate", actor: engineActor, payload: { candidate: "K1", change: "CHG-1", status: "staged", loop_hash: CAND_HASH, lock, reason: "" } },
+      { type: "compose.chosen", actor: engineActor, payload: { candidate: "K1", why: "w", contrasts: improve.blobs.put("[]") } },
+    ]);
+    const decided = (change: string, written: string) => improve.commit(() => [{ type: "builder.decided", actor: human, payload: { change, file: 0, accepted: true, written } }]);
+    decided("CHG-1", NAMED);
+    expect(verifyGates(improve.dir)).toEqual({ ok: true, checked: true, problems: [] });
+    decided("CHG-1", "3".repeat(64));
+    decided("CHG-2", NAMED);
+    const r = verifyGates(improve.dir);
+    expect(r.ok).toBe(false);
+    expect(r.problems.map((x) => [x.status, x.detail])).toEqual([
+      ["adopted_unprobed", "file 0 of change CHG-1 was written as bytes the probed version of K1 does not name"],
+      ["adopted_unprobed", "change CHG-2 was accepted, and it is not the candidate Compose chose"],
+    ]);
   } finally {
     wb.close();
   }

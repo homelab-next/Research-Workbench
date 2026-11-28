@@ -125,7 +125,7 @@ test("a view that is not the analyst's may not read an improve view, create an i
     const create = await r.post("/api/improve", INPUT);
     expect(create.status).toBe(403);
     expect(await refusedOf(create)).toEqual([`the ${role} view may not do create improve`]);
-    for (const [command, args] of [["adopt_decide", { change: "chg-1", accept: true }], ["adopt_finish", {}], ["set_known_answer", { product: 1, text: "x", findings: [], marking: "TLP:RED" }], ["withdraw_known_answer", { product: 1, reason: "x" }]] as const) {
+    for (const [command, args] of [["adopt_decide", { change: "chg-1", accept: true }], ["set_known_answer", { product: 1, text: "x", findings: [], marking: "TLP:RED" }], ["withdraw_known_answer", { product: 1, reason: "x" }]] as const) {
       const res = await r.command("CASE-1", command, args);
       expect(`${command}: ${res.status}`).toBe(`${command}: 403`);
     }

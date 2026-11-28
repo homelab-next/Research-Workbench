@@ -66,7 +66,7 @@ export function candidateFiles(root: string, files: 1 | 2 = 2): { path: string; 
 }
 
 /** The improve case's runners up to Adopt: K1 staged and chosen, K2 dropped (its change resolves to the base's own version). */
-function runners(t: Served, opts: ImproveRunOptions): Partial<Record<Role, StageRunner>> {
+export function improveRunners(t: Served, opts: ImproveRunOptions = {}): Partial<Record<Role, StageRunner>> {
   const deps = t.app.hub.deps;
   const live = () => deps.loops!.current(IMPROVE_TARGET)!;
   const root = t.config.roots[0]!.path;
@@ -132,7 +132,7 @@ export async function improveCase(t: Served, opts: ImproveRunOptions = {}): Prom
   const res = await t.post("/api/improve", IMPROVE_INPUT);
   if (res.status !== 200) throw new Error(`POST /api/improve: ${res.status} ${await res.text()}`);
   const { id } = (await res.json()) as { id: string };
-  const e = Engine.open(t.app.hub.read(id), t.app.hub.deps, { runners: runners(t, opts) });
+  const e = Engine.open(t.app.hub.read(id), t.app.hub.deps, { runners: improveRunners(t, opts) });
   try {
     e.start({ kind: "human", id: t.config.user });
     await e.advance();

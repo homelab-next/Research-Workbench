@@ -5,18 +5,12 @@
 import { afterEach, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { SAMPLE_START, SAMPLE_WINDOW } from "../../scripts/make-sample-data";
-import { canonical } from "../../src/core/canonical";
-import type { Json } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
-import type { CaseSession } from "../../src/core/session";
-import type { ScoreSheet, TaskInputs } from "../../src/core/state";
-import type { Actor, Entry, EntryInput } from "../../src/core/types";
-import type { ImproveView, NewImproveInput } from "../../src/core/wire";
+import type { Entry } from "../../src/core/types";
+import type { ImproveView } from "../../src/core/wire";
 import { Engine } from "../../src/pipeline/engine";
-import type { StageEnv, StageRunner } from "../../src/pipeline/engine";
-import type { Role } from "../../src/pipeline/manifests";
 import { ADOPT_STALE, NOT_PROBED, NOT_WAITING } from "../../src/server/improve";
+import { ASSEMBLE, IMPROVE_INPUT, IMPROVE_SHEET, IMPROVE_TARGET, RESEARCH, candidateFiles, improveCase, improveRunners } from "../helpers/improve-run";
 import { served, withImproveLoop } from "../helpers/served";
 import type { Served } from "../helpers/served";
 
@@ -37,109 +31,9 @@ afterEach(async () => {
 });
 const open = async (): Promise<Served> => (s = await served({ before: withImproveLoop, onError: (e) => { errors.push(e); } }));
 
-const ENGINE_ACTOR: Actor = { kind: "system", id: "engine" };
-const TARGET = "investigation";
-const TYPE = "unknown-device";
-const RESEARCH = "context/procedures/research.md";
-const ASSEMBLE = "context/procedures/assemble.md";
-const INPUT: NewImproveInput = { loop: TARGET, case_type: TYPE, tasks: 1, candidates: 1, marking: "TLP:AMBER" };
-const SHEET: ScoreSheet = {
-  format: 1, scale: ["unlikely", "likely"],
-  outputs: [
-    { probe: "base/T1", candidate: "base", task: "T1", outcome: "drafted", score: 500, text: null, findings: [{ expected: 0, produced: null, by: null, similarity: null, likelihood_distance: null, confidence_distance: null, score: 0 }], left_over: ["a statement no answer expects"] },
-    { probe: "K1/T1", candidate: "K1", task: "T1", outcome: "drafted", score: 875, text: null, findings: [{ expected: 0, produced: "the device is a printer", by: "code", similarity: 800, likelihood_distance: 0, confidence_distance: 500, score: 875 }], left_over: [] },
-  ],
-  summary: [{ candidate: "base", score: 500, drafted: 1, tasks: 1 }, { candidate: "K1", score: 875, drafted: 1, tasks: 1 }],
-};
-const LESSONS = { lessons: [{ lesson: "LESSON-7", title: "Say why nothing was found", fresh: true }], dropped: [] };
-
-const blobOf = (x: CaseSession, v: unknown) => x.blobs.put(canonical(v as Json));
-const inRun = (env: StageEnv, make: (x: CaseSession, next: (kind: "change") => string) => EntryInput[]): void => {
-  env.session.commit((st, ids) => make(env.session, (kind) => ids.next(kind)).map((e) => ({ ...e, run: st.run.id, stage: env.stage.id })));
-};
-const passing = (action: (env: StageEnv) => void, output: Json = null): StageRunner => async (env) => {
-  action(env);
-  return { kind: "finished", outcome: "pass", draft_hash: null, output, reason: null };
-};
-const taskInputs: TaskInputs = { question: "Task 1: who is behind the traffic to 198.51.100.77?", starting: [SAMPLE_START], window: SAMPLE_WINDOW, objective: "sample-objective", marking: "TLP:GREEN", title: "Task 1" };
-const agent = (stage: string): Actor => ({ kind: "agent", id: "analyst", stage, profile: "improve-test", model: "sample-device", effort: null, where: "machine" });
-
-/** The candidate K1's two files: each procedure of the target loop with one line changed. */
-function candidateFiles(root: string): { path: string; before: string; text: string }[] {
-  const research = readFileSync(join(root, ...RESEARCH.split("/")), "utf8");
-  const assemble = readFileSync(join(root, ...ASSEMBLE.split("/")), "utf8");
-  return [
-    { path: RESEARCH, before: research, text: research.replace("Say what was not found.", "Say what was not found, and why.") },
-    { path: ASSEMBLE, before: assemble, text: `${assemble}Say which card each finding stands on.\n` },
-  ];
-}
-
-/** The improve case's runners up to Adopt. `judge: false` stalls the Judge, so the run pauses after Compose with no scores. */
-function runners(t: Served, opts: { judge?: boolean } = {}): Partial<Record<Role, StageRunner>> {
-  const deps = t.app.hub.deps;
-  const live = () => deps.loops!.current(TARGET)!;
-  const root = t.config.roots[0]!.path;
-  return {
-    select: passing((env) => inRun(env, (x) => [
-      { type: "improve.selected", actor: ENGINE_ACTOR, payload: { target: TARGET, version: live().manifest.version, loop_hash: live().pipeline.hash, lock: blobOf(x, live().lock), case_type: TYPE, scale: ["unlikely", "likely"], left_out: [] } },
-      {
-        type: "improve.task", actor: ENGINE_ACTOR,
-        payload: {
-          task: "T1", case: "CASE-90", origin: "f".repeat(64), head: { seq: 9, hash: "9".repeat(64) }, product: { n: 1, draft_hash: "d".repeat(64) },
-          answer: { seq: 8, hash: "8".repeat(64) }, marking: "TLP:GREEN", inputs: blobOf(x, taskInputs), record: blobOf(x, { record: 1 }),
-        },
-      },
-    ])),
-    propose: passing((env) => {
-      const files = candidateFiles(root);
-      const staged = deps.improve!.stage({ case: env.session.id, origin: env.session.entries(0, 1)[0]!.hash }, "sample", files.map((f) => ({ path: f.path, text: f.text })), TARGET);
-      if (!staged.ok) throw new Error(staged.problems.join(" | "));
-      inRun(env, (x, next) => [
-        {
-          type: "builder.proposed", actor: agent("propose"),
-          payload: {
-            change: next("change"), title: "Say why", why: "fewer misses", root: "sample",
-            files: files.map((f) => ({ path: f.path, kind: "procedure", id: f.path === RESEARCH ? "research-sop" : "assemble-sop", before: sha256Hex(f.before), after: sha256Hex(f.text) })),
-            bundle: blobOf(x, { files: files.map((f) => ({ path: f.path, text: f.text })) }),
-          },
-        },
-        { type: "improve.candidate", actor: ENGINE_ACTOR, payload: { candidate: "K1", change: "chg-1", status: "staged", loop_hash: staged.loop.pipeline.hash, lock: blobOf(x, staged.loop.lock), reason: "" } },
-      ]);
-    }),
-    probe: passing((env) => inRun(env, (x) => ["base", "K1"].flatMap((candidate, n): EntryInput[] => {
-      const probe = `${candidate}/T1`;
-      const loop_hash = candidate === "base" ? x.state.improve.selected!.loop_hash : x.state.improve.candidates.K1!.loop_hash!;
-      const child = `CASE-${80 + n}`;
-      return [
-        { type: "probe.started", actor: ENGINE_ACTOR, payload: { probe, candidate, task: "T1", child, origin: "0a".repeat(32), loop_hash, input_hash: "0b".repeat(32), budgets: { lookups: 120, tokens: 600000 } } },
-        {
-          type: "probe.finished", actor: ENGINE_ACTOR,
-          payload: { probe, child, child_run: "run-1", head: { seq: 40 + n, hash: `${n}c`.repeat(32) }, outcome: "drafted", reason: "", draft_hash: `${n}d`.repeat(32), output_hash: `${n}e`.repeat(32), output: blobOf(x, { probe }), lookups: 3, tokens: 1000 + n },
-        },
-      ];
-    }))),
-    compose: passing((env) => inRun(env, (x) => [{ type: "compose.chosen", actor: agent("compose"), payload: { candidate: "K1", why: "K1 states why nothing was found", contrasts: blobOf(x, []) } }])),
-    judge: opts.judge === false
-      ? async () => ({ kind: "stalled", reason: "the test holds the Judge" })
-      : passing((env) => inRun(env, (x) => [{ type: "judge.scored", actor: ENGINE_ACTOR, payload: { answers: blobOf(x, []), scores: blobOf(x, SHEET), matcher: "code", summary: SHEET.summary } }])),
-    reflect: passing(() => undefined, LESSONS as unknown as Json),
-  };
-}
-
-/** A new improve case, run to its adopt gate (or, with `judge: false`, to the Judge, where it pauses) by an engine with the test's runners. */
-async function improveCase(t: Served, opts: { judge?: boolean } = {}): Promise<string> {
-  const res = await t.post("/api/improve", INPUT);
-  expect(res.status).toBe(200);
-  const { id } = (await res.json()) as { id: string };
-  const e = Engine.open(t.app.hub.read(id), t.app.hub.deps, { runners: runners(t, opts) });
-  try {
-    e.start({ kind: "human", id: t.config.user });
-    await e.advance();
-  } finally {
-    e.close();
-  }
-  return id;
-}
+const TARGET = IMPROVE_TARGET;
+const INPUT = IMPROVE_INPUT;
+const SHEET = IMPROVE_SHEET;
 const atGate = async (t: Served): Promise<string> => {
   const id = await improveCase(t);
   expect(t.app.hub.read(id).state.run).toMatchObject({ status: "waiting", waiting: "adopt" });
@@ -252,7 +146,7 @@ test("adopt_decide on a candidate that was not chosen, before the gate, or on a 
   // a run paused before Adopt
   const paused = await improveCase(t, { judge: false });
   expect(refusedOf(await t.command(paused, "adopt_decide", { change: "chg-1", accept: true }))).toEqual([NOT_WAITING]);
-  expect(refusedOf(await t.command(paused, "adopt_finish"))).toEqual([NOT_WAITING]);
+  expect(refusedOf(await t.command(paused, "adopt_decide", { change: "chg-1", accept: false }))).toEqual([NOT_WAITING]);
   const id = await atGate(t);
   const n = t.entries(id).length;
   const chain = t.wb.chain.read().length;
@@ -270,7 +164,7 @@ test("adopt_decide on a candidate that was not chosen, before the gate, or on a 
   expect(rootFile(t, RESEARCH)).toBe(research);
   expect(t.app.hub.read(id).state.run).toMatchObject({ status: "waiting", waiting: "adopt" });
   // once the gate is passed, nothing more is decided there
-  expect((await t.command(id, "adopt_finish")).status).toBe(200);
+  expect((await t.command(id, "adopt_decide", { change: "chg-1", accept: false })).status).toBe(200);
   await t.app.hub.idle();
   const late = await t.command(id, "adopt_decide", { change: "chg-1", accept: false });
   expect(refusedOf(late)).toEqual([NOT_WAITING]);
@@ -329,14 +223,16 @@ test("a file changed on disk since it was proposed is refused as stale, and the 
   expect(t.app.hub.read(id).state.run).toMatchObject({ status: "waiting", waiting: "adopt" });
 });
 
-test("adopt_finish rejects what is undecided and passes the gate in one commit; nothing is written into a root", async () => {
+test("a rejection decides every file undecided and passes the gate in one commit; nothing is written into a root, and there is no Finish command", async () => {
   const t = await open();
-  for (const how of ["adopt_finish", "reject"] as const) {
+  {
     const id = await atGate(t);
+    const finish = await t.command(id, "adopt_finish");
+    expect(finish.status).not.toBe(200);
     const files = candidateFiles(t.config.roots[0]!.path);
     const chain = t.wb.chain.read().length;
     const before = t.entries(id).length;
-    const r = how === "adopt_finish" ? await t.command(id, "adopt_finish") : await t.command(id, "adopt_decide", { change: "chg-1", accept: false });
+    const r = await t.command(id, "adopt_decide", { change: "chg-1", accept: false });
     expect(r.status).toBe(200);
     await t.app.hub.idle();
     const after = t.entries(id).slice(before);
@@ -374,14 +270,15 @@ test("the improve view shows no score before judge.scored and the sheet after", 
   expect(early.chosen).toEqual({ candidate: "K1", why: "K1 states why nothing was found" });
   expect(early.lessons).toEqual([]);
   expect(early.adopt).toMatchObject({ waiting: false, candidate: "K1", change: "chg-1", undecided: 2 });
-  expect(early.selected).toMatchObject({ target: TARGET, tasks: [{ task: "T1", case: "CASE-90", marking: "TLP:GREEN" }], left_out: [] });
+  expect(early.selected).toMatchObject({ target: TARGET, tasks: [{ task: "T1", case: "CASE-90", marking: "TLP:GREEN" }], left_out: [{ case: "CASE-70", why: "marking" }] });
   expect(early.candidates.map((c) => [c.candidate, c.change, c.title, c.why, c.status, c.files.map((f) => [f.path, f.decided, f.stale])])).toEqual([
     ["K1", "chg-1", "Say why", "fewer misses", "staged", [[RESEARCH, null, false], [ASSEMBLE, null, false]]],
+    ["K2", "chg-2", "Say nothing new", "the same words", "dropped", [[RESEARCH, null, false]]],
   ]);
   expect(early.candidates[0]!.files[0]!.lines.filter((l) => l.op !== " ").map((l) => l.op)).toEqual(["-", "+"]);
-  expect(early.probes.map((p) => [p.probe, p.child, p.head?.seq, p.outcome, p.lookups])).toEqual([["base/T1", "CASE-80", 40, "drafted", 3], ["K1/T1", "CASE-81", 41, "drafted", 3]]);
+  expect(early.probes.map((p) => [p.probe, p.child, p.head?.seq, p.outcome, p.lookups])).toEqual([["base/T1", "CASE-80", 40, "drafted", 3], ["K1/T1", "CASE-81", 41, "drafted", 4]]);
   // the run goes on to the Judge and on to the adopt gate
-  const e = Engine.open(t.app.hub.read(id), t.app.hub.deps, { runners: runners(t) });
+  const e = Engine.open(t.app.hub.read(id), t.app.hub.deps, { runners: improveRunners(t) });
   try {
     await e.resume({ kind: "human", id: t.config.user });
   } finally {
@@ -404,7 +301,7 @@ test("no route and no command takes an actor", async () => {
   const create = await t.post("/api/improve", { ...INPUT, actor: someone });
   expect(create.status).toBe(400);
   for (const [command, args] of [
-    ["adopt_decide", { change: "chg-1", accept: true }], ["adopt_finish", {}], ["set_known_answer", ANSWER], ["withdraw_known_answer", { product: 1, reason: "x" }],
+    ["adopt_decide", { change: "chg-1", accept: true }], ["set_known_answer", ANSWER], ["withdraw_known_answer", { product: 1, reason: "x" }],
   ] as const) {
     const inArgs = await t.post(`/api/cases/${id}/commands`, { command, args: { ...args, actor: someone } });
     expect(`${command}: ${inArgs.status} ${JSON.stringify(await inArgs.json())}`).toBe(`${command}: 400 ${JSON.stringify({ ok: false, refused: ["the server names the actor"] })}`);

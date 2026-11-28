@@ -96,7 +96,8 @@ export function matcherParts(session: CaseSession, answers: readonly AnswerCopy[
   return parts;
 }
 
-const firstLine = (t: string): string => t.split("\n")[0]!.slice(0, 300);
+/** What the stage's output says when its model gave no matching: never the model's own words. */
+export const MODEL_GAVE_NONE = "the stage's model gave no matching; the scores are the code's";
 const QUESTION = [
   "Compare each probe's findings with the expected findings listed for it.",
   "For each expected finding that one of the probe's findings states in other words, give { probe, expected, produced }: the probe's id, the number of the expected finding and the id of that finding. Leave out an expected finding no finding states.",
@@ -166,7 +167,8 @@ export const judgeRunner: StageRunner = async (env: StageEnv): Promise<StageEnd>
         case "output": ({ extra, texts } = keep(end.output, asked)); break;
         case "stopped": return { kind: "stopped" };
         case "blocked": reason = `the stage's model may not receive data marked ${end.marking}; the scores are the code's`; break;
-        case "declined": case "stalled": case "waiting_child": reason = `${firstLine(end.reason)}; the scores are the code's`; break;
+        // a fixed sentence: the model's own words could quote a claim it was shown
+        case "declined": case "stalled": case "waiting_child": reason = MODEL_GAVE_NONE; break;
       }
     }
   }

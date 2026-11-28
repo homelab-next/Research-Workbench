@@ -168,13 +168,14 @@ test("stage writes only under <data>/staged/<case>-<origin12>/ and returns the s
   expect(folder).toBe(`${s.id}-${me(s).origin.slice(0, 12)}`);
   const before = listing(dir);
   const chainBefore = wb.chain.read().length;
-  const r = host.stage(me(s), sample.root, candidateFiles(), TARGET);
+  const r = host.stage(me(s), "sample", candidateFiles(), TARGET);
   if (!r.ok) throw new Error(r.problems.join(" | "));
   expect(r.loop.pipeline.hash).not.toBe(live().pipeline.hash);
   expect(r.loop.manifest.id).toBe(TARGET);
-  // the root named by its folder's name stages the same version
+  // staged again, the same version; the root is named by its folder's name only, as a change names it
   const again = host.stage(me(s), "sample", candidateFiles(), TARGET);
   expect(again.ok && again.loop.pipeline.hash).toBe(r.loop.pipeline.hash);
+  expect(host.stage(me(s), sample.root, candidateFiles(), TARGET)).toEqual({ ok: false, problems: ["the root sample is not a trusted root here"] });
   const after = listing(dir);
   const changed = [...after].filter(([p, v]) => before.get(p) !== v).map(([p]) => p);
   expect(changed.length).toBeGreaterThan(0);
@@ -186,7 +187,7 @@ test("stage writes only under <data>/staged/<case>-<origin12>/ and returns the s
   // the staged store is the one the host gives for that case
   expect(existsSync(join(config.improve.staged, folder, "blobs"))).toBe(true);
   // check reads the roots as they are and writes nothing
-  expect(host.check(sample.root, candidateFiles(), TARGET).ok).toBe(true);
+  expect(host.check("sample", candidateFiles(), TARGET).ok).toBe(true);
   expect(host.stage(me(s), "no-such-root", candidateFiles(), TARGET)).toEqual({ ok: false, problems: ["the root no-such-root is not a trusted root here"] });
   expect(listing(dir)).toEqual(after);
 });
@@ -194,7 +195,7 @@ test("stage writes only under <data>/staged/<case>-<origin12>/ and returns the s
 test("clear removes that folder, and a second clear is nothing", () => {
   const s = improveCase();
   const other = improveCase();
-  const r = host.stage(me(s), sample.root, candidateFiles(), TARGET);
+  const r = host.stage(me(s), "sample", candidateFiles(), TARGET);
   expect(r.ok).toBe(true);
   host.staged(me(other));
   host.clear(me(s));
@@ -265,9 +266,9 @@ const noteOf = (deps: { registry: { source(id: string): { tables: { columns: { n
 
 test("a candidate that changes a source's field notes is staged whole: its hash is not the procedure's alone nor the base's, and a probe child binds a registry with the note", () => {
   const s = improveCase();
-  const both = host.stage(me(s), sample.root, [...candidateFiles(), sourceFile()], TARGET);
-  const procOnly = host.stage(me(s), sample.root, candidateFiles(), TARGET);
-  const srcOnly = host.stage(me(s), sample.root, [sourceFile()], TARGET);
+  const both = host.stage(me(s), "sample", [...candidateFiles(), sourceFile()], TARGET);
+  const procOnly = host.stage(me(s), "sample", candidateFiles(), TARGET);
+  const srcOnly = host.stage(me(s), "sample", [sourceFile()], TARGET);
   if (!both.ok || !procOnly.ok || !srcOnly.ok) throw new Error("a stage was refused");
   expect(both.loop.pipeline.hash).not.toBe(procOnly.loop.pipeline.hash);
   expect(srcOnly.loop.pipeline.hash).not.toBe(live().pipeline.hash);

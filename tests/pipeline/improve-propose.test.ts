@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { SAMPLE_START, SAMPLE_WINDOW } from "../../scripts/make-sample-data";
 import { compose } from "../../src/cli/compose";
 import { BlobStore } from "../../src/core/blobs";
@@ -147,6 +147,8 @@ function canaryTask(): TaskView {
 }
 interface Host extends ImproveHost { asked: string[]; staged_problems: string[][] }
 /** A host whose check and stage are the real checkCandidate and stageCandidate over the sample's root; `before` runs before each staging. */
+/** The root a host call names by its folder's name, as a path. */
+const pathOf = (name: string): string => (name === basename(sample.root) ? sample.root : join(dir, "no-such-root", name));
 function host(opts: { before?: () => void; stageThrows?: boolean } = {}): Host {
   const asked: string[] = [];
   const staged_problems: string[][] = [];
@@ -156,11 +158,11 @@ function host(opts: { before?: () => void; stageThrows?: boolean } = {}): Host {
     tasks: (type) => { asked.push(`tasks:${type}`); return [canaryTask()]; },
     task: (ref) => { asked.push(`task:${ref.case}`); return canaryTask(); },
     staged: () => staging,
-    check: (root, files, target) => checkCandidate(candidateDeps(), root, files, target),
+    check: (root, files, target) => checkCandidate(candidateDeps(), pathOf(root), files, target),
     stage: (_i, root, files, target) => {
       if (opts.stageThrows === true) throw new Error("the process stopped");
       opts.before?.();
-      const r = stageCandidate(candidateDeps(), root, files, target, staging);
+      const r = stageCandidate(candidateDeps(), pathOf(root), files, target, staging);
       if (!r.ok) staged_problems.push(r.problems);
       return r;
     },
@@ -171,16 +173,16 @@ function host(opts: { before?: () => void; stageThrows?: boolean } = {}): Host {
   };
 }
 const proposal = (title: string, files: ManifestFile[]): { tool: string; args: Record<string, Json> } => ({ tool: "propose_change", args: { why: `because ${title}`, title, files: files as unknown as Json } });
-function providerOf(turns: ScriptTurn["reply"][]): Providers {
-  return new Providers([new ScriptedProvider({ id: "scripted", scripts: [{ id: MODEL, turns: turns.map((reply) => ({ actor: "proposer", reply })) }] })]);
+function providerOf(turns: ScriptTurn["reply"][], context?: number): Providers {
+  return new Providers([new ScriptedProvider({ id: "scripted", scripts: [{ id: MODEL, turns: turns.map((reply) => ({ actor: "proposer", reply })), ...(context === undefined ? {} : { context }) }] })]);
 }
 function depsWith(h: ImproveHost, providers: Providers): EngineDeps {
   return { ...composed.deps, improve: h, providers, runner: { ...composed.deps.runner, secrets: () => [SECRET] } };
 }
 const runners = (opts: { loop_hash?: string } = {}): Partial<Record<Role, StageRunner>> => ({ select: selects(opts), probe: stallProbe });
 
-async function run(s: CaseSession, h: ImproveHost, turns: ScriptTurn["reply"][], opts: { loop_hash?: string } = {}): Promise<Engine> {
-  const engine = Engine.open(s, depsWith(h, providerOf(turns)), { runners: runners(opts) });
+async function run(s: CaseSession, h: ImproveHost, turns: ScriptTurn["reply"][], opts: { loop_hash?: string; context?: number } = {}): Promise<Engine> {
+  const engine = Engine.open(s, depsWith(h, providerOf(turns, opts.context)), { runners: runners(opts) });
   expect(engine.unusable).toBeNull();
   engine.start(human);
   await engine.advance();
@@ -281,6 +283,20 @@ test("a change of a source's field notes alone is staged, not dropped: the versi
   expect(k1).toMatchObject({ candidate: "K1", change: "chg-1", status: "staged", reason: "" });
   expect(k1!.loop_hash).not.toBe(s.state.improve.selected!.loop_hash);
   expect(proposeOutput(s)).toEqual({ candidates: [{ candidate: "K1", change: "chg-1", status: "staged" }] });
+});
+
+test("a change of a file the proposer was not shown (left out of its pack) is dropped with the reason, and is not staged", async () => {
+  const s = improveCase();
+  const h = host();
+  // a context so small that the changeable files are left out of the proposer's pack
+  await run(s, h, [{ tool_calls: [proposal("Shorter", [askEdit()])] }, FINAL], { context: 2048 });
+  const requests = ofType(s, "model.request").filter((e) => e.stage === "propose");
+  expect(requests.length).toBeGreaterThan(0);
+  const path = askEdit().path;
+  expect(requests.every((e) => !e.payload.pack.some((i) => i.kind === "manifest" && i.id === path))).toBe(true);
+  expect(ofType(s, "builder.proposed").length).toBe(1);
+  expect(ofType(s, "improve.candidate").map((e) => e.payload)).toEqual([{ candidate: "K1", change: "chg-1", status: "dropped", loop_hash: null, lock: null, reason: `it changes ${path}, which was not in what the proposer was shown` }]);
+  expect(h.staged_problems).toEqual([]);
 });
 
 test("a change that no longer resolves when it is staged is dropped with the loop's problem", async () => {

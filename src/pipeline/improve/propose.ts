@@ -14,7 +14,7 @@ import type { PackPart } from "../../agents/context";
 import type { BuilderLoop, BuilderTools, ChangeCheck, ManifestFile } from "../../agents/tools";
 import { hideCredentials } from "../../agents/tools/builder";
 import { scrub } from "../../agents/tools/kit";
-import { rootsOf } from "../../modules/config";
+import { rootsOf, saveRootOf } from "../../modules/config";
 import { parseManifestFile } from "../../modules/manifests";
 import type { Registry } from "../../modules/registry";
 import { rootRelative } from "../components";
@@ -33,16 +33,8 @@ const NO_HOST = "this workbench cannot run an improve loop here";
 /** The kinds of a lock's items a candidate may change by their own file. */
 const ITEM_KINDS: readonly string[] = ["skill", "procedure", "stage"];
 
-/**
- * The trusted root a candidate of `loop` is written into, as loop-write's writeRoot names it (src/pipeline may not import loop-write): the
- * trusted root that holds the loop's manifest, else the first trusted root; null when the configuration has none.
- */
-function rootOf(deps: Pick<EngineDeps, "config">, loop: ResolvedLoop | null): string | null {
-  const trusted = deps.config.roots.filter((r) => r.trusted);
-  const at = loop?.manifest.root ?? null;
-  const holds = at === null ? undefined : trusted.find((r) => resolve(r.path) === resolve(at));
-  return holds?.path ?? trusted[0]?.path ?? null;
-}
+/** The trusted root a candidate of `loop` is written into: the one rule writeRoot keeps too (saveRootOf); null when the configuration has none. */
+const rootOf = (deps: Pick<EngineDeps, "config">, loop: ResolvedLoop | null): string | null => saveRootOf(deps.config, loop?.manifest.root ?? null);
 
 /** A manifest file of `root`, as the builder's read gives it: scrubbed, every secret value and credential-named value hidden; null when there is none. */
 function readManifest(registry: Registry, root: string | null, path: string, secrets: readonly string[]): string | null {
@@ -95,7 +87,7 @@ export function proposerTools(session: CaseSession, deps: EngineDeps): BuilderTo
     check: (files: ManifestFile[]): ChangeCheck => {
       if (host === undefined) return { ok: false, problems: [NO_HOST], files: [] };
       if (root === null) return { ok: false, problems: ["the configuration has no trusted root to save into"], files: [] };
-      return host.check(root, files, target);
+      return host.check(basename(resolve(root)), files, target);
     },
     secrets,
     improve: { target, max: request?.candidates ?? 0 },
@@ -209,24 +201,33 @@ function bundleFiles(session: CaseSession, change: BuilderChange): ManifestFile[
   }
 }
 
-/** The trusted root a change names by its folder name, now; null when there is none. */
-function namedRoot(deps: Pick<EngineDeps, "config">, name: string): string | null {
-  return deps.config.roots.find((r) => r.trusted && basename(resolve(r.path)) === name)?.path ?? null;
+/** The paths of the files the proposer's requests of this run held as parts before seq `before` (what improveParts gave and the pack kept). */
+function shownFiles(session: CaseSession, before: number, stage: string): Set<string> {
+  const run = session.state.run.id;
+  const shown = new Set<string>();
+  for (const e of session.entries()) {
+    if (e.seq >= before) break;
+    if (e.type !== "model.request" || e.run !== run || e.stage !== stage) continue;
+    for (const item of e.payload.pack) if (item.kind === "manifest") shown.add(item.id);
+  }
+  return shown;
 }
 
 const SAME_AS_BASE = "it changes nothing the loop reads";
 const REASON_CHARS = 300;
 
 /** One change staged through the host: its candidate's payload but the id. Throws what the host throws (a stop of the process). */
-function stageOne(session: CaseSession, deps: EngineDeps, host: NonNullable<EngineDeps["improve"]>, change: BuilderChange, sel: NonNullable<CaseState["improve"]["selected"]>): Omit<Payloads["improve.candidate"], "candidate"> {
+function stageOne(session: CaseSession, deps: EngineDeps, host: NonNullable<EngineDeps["improve"]>, change: BuilderChange, sel: NonNullable<CaseState["improve"]["selected"]>, stageId: string): Omit<Payloads["improve.candidate"], "candidate"> {
   const registry = deps.runner.registry;
   const secrets = deps.runner.secrets?.() ?? [];
   const dropped = (reason: string) => ({ change: change.id, status: "dropped" as const, loop_hash: null, lock: null, reason: clip(scrub(registry, hideCredentials(reason, secrets)), REASON_CHARS) });
   const files = bundleFiles(session, change);
   if (files === null) return dropped("its files could not be read from the case");
-  const root = namedRoot(deps, change.root);
-  if (root === null) return dropped(`the root ${change.root} is not a trusted root here`);
-  const r = host.stage(improveOf(session), root, files, sel.target);
+  // a candidate changes only what its proposer was shown: a file of the target left out of the pack was never read
+  const shown = shownFiles(session, change.seq, stageId);
+  const unseen = files.find((f) => !shown.has(f.path));
+  if (unseen !== undefined) return dropped(`it changes ${unseen.path}, which was not in what the proposer was shown`);
+  const r = host.stage(improveOf(session), change.root, files, sel.target);
   if (!r.ok) return dropped(r.problems[0] ?? `loop "${sel.target}" is not usable`);
   if (r.loop.pipeline.hash === sel.loop_hash) return dropped(SAME_AS_BASE);
   const lock = session.blobs.put(canonical(r.loop.lock as unknown as Json));
@@ -255,7 +256,7 @@ export const proposeRunner: StageRunner = async (env) => {
     const known = new Set(Object.values(session.state.improve.candidates).map((c) => c.change));
     const next = changesOfRun(session.state).find((c) => !known.has(c.id));
     if (next === undefined) break;
-    const payload = stageOne(session, deps, host, next, sel);
+    const payload = stageOne(session, deps, host, next, sel, stage.id);
     session.commit((st) => {
       if (Object.values(st.improve.candidates).some((c) => c.change === next.id)) return [];
       return [{ type: "improve.candidate", actor: ENGINE, run: st.run.id, stage: stage.id, payload: { candidate: `K${st.improve.candidate_order.length + 1}`, ...payload } }];

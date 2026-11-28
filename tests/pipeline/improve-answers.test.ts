@@ -145,6 +145,14 @@ test("a secret value in the text or a claim is written redacted", () => {
   expect((e!.payload as Payloads["answer.known"]).findings[0]!.claim).toBe("the token [redacted secret] was reused");
 });
 
+test("a secret value typed as a likelihood term is written redacted when no scale is given", () => {
+  const { s } = published();
+  setKnownAnswer(s, deps, input({ findings: [{ claim: "the host beacons", likelihood: `very ${SECRET}`, confidence: "high" }] }), null);
+  const [e] = answersOf(s);
+  expect(JSON.stringify(e!.payload)).not.toContain(SECRET);
+  expect((e!.payload as Payloads["answer.known"]).findings[0]!.likelihood).toBe("very [redacted secret]");
+});
+
 test("withdrawKnownAnswer removes it; with no reason, or for a product with none, it is refused", () => {
   const { s } = published("TLP:GREEN", "TLP:AMBER", 2);
   setKnownAnswer(s, deps, input(), SCALE);

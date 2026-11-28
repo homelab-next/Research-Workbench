@@ -204,9 +204,3 @@ export function adoptDecide(ctx: BuilderContext, change: string, accept: boolean
     with: (s) => [passAdopt(ctx, s)],
   });
 }
-
-/** Rejects every file still undecided and passes the gate, in one commit. Nothing is written into a root. */
-export function adoptFinish(ctx: BuilderContext): void {
-  const offer = offered(ctx);
-  builderDecideAll(ctx, offer.change, false, { with: (s) => [passAdopt(ctx, s)] });
-}

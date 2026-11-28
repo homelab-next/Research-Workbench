@@ -9,13 +9,12 @@ import type { Actor, ExpectedFinding, Marking } from "../core/types";
 import type { Workbench } from "../core/workbench";
 import type { NewImproveInput } from "../core/wire";
 import type { EngineDeps } from "../pipeline/engine";
-import { setKnownAnswer, withdrawKnownAnswer } from "../pipeline/improve/answers";
-import { termsOf } from "../agents/draft";
+import { answerScale, setKnownAnswer, withdrawKnownAnswer } from "../pipeline/improve/answers";
 import { defineCommand, thenAfter } from "./commands";
 import type { CommandContext } from "./commands";
 import type { BuilderContext } from "./builder";
 import type { CaseHub } from "./hub";
-import { adoptDecide, adoptFinish, createImprove, improveView } from "./improve";
+import { adoptDecide, createImprove, improveView } from "./improve";
 import type { Reading } from "./roles";
 
 export interface ImproveRouteDeps {
@@ -75,6 +74,11 @@ export function improveRoutes(d: ImproveRouteDeps): ImproveRoute[] {
         return json(200, await improveView(session, d.hub.depsFor(id), { secrets: d.secrets() }));
       },
     },
+    {
+      // the likelihood terms a known answer of this case is checked against: its own loop's standard's, as set_known_answer checks them
+      method: "GET", path: /^\/api\/cases\/([^/]+)\/answer-scale$/, needs: { read: "improve" }, kind: "api",
+      handle: ({ params }) => json(200, { likelihood: [...(answerScale(d.hub.depsFor(params[0]!)) ?? [])] }),
+    },
   ];
 }
 
@@ -87,14 +91,6 @@ const finding: Schema = {
 };
 const product: Schema = { type: "integer", minimum: 1 };
 
-/** The likelihood terms of the case's own standard, least likely first; null when it lists none. */
-function likelihoodOf(deps: EngineDeps): readonly string[] | null {
-  const { profile, registry, components } = deps;
-  const standard = profile.standard === null ? null : components !== undefined ? components.get("*", "standard", profile.standard) : registry.get("standard", profile.standard);
-  const terms = termsOf(standard?.body ?? null)?.likelihood ?? [];
-  return terms.length === 0 ? null : terms;
-}
-
 /** The builder context of a case command: the case's session and bound deps, the person the server names, the workbench, its reload and secrets. */
 const builderCtx = (ctx: CommandContext): BuilderContext => ({ session: ctx.session, deps: ctx.deps, hub: ctx.hub, actor: ctx.actor, reload: ctx.reload, wb: ctx.wb, secrets: ctx.secrets });
 
@@ -105,7 +101,7 @@ defineCommand("set_known_answer", {
   },
   then: thenAfter("setKnownAnswer"),
   perform: ({ session, deps, actor }, a) => {
-    setKnownAnswer(session, deps, { product: a.product as number, text: a.text as string, findings: a.findings as unknown as ExpectedFinding[], marking: a.marking as Marking, actor }, likelihoodOf(deps));
+    setKnownAnswer(session, deps, { product: a.product as number, text: a.text as string, findings: a.findings as unknown as ExpectedFinding[], marking: a.marking as Marking, actor }, answerScale(deps));
   },
 });
 
@@ -120,10 +116,4 @@ defineCommand("adopt_decide", {
   args: { type: "object", additionalProperties: false, required: ["change", "accept"], properties: { change: str, accept: { type: "boolean" } } },
   then: thenAfter("adoptDecide"),
   perform: (ctx, a) => { adoptDecide(builderCtx(ctx), a.change as string, a.accept as boolean); },
-});
-
-defineCommand("adopt_finish", {
-  args: { type: "object", additionalProperties: false, properties: {} },
-  then: thenAfter("adoptFinish"),
-  perform: (ctx) => { adoptFinish(builderCtx(ctx)); },
 });

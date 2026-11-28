@@ -5,10 +5,11 @@
 import { MARKINGS } from "../../core/types";
 import type { CaseState } from "../../core/state";
 import type { Entry, Marking, ModelChoice } from "../../core/types";
-import type { BuilderFileView, BuilderSummaryView, BuilderView, CommandResult, DiffLine } from "../../core/wire";
+import type { BuilderFileView, BuilderSummaryView, BuilderView, CommandResult } from "../../core/wire";
 import type { Shell } from "../app";
 import { markingChip } from "../chips";
 import { clear } from "../dom";
+import { diffLines } from "../diff";
 import { refusalLine } from "../refusal";
 import { CaseStore, follow } from "../store";
 
@@ -19,7 +20,6 @@ const NO_ANSWER = "The server did not answer.";
 const STALE = "This file changed on disk since it was proposed, so it cannot be accepted.";
 /** The first rows of a probe's card that are shown. */
 const FIRST_ROWS = 5;
-const OP_CLASS: Record<DiffLine["op"], string> = { "+": "diff-added", "-": "diff-removed", " ": "diff-context" };
 const modelWords = (m: ModelChoice): string => `${m.provider} ${m.model}${m.effort === null ? "" : ` · effort ${m.effort}`}`;
 /** The entries after which what the view says may have changed: a proposal, a decision, a probe's card, the model. */
 const VIEW_TYPES = new Set<Entry["type"]>(["builder.proposed", "builder.decided", "builder.probe_asked", "builder.probe_decided", "card.created", "stage.model_set"]);
@@ -284,8 +284,6 @@ export function builderPanel(shell: Shell, opts: { loop: string | null; onWritte
     readView();
     paintOpen();
   };
-  const diffLines = (lines: readonly DiffLine[]): HTMLElement =>
-    h("div", { class: "diff", role: "list" }, lines.map((l) => h("div", { class: `diff-line ${OP_CLASS[l.op] ?? "diff-context"}`, role: "listitem" }, `${l.op}${l.text}`)));
   const fileBlock = (c: Change, f: BuilderFileView): HTMLElement => {
     const key = `file:${c.id}/${f.index}`;
     const decided = f.decided;
@@ -295,7 +293,7 @@ export function builderPanel(shell: Shell, opts: { loop: string | null; onWritte
         " ", h("span", { class: "muted file-kind" }, `${f.kind} ${f.id}`)),
       decided === null ? null : h("p", { class: `file-decided tag ${decided.accepted ? "tag-done" : "tag-human"}` }, decided.accepted ? "Accepted" : "Rejected"),
       decided === null && f.stale ? h("p", { class: "file-stale tag tag-attention" }, STALE) : null,
-      diffLines(f.lines),
+      diffLines(h, f.lines),
       decided !== null ? null : h("div", { class: "file-actions" },
         f.stale ? null : h("button", { type: "button", class: "primary", data: { action: "accept", key: `${key}:accept` }, disabled: busy.has(key),
           title: `Write ${f.path} into the loop's root`, on: { click: () => void decide(c.id, f.index, true) } }, "Accept"),

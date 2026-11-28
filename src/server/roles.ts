@@ -13,7 +13,7 @@ export const MEMORY_COMMANDS = ["propose_lesson", "accept_lesson", "reject_lesso
  * The improve loop's commands (slice 14), each a person's act: an improve case is made by its own route; a known answer is set and withdrawn,
  * and the chosen candidate is accepted or rejected whole at the adopt gate, as case commands.
  */
-export const IMPROVE_COMMANDS = ["create_improve", "set_known_answer", "withdraw_known_answer", "adopt_decide", "adopt_finish"] as const;
+export const IMPROVE_COMMANDS = ["create_improve", "set_known_answer", "withdraw_known_answer", "adopt_decide"] as const;
 
 /** The analyst reads everything; the other views read the page and who they are, and nothing else. Checked on the server for every read. */
 export function mayRead(role: Role, what: Reading): boolean {

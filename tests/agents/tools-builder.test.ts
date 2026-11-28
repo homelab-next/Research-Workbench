@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import type { Json } from "../../src/core/canonical";
 import { parseJson } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
@@ -485,7 +485,9 @@ function improveCase(max: number): { s: CaseSession; ctx: ToolContext; call(name
     loop: IMPROVE_TARGET, type: IMPROVE_TARGET, improve: { target: IMPROVE_TARGET, case_type: IMPROVE_TARGET, tasks: 1, candidates: max },
   });
   const secrets = f.ctx.builder!.secrets;
-  const host = { check: (root: string, files: { path: string; text: string }[], target: string) => checkCandidate({ config: f.config, chain: f.wb.chain, content: f.wb.chainBlobs, secrets, loops: f.loops, registry: f.registry }, root, files, target) };
+  // the host names a root by its folder's name, as a change names it
+  const pathOf = (name: string): string => f.config.roots.find((r) => r.trusted && basename(resolve(r.path)) === name)?.path ?? name;
+  const host = { check: (root: string, files: { path: string; text: string }[], target: string) => checkCandidate({ config: f.config, chain: f.wb.chain, content: f.wb.chainBlobs, secrets, loops: f.loops, registry: f.registry }, pathOf(root), files, target) };
   const deps = { config: f.config, loops: f.loops, registry: f.registry, runner: { ...f.ctx.deps, secrets: () => secrets }, improve: host } as unknown as EngineDeps;
   const ctx: ToolContext = { ...f.ctx, session: s, actor: proposer, link: { run: null, stage: "propose", job: null }, builder: proposerTools(s, deps) };
   return { s, ctx, call: (name, args) => execTool(ctx, parseCall(BUILDER_TOOL_NAMES, name, JSON.stringify(args))) };

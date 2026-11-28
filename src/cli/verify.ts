@@ -2,7 +2,7 @@
 // bun run src/cli/verify.ts --ledger <ledger.sqlite> --blobs <blob-dir>   (for example the workbench chain)
 import { existsSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { formatReport, linkLines, probeLines, scoreLines, UnreadableLedgerError, verifyLedger, verifyLinks, verifyProbes, verifyPublished, verifyScores } from "../core/verify";
+import { formatReport, gateLines, linkLines, probeLines, scoreLines, UnreadableLedgerError, verifyGates, verifyLedger, verifyLinks, verifyProbes, verifyPublished, verifyScores } from "../core/verify";
 
 const USAGE = [
   "usage: bun run src/cli/verify.ts <case-dir>                          (the directory must contain ledger.sqlite)",
@@ -37,8 +37,10 @@ try {
   // an improve case's probes against their children, and its scores against its own blobs; nothing is printed for a case with neither
   const probes = target.caseDir === null ? null : verifyProbes(target.caseDir, dirname(resolve(target.caseDir)));
   const scores = target.caseDir === null ? null : verifyScores(target.caseDir);
-  console.log([formatReport(report), ...(links === null ? [] : linkLines(links)), ...(probes === null ? [] : probeLines(probes)), ...(scores === null ? [] : scoreLines(scores))].join("\n"));
-  process.exit(report.ok && (links?.ok ?? true) && (probes?.ok ?? true) && (scores?.ok ?? true) ? 0 : 1);
+  // a gate passed by code anywhere but a probe child's plan gate, and an adopted file the probed version does not name, fail the case
+  const gates = target.caseDir === null ? null : verifyGates(target.caseDir);
+  console.log([formatReport(report), ...(links === null ? [] : linkLines(links)), ...(probes === null ? [] : probeLines(probes)), ...(scores === null ? [] : scoreLines(scores)), ...(gates === null ? [] : gateLines(gates))].join("\n"));
+  process.exit(report.ok && (links?.ok ?? true) && (probes?.ok ?? true) && (scores?.ok ?? true) && (gates?.ok ?? true) ? 0 : 1);
 } catch (err) {
   if (!(err instanceof UnreadableLedgerError)) throw err;
   console.log(`ledger ${target.ledger}: UNREADABLE (${err.message})`);
