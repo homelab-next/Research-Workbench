@@ -131,3 +131,29 @@ test("a proposed change, a decision on one of its files, a probe asked for and a
   expect(describe(sampleOf("builder.decided", {}), ref)).toEqual({ what: "decision on a change", detail: "" });
   expect(describe(sampleOf("builder.probe_decided", {}), ref)).toEqual({ what: "probe decided", detail: "" });
 });
+
+test("each of the twelve entry types has its words", () => {
+  // "case type set" unknown-device · "case type proposed" · "note added" m1 · "note revised" · "note dropped" · "memory bound" 2 lessons · "lesson proposed" LESSON-3 · "lesson accepted" · "lesson rejected" · "lesson retired" · "memory exported" · "memory loaded"
+  const lock = { blob: "a".repeat(64), bytes: 10 };
+  const head = { seq: 4, hash: "b".repeat(64) };
+  const file = "memory.TLP-GREEN.bbbbbbbbbbbb.memory.tar.gz";
+  const d = (type: EntryType, payload: unknown) => describe(sampleOf(type, payload), ref);
+  expect(d("case.type_set", { type: "unknown-device" })).toEqual({ what: "case type set", detail: "unknown-device" });
+  expect(d("case.type_set", { type: null })).toEqual({ what: "case type set", detail: "no type" });
+  expect(d("case.type_proposed", { type: "unknown-device", why: "Frame read the question as this type" })).toEqual({ what: "case type proposed", detail: "unknown-device · Frame read the question as this type" });
+  expect(d("memory.noted", { item: "m1", kind: "pointer", text: "the access point in the lobby is ap-3", cards: ["c5"] })).toEqual({ what: "note added", detail: "m1 · pointer · the access point in the lobby is ap-3" });
+  expect(d("memory.revised", { item: "m1", kind: "fact", text: "ap-3 is in the lobby", cards: [] })).toEqual({ what: "note revised", detail: "m1 · fact · ap-3 is in the lobby" });
+  expect(d("memory.dropped", { item: "m1", reason: "no longer true" })).toEqual({ what: "note dropped", detail: "m1 · no longer true" });
+  expect(d("memory.bound", { lock, store: { origin: "o", head }, case_type: "unknown-device", lessons: [{ lesson: "LESSON-1", hash: "c" }, { lesson: "LESSON-2", hash: "d" }] }))
+    .toEqual({ what: "memory bound", detail: "unknown-device · 2 lessons" });
+  expect(d("lesson.proposed", { lesson: "LESSON-3", case_type: "unknown-device", title: "Look at the DHCP lease first", text: "t", triggers: [], marking: "TLP:GREEN", supersedes: null, hash: "h", from: { kind: "person" } }))
+    .toEqual({ what: "lesson proposed", detail: "LESSON-3 · unknown-device · Look at the DHCP lease first" });
+  expect(d("lesson.accepted", { lesson: "LESSON-3", hash: "h", marking: "TLP:GREEN" })).toEqual({ what: "lesson accepted", detail: "LESSON-3 · TLP:GREEN" });
+  expect(d("lesson.rejected", { lesson: "LESSON-3", reason: "too narrow" })).toEqual({ what: "lesson rejected", detail: "LESSON-3 · too narrow" });
+  expect(d("lesson.retired", { lesson: "LESSON-3", reason: "the lease server moved" })).toEqual({ what: "lesson retired", detail: "LESSON-3 · the lease server moved" });
+  expect(d("memory.exported", { file, origin: "o", head, lessons: 2 })).toEqual({ what: "memory exported", detail: `${file} · 2 lessons` });
+  expect(d("memory.loaded", { file, origin: "o", head, before: { seq: 0, hash: "" } })).toEqual({ what: "memory loaded", detail: file });
+  // read loosely: a missing or odd field is left out, never thrown on
+  expect(d("memory.bound", { lessons: "x" })).toEqual({ what: "memory bound", detail: "" });
+  expect(d("case.type_set", {})).toEqual({ what: "case type set", detail: "" });
+});

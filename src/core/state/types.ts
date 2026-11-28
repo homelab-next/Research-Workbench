@@ -1,12 +1,12 @@
 import type {
-  Actor, BlobRef, Card, Cost, Marking, Challenge, CheckFinding, Coverage, Draft, Finding, ModelChoice, Observable, Payloads,
+  Actor, BlobRef, Card, Cost, Marking, Challenge, CheckFinding, Coverage, Draft, Finding, ModelChoice, NoteKind, Observable, Payloads,
   Place, Plan, ProposedFile, Proposal, Question, QueryPurpose, ReviewConflict, RunHold, StageDef, StepOutcome, TimeWindow,
 } from "../types";
 
-export type IdKind = "card" | "lane" | "query" | "job" | "proposal" | "challenge" | "request" | "call" | "turn" | "run" | "plan" | "conflict" | "question" | "change" | "probe";
+export type IdKind = "card" | "lane" | "query" | "job" | "proposal" | "challenge" | "request" | "call" | "turn" | "run" | "plan" | "conflict" | "question" | "change" | "probe" | "memory";
 export const ID_PREFIX: Record<IdKind, string> = {
   card: "c", lane: "l", query: "q", job: "j", proposal: "p", challenge: "x",
-  request: "r", call: "t", turn: "u", run: "run-", plan: "plan-", conflict: "k", question: "ask-", change: "chg-", probe: "probe-",
+  request: "r", call: "t", turn: "u", run: "run-", plan: "plan-", conflict: "k", question: "ask-", change: "chg-", probe: "probe-", memory: "m",
 };
 
 export interface CardState extends Card {
@@ -179,6 +179,26 @@ export interface BuilderProbe {
 /** What a builder session proposed and probed, and what the person decided (slice 12, part B). Empty in a case's ledger. */
 export interface BuilderState { changes: Record<string, BuilderChange>; probes: Record<string, BuilderProbe> }
 
+/** A note of the case's notebook: who wrote it (an agent, with its stage, or a person), when, and a person's latest revision or drop. */
+export interface NoteState {
+  id: string; kind: NoteKind; text: string; cards: string[]; by: "agent" | "human"; author: string; stage: string | null; noted_seq: number; noted_ts: string;
+  revised: { by: string; seq: number; ts: string } | null; dropped: { by: string; reason: string; seq: number; ts: string } | null;
+}
+/** A memory.bound as the fold keeps it, with the seq it was written at. */
+export interface BoundMemory { lock: BlobRef; store: { origin: string | null; head: { seq: number; hash: string } }; case_type: string | null; lessons: { lesson: string; hash: string }[]; seq: number }
+/** The case's type, its notebook, and what the run in progress was given from the shared store (slice 13). */
+export interface MemoryState {
+  /** The case's type; null when none was set (a ledger from before slice 13, or a case the person gave none). */
+  type: string | null; type_by: { actor: string; seq: number } | null;
+  /** What Frame proposed, while no type is set. */
+  proposed_type: { type: string; why: string; seq: number } | null;
+  notes: Record<string, NoteState>; order: string[];
+  /** A memory.bound not yet followed by its run.started. */
+  pending: BoundMemory | null;
+  /** What the run in progress was given; null for a run with no memory.bound. */
+  bound: BoundMemory | null;
+}
+
 export interface CaseState {
   seq: number;
   head_ts: string | null;
@@ -229,4 +249,6 @@ export interface CaseState {
   loop: LoopState;
   /** A builder session's changes and probes (slice 12, part B); empty for a case. */
   builder: BuilderState;
+  /** The case's type, its notebook and what its run was given from memory (slice 13). */
+  memory: MemoryState;
 }

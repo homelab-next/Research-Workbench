@@ -89,3 +89,12 @@ test("apply records a shape rejection without touching anything else", () => {
     skipped: [{ seq: 2, type: "lane.created", reason: "malformed lane.created" }],
   });
 });
+
+test("a malformed memory.noted is recorded and still moves the memory counter, as a malformed lane does", () => {
+  const base = fold(started().entries);
+  const e = { ...last(started()), seq: 2, type: "memory.noted", payload: { item: "m1", kind: "rule", text: "t", cards: [] } } as unknown as Entry;
+  expect(apply(base, e)).toEqual({
+    ...base, seq: 2, head_ts: e.ts, counters: { ...base.counters, memory: 1 },
+    skipped: [{ seq: 2, type: "memory.noted", reason: "malformed memory.noted" }],
+  });
+});

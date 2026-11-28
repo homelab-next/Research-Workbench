@@ -132,6 +132,18 @@ const TABLE: Record<EntryType, [string | ((p: Loose) => string), Say]> = {
     (p) => (p.approved === true ? "probe approved" : p.approved === false ? "probe rejected" : "probe decided"),
     (p) => join(str(p.probe), str(p.outcome), str(p.detail)),
   ],
+  "case.type_set": ["case type set", (p) => (p.type === null ? "no type" : str(p.type))],
+  "case.type_proposed": ["case type proposed", (p) => join(str(p.type), str(p.why))],
+  "memory.noted": ["note added", (p) => join(str(p.item), str(p.kind), str(p.text))],
+  "memory.revised": ["note revised", (p) => join(str(p.item), str(p.kind), str(p.text))],
+  "memory.dropped": ["note dropped", (p) => join(str(p.item), str(p.reason))],
+  "memory.bound": ["memory bound", (p) => join(str(p.case_type), Array.isArray(p.lessons) ? plural(p.lessons.length, "lessons") : "")],
+  "lesson.proposed": ["lesson proposed", (p) => join(str(p.lesson), str(p.case_type), str(p.title))],
+  "lesson.accepted": ["lesson accepted", (p) => join(str(p.lesson), str(p.marking))],
+  "lesson.rejected": ["lesson rejected", (p) => join(str(p.lesson), str(p.reason))],
+  "lesson.retired": ["lesson retired", (p) => join(str(p.lesson), str(p.reason))],
+  "memory.exported": ["memory exported", (p) => join(str(p.file), plural(p.lessons, "lessons"))],
+  "memory.loaded": ["memory loaded", (p) => str(p.file)],
 };
 
 /** One short plain sentence for an entry, and its particulars. Everything from the entry is text, and nothing here throws for an odd payload. */

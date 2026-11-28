@@ -8,8 +8,9 @@ import { canonical } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
 import type { IdAllocator } from "../../src/core/ids";
 import type { CaseSession } from "../../src/core/session";
-import { blockers, builderMarking, builderOpen, fold, initialArchive, initialBuilder, initialLoop, latestDraft, publishable, runUsage, unloadDue } from "../../src/core/state";
+import { applyMemory, blockers, builderMarking, builderOpen, fold, initial, initialArchive, initialBuilder, initialLoop, initialMemory, latestDraft, publishable, REDUCERS, runUsage, unloadDue } from "../../src/core/state";
 import type { CaseState } from "../../src/core/state";
+import { applyWith } from "../../src/core/state/apply";
 import type { Actor, Draft, EntryInput, Plan, Product, StageDef } from "../../src/core/types";
 import { verifyCase } from "../../src/core/verify";
 import { Workbench } from "../../src/core/workbench";
@@ -493,5 +494,30 @@ test("a builder session's ledger folds the same at every entry as the live sessi
   wb = Workbench.open(dir, { onError });
   expect(wb.builder(s.id).state).toEqual(final);
   expect(verifyCase(s.dir)).toMatchObject({ entries: all.length, firstBad: null, blobs: { bad: [] } });
+  expect(errors).toEqual([]);
+});
+
+// ---------- slice 13: memory ----------
+
+test("the whole run's ledger folds to the state it folded to, with an empty memory beside it", () => {
+  // the existing fixture: every field but memory and counters.memory equals the literal the test already holds; skipped is []
+  const { s, live } = wholeRun();
+  const entries = s.entries();
+  const state = fold(entries);
+  expect(state.memory).toEqual(initialMemory());
+  expect(state.counters.memory).toBe(0);
+  expect(state.skipped).toEqual([]);
+  expect(state).toEqual(live[state.seq]!);
+  // folded without the memory reducer, as before this slice, every entry gives the same state but for the new field and counter
+  const without = REDUCERS.filter((r) => r !== applyMemory);
+  let old = initial();
+  for (const e of entries) {
+    old = applyWith(old, e, without);
+    const now = fold(entries, e.seq);
+    const { memory: _m, counters: { memory: _c, ...counters }, ...rest } = now;
+    const { memory: _om, counters: { memory: _oc, ...oldCounters }, ...oldRest } = old;
+    expect(rest, `entry ${e.seq} (${e.type})`).toEqual(oldRest);
+    expect(counters).toEqual(oldCounters);
+  }
   expect(errors).toEqual([]);
 });

@@ -3,6 +3,7 @@ import { apply } from "./apply";
 import { initialArchive } from "./archive";
 import { initialBuilder } from "./builder";
 import { initialLoop } from "./loops";
+import { initialMemory } from "./memory";
 import type { CaseState, IdKind } from "./types";
 
 export { apply, applyCase, countedKind, REDUCERS } from "./apply";
@@ -10,6 +11,7 @@ export type { Reducer } from "./apply";
 export { applyArchive, initialArchive, unloadDue } from "./archive";
 export { applyBuilder, builderMarking, builderOpen, initialBuilder } from "./builder";
 export { applyLoops, depthOf, initialLoop, loopOf, subloopKey } from "./loops";
+export { applyMemory, CASE_TYPE_ID, initialMemory, LESSON_ID, liveNotes, NOTE_CARDS_MAX, NOTE_TEXT_MAX } from "./memory";
 export { applyRun, runUsage, stageFinishedCounts, subgoalAnswered } from "./run";
 export { applyAnalysis, blockers, latestDraft, notedExceptions, openMustAddress, proposalMarking, publishable } from "./analysis";
 export { applyCards, cardLocation } from "./cards";
@@ -27,7 +29,7 @@ export * from "./types";
 
 export function initial(): CaseState {
   const counters = {} as Record<IdKind, number>;
-  for (const k of ["card", "lane", "query", "job", "proposal", "challenge", "request", "call", "turn", "run", "plan", "conflict", "question", "change", "probe"] as const) counters[k] = 0;
+  for (const k of ["card", "lane", "query", "job", "proposal", "challenge", "request", "call", "turn", "run", "plan", "conflict", "question", "change", "probe", "memory"] as const) counters[k] = 0;
   return {
     seq: 0,
     head_ts: null,
@@ -67,6 +69,7 @@ export function initial(): CaseState {
     archive: initialArchive(),
     loop: initialLoop(),
     builder: initialBuilder(),
+    memory: initialMemory(),
   };
 }
 

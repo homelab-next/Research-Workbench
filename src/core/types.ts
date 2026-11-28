@@ -316,7 +316,40 @@ export interface Payloads {
   "builder.probe_asked": { probe: string; kind: "pivot" | "query"; source: string; pivot: string | null; value: Observable | null; text: string | null; window: TimeWindow; why: string };
   /** A person's decision on a probe. `query` is the query that ran for it, null for a refusal or when nothing was sent. */
   "builder.probe_decided": { probe: string; approved: boolean; query: string | null; outcome: "ran" | "refused" | "rejected"; detail: string };
+  // memory (slice 13): a case's type, its notebook, and what a run was given from the shared store
+  /** The case's type, by a person at any time or by the workbench in the commit of case.created; null clears it. */
+  "case.type_set": { type: string | null };
+  /** A type the workbench read from Frame's checked output, while the case has none; a person confirms it with case.type_set. */
+  "case.type_proposed": { type: string; why: string };
+  /** A note of the case's notebook, by an agent (the tool note_memory) or a person. It is not evidence and is never cited. */
+  "memory.noted": { item: string; kind: NoteKind; text: string; cards: string[] };
+  /** A person's revision of a note in the notebook. */
+  "memory.revised": { item: string; kind: NoteKind; text: string; cards: string[] };
+  /** A person took a note out of the notebook. */
+  "memory.dropped": { item: string; reason: string };
+  /** What a run was given from the shared store: the lock (a blob of this case) and the lessons it holds, by id and hash. */
+  "memory.bound": { lock: BlobRef; store: { origin: string | null; head: { seq: number; hash: string } }; case_type: string | null; lessons: { lesson: string; hash: string }[] };
+  // the memory store's ledger only; a case fold ignores them
+  "lesson.proposed": {
+    lesson: string; case_type: string; title: string; text: string; triggers: Trigger[]; marking: Marking; supersedes: string | null; hash: string; from: LessonOrigin;
+  };
+  /** A person accepted the proposal whose hash they saw, at a marking at least the proposal's. */
+  "lesson.accepted": { lesson: string; hash: string; marking: Marking };
+  "lesson.rejected": { lesson: string; reason: string };
+  "lesson.retired": { lesson: string; reason: string };
+  // workbench chain only; a case fold ignores them
+  "memory.exported": { file: string; origin: string | null; head: { seq: number; hash: string }; lessons: number };
+  "memory.loaded": { file: string; origin: string; head: { seq: number; hash: string }; before: { seq: number; hash: string } };
 }
+/** What a note of the notebook is: a fact, a decision, or a pointer to where something is. */
+export type NoteKind = "fact" | "decision" | "pointer";
+/** When a lesson applies: an observable type the case holds, a source it used, or text a finding of its latest draft contains. */
+export type Trigger = { observable: string } | { source: string } | { finding: string };
+/** Where a lesson came from: a case (its id, the hash of its first entry, the run, its head then, the product it published, the stage; `model` true when a model wrote the text), a person with no case, or a seed manifest. */
+export type LessonOrigin =
+  | { kind: "case"; case: string; origin: string; run: string | null; head: { seq: number; hash: string }; product: { n: number; draft_hash: string } | null; stage: string | null; model: boolean }
+  | { kind: "person" }
+  | { kind: "seed"; manifest: string; item: string; hash: string };
 /** One file of a proposed change: where it goes, what it is, and the sha256 of its text before (null for a new file) and after. */
 export interface ProposedFile { path: string; kind: string; id: string; before: string | null; after: string }
 export type EntryType = keyof Payloads;
@@ -344,6 +377,7 @@ export const BLOB_FIELDS: { readonly [T in EntryType as BlobField<Payloads[T]> e
   "loop.recorded": ["lock"],
   "loop.output": ["value"],
   "builder.proposed": ["bundle"],
+  "memory.bound": ["lock"],
 };
 
 /** The blob reference fields of payload P that may hold null. */
@@ -369,6 +403,7 @@ export const BLOB_NULLABLE: { readonly [T in keyof typeof BLOB_FIELDS]: { readon
   "loop.recorded": { lock: false },
   "loop.output": { value: false },
   "builder.proposed": { bundle: false },
+  "memory.bound": { lock: false },
 };
 
 /** True when the typed blob position `field` of entry type `type` may hold null (or is not a typed position at all). */
@@ -423,6 +458,7 @@ export const CONFLICT_CHANGES = listOf<ReviewConflict["change"]>({ likelihood: t
 export const ANSWER_ACTIONS = listOf<Payloads["challenge.answered"]["action"]>({ revised: true, rebutted: true });
 export const FEEDBACK_KINDS = listOf<Payloads["feedback.recorded"]["kind"]>({ mop: true, moe: true });
 export const PERSON_BASES = listOf<PersonBasis>({ saw: true, did: true, told: true, unstated: true });
+export const NOTE_KINDS = listOf<NoteKind>({ fact: true, decision: true, pointer: true });
 
 /** Every entry type, as a runtime list. Built from an object keyed by EntryType, so a name missing from Payloads or extra to it is a type error. */
 export const ENTRY_TYPES = listOf<EntryType>({
@@ -446,6 +482,8 @@ export const ENTRY_TYPES = listOf<EntryType>({
   "case.loop_set": true, "loop.bound": true, "subloop.child": true, "subloop.started": true, "subloop.finished": true,
   "loop.recorded": true, "loop.output": true, "manifest.written": true,
   "builder.proposed": true, "builder.decided": true, "builder.probe_asked": true, "builder.probe_decided": true,
+  "case.type_set": true, "case.type_proposed": true, "memory.noted": true, "memory.revised": true, "memory.dropped": true, "memory.bound": true,
+  "lesson.proposed": true, "lesson.accepted": true, "lesson.rejected": true, "lesson.retired": true, "memory.exported": true, "memory.loaded": true,
 });
 const ENTRY_TYPE_SET: ReadonlySet<string> = new Set(ENTRY_TYPES);
 export const isEntryType = (x: unknown): x is EntryType => typeof x === "string" && ENTRY_TYPE_SET.has(x);
