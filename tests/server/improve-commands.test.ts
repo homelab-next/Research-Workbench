@@ -276,6 +276,28 @@ test("adopt_decide on a candidate that was not chosen, before the gate, or on a 
   expect(refusedOf(late)).toEqual([NOT_WAITING]);
 });
 
+test("with a candidate chosen and its files undecided, an accept on a run paused or stopped at the adopt gate is refused before anything is written", async () => {
+  const t = await open();
+  for (const how of ["pause", "stop"] as const) {
+    const id = await atGate(t);
+    expect(t.app.hub.read(id).state.improve.chosen?.candidate).toBe("K1");
+    expect((await t.command(id, how, how === "stop" ? { reason: "enough" } : {})).status).toBe(200);
+    await t.app.hub.idle();
+    expect(t.app.hub.read(id).state.run.status).toBe(how === "pause" ? "paused" : "finished");
+    const chain = t.wb.chain.read().length;
+    const research = rootFile(t, RESEARCH);
+    const assemble = rootFile(t, ASSEMBLE);
+    const n = t.entries(id).length;
+    const r = await t.command(id, "adopt_decide", { change: "chg-1", accept: true });
+    expect(r.status).toBe(409);
+    expect(refusedOf(r)).toEqual([NOT_WAITING]);
+    expect([rootFile(t, RESEARCH), rootFile(t, ASSEMBLE)]).toEqual([research, assemble]);
+    expect(t.wb.chain.read().slice(chain).filter((e) => e.type === "manifest.written")).toEqual([]);
+    expect(t.wb.chain.read().length).toBe(chain);
+    expect(t.entries(id).length).toBe(n);
+  }
+});
+
 test("a file changed on disk since it was proposed is refused as stale, and the gate stays", async () => {
   const t = await open();
   const id = await atGate(t);
