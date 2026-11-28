@@ -5,7 +5,7 @@
     "": {
       "name": "research-workbench",
       "dependencies": {
-        "pivot": "github:homelab-next/pivot#v0.3.0",
+        "pivot": "github:homelab-next/pivot#v0.3.2",
       },
       "devDependencies": {
         "@types/bun": "^1.4.5",
@@ -71,7 +71,7 @@
 
     "happy-dom": ["happy-dom@21.0.4", "", { "dependencies": { "@types/node": ">=20.0.0", "@types/whatwg-mimetype": "^3.0.2", "@types/ws": "^8.18.1", "buffer-image-size": "^0.6.4", "entities": "^7.0.1", "whatwg-mimetype": "^3.0.0", "ws": "^8.21.0" } }, "sha512-tFm+GaLBgo6o0awHnvHaNoraVo27qJ+2tZEtZ+cIa08hXbeitrxAJajLI05hsUy/2/YTKcUjQYzHe5mCcraLBw=="],
 
-    "pivot": ["pivot@github:homelab-next/pivot#d90b4d8", { "bin": { "pivot": "./src/cli/pivot.ts" } }, "homelab-next-pivot-d90b4d8", "sha512-qZ5jQhEKGpA+miJ3vsUKn1/XaI76uDIINK3H4+md6WybhOCRNtt1/0gaFeCjsEYSZ6Jhqd5Q7bFZGjwxoc9T0Q=="],
+    "pivot": ["pivot@github:homelab-next/pivot#4805c11", { "bin": { "pivot": "./src/cli/pivot.ts" } }, "homelab-next-pivot-4805c11", "sha512-5GGqCjJ7qw27LEXT/FEae119yTSoMepfZ5JF5s+pAg811IhuZ5PBpFSmwUSNkmpd/VcDf2Bvz4W/W91jC9z5Mg=="],
 
     "typescript": ["typescript@7.0.2", "", { "optionalDependencies": { "@typescript/typescript-aix-ppc64": "7.0.2", "@typescript/typescript-darwin-arm64": "7.0.2", "@typescript/typescript-darwin-x64": "7.0.2", "@typescript/typescript-freebsd-arm64": "7.0.2", "@typescript/typescript-freebsd-x64": "7.0.2", "@typescript/typescript-linux-arm": "7.0.2", "@typescript/typescript-linux-arm64": "7.0.2", "@typescript/typescript-linux-loong64": "7.0.2", "@typescript/typescript-linux-mips64el": "7.0.2", "@typescript/typescript-linux-ppc64": "7.0.2", "@typescript/typescript-linux-riscv64": "7.0.2", "@typescript/typescript-linux-s390x": "7.0.2", "@typescript/typescript-linux-x64": "7.0.2", "@typescript/typescript-netbsd-arm64": "7.0.2", "@typescript/typescript-netbsd-x64": "7.0.2", "@typescript/typescript-openbsd-arm64": "7.0.2", "@typescript/typescript-openbsd-x64": "7.0.2", "@typescript/typescript-sunos-x64": "7.0.2", "@typescript/typescript-win32-arm64": "7.0.2", "@typescript/typescript-win32-x64": "7.0.2" }, "bin": { "tsc": "bin/tsc" } }, "sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA=="],
 

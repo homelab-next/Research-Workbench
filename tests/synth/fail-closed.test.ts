@@ -61,7 +61,7 @@ test("setupOf refuses a setup whose configuration puts its data folder, a store 
   const dir = join(tmp, "a-setup");
   mkdirSync(dir);
   const setup = {
-    format: 1, params: { seed: 15, start: "2026-10-01", days: 4, users: 12, hosts: 16, sites: 2, volume: 0.05, scale: 50000 }, pivot: "0.3.0", workbench: "0.15.0",
+    format: 1, params: { seed: 15, start: "2026-10-01", days: 4, users: 12, hosts: 16, sites: 2, volume: 0.05, scale: 50000 }, pivot: "0.3.2", workbench: "0.15.0",
     digest: "d", storylines: [], left_out: [], model: "scripted",
   };
   writeFileSync(join(dir, SETUP_FILE), `${JSON.stringify(setup)}\n`);

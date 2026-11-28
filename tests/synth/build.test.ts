@@ -87,7 +87,7 @@ test("the folder holds lake.sqlite, root, truth, data, config.yaml and synth.jso
     expect(setup).toEqual(b.setup);
     expect(setup.format).toBe(1);
     expect(setup.params).toEqual(TINY_PARAMS);
-    expect(setup.pivot).toBe("0.3.0");
+    expect(setup.pivot).toBe("0.3.2");
     expect(setup.workbench).toBe("0.15.0");
     expect(setup.digest).toMatch(/^[0-9a-f]{64}$/);
     expect(setup.storylines.length).toBe(9);

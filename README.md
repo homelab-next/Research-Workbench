@@ -6,7 +6,7 @@ A workbench for an analyst who investigates on their own network. You ask a ques
 
 Every action is written to an append-only ledger, and each entry is chained to the one before by a hash. The exact queries, the sources, the models' answers and your own decisions are all in it. Any finding can be traced to the bytes behind it, re-run, and replayed one action at a time. That chain of custody is the point.
 
-The catalogue of sources and pivots, the query guard, the connectors and the route search come from [pivot](https://github.com/homelab-next/pivot), the workbench's one first-party dependency, pinned to the tag `v0.3.0` in `package.json` (the lock file pins the hash of the annotated tag object, which names exactly one commit). pivot only plans and reaches sources; the workbench keeps its own custody. Every query it sends goes through its runner and into the case's ledger, never through pivot's run endpoint or log. There is no third-party runtime dependency.
+The catalogue of sources and pivots, the query guard, the connectors and the route search come from [pivot](https://github.com/homelab-next/pivot), the workbench's one first-party dependency, pinned to the tag `v0.3.2` in `package.json` (the lock file pins the hash of the annotated tag object, which names exactly one commit). pivot only plans and reaches sources; the workbench keeps its own custody. Every query it sends goes through its runner and into the case's ledger, never through pivot's run endpoint or log. There is no third-party runtime dependency.
 
 This first slice is one investigation, end to end, on one machine, for one person. What it leaves out is listed in section 2 of [the design spec](docs/superpowers/specs/2026-11-23-investigation-slice-design.md).
 

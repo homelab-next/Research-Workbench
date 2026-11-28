@@ -86,7 +86,7 @@ test("setupOf refuses the defaults, a configuration with no synth.json beside it
   expect(() => setupOf(cfg)).toThrow(sentence);
 
   const setup = {
-    format: 1, params: { seed: 15, start: "2026-10-01", days: 4, users: 12, hosts: 16, sites: 2, volume: 0.05, scale: 50000 }, pivot: "0.3.0", workbench: "0.15.0",
+    format: 1, params: { seed: 15, start: "2026-10-01", days: 4, users: 12, hosts: 16, sites: 2, volume: 0.05, scale: 50000 }, pivot: "0.3.2", workbench: "0.15.0",
     digest: "d", storylines: [], left_out: [], model: "scripted",
   };
   writeFileSync(join(other, SETUP_FILE), JSON.stringify(setup) + "\n");
