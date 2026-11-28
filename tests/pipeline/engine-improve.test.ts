@@ -407,7 +407,8 @@ test("the stub of a role that is not built stalls the run with its sentence", as
   // Select is built (slice 14, Task 9): with a host that cannot give tasks the run stops at it with the failure's sentence, not the stub's
   expect(await engine.advance()).toMatchObject({ status: "paused", current: "select", pause_reason: "Select failed unexpectedly: the engine does not call tasks" });
   // Reflect and Adopt are built too (slice 14, Task 14): each is held by its own test file
-  const built: readonly string[] = ["select", "reflect", "adopt"];
+  // Probe is built (slice 14, Task 11): held by tests/pipeline/improve-probe.test.ts
+  const built: readonly string[] = ["select", "probe", "reflect", "adopt"];
   for (const role of IMPROVE_ROLES.filter((r) => !built.includes(r))) {
     const end = await IMPROVE_RUNNERS[role]({} as StageEnv);
     expect(end).toEqual({ kind: "stalled", reason: `${TITLES[role]} is not built yet` });
