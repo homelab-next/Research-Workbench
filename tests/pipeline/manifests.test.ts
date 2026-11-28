@@ -58,6 +58,11 @@ test("a stage manifest that lists propose_change is refused: \"propose_change\" 
   expect(stageFrom(body, "0".repeat(64), "X", true)).toBe(`"request_probe" is the loop builder's, not a stage's`);
 });
 
+test("a stage manifest may list note_memory", () => {
+  const body = { kind: "stage", id: "x", title: "X", order: 1, runs: "agent", role: "frame", tools: ["list_cards", "note_memory"], model: { provider: "scripted", model: "m" } };
+  expect(typeof stageFrom(body, "0".repeat(64), "X", true)).not.toBe("string");
+});
+
 test("a stage with an unknown role, a bad shape, or an agent with no model is left out with a problem", () => {
   edit("feedback", "role: feedback", "role: oracle");
   edit("checks", "order: 5", "order: five");

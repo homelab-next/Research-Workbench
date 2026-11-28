@@ -12,6 +12,7 @@ import { ANALYSIS_TOOLS } from "./analysis";
 import { BUILDER_TOOLS } from "./builder";
 import { CARD_TOOLS } from "./cards";
 import { params, scrub, TOOL_VIEW_CHARS, ToolError, VIEW_ROWS } from "./kit";
+import { MEMORY_TOOLS } from "./memory";
 import { PERSON_TOOLS } from "./person";
 import { RESEARCH_TOOLS } from "./research";
 import { SOURCE_TOOLS } from "./sources";
@@ -19,13 +20,13 @@ import { SOURCE_TOOLS } from "./sources";
 export { TOOL_VIEW_CHARS, ToolError, VIEW_ROWS };
 
 const STAGE_TOOLS = ["list_sources", "describe_source", "find_routes", "list_playbooks", "run_step", "run_pivot", "run_query", "list_cards", "read_card", "verify_card",
-  "propose_assessment", "propose_narrative", "request_research", "raise_challenge", "answer_challenge", "ask_person"] as const;
+  "propose_assessment", "propose_narrative", "request_research", "raise_challenge", "answer_challenge", "ask_person", "note_memory"] as const;
 /** The loop builder's tools (slice 12, part B). In the fixed list so the agent loop runs them unchanged; a stage manifest may not list one. */
 export const BUILDER_TOOL_NAMES = ["loop_catalogue", "adapter_catalogue", "list_connectors", "list_roots", "validate_manifest", "propose_change", "request_probe"] as const;
 /** Every tool the agent loop knows: a stage's, then the builder's. */
 export const TOOL_NAMES = [...STAGE_TOOLS, ...BUILDER_TOOL_NAMES] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
-/** The sixteen tools a stage manifest may list. */
+/** The seventeen tools a stage manifest may list. */
 export const STAGE_TOOL_NAMES: readonly ToolName[] = STAGE_TOOLS;
 
 /** A file the builder proposes: `path` relative to the write root, `/` separated. The shape of loop-write's ManifestFile, which src/agents may not import. */
@@ -67,6 +68,8 @@ export interface ToolContext {
   in_code?: boolean;
   /** At most this many unanswered questions to the person in a run (the config's questions.max_open); DEFAULT_MAX_OPEN when absent. */
   max_open_questions?: number;
+  /** At most this many live notes in a notebook (the config's memory.max_notes); DEFAULT_MAX_NOTES when absent. */
+  max_notes?: number;
   /** The loop builder's reader and check (slice 12, part B); absent everywhere but a builder session. */
   builder?: BuilderTools;
 }
@@ -87,7 +90,7 @@ const unavailable = (name: ToolName): ToolDef => ({
   call: async () => ({ ok: false, summary: "not available", view: { error: "not available" }, marking: null }),
 });
 
-const defs = new Map<string, ToolDef>([...SOURCE_TOOLS, ...RESEARCH_TOOLS, ...CARD_TOOLS, ...ANALYSIS_TOOLS, ...PERSON_TOOLS, ...BUILDER_TOOLS].map((t) => [t.name, t]));
+const defs = new Map<string, ToolDef>([...SOURCE_TOOLS, ...RESEARCH_TOOLS, ...CARD_TOOLS, ...ANALYSIS_TOOLS, ...PERSON_TOOLS, ...MEMORY_TOOLS, ...BUILDER_TOOLS].map((t) => [t.name, t]));
 export const TOOLS = Object.fromEntries(TOOL_NAMES.map((n) => [n, defs.get(n) ?? unavailable(n)])) as Record<ToolName, ToolDef>;
 
 /** The specs a model is given; with the agent's context, each tool's parameters as they are in it. */
