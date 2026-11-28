@@ -884,7 +884,8 @@ export class Workbench {
   }
 
   /**
-   * Replaces the store with the file's, when the store here is empty or the file is this store further on; records memory.loaded. Throws
+   * Replaces the store with the file's, when the store here is empty, holds only seed proposals no person has decided, or the file is this store
+   * further on; records memory.loaded, whose `before` is the head of the store replaced. Throws
    * MemoryFileError or MemoryRefused, and then the store is what it was. Stores are not merged: a file of another store, of this store behind or
    * beside it, or at its head is refused.
    */
@@ -930,14 +931,16 @@ export class Workbench {
       const marking = strictest(...folded.order.map((id) => folded.lessons[id]!.marking));
       if (canonical(counts) !== canonical(m.lessons) || marking !== m.marking) throw new MemoryFileError("memory.json does not say what its ledger holds; this file cannot be loaded");
       lessons = folded.order.length;
-      // 4. only an empty store, or this store further on
+      // 4. only an empty store, a store of untouched seed proposals, or this store further on
       this.open();
       const here = this.memory;
       before = here.head();
       if (before.seq > 0) {
-        if (here.origin() !== m.origin) throw new MemoryRefused("this file is another workbench's memory store, and stores are not merged; to use it, start from an empty store");
-        if (before.seq === m.head.seq && before.hash === m.head.hash) throw new MemoryRefused("this memory store is already at the file's head");
-        if (m.head.seq <= before.seq || hashAt(ledgerPath, before.seq) !== before.hash) {
+        if (here.origin() !== m.origin) {
+          // a store of seed proposals no person has decided is what a first start files: the file's store replaces it (controller ruling)
+          if (!onlyUntouchedSeeds(here.entries())) throw new MemoryRefused("this file is another workbench's memory store, and stores are not merged; to use it, start from an empty store");
+        } else if (before.seq === m.head.seq && before.hash === m.head.hash) throw new MemoryRefused("this memory store is already at the file's head");
+        else if (m.head.seq <= before.seq || hashAt(ledgerPath, before.seq) !== before.hash) {
           throw new MemoryRefused("this workbench's memory store has entries the file does not hold; stores are not merged");
         }
       }
@@ -1280,6 +1283,18 @@ function sameBytes(a: string, b: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * True when every entry of the store is a seed's proposal filed by the workbench: no person has proposed, accepted, rejected or retired
+ * anything in it. Such a store is what a first start files from the roots' seeds, and a load may replace it.
+ */
+function onlyUntouchedSeeds(entries: readonly Entry[]): boolean {
+  return entries.every((e) => {
+    if (e.type !== "lesson.proposed" || e.actor.kind !== "system") return false;
+    const from = (e.payload as { from?: unknown }).from;
+    return typeof from === "object" && from !== null && (from as { kind?: unknown }).kind === "seed";
+  });
 }
 
 /**

@@ -14,6 +14,9 @@ import { Refused } from "../../src/core/refused";
 import type { Actor } from "../../src/core/types";
 import { verifyMemory } from "../../src/core/verify";
 import { Workbench } from "../../src/core/workbench";
+import { sha256Hex } from "../../src/core/hash";
+import { fileSeeds } from "../../src/modules/seeds";
+import type { SeedLesson } from "../../src/modules/seeds";
 
 const person: Actor = { kind: "human", id: "analyst" };
 const code: Actor = { kind: "system", id: "workbench" };
@@ -264,4 +267,49 @@ test("while an export packs the store, the store is refused, and is open again o
   await exporting;
   expect(wb.memory.open).toBe(true);
   expect(wb.memory.state.order).toEqual(["LESSON-1"]);
+});
+
+// ---------- final review I4: a store of untouched seed proposals takes a file ----------
+
+/** Two seed proposals of the sample's kind, as compose files them on a first start. */
+const seeds = (): SeedLesson[] => ["l1", "l2"].map((item) => ({
+  manifest: "sample-seeds", item, hash: sha256Hex(item), case_type: "unknown-device", title: `Seed ${item}`,
+  text: "A device seen only on AP-3 is usually a guest in the lobby.", triggers: [], marking: "TLP:GREEN", supersedes: null,
+}));
+
+test("a store holding only seed proposals no person has decided is replaced by a load, and memory.loaded.before is its head", async () => {
+  fileSeeds(wb.memory, seeds());
+  wb.memory.accept("LESSON-1", { actor: person, hash: wb.memory.state.lessons["LESSON-1"]!.hash });
+  const made = await wb.exportMemory(join(files(), "1"), { actor: person });
+  const b = another("b");
+  fileSeeds(b.memory, seeds());
+  const before = b.memory.head();
+  expect(before.seq).toBe(2);
+  const r = await b.loadMemory(made.path, { actor: person });
+  expect(r.head).toEqual(wb.memory.head());
+  expect(b.memory.origin()).toBe(wb.memory.origin());
+  expect(b.memory.state).toEqual(wb.memory.state);
+  const loaded = b.chain.read().filter((e) => e.type === "memory.loaded");
+  expect(loaded.map((e) => e.payload)).toEqual([{ file: made.file, origin: wb.memory.origin()!, head: wb.memory.head(), before }]);
+  expect(errors).toEqual([]);
+});
+
+test("a store of seeds a person has accepted, rejected or retired one of, or holding a proposal that is not a seed's, is not replaced: stores are not merged", async () => {
+  share(wb, "Check the lobby access point first");
+  const made = await wb.exportMemory(join(files(), "1"), { actor: person });
+  const touched: [string, (w: Workbench) => void][] = [
+    ["accepted", (w) => w.memory.accept("LESSON-1", { actor: person, hash: w.memory.state.lessons["LESSON-1"]!.hash })],
+    ["rejected", (w) => w.memory.reject("LESSON-1", { actor: person, reason: "not here" })],
+    ["retired", (w) => { w.memory.accept("LESSON-1", { actor: person, hash: w.memory.state.lessons["LESSON-1"]!.hash }); w.memory.retire("LESSON-1", { actor: person, reason: "old" }); }],
+    ["a person's proposal", (w) => w.memory.propose(draft("A person's own"), { kind: "person" }, person)],
+  ];
+  for (const [name, touch] of touched) {
+    const o = another(`t-${name.replace(/[^a-z]/g, "")}`);
+    fileSeeds(o.memory, seeds());
+    touch(o);
+    const before = { origin: o.memory.origin(), head: o.memory.head(), state: o.memory.state };
+    expect(await refused(o.loadMemory(made.path, { actor: person })), name).toBe("this file is another workbench's memory store, and stores are not merged; to use it, start from an empty store");
+    expect({ origin: o.memory.origin(), head: o.memory.head(), state: o.memory.state }, name).toEqual(before);
+    expect(o.chain.read().some((e) => e.type === "memory.loaded"), name).toBe(false);
+  }
 });

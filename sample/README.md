@@ -158,7 +158,7 @@ starts from an address, and the loop uses the asset list). After `approve` the p
 which waits for a person: `bun run memory accept LESSON-3` shares it with the next case of the type, or `bun run memory reject LESSON-3
 --reason ...` does not. `verify --case` checks each lesson the run was locked to against the store; `export` writes
 `memory.TLP-<marking>.<12 hex>.memory.tar.gz` into `<data_dir>/memory-files`, which `bun run memory load <file>` loads into a new workbench
-(before it first loads the roots, which would file the seeds into its empty store).
+(one whose store holds only the seeds its first start filed, untouched, or nothing).
 
 In the interface: Home, **Memory** shows the two proposals under Unknown device, each with Accept and Reject; Loops, Unknown device, New
 case from this loop shows the case type on the form; the case's Memory lens (`m`) shows its type, its notebook (add a note there) and the
