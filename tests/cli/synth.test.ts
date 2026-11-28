@@ -109,3 +109,32 @@ test("show prints the tables' rows and sizes and the storylines, and opens no wo
     wb.close();
   }
 });
+
+test("build and show print no verdict, no storyline title and no truth summary; show names the case each storyline became; show --reveal prints them under a warning", () => {
+  expect(built.code).toBe(0);
+  const cfg = join(setup, "config.yaml");
+  const s = JSON.parse(readFileSync(join(setup, "synth.json"), "utf8")) as { storylines: { id: string; title: string }[] };
+  const summaries = s.storylines.map((st) => (JSON.parse(readFileSync(join(setup, "truth", `${st.id}.json`), "utf8")) as { summary: string }).summary);
+  const spoils = (text: string): string[] => [
+    ...["malicious", "benign"].filter((w) => text.toLowerCase().includes(w)),
+    ...s.storylines.filter((st) => text.includes(st.title)).map((st) => st.title),
+    ...summaries.filter((x) => text.includes(x)),
+  ];
+  expect(spoils(built.out)).toEqual([]);
+  const tasks = run(["tasks", "--config", cfg]);
+  expect(tasks.err).toBe("");
+  expect(tasks.code).toBe(0);
+  expect(spoils(tasks.out)).toEqual([]);
+  const shown = run(["show", "--config", cfg]);
+  expect(shown.code).toBe(0);
+  expect(spoils(shown.out)).toEqual([]);
+  expect(shown.out).toContain(`cases: ${s.storylines.length} task, 0 seeded`);
+  for (const st of s.storylines) expect(shown.out).toMatch(new RegExp(`^  ${st.id} \\([a-z-]+\\): task CASE-[0-9]+$`, "m"));
+  const revealed = run(["show", "--config", cfg, "--reveal"]);
+  expect(revealed.code).toBe(0);
+  expect(revealed.out).toContain("--reveal: this spoils the synthetic cases");
+  expect(revealed.out).toContain("malicious");
+  expect(revealed.out).toContain("benign");
+  for (const x of summaries) expect(revealed.out).toContain(x);
+  expect(run(["tasks", "--config", cfg, "--reveal"]).code).toBe(2);
+});

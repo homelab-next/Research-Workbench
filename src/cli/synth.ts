@@ -2,9 +2,11 @@
 // Builds a self-contained synthetic setup (a fake company's lake, a root over it, its ground truth beside them) and works in one. Every
 // form but build needs --config naming the setup's own configuration; the environment's and the home's are never used for them.
 import { Database } from "bun:sqlite";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readLakeCatalog } from "pivot/synth/format";
 import type { SynthParams } from "pivot/synth/params";
+import { readGroundTruth } from "pivot/synth/truth";
 import { MARKINGS, WHERES, isMarking } from "../core/types";
 import type { Actor, Marking, Where } from "../core/types";
 import { ConfigError, loadConfig } from "../modules/config";
@@ -16,16 +18,18 @@ import { synthSeed } from "../synth/seed";
 import { setupOf, SynthRefused } from "../synth/setup";
 import type { SynthContext, SynthSetup } from "../synth/setup";
 import { readIndex, synthTasks } from "../synth/tasks";
+import type { TruthIndex } from "../synth/tasks";
 
 const USAGE = [
   "usage:",
   "  bun run synth build <dir> (--scripted | --base-url URL --model ID [--provider ID] [--where machine|network|hosted])",
   "                            [--seed N] [--start YYYY-MM-DD] [--days N] [--users N] [--hosts N] [--sites N] [--volume X] [--scale N] [--only id,id] [--port N]",
-  "  bun run synth show        --config <dir>/config.yaml",
+  "  bun run synth show        --config <dir>/config.yaml [--reveal]",
   "  bun run synth tasks       --config <dir>/config.yaml [--only id,id] [--marking M]",
   "  bun run synth answer CASE-N --config <dir>/config.yaml [--product N]",
   "  bun run synth seed-tasks  --config <dir>/config.yaml [--only id,id] [--marking M]",
   "build writes only inside <dir>. Every other form needs --config and a synth.json beside it, and (but show) the server stopped.",
+  "show --reveal prints each storyline's verdict and truth summary: it spoils the synthetic cases.",
 ].join("\n");
 
 class UsageError extends Error {}
@@ -35,7 +39,7 @@ const INTS = ["seed", "days", "users", "hosts", "sites", "scale"] as const;
 interface Spec { values: string[]; flags: string[]; positional: "dir" | "case" | null }
 const SPECS: Record<Form, Spec> = {
   build: { values: ["base-url", "model", "provider", "where", ...INTS, "start", "volume", "only", "port"], flags: ["scripted"], positional: "dir" },
-  show: { values: ["config"], flags: [], positional: null },
+  show: { values: ["config"], flags: ["reveal"], positional: null },
   tasks: { values: ["config", "only", "marking"], flags: [], positional: null },
   answer: { values: ["config", "product"], flags: [], positional: "case" },
   "seed-tasks": { values: ["config", "only", "marking"], flags: [], positional: null },
@@ -144,10 +148,19 @@ function tableLines(tables: { name: string; rows: number; bytes: number }[]): st
   return tables.map((t) => `  ${t.name.padEnd(w)}  ${`${t.rows} rows`.padStart(r + 5)}  ${size(t.bytes)}`);
 }
 
-function storylineLines(setup: SynthSetup): string[] {
+/**
+ * The storylines placed, by id and case type, with the cases each became when `index` is given. Neither whether a storyline is malicious nor
+ * its title (which may say so) is printed: that would spoil the cases. show --reveal prints them apart, under a warning.
+ */
+function storylineLines(setup: SynthSetup, index: TruthIndex | null = null): string[] {
+  const casesOf = (id: string): string => {
+    const rows = index!.cases.filter((c) => c.storyline === id);
+    if (rows.length === 0) return ": no case yet";
+    return `: ${rows.map((c) => `${c.made_by === "tasks" ? "task" : "seeded"} ${c.case}`).join(", ")}`;
+  };
   return [
     `storylines placed: ${setup.storylines.length}`,
-    ...setup.storylines.map((s) => `  ${s.id} (${s.case_type}, ${s.malicious ? "malicious" : "benign"}): ${s.title}`),
+    ...setup.storylines.map((s) => `  ${s.id} (${s.case_type})${index === null ? "" : casesOf(s.id)}`),
     setup.left_out.length === 0 ? "left out: none" : `left out: ${setup.left_out.length}`,
     ...setup.left_out.map((s) => `  ${s.id}: ${s.why}`),
   ];
@@ -178,7 +191,24 @@ function build(p: Parsed): number {
   return 0;
 }
 
-function show(config: Config): number {
+/** Each storyline's verdict, title and truth summary, under a warning that this spoils the cases. */
+function revealLines(dir: string, setup: SynthSetup): string[] {
+  const lines = ["", "--reveal: this spoils the synthetic cases; do not show it to whoever works them", "verdicts:"];
+  for (const s of setup.storylines) {
+    lines.push(`  ${s.id}: ${s.malicious ? "malicious" : "benign"}, ${s.title}`);
+    let summary: string;
+    try {
+      const truth = readGroundTruth(readFileSync(join(dir, "truth", `${s.id}.json`)));
+      summary = truth === null ? "(its truth file is not a ground truth)" : truth.summary;
+    } catch {
+      summary = "(its truth file cannot be read)";
+    }
+    lines.push(`    ${summary}`);
+  }
+  return lines;
+}
+
+function show(config: Config, reveal: boolean): number {
   const { dir, setup } = setupOf(config);
   const lake = join(dir, "lake.sqlite");
   const db = new Database(lake, { readonly: true });
@@ -200,10 +230,11 @@ function show(config: Config): number {
     `digest: ${setup.digest}`,
     "tables (simulated sizes):",
     ...tableLines(tables),
-    ...storylineLines(setup),
+    ...storylineLines(setup, index),
     `model: ${modelLine(setup.model)}`,
     `port: ${config.server.port}`,
     `cases: ${index.cases.filter((c) => c.made_by === "tasks").length} task, ${index.cases.filter((c) => c.made_by === "seed-tasks").length} seeded`,
+    ...(reveal ? revealLines(dir, setup) : []),
   ];
   console.log(lines.join("\n"));
   return 0;
@@ -225,7 +256,7 @@ async function main(argv: string[]): Promise<number> {
     if (p.form === "build") return build(p);
     // the setup's own configuration only: --config is required, and nothing of the environment's or the home's is used in its place
     const config = loadConfig({ path: p.one.config! });
-    if (p.form === "show") return show(config);
+    if (p.form === "show") return show(config, p.flags.has("reveal"));
     const { dir, setup } = setupOf(config);
     const ctx: SynthContext = {
       config, dir, setup, human: { kind: "human", id: config.user } satisfies Actor,
