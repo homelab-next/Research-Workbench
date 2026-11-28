@@ -207,6 +207,8 @@ conversation …
 - **Hunt plan (hunts):** numbered sections — 1 Intelligence (basis, relevance, why now, serves, confidence, gaps), 2 Scope, 3 Hypotheses (collapsible, each with statement, priority, why, observables, data sources marked known / to confirm, supports, refutes, positive control, query approach, false positives), 4 Readiness, 5 Baseline, 6 Execution, 7 Budget / escalation / deliverables, Open questions (each with "Add as question"). A workbench draft shows at once; the agent's draft replaces it when it arrives. Accept turns hypotheses into lanes.
 - **New hunt form:** name, what and why, optional actor (its techniques appear as checkboxes), other technique ids, objective picker, skills (defaults pre-ticked), more context (procedures, lessons) in a collapsible section, window, scope, marking. "Create and draft the plan".
 
+**A synthetic setup** (`bun run serve --config <synth>/config.yaml`; see [synthetic-company.md](synthetic-company.md)) looks the same as any other. A synthetic case's title starts with `[synthetic]`, wherever its title is shown, so it is never taken for a real one. A costly step on the fake lake shows its estimate in USD at the plan gate, from an estimate query the runner records, and waits for the budget field like any costly step. A free step on it (the asset list, group membership, DHCP, WiFi, vulnerability findings) runs when the plan is accepted.
+
 ## 8. Centre panels (inner kiosk screens)
 
 All panels are top-aligned cards with a max height and their own scroll.

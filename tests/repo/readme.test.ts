@@ -1,7 +1,11 @@
-import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { buildSynth } from "pivot/synth/build";
+import { TINY_PARAMS } from "pivot/synth/params";
+import { readGroundTruth } from "pivot/synth/truth";
+import type { GroundTruth } from "pivot/synth/truth";
 import { newRoot } from "../../scripts/new-root";
 import { preflight } from "../../src/cli/preflight";
 import { Registry } from "../../src/modules/registry";
@@ -76,7 +80,7 @@ test("each documented command runs with --help as documented, and every flag and
 
 test("the README's sections come in order", () => {
   const heads = [...README.matchAll(/^## (.+)$/gm)].map((m) => m[1]!);
-  expect(heads).toEqual(["What this is", "Run the sample", "Point it at your own data", "The person", "Before a run", "Custody", "Cases: load and unload", "Loops", "Build a loop with help", "Memory", "Improve a loop", "Known limits"]);
+  expect(heads).toEqual(["What this is", "Run the sample", "Point it at your own data", "The person", "Before a run", "Custody", "Cases: load and unload", "Loops", "Build a loop with help", "Memory", "Improve a loop", "A synthetic company", "Known limits"]);
 });
 
 /** A root made from the README's own types, sources and pivots (with `edit` applied to the pivots), and preflight's checks on it. */
@@ -130,4 +134,62 @@ test("the three refusals the README names are the ones the guard gives", async (
     seen.push(...checks.filter((c) => c.name === "pivots" && c.level === "fail").map((c) => c.detail));
   }
   for (const m of named) expect(seen.some((d) => d.includes(m)), m).toBe(true);
+});
+
+const PIVOT = join(REPO, "node_modules", "pivot");
+const DOCS = ["README.md", "docs/synthetic-company.md", "docs/security-notes.md", "docs/gui-guide.md", "synth/README.md"];
+const read = (rel: string): string => readFileSync(join(REPO, rel), "utf8");
+/** The `id:` of each manifest of a folder of the installed pivot. */
+const idsIn = (rel: string): string[] =>
+  readdirSync(join(PIVOT, rel)).filter((f) => f.endsWith(".yaml")).sort().map((f) => (Bun.YAML.parse(readFileSync(join(PIVOT, rel, f), "utf8")) as { id: string }).id);
+
+// a tiny synthetic build (synthetic data only, in a temporary folder this file removes), for the truths it writes
+let synthTmp: string;
+let truths: GroundTruth[];
+beforeAll(() => {
+  synthTmp = mkdtempSync(join(tmpdir(), "readme-synth-"));
+  const dir = join(synthTmp, "synth");
+  buildSynth(dir, TINY_PARAMS);
+  truths = readdirSync(join(dir, "truth")).filter((f) => f.endsWith(".json") && f !== "mess.json").sort()
+    .map((f) => readGroundTruth(readFileSync(join(dir, "truth", f)))!);
+});
+afterAll(() => { if (synthTmp !== undefined) rmSync(synthTmp, { recursive: true, force: true }); });
+
+test("docs/synthetic-company.md names every storyline id and every source id the installed pivot ships, and no ground truth", () => {
+  const doc = read("docs/synthetic-company.md");
+  const storylines = idsIn("synth/storylines");
+  const sources = idsIn("synth/catalogue/sources");
+  expect(storylines.length).toBe(9);
+  expect(sources.length).toBe(13);
+  for (const id of [...storylines, ...sources]) expect(doc, id).toContain(`\`${id}\``);
+  // the case type of each storyline is given beside it; its title (which may say whether it is malicious) is not
+  for (const f of readdirSync(join(PIVOT, "synth/storylines")).filter((x) => x.endsWith(".yaml"))) {
+    const s = Bun.YAML.parse(readFileSync(join(PIVOT, "synth/storylines", f), "utf8")) as { id: string; title: string; case_type: string };
+    expect(doc, s.id).toMatch(new RegExp(`\`${s.id}\`[^\n]*\`${s.case_type}\``));
+    for (const d of DOCS) expect(read(d), `${d}: the title of ${s.id}`).not.toContain(s.title);
+  }
+  expect(truths.length).toBe(9);
+  for (const d of DOCS) {
+    const text = read(d);
+    for (const t of truths) {
+      expect(text, `${d}: the summary of ${t.storyline}`).not.toContain(t.summary);
+      for (const f of t.findings) expect(text, `${d}: a claim of ${t.storyline}`).not.toContain(f.claim);
+    }
+  }
+});
+
+test("every test file docs/security-notes.md names exists", () => {
+  const notes = read("docs/security-notes.md");
+  // a file is the workbench's, or pivot's where the clause that names it (from its line's start or the last parenthesis) says "pivot's"
+  const named = [...notes.matchAll(/`(tests\/[\w./-]+\.test\.ts)`/g)].map((m) => {
+    const before = notes.slice(0, m.index);
+    const clause = before.slice(Math.max(before.lastIndexOf("\n"), before.lastIndexOf("(")) + 1);
+    return { pivot: clause.includes("pivot's") && !existsSync(join(REPO, m[1]!)), path: m[1]! };
+  });
+  expect(named.length).toBeGreaterThan(10);
+  // the synthetic company's section names its own
+  const synth = notes.slice(notes.indexOf("## A synthetic company"));
+  expect(notes).toContain("## A synthetic company");
+  expect(synth).toContain("tests/synth/setup.test.ts");
+  for (const n of named) expect(existsSync(join(n.pivot ? PIVOT : REPO, n.path)), `${n.pivot ? "pivot's " : ""}${n.path}`).toBe(true);
 });

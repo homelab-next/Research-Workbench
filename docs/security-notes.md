@@ -69,6 +69,46 @@ What this slice relies on, and what it does not do. Each claim below has a test;
 - **Markings.** A probe child is marked as the improve case is, which is at least as strict as every task it selected and every known answer it reads: Select leaves out a task, or an answer, stricter than the improve case. The Improve lens and `bun run improve show` never show an answer's text or a claim.
 - **Replay.** The improve case records what Select took of each task, each probe's output with the child's head (`seq` and `hash`), the comparisons, the answers' copy and the scores, as its own blobs, so it folds, verifies and replays without its children or its tasks. `verify` also checks each probe against its child where the child is loaded (the head is in the child's ledger, the child names this probe, it bound the recorded version, and its output at that head hashes to what was recorded), and recomputes the scores from the improve case.
 
+## A synthetic company: the fake lake, its setup and its answers
+
+What keeps a synthetic setup ([synthetic-company.md](synthetic-company.md)) apart from your own data, and its answers away from what is
+being measured. `<synth>` is the setup's folder, `<data>` its data folder, `<lake>` your own lake.
+
+- **A setup shares nothing with yours.** `bun run synth build <synth>` refuses a folder that is not empty, a folder inside the repository,
+  and a folder that is, holds or sits inside any folder of the configuration the workbench would load with no `--config` (the data folder,
+  a root, the case store, the loop store, the imports folder, a memory folder). It writes only inside `<synth>`, and a refusal part-way
+  leaves nothing behind. The setup's configuration names its own data folder and its one trusted root, both inside `<synth>`. (`tests/synth/setup.test.ts`, `tests/synth/build.test.ts`, `tests/cli/synth.test.ts`.)
+- **The other forms work only in a setup.** `synth show`, `tasks`, `answer` and `seed-tasks` require `--config` and refuse a configuration
+  with no `synth.json` beside it (or one of another format) before a workbench is opened; the environment's and the home's configuration are
+  never used for them. So a synthetic case is never made in a data folder that is not a setup's. (`tests/synth/setup.test.ts`, `tests/cli/synth.test.ts`.)
+- **The lake says what it is.** A lake file carries `_lake_meta` with `kind = pivot-synthetic-lake` and `format = 1`; the `fakeathena`
+  connector opens no file that does not, and opens it read-only. A `fakeathena` source is accepted only from a trusted root. (pivot's `tests/synth/format.test.ts`, pivot's `tests/connectors/connector-fakeathena.test.ts`, pivot's `tests/catalogue/fakeathena-manifest.test.ts`.)
+- **A source reads only its own tables.** One file holds every source, so a statement that names a lake table its source's manifest does not
+  list, `_lake_meta`, `_lake_tables`, `_lake_partitions`, `sqlite_*` or `pragma_*` is refused before the file is queried; without this a
+  free source could read a costly one. The guard is applied unchanged, as the `trino` connector applies it, to a literal rendering of the
+  request, and the statement SQLite runs binds the same values as parameters. (pivot's `tests/connectors/connector-fakeathena.test.ts`.)
+- **It opens no network connection.** The connector and its cost model import nothing that reaches a network (no `fetch`, socket, server,
+  resolver or the `http` and `trino` connectors), and a run calls `fetch` zero times; nor does anything under the workbench's `src/synth/`.
+  (pivot's `tests/connectors/connector-fakeathena.test.ts`, pivot's `tests/synth/acceptance.test.ts`, `tests/server/boundaries.test.ts`.)
+- **Custody is unchanged.** Every query on the fake lake is `runQuery`'s, as for any source: `query.issued`, then the contact, then
+  `query.result` or `query.failed`; an estimate is a query of its own, recorded with purpose `estimate`; an agent's costly lookup is a
+  `costly_query` proposal, and a person's budget below the estimate runs nothing. `src/modules/runner.ts` is not edited for it, and no
+  ledger entry type or payload field is added. (`tests/modules/fakeathena-runner.test.ts`.)
+- **The ground truth is where no query, no model and no judge before its time can reach it.** It is written to `<synth>/truth/`, never into
+  the lake or the root, and beside a case at `<data>/synth-truth/<case>/ground-truth.json`, outside the case's folder, so it never travels in a
+  case file. Only `src/synth/tasks.ts`, `answer.ts` and `seed.ts` read one, and only a person's command runs them; nothing under
+  `src/pipeline/`, `src/agents/`, `src/server/`, `src/core/` or `src/web/` imports `src/synth/`. No file the build writes into the root, no
+  entry or blob of a case `synth tasks` makes, and no product a seeded case publishes holds a truth's summary or a claim; the seed loop's
+  script is written from the storylines' public tasks alone. A truth becomes a known answer only through `setKnownAnswer`, in the person's
+  name, after `synth answer` has checked the file was written for that very case (its id and the hash of its first entry); from then on it
+  is read as any known answer is, by the improve loop's Judge alone. (`tests/server/boundaries.test.ts`, `tests/synth/build.test.ts`, `tests/synth/tasks.test.ts`, `tests/synth/answer.test.ts`, `tests/synth/seed.test.ts`, `tests/synth/seed-script.test.ts`.)
+- **A person's gates stay a person's.** `synth seed-tasks` accepts a plan and approves a product as the person who runs it, through the
+  engine calls `investigate accept-plan` and `investigate approve` use, with no budget, so nothing costly runs in a seed. (`tests/synth/seed.test.ts`.)
+- **The commands do not spoil the cases.** `synth build` and `synth show` print storyline ids, counts and the cases each became, never a
+  verdict, a storyline's title or a truth's summary; `synth show --reveal` prints them after a warning line. (`tests/cli/synth.test.ts`.)
+- **What this does not do.** The separation is by folders and by the configuration the command loads. A setup is still files that you own:
+  nothing stops you, or a process of yours, from reading `<synth>/truth/` and giving it to a model by hand.
+
 ## What the page guarantees
 
 - **The page is a constant.** It is a fixed document that loads exactly one script (`/app.js`) and one stylesheet (`/app.css`) and nothing else; no data is ever written into it (`tests/server/boundaries.test.ts` counts them). It runs under `default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types 'none'`. There is no inline script, no inline style and no `unsafe-*` source. (`tests/web/browser-run.test.ts` checks, in a real browser, that the page has none, that `document.body.innerHTML = ...` throws a `TypeError`, that every request the page made went to its own origin, and that the browser reported no script exception, console error or policy violation.)

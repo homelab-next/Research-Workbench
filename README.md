@@ -512,6 +512,59 @@ improve:
   staged: <data_dir>/staged    # where staged candidates are built; a cache. Never the data folder, a folder that holds it, or a folder the workbench keeps (cases, stores, roots); a sweep removes only the folders staging made
 ```
 
+## A synthetic company
+
+A **synthetic setup** is a whole workbench over an invented company: pivot's fake lake (a month of thirteen log sources, with their noise,
+their mess and nine planted storylines), a root over it, and the ground truth of each storyline. It is for practising investigations and for
+giving the improve loop tasks whose answers are known. It shares nothing with your own setup: it is built in a folder of its own, with its
+own data folder, its one trusted root and its own configuration, and it never reads or writes `<lake>`, your data folder, your roots or your
+configuration. Everything in it is synthetic. What is in it, how a query is priced and where its answers are kept is in
+[docs/synthetic-company.md](docs/synthetic-company.md).
+
+Build one in a new or empty folder `<synth>` outside `<repo>`, on the scripted model or on a model of yours:
+
+```bash
+bun run synth build <synth> --scripted
+bun run synth build <synth> --base-url http://127.0.0.1:1234/v1 --model example/model-a
+```
+
+The build refuses a folder that is not empty, a folder inside this repository, and a folder that is, holds or sits inside the data folder, a
+root or a store of the configuration the workbench would load with no `--config`. It prints the tables with their simulated sizes and the
+storylines placed by id and case type, never whether one is malicious. A `--scripted` setup's stages name the scripted model `synth-run`,
+which is not shipped: write `<synth>/root/scripts/synth-run.yaml` before a run. Every other form takes the setup's own configuration and
+refuses one with no `synth.json` beside it, so a synthetic case is never made in your data folder:
+
+```bash
+bun run serve --config <synth>/config.yaml
+bun run synth tasks --config <synth>/config.yaml
+bun run synth answer CASE-1 --config <synth>/config.yaml
+bun run synth seed-tasks --config <synth>/config.yaml
+bun run improve start investigation --type suspicious-signin --marking TLP:GREEN --config <synth>/config.yaml
+```
+
+`serve` opens the setup on port 4757. `synth tasks` (with the server stopped) makes a case for each storyline's task, titled `[synthetic] …`,
+of its case type, marked `TLP:GREEN`, and puts its ground truth beside the cases folder, at `<data>/synth-truth/<case>/ground-truth.json`.
+Work the case as any other; once it is published, `synth answer` sets its known answer from that truth, as you. `synth seed-tasks` makes, for
+each storyline, a case of the scripted seed loop `synth-seed`, accepts its plan with no budget, approves its product and sets its known answer:
+a task for the improve loop at once, with nothing costly run. Its product judges nothing (it is not the answer, so Propose is never shown the
+truth). `improve start` then tries changed versions of the investigation loop against those tasks. `bun run synth show --config
+<synth>/config.yaml` prints the setup and the case each storyline became; `--reveal` prints the verdicts, and spoils the cases.
+
+**What costs money there.** Nothing is real money: the `fakeathena` connector bills in simulated USD, as a scanning lake does. Seven sources
+are costly (`signins`, `process`, `dns`, `proxy`, `flows`, `email`, `cloud`): 5 USD a terabyte of the simulated bytes a statement reads, only
+the days its window touches and the share of the columns it names, at least 10 MB a query. `reputation` costs 0.002 USD a lookup; `groups`,
+`dhcp`, `wifi`, `vulns` and `assets` are free. At the plan gate each costly step shows its estimate in USD, made by an estimate query the
+runner records, and waits for the budget you give it; a budget below the estimate runs nothing of it:
+
+```bash
+bun run investigate accept-plan CASE-1 --budget s2=0.5 --config <synth>/config.yaml
+```
+
+**Sizes.** The default company (30 days, 200 people, 300 hosts, 3 sites) is a lake file of about 1.1 GB whose tables read, at the default
+scale, as a few terabytes. The tests build a tiny one (4 days, 12 people, 16 hosts, 2 sites, a twentieth of the volume): a file under 1 MB
+whose tables read as about 13 GB. A build is projected first (the rows of each table at their width, times 1.8 for SQLite's overhead), and one
+projected over 2 GB is refused before a file is made; take fewer days, hosts, people or less volume.
+
 ## Known limits
 
 - Build with help offers the models that the loops' stages name, so in the interface a builder conversation cannot be given the sample's scripted builder (`scripted / sample-builder`); the tests above set it through the conversation's model route.
