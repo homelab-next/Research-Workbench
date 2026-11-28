@@ -507,7 +507,7 @@ improve:
   probe_lookups: 240           # the lookups all of one run's probe children share
   probe_tokens: 1200000        # the tokens all of one run's probe children share
   own_tokens: 400000           # the improve case's own run budget
-  staged: <data_dir>/staged    # where staged candidates are built; a cache
+  staged: <data_dir>/staged    # where staged candidates are built; a cache. Never the data folder, a folder that holds it, or a folder the workbench keeps (cases, stores, roots); a sweep removes only the folders staging made
 ```
 
 ## Known limits

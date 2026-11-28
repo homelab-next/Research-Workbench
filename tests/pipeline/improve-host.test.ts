@@ -17,7 +17,7 @@ import type { ManifestFile } from "../../src/modules/loop-write";
 import { Engine } from "../../src/pipeline/engine";
 import type { ImproveHost, ProbeRef } from "../../src/pipeline/improve/host";
 import { probeLink } from "../../src/pipeline/improve/probe";
-import { improveHost, stagedFolder } from "../../src/pipeline/improve/workbench-host";
+import { STAGED_MARK, improveHost, stagedFolder } from "../../src/pipeline/improve/workbench-host";
 import type { ResolvedLoop } from "../../src/pipeline/loops";
 import { sampleRoot } from "../helpers/sample-root";
 
@@ -178,7 +178,9 @@ test("stage writes only under <data>/staged/<case>-<origin12>/ and returns the s
   const after = listing(dir);
   const changed = [...after].filter(([p, v]) => before.get(p) !== v).map(([p]) => p);
   expect(changed.length).toBeGreaterThan(0);
-  for (const p of changed) expect(p.startsWith(join("wb", "staged", folder, "blobs") + "/")).toBe(true);
+  // the staged bytes and the mark that tells a sweep staging made the folder; nothing else
+  for (const p of changed) expect(p.startsWith(join("wb", "staged", folder, "blobs") + "/") || p === join("wb", "staged", folder, STAGED_MARK)).toBe(true);
+  expect(changed).toContain(join("wb", "staged", folder, STAGED_MARK));
   for (const p of before.keys()) expect(after.has(p)).toBe(true);
   expect(wb.chain.read()).toHaveLength(chainBefore);
   // the staged store is the one the host gives for that case

@@ -283,3 +283,27 @@ test("max_tasks above 8, max_candidates above 4, or a budget below 1 is a Config
     expect(() => loadConfig({ path: file(dir, `i${i}.yaml`, `improve:\n  ${line}\n`), env: {}, home: "/h", repoRoot: "/repo" })).toThrow(new RegExp(field));
   });
 });
+
+test("improve.staged that is the data folder, holds it, or is, holds or sits in the case store, the cases or blobs folder, the loop or memory folders or a root, is a ConfigError", () => {
+  const dir = tmp();
+  const d = join(dir, "d");
+  const bad: [string, string][] = [
+    ["the data folder", `data_dir: ${d}\nimprove:\n  staged: ${d}\n`],
+    ["the config's own folder", `data_dir: ${d}\nimprove:\n  staged: .\n`],
+    ["a filesystem root", `data_dir: ${d}\nimprove:\n  staged: /\n`],
+    ["the cases folder", `data_dir: ${d}\nimprove:\n  staged: ${join(d, "cases")}\n`],
+    ["inside the blobs folder", `data_dir: ${d}\nimprove:\n  staged: ${join(d, "blobs", "x")}\n`],
+    ["the case store", `data_dir: ${d}\nimprove:\n  staged: ${join(d, "store")}\n`],
+    ["inside the memory store", `data_dir: ${d}\nimprove:\n  staged: ${join(d, "memory", "s")}\n`],
+    ["the loop store", `data_dir: ${d}\nimprove:\n  staged: ${join(d, "loops")}\n`],
+    ["holding a root", `data_dir: ${d}\nroots:\n  - path: ${join(dir, "mods", "r")}\nimprove:\n  staged: ${join(dir, "mods")}\n`],
+    ["inside a root", `data_dir: ${d}\nroots:\n  - path: ${join(dir, "r")}\nimprove:\n  staged: ${join(dir, "r", "staged")}\n`],
+  ];
+  bad.forEach(([what, text], i) => {
+    expect(() => loadConfig({ path: file(dir, `s${i}.yaml`, text), env: {}, home: "/h", repoRoot: "/repo" }), what).toThrow(/improve\.staged/);
+  });
+  // a folder of its own, inside the data folder or beside it, is taken
+  for (const ok of [join(d, "staged"), join(dir, "cache")]) {
+    expect(loadConfig({ path: file(dir, "ok.yaml", `data_dir: ${d}\nimprove:\n  staged: ${ok}\n`), env: {}, home: "/h", repoRoot: "/repo" }).improve.staged).toBe(ok);
+  }
+});

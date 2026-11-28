@@ -1,5 +1,5 @@
 // The improve loop's host over a workbench (slice 14): the tasks it reads, the staging stores of its candidates, and its probe children.
-import { existsSync, readdirSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { BlobStore } from "../../core/blobs";
 import type { CaseSession } from "../../core/session";
@@ -14,23 +14,15 @@ import { notTheChild, readChild } from "../subloop";
 import type { ChildRef } from "../subloop";
 import type { ImproveHost, ProbeRef, TaskRef, TaskView } from "./host";
 import { driveProbe } from "./probe";
+import { inProgress, markStaged, stagedFolder } from "./staging";
+
+export { STAGED_MARK, markStaged, stagedFolder, sweepStaged } from "./staging";
 
 /** Who makes a probe child: the engine, as for any child case. */
 const ENGINE: Actor = { kind: "system", id: "engine" };
 /** Who stands for the case type a probe child takes: the task's, not a person's choice. */
 const TASK_TYPE: Actor = { kind: "system", id: "improve-task" };
-/** A staging folder's name: the improve case's id, a dash, and the first 12 hex of its first entry's hash. */
-const FOLDER = /^(CASE-[1-9][0-9]*)-([0-9a-f]{12})$/;
-/** What an origin that cannot be read gives a folder's name: it is no case's, so a sweep removes it. */
-const NO_ORIGIN = "none";
-
 const gone = (error: unknown): boolean => error instanceof CaseNotFoundError || error instanceof CaseRefused;
-const inProgress = (status: string): boolean => status !== "none" && status !== "finished";
-
-/** The folder of an improve case's staging store: "<case id>-<first 12 hex of its first entry's hash>". */
-export function stagedFolder(improve: { case: string; origin: string | null }): string {
-  return `${improve.case}-${improve.origin === null ? NO_ORIGIN : improve.origin.slice(0, 12)}`;
-}
 
 /** The session of a loaded case, or null when there is none here. */
 function sessionOf(wb: Workbench, id: string): CaseSession | null {
@@ -89,6 +81,7 @@ export function improveHost(opts: { wb: Workbench; deps: () => EngineDeps; engin
       const deps = saveDeps();
       const path = rootPath(deps.config, root);
       if (path === null) return { ok: false, problems: [notARoot(root)] };
+      markStaged(folder(improve), improve);
       return stageCandidate(deps, path, files, target, host.staged(improve));
     },
     check: (root, files: ManifestFile[], target): ChangeCheck => {
@@ -128,25 +121,4 @@ export function improveHost(opts: { wb: Workbench; deps: () => EngineDeps; engin
     },
   };
   return host;
-}
-
-/** Removes each staging folder whose improve case is loaded here with that origin and has no run in progress, and each folder that names no case. Returns what it removed. */
-export function sweepStaged(config: Config, wb: Workbench): string[] {
-  const dir = config.improve.staged;
-  if (!existsSync(dir)) return [];
-  const status = new Map(wb.listCases().map((c) => [c.id, c.run_status]));
-  const removed: string[] = [];
-  for (const name of readdirSync(dir).sort()) {
-    const m = FOLDER.exec(name);
-    if (m !== null) {
-      const origin = wb.loadedOrigin(m[1]!);
-      // a case that is not loaded here (in the store, say) keeps its folder; so does one whose run is in progress
-      if (origin === null || !origin.startsWith(m[2]!)) continue;
-      if (inProgress(status.get(m[1]!) ?? "none")) continue;
-    }
-    const at = join(dir, name);
-    rmSync(at, { recursive: true, force: true });
-    removed.push(at);
-  }
-  return removed;
 }

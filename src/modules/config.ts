@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isPlainObject } from "../core/canonical";
 import type { Schema } from "../core/schema";
@@ -224,7 +224,7 @@ export function loadConfig(opts: { path?: string; env?: Record<string, string | 
   const data_dir = given.data_dir !== undefined ? place(given.data_dir)
     : join(env.XDG_DATA_HOME ? env.XDG_DATA_HOME : join(home, ".local/share"), "research-workbench");
 
-  return {
+  const config: Config = {
     path,
     write_path: path ?? homeFile,
     data_dir,
@@ -267,6 +267,37 @@ export function loadConfig(opts: { path?: string; env?: Record<string, string | 
       staged: given.improve?.staged !== undefined ? place(given.improve.staged) : join(data_dir, "staged"),
     },
   };
+  const staged = stagedProblem(config);
+  if (staged !== null) throw new ConfigError(`${path ?? "the default configuration"}: improve.staged ${staged}`);
+  return config;
+}
+
+/** True when `a` is `b` or a folder inside it. */
+const within = (a: string, b: string): boolean => {
+  const r = relative(b, a);
+  return r === "" || (r !== ".." && !r.startsWith(`..${sep}`) && !isAbsolute(r));
+};
+
+/**
+ * Why the staging folder cannot be where it is set, or null. It is a cache a start-up sweep clears, so it may not be the data folder or hold
+ * it, and may not be, hold or sit inside a folder the workbench keeps: the cases, the content store, the case store, the loop and memory
+ * folders and every root. A folder of its own inside the data folder (the default) is taken.
+ */
+function stagedProblem(config: Config): string | null {
+  const staged = resolve(config.improve.staged);
+  const data = resolve(config.data_dir);
+  if (within(data, staged)) return "may not be the data folder or a folder that holds it";
+  const kept: [string, string][] = [
+    ["the cases folder", join(data, "cases")], ["the content store", join(data, "blobs")], ["the builders folder", join(data, "builders")],
+    ["the case store", config.cases.store], ["the loop store", config.loops.store], ["the loop imports folder", config.loops.imports],
+    ["the memory store", config.memory.store], ["the memory files folder", config.memory.files],
+    ...config.roots.map((r): [string, string] => ["a module root", r.path]),
+  ];
+  for (const [what, at] of kept) {
+    const p = resolve(at);
+    if (within(staged, p) || within(p, staged)) return `may not be, hold or sit inside ${what}`;
+  }
+  return null;
 }
 
 /** A root as the workbench loads it: `staged` marks an imported folder the configuration does not list, which supplies nothing until it is trusted. */
