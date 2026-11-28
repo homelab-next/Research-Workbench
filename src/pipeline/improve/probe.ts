@@ -21,6 +21,8 @@ import type { ImproveHost, ProbeRef } from "./host";
 
 /** The most times code accepts one probe child's plan: a child that plans again is accepted again, up to this. */
 export const PROBE_PLAN_ACCEPTS = 4;
+/** The most times code goes on past a question to the person in one probe child. */
+export const PROBE_PASS_OVERS = 8;
 const ENGINE: Actor = { kind: "system", id: "engine" };
 /** Why a probe child is ended once its output is recorded. */
 const PROBE_ENDS = "a probe ends at its publish gate";
@@ -49,28 +51,50 @@ export function probeLink(state: Readonly<CaseState>, stage: string, probe: { pr
 const codeAccepts = (session: CaseSession): number =>
   session.entries().filter((e) => e.type === "plan.accepted" && e.actor.kind === PROBE_ACTOR.kind && e.actor.id === PROBE_ACTOR.id).length;
 
+/** How many times code has gone on past a question to the person in this child: improve-probe's run.resumed right after a pause held for a question, counted from its ledger. */
+function codePassOvers(session: CaseSession): number {
+  let n = 0;
+  let held = false;
+  for (const e of session.entries()) {
+    if (e.type === "run.paused") held = e.payload.hold?.kind === "question";
+    else if (e.type === "run.resumed") {
+      if (held && e.actor.kind === PROBE_ACTOR.kind && e.actor.id === PROBE_ACTOR.id) n += 1;
+      held = false;
+    }
+  }
+  return n;
+}
+
 /**
- * Carries a probe child to where a probe ends: starts it on `loop` when it has no run, resumes it once when interrupted, and accepts its plan by its
- * policy (at most PROBE_PLAN_ACCEPTS times) each time it waits there. Returns when it waits at its publish gate, is paused, has finished, or waits at a
- * plan that cannot be accepted. A host's `probes.drive` is this.
+ * Carries a probe child to where a probe ends: starts it on `loop` when it has no run, resumes it once when interrupted, accepts its plan by its
+ * policy (at most PROBE_PLAN_ACCEPTS times) each time it waits there, and goes on past a question to the person (at most PROBE_PASS_OVERS times) each
+ * time the run is held for its answer: no person is there to answer, and asking is what the investigation should do, so the question is passed over
+ * as the person's resume without the answer would, and stays asked. Returns when it waits at its publish gate, is paused otherwise, has finished,
+ * or waits at a plan that cannot be accepted. A host's `probes.drive` is this.
  */
 export async function driveProbe(engine: Engine, session: CaseSession, loop: ResolvedLoop): Promise<RunSummary> {
   if (session.state.run.status === "none") engine.start(ENGINE, { loop });
   // a stopped process left it interrupted: resumed once, by code. A pause the engine or a person made is left as it is
   if (session.state.run.status === "interrupted") engine.resumeProbe();
   let summary = await engine.advance();
-  while (summary.status === "waiting" && summary.waiting === "plan" && codeAccepts(session) < PROBE_PLAN_ACCEPTS) {
-    let accepted: boolean;
-    try {
-      accepted = probeAcceptPlan(session);
-    } catch (err) {
-      if (err instanceof PlanRefused) return engine.summary();
-      throw err;
+  for (;;) {
+    const run = session.state.run;
+    if (summary.status === "waiting" && summary.waiting === "plan" && codeAccepts(session) < PROBE_PLAN_ACCEPTS) {
+      let accepted: boolean;
+      try {
+        accepted = probeAcceptPlan(session);
+      } catch (err) {
+        if (err instanceof PlanRefused) return engine.summary();
+        throw err;
+      }
+      if (!accepted) return engine.summary();
+    } else if (run.status === "paused" && run.hold?.kind === "question" && codePassOvers(session) < PROBE_PASS_OVERS) {
+      if (!engine.passOverQuestion()) return engine.summary();
+    } else {
+      return summary;
     }
-    if (!accepted) return engine.summary();
     summary = await engine.advance();
   }
-  return summary;
 }
 
 /** The files of a change, from its bundle blob ({ files: [{ path, text }] }); null when the bundle cannot be read. */

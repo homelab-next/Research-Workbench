@@ -10,10 +10,11 @@ import { foldLessons, lessonHash } from "./lessons";
 import type { LessonDraft } from "./lessons";
 import { MEMORY_CHAIN } from "./memstore";
 import { rescore } from "./score";
-import { fold, probeOutputOf } from "./state";
+import { apply, fold, initial, probeOutputOf } from "./state";
 import { isObj } from "./state/guards";
 import { readAnswers, readProbeOutput, readScoreSheet } from "./state/improve";
 import type { LedgerRow, RowFault } from "./ledger";
+import type { CaseState } from "./state";
 import { BLOB_FIELDS, blobFieldNullable } from "./types";
 import type { Actor, Entry, EntryType } from "./types";
 import type { PublishedReport } from "./wire";
@@ -521,8 +522,9 @@ function lockHashes(bytes: Uint8Array | null): Set<string> | null {
 }
 
 /**
- * Two rules of the improve loop that hold in any case's ledger. (a) A gate is passed by a person; the one exception is the plan gate of a probe child,
- * passed by improve-probe. Any other gate.passed by an actor that is not a person is code_passed_gate. (b) In an improve case, every file a person's
+ * Two rules of the improve loop that hold in any case's ledger. (a) A gate is passed by a person; the exceptions are the plan gate of a probe child,
+ * passed by improve-probe, and a probe child's run held for the person's answer to a question, which improve-probe resumes without it (passedQuestions).
+ * Any other gate.passed, or resume past a question, by an actor that is not a person is code_passed_gate. (b) In an improve case, every file a person's
  * accept wrote (builder.decided accepted, its written hash) is of the change Compose chose in that run, and its hash is one the staged lock of that
  * candidate names: what was probed. Anything else accepted there is adopted_unprobed. Reads only. `checked` is true for an improve case or a probe
  * child, and for any case where a problem is found.
@@ -533,7 +535,8 @@ export function verifyGates(caseDir: string): GateReport {
   const actors = actorsOf(ledgerPath);
   const problems: GateReport["problems"] = [];
   // a probe child as the fold reads one: probe.child in the commit of case.created, nowhere else
-  const probeChild = rows.some((r) => r.type === "probe.child") && fold(entriesOf(ledgerPath)).improve.probe_of !== null;
+  const resumes = passedQuestions(ledgerPath);
+  const probeChild = rows.some((r) => r.type === "probe.child") && resumes.state.improve.probe_of !== null;
   const improveCase = rows.some((r) => r.type === "improve.requested");
   for (const r of rows) {
     if (r.type !== "gate.passed" || !isObj(r.payload)) continue;
@@ -544,6 +547,8 @@ export function verifyGates(caseDir: string): GateReport {
     const who = isObj(a) && typeof a.kind === "string" ? `${a.kind}${typeof a.id === "string" ? ` ${a.id}` : ""}` : "an unreadable actor";
     problems.push({ seq: r.seq, status: "code_passed_gate", detail: `the ${String(r.payload.gate)} gate was passed by ${who}` });
   }
+  problems.push(...resumes.problems);
+  problems.sort((a, b) => a.seq - b.seq);
   if (improveCase) {
     let candidates = new Map<string, { change: string; lock: unknown }>();
     let chosen: string | null = null;
@@ -568,10 +573,39 @@ export function verifyGates(caseDir: string): GateReport {
   return { ok: problems.length === 0, checked: improveCase || probeChild || problems.length > 0, problems };
 }
 
+/**
+ * The resumes that went on past what only a person may: a run held for the person's answer to a question resumed by an actor that is not a person,
+ * but for improve-probe in a probe child (no person is there to answer; the question stays asked); and any run.resumed by improve-probe but that one
+ * and the resume of an interrupted probe child. Each is judged against the fold just before it; the fold at the end is returned with them.
+ */
+function passedQuestions(ledgerPath: string): { problems: GateReport["problems"]; state: CaseState } {
+  const out: GateReport["problems"] = [];
+  let s = initial();
+  for (const e of entriesOf(ledgerPath)) {
+    if (e.type === "run.resumed") {
+      const a = e.actor as unknown;
+      const human = isObj(a) && a.kind === "human";
+      const byProbe = isObj(a) && a.kind === "system" && a.id === "improve-probe";
+      const onQuestion = s.run.status === "paused" && s.run.hold?.kind === "question";
+      const child = s.improve.probe_of !== null;
+      const who = isObj(a) && typeof a.kind === "string" ? `${a.kind}${typeof a.id === "string" ? ` ${a.id}` : ""}` : "an unreadable actor";
+      if (byProbe && !child) {
+        out.push({ seq: e.seq, status: "code_passed_gate", detail: onQuestion ? `the person's question was passed over by ${who}, outside a probe child` : `a run was resumed by ${who}, outside a probe child` });
+      } else if (byProbe && !onQuestion && s.run.status !== "interrupted") {
+        out.push({ seq: e.seq, status: "code_passed_gate", detail: `a run ${s.run.status === "paused" ? `held on ${s.run.pause_reason ?? "a pause"}` : `that was ${s.run.status}`} was resumed by ${who}` });
+      } else if (!human && !byProbe && onQuestion) {
+        out.push({ seq: e.seq, status: "code_passed_gate", detail: `the person's question was passed over by ${who}` });
+      }
+    }
+    s = apply(s, e);
+  }
+  return { problems: out, state: s };
+}
+
 /** No line for a case that is neither an improve case nor a probe child and holds no problem; else `gates: ok` or one BROKEN line per problem. */
 export function gateLines(r: GateReport): string[] {
   if (!r.checked) return [];
-  if (r.ok) return ["gates: ok, every gate a person's but a probe child's plan gate, and every adopted file the probed version's"];
+  if (r.ok) return ["gates: ok, every gate a person's but a probe child's plan gate and its questions passed over, and every adopted file the probed version's"];
   return r.problems.map((x) => `gates: BROKEN at seq ${x.seq}: ${x.detail}`);
 }
 

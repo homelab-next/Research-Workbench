@@ -418,6 +418,17 @@ export class Engine {
     return written.length > 0;
   }
 
+  /**
+   * In a probe child: what a person's resume without the answer does when the run is held for the person's answer to a question, written by
+   * improve-probe (no person is there to answer); the question stays asked and unanswered, waived by improve-probe. Advances nothing, grants no
+   * fresh allowance of a cap. True when it wrote. Throws RunRefused elsewhere.
+   */
+  passOverQuestion(): boolean {
+    this.mustBeProbe();
+    const written = this.session.commit((s) => (s.run.status === "paused" && s.run.hold?.kind === "question" ? [{ type: "run.resumed", actor: PROBE_ACTOR, payload: {}, run: s.run.id }] : []));
+    return written.length > 0;
+  }
+
   /** In a probe child: ends the run in progress as stopped, by improve-probe, with the reason, and anchors the case closed; nothing when it has none. Throws RunRefused elsewhere. */
   endProbe(reason: string): void {
     this.mustBeProbe();
@@ -428,7 +439,7 @@ export class Engine {
   }
 
   private mustBeProbe(): void {
-    if (this.session.state.improve.probe_of === null) throw new RunRefused("only a probe child's run is resumed or ended by improve-probe");
+    if (this.session.state.improve.probe_of === null) throw new RunRefused("only a probe child's run is resumed, passed over a question or ended by improve-probe");
   }
 
   /**

@@ -1004,6 +1004,48 @@ test("verifyGates: improve-probe passing a probe child's plan gate is ok; any ot
   }
 });
 
+test("verifyGates: improve-probe going on past a question to the person is ok only in a probe child held on that question; anywhere else, and any other actor but a person, is code_passed_gate", () => {
+  const asker = { kind: "agent", id: "analyst", stage: "frame", profile: "investigation", model: "m", effort: null, where: "machine" } as const;
+  const held = (c: CaseSession): void => {
+    c.commit((s, ids) => [{ type: "question.asked", actor: asker, run: s.run.id, stage: "frame", payload: { question: { id: ids.next("question"), text: "Is it expected?", why: "w", cards: [], about: [], blocking: true } } }]);
+    c.commit((s) => [{ type: "run.paused", actor: engineActor, run: s.run.id, payload: { reason: "waiting for the person's answer to ask-1", hold: { kind: "question", stage: "frame" } } }]);
+  };
+  const wb = Workbench.open(join(root, "wb"), { onError: () => {} });
+  try {
+    const p = probedCase(wb);
+    const child = p.children["base/T1"]!;
+    held(child);
+    child.commit((s) => [{ type: "run.resumed", actor: probeActorId, run: s.run.id, payload: {} }]);
+    expect(verifyGates(child.dir)).toEqual({ ok: true, checked: true, problems: [] });
+    // a probe child paused by its engine for another reason: improve-probe's resume passes nothing it may
+    const other = p.children["K1/T1"]!;
+    other.commit((s) => [{ type: "run.paused", actor: engineActor, run: s.run.id, payload: { reason: "paused by engine" } }]);
+    const at = other.commit((s) => [{ type: "run.resumed", actor: probeActorId, run: s.run.id, payload: {} }])[0]!.seq;
+    expect(verifyGates(other.dir).problems).toEqual([{ seq: at, status: "code_passed_gate", detail: "a run held on paused by engine was resumed by system improve-probe" }]);
+    // the improve case is no probe child
+    p.improve.commit((s) => [{ type: "run.paused", actor: engineActor, run: s.run.id, payload: { reason: "waiting", hold: { kind: "question", stage: "select" } } }]);
+    const there = p.improve.commit((s) => [{ type: "run.resumed", actor: probeActorId, run: s.run.id, payload: {} }])[0]!.seq;
+    expect(verifyGates(p.improve.dir).problems).toEqual([{ seq: there, status: "code_passed_gate", detail: "the person's question was passed over by system improve-probe, outside a probe child" }]);
+  } finally {
+    wb.close();
+  }
+  // an ordinary case: a question hold passed over by the engine, and by improve-probe
+  ledger.append({ type: "run.started", actor: human, payload: { run: "run-1", pipeline: "investigation", pipeline_hash: "a".repeat(64), stages: linkStages } } as never);
+  ledger.append({ type: "question.asked", actor: asker, run: "run-1", stage: "frame", payload: { question: { id: "ask-1", text: "Is it expected?", why: "w", cards: [], about: [], blocking: true } } } as never);
+  ledger.append({ type: "run.paused", actor: engineActor, run: "run-1", payload: { reason: "waiting", hold: { kind: "question", stage: "frame" } } } as never);
+  const byEngine = ledger.append({ type: "run.resumed", actor: engineActor, run: "run-1", payload: {} } as never).seq;
+  expect(verifyGates(dir)).toEqual({ ok: false, checked: true, problems: [{ seq: byEngine, status: "code_passed_gate", detail: "the person's question was passed over by system engine" }] });
+  ledger.append({ type: "run.paused", actor: engineActor, run: "run-1", payload: { reason: "waiting", hold: { kind: "question", stage: "frame" } } } as never);
+  const byProbe = ledger.append({ type: "run.resumed", actor: probeActorId, run: "run-1", payload: {} } as never).seq;
+  expect(verifyGates(dir).problems.map((x) => [x.seq, x.detail])).toEqual([
+    [byEngine, "the person's question was passed over by system engine"], [byProbe, "the person's question was passed over by system improve-probe, outside a probe child"],
+  ]);
+  // a person's resume of a question hold is the person's
+  ledger.append({ type: "run.paused", actor: engineActor, run: "run-1", payload: { reason: "waiting", hold: { kind: "question", stage: "frame" } } } as never);
+  ledger.append({ type: "run.resumed", actor: human, run: "run-1", payload: {} } as never);
+  expect(verifyGates(dir).problems).toHaveLength(2);
+});
+
 test("verifyGates: a file an accept wrote in an improve case is ok only as bytes the chosen candidate's staged lock names", () => {
   const wb = Workbench.open(join(root, "wb"), { onError: () => {} });
   try {

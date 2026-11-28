@@ -579,6 +579,42 @@ test("run.resumed by improve-probe is read only while the run is interrupted; ru
   expect(s.run).toMatchObject({ status: "finished", outcome: "stopped" });
 });
 
+/** A probe child at its plan gate, through it, whose assemble stage asked the person a blocking question and paused for it. */
+function heldOnQuestion(b: EntryBuilder): EntryBuilder {
+  b.add("plan.accepted", { plan: "plan-1", steps: ["s1"], budgets: {} }, { actor: probeActor });
+  b.add("lane.created", { lane: "l1", title: "Flows", subgoal: "g1" }, { actor: probeActor });
+  b.add("gate.passed", { gate: "plan" }, { actor: probeActor });
+  b.add("stage.started", { stage: "assemble", attempt: 1 }, { actor: engine });
+  b.add("question.asked", { question: { id: "ask-1", text: "Is the device expected on that access point?", why: "only the person knows", cards: [], about: [], blocking: true } }, { actor: assembler, stage: "assemble" });
+  b.add("stage.finished", { stage: "assemble", attempt: 1, outcome: "pass", draft_hash: null, output: null, reason: null }, { actor: engine });
+  b.add("run.paused", { reason: "waiting for the person's answer to ask-1", hold: { kind: "question", stage: "assemble" } }, { actor: engine });
+  return b;
+}
+
+test("in a probe child, run.resumed by improve-probe over a question hold goes on as a person's resume does: the question stays unanswered, waived by improve-probe", () => {
+  const byProbe = heldOnQuestion(atPlanGate(probeChild()));
+  const r = byProbe.add("run.resumed", {}, { actor: probeActor });
+  const s = fold(byProbe.entries);
+  expect(s.skipped).toEqual([]);
+  expect(s.run).toMatchObject({ status: "running", hold: null, pause_reason: null });
+  expect(s.questions["ask-1"]).toMatchObject({ answer: null, waived: { by: PROBE_ACTOR_ID, seq: r.seq } });
+  // the same as a person's, but for who waived it
+  const byPerson = heldOnQuestion(atPlanGate(probeChild()));
+  byPerson.add("run.resumed", {}, { actor: human });
+  const p = fold(byPerson.entries);
+  expect({ ...s, questions: {} }).toEqual({ ...p, questions: {} });
+  expect(p.questions["ask-1"]!.waived!.by).toBe(human.id);
+  // in a case that is not a probe child it is skipped, and the run stays held
+  const ONLY = "improve-probe acts only in a probe child";
+  const plain = investigated().b;
+  plain.add("run.started", { run: "run-2", pipeline: "investigation", pipeline_hash: "a".repeat(64), stages: investigation }, { actor: engine });
+  plain.add("stage.started", { stage: "assemble", attempt: 1 }, { actor: engine });
+  plain.add("question.asked", { question: { id: "ask-1", text: "Is it expected?", why: "w", cards: [], about: [], blocking: true } }, { actor: assembler, stage: "assemble" });
+  plain.add("run.paused", { reason: "waiting", hold: { kind: "question", stage: "assemble" } }, { actor: engine });
+  const e = plain.add("run.resumed", {}, { actor: probeActor });
+  unchangedBy(plain.entries, e, ONLY);
+});
+
 test("product.published and gate.passed publish by a person in a probe child are skipped: a probe child never publishes", () => {
   const NEVER = "a probe child never publishes";
   const { b, draft } = atPublishGate(atPlanGate(probeChild()));

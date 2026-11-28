@@ -24,6 +24,7 @@ import type { EngineDeps, StageEnv, StageRunner } from "../../src/pipeline/engin
 import type { ImproveHost, ProbeRef } from "../../src/pipeline/improve/host";
 import { driveProbe, NO_IMPROVE_HOST, PROBE_PLAN_ACCEPTS, probeBudgets, probeLink } from "../../src/pipeline/improve/probe";
 import type { ResolvedLoop } from "../../src/pipeline/loops";
+import { frameRunner } from "../../src/pipeline/stages/frame";
 import { planRunner } from "../../src/pipeline/stages/plan";
 import { IMPROVE_ROLES } from "../../src/pipeline/manifests";
 import type { Role } from "../../src/pipeline/manifests";
@@ -337,6 +338,50 @@ test("driveProbe resumes an interrupted child once, and leaves a paused one paus
   expect(ofType(b, "run.resumed")).toHaveLength(0);
 });
 
+/** The frame stage as it is, which then asks the person a blocking question once. */
+const asksOnce = (text: string): StageRunner => async (env) => {
+  const end = await frameRunner(env);
+  if (Object.keys(env.session.state.questions).length === 0) {
+    // asked by the agent that answered the stage's model request, as ask_person asks
+    const asker = env.session.entries().findLast((e) => e.type === "model.request")?.actor ?? agentOf(env.stage.id);
+    env.session.commit((st, ids) => [{
+      type: "question.asked", actor: asker, run: st.run.id, stage: env.stage.id,
+      payload: { question: { id: ids.next("question"), text, why: "only the person knows", cards: [], about: [], blocking: true } },
+    }]);
+  }
+  return end;
+};
+
+test("driveProbe goes on past a blocking question to the person as improve-probe, as the person's resume without the answer does; the question stays asked and unanswered", async () => {
+  const parent = await parentAtProbe();
+  const c = probeChildOf(parent);
+  const summary = await driveProbe(engineOf(c, { frame: asksOnce("Is the device expected on that access point?") }), c, live());
+  expect(summary).toMatchObject({ status: "waiting", waiting: "publish" });
+  const paused = ofType(c, "run.paused");
+  expect(paused).toHaveLength(1);
+  expect(paused[0]!.payload.hold).toEqual({ kind: "question", stage: "frame" });
+  const resumed = ofType(c, "run.resumed");
+  expect(resumed.map((e) => e.actor)).toEqual([PROBE]);
+  expect(c.state.questions["ask-1"]).toMatchObject({ text: "Is the device expected on that access point?", answer: null, waived: { by: "improve-probe", seq: resumed[0]!.seq } });
+  expect(c.state.skipped).toEqual([]);
+  expect(probeOutputOf(c.state).outcome).toBe("drafted");
+  expect(c.entries().some((e) => e.actor.kind === "human")).toBe(false);
+});
+
+test("Engine.passOverQuestion writes only in a probe child held on a question, and refuses in any other case", async () => {
+  const parent = await parentAtProbe();
+  const c = probeChildOf(parent);
+  const e = engineOf(c);
+  e.start(ENGINE, { loop: live() });
+  // not held on a question: nothing is written
+  e.pause(ENGINE);
+  const n = c.entries().length;
+  expect(e.passOverQuestion()).toBe(false);
+  expect(c.entries().length).toBe(n);
+  // the improve case itself is no probe child
+  expect(() => engineOf(parent).passOverQuestion()).toThrow(/probe child/);
+});
+
 test("a child that plans again is accepted again, four times at most", async () => {
   expect(PROBE_PLAN_ACCEPTS).toBe(4);
   const parent = await parentAtProbe();
@@ -439,35 +484,31 @@ test("probe.finished holds the child's head, the hash of its output and the outp
   }
 });
 
-test("a child that pauses on a question to the person, on a declined model or on its budget is recorded incomplete with the reason, and Probe goes on", async () => {
+test("a child that pauses on a declined model or on its budget is recorded incomplete with the reason, and Probe goes on; a child that asks the person goes on past the question", async () => {
   const declined: StageRunner = async () => ({ kind: "declined", reason: "the model declined in the test" });
-  const asks: StageRunner = async (env) => {
-    env.session.commit((st) => [{
-      type: "question.asked", actor: agentOf(env.stage.id), run: st.run.id, stage: env.stage.id,
-      payload: { question: { id: "q-1", text: "Which network is this?", why: "the test asks", cards: [], about: [], blocking: true } },
-    }]);
-    return { kind: "finished", outcome: "pass", draft_hash: null, output: null, reason: null };
-  };
   host.childRunners = (c) => {
     const task = c.state.improve.probe_of?.task;
-    return task === "T1" ? { frame: declined } : task === "T2" ? { frame: asks } : {};
+    return task === "T1" ? { frame: declined } : task === "T2" ? { frame: asksOnce("Which network is this?") } : {};
   };
   // a share of 1 token: T3's child stops on its budget at its first model call past it
   const { s } = await runImprove({ tasks: 3, candidate: "none", deps: { config: { ...config, improve: { ...config.improve, probe_tokens: 3 } } } });
   expect(probeStage(s).status).toBe("passed");
   const finished = ofType(s, "probe.finished").map((e) => e.payload);
-  expect(finished.map((p) => [p.probe, p.outcome])).toEqual([["base/T1", "incomplete"], ["base/T2", "incomplete"], ["base/T3", "incomplete"]]);
+  expect(finished.map((p) => p.probe)).toEqual(["base/T1", "base/T2", "base/T3"]);
   for (const p of finished) {
     const c = child(p.child);
-    expect(p.draft_hash).toBeNull();
-    expect(p.reason).not.toBe("");
     expect(readProbeOutput(s.blobs.get(p.output.blob))!.reason).toBe(p.reason);
     // ended once recorded, as stopped, by improve-probe
     expect(c.state.run).toMatchObject({ status: "finished", outcome: "stopped" });
   }
-  expect(finished[0]!.reason).toMatch(/declined/);
-  expect(finished[1]!.reason).toMatch(/Which network is this\?|question/);
-  expect(finished[2]!.reason).toMatch(/budget/);
+  const [t1, t2, t3] = finished;
+  expect(t1!).toMatchObject({ outcome: "incomplete", draft_hash: null });
+  expect(t1!.reason).toMatch(/declined/);
+  expect(t3!).toMatchObject({ outcome: "incomplete", draft_hash: null });
+  expect(t3!.reason).toMatch(/budget/);
+  // T2 asked the person, and stopped on its budget like T3, not on the question
+  expect(t2!).toMatchObject({ outcome: "incomplete" });
+  expect(t2!.reason).not.toMatch(/waiting for the person's answer/);
 });
 
 test("after its probe is recorded a child's run is ended as stopped by improve-probe; nothing was published", async () => {

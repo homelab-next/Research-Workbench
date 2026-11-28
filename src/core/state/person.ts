@@ -4,6 +4,7 @@ import type { Card, Entry, PersonBasis, Product, Question } from "../types";
 import { holds, keepsValue, namesFinding, revisedRulingReason, ruledFindings, rulingText } from "./conflicts";
 import { has, isBool, isObj, isOneOf, isStr, isStrList, isStrOrNull, malformed, recordSkip } from "./guards";
 import { isObservable } from "./shapes";
+import { PROBE_ACTOR_ID } from "./improve";
 import type { CaseState, Overrule, OverruleState, QuestionState } from "./types";
 
 /** The source a finding names when it rests on the person's word. */
@@ -72,9 +73,11 @@ export function applyPerson(s: CaseState, entry: Entry): CaseState {
       return { ...s, overrules: { ...s.overrules, [p.finding]: { ...o, earlier } } };
     }
     case "run.resumed": {
-      // a person going on without the answer waives the questions the run was held for
+      // a person going on without the answer waives the questions the run was held for; in a probe child, where no person is there to answer,
+      // improve-probe goes on without it the same way (probeVeto has skipped that actor anywhere else)
       const hold = s.run.hold;
-      if (s.run.status !== "paused" || entry.actor.kind !== "human" || hold === null || hold.kind !== "question") return s;
+      const byProbe = entry.actor.kind === "system" && entry.actor.id === PROBE_ACTOR_ID && s.improve.probe_of !== null;
+      if (s.run.status !== "paused" || (entry.actor.kind !== "human" && !byProbe) || hold === null || hold.kind !== "question") return s;
       const waiting = waitingOn(s, hold.stage);
       if (waiting.length === 0) return s;
       const waived = { by: entry.actor.id, seq: entry.seq, ts: entry.ts };

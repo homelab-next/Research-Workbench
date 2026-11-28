@@ -276,7 +276,8 @@ export function applyImprove(s: CaseState, entry: Entry): CaseState {
 
 /**
  * Why the fold skips this entry before any reducer sees it; null for every entry an old ledger can hold. improve-probe acts only in a probe
- * child, and there writes only the five entries of a code acceptance of its plan, a resume of an interrupted run and its end; only a person
+ * child, and there writes only the five entries of a code acceptance of its plan, a resume of an interrupted run or of a run held for the person's
+ * answer to a question (going on without it, as the person's resume does: no person is there to answer), and its end; only a person
  * passes the adopt gate; and a probe child never publishes.
  */
 export function probeVeto(s: Readonly<CaseState>, entry: Entry): string | null {
@@ -285,7 +286,8 @@ export function probeVeto(s: Readonly<CaseState>, entry: Entry): string | null {
   if (entry.actor.kind === "system" && entry.actor.id === PROBE_ACTOR_ID) {
     if (!child) return "improve-probe acts only in a probe child";
     const allowed = entry.type === "plan.accepted" || entry.type === "lane.created" || (entry.type === "gate.passed" && p.gate === "plan")
-      || (entry.type === "run.resumed" && s.run.status === "interrupted") || (entry.type === "run.finished" && p.outcome === "stopped");
+      || (entry.type === "run.resumed" && (s.run.status === "interrupted" || (s.run.status === "paused" && s.run.hold?.kind === "question")))
+      || (entry.type === "run.finished" && p.outcome === "stopped");
     if (!allowed) return "improve-probe accepts a probe's plan, resumes an interrupted probe or ends it, and nothing else";
   }
   if (entry.type === "gate.passed" && p.gate === "adopt" && entry.actor.kind !== "human") return "only a person passes the adopt gate";
