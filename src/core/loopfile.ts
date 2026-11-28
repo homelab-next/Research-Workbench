@@ -1,16 +1,19 @@
-// The loop file: a loop's manifests packed as a ustar archive inside gzip, loop.json first. Server-side core (like casefile.ts): never
-// imported by src/web or src/core/state. It knows tar and loop.json and nothing of the registry. A loop file is untrusted input: the reader
-// checks every member's kind, name, size and hash against loop.json, and writes nothing itself.
+// The loop file: a loop's manifests packed as a ustar archive inside gzip, loop.json first, every other member under manifests/. Server-side core
+// (like casefile.ts): never imported by src/web or src/core/state. It knows loop.json and nothing of the registry. A loop file is untrusted input.
+// The packer and the reader are packfile.ts's, the same as a case file's and a memory file's, so every refusal made there is made for a loop file
+// too: this file holds only the manifest, its rule for its list of files, and the words, which are the loop file's own.
 import { closeSync, fsyncSync, linkSync, openSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { canonical } from "./canonical";
 import type { Json } from "./canonical";
 import { WORKBENCH_VERSION } from "./casefile";
 import { sha256Hex } from "./hash";
+import { intoMemory, readPackFile, writePackMembers } from "./packfile";
+import type { PackEntry, PackKind } from "./packfile";
 import { Refused } from "./refused";
 import { isNum, isObj, isStr } from "./state/guards";
-import { readTarGz, shown, TarError, writeTarGz } from "./tar";
-import type { TarMember, TarSink } from "./tar";
+import { shown } from "./tar";
+import type { TarProblem } from "./tar";
 
 export const LOOP_FILE_FORMAT = 1;
 /** The most a loop file may hold, unpacked: loop.json and every member together. */
@@ -39,7 +42,6 @@ const FILE_NAME = /^([A-Za-z0-9_][A-Za-z0-9._-]*)\.v([1-9][0-9]{0,8})\.([0-9a-f]
 const UNREADABLE = "the file is not a readable loop file";
 const NOT_A_MANIFEST = "loop.json is not a loop file manifest of format 1";
 const enc = new TextEncoder();
-const strict = new TextDecoder("utf-8", { fatal: true });
 const lt = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const reasonOf = (err: unknown): string => (err instanceof Error ? err.message : String(err)).split("\n")[0]!;
 
@@ -72,15 +74,16 @@ const isEntry = (x: unknown): x is LoopFileEntry =>
   isObj(x) && isStr(x.path) && nameProblem(x.path) === null && isStr(x.kind) && x.kind !== "" && isStr(x.id) && x.id !== ""
   && isHash(x.sha256) && isCount(x.bytes, 0) && (x.origin === null || isHash(x.origin));
 
-/** Why `x` is not a loop file manifest: the sentence to refuse it with; null when it is one. */
-function manifestProblem(x: unknown): string | null {
-  if (!isObj(x) || x.format !== LOOP_FILE_FORMAT || !isStr(x.workbench) || !isStr(x.loop) || !LOOP_ID.test(x.loop) || !isCount(x.version, 1)
-    || !isStr(x.title) || !isStr(x.about) || !isHash(x.hash) || !(x.legacy_hash === null || isHash(x.legacy_hash))
-    || !isObj(x.lock) || !Array.isArray(x.subloops) || !x.subloops.every(isObj) || !Array.isArray(x.files) || !x.files.every(isEntry)) {
-    return NOT_A_MANIFEST;
-  }
+/** Whether `x` has the shape of a loop file manifest of format 1 (its list of files is filesProblem's to judge). */
+const isLoopManifest = (x: unknown): x is LoopFileManifest =>
+  isObj(x) && x.format === LOOP_FILE_FORMAT && isStr(x.workbench) && isStr(x.loop) && LOOP_ID.test(x.loop) && isCount(x.version, 1)
+  && isStr(x.title) && isStr(x.about) && isHash(x.hash) && (x.legacy_hash === null || isHash(x.legacy_hash))
+  && isObj(x.lock) && Array.isArray(x.subloops) && x.subloops.every(isObj) && Array.isArray(x.files) && x.files.every(isEntry);
+
+/** Why a loop file's list of files is not one: no path twice, no path the folder of another. The sentence, or null. */
+function filesProblem(files: readonly PackEntry[]): string | null {
   const paths = new Set<string>();
-  for (const f of x.files as LoopFileEntry[]) {
+  for (const f of files) {
     if (paths.has(f.path)) return `${shown(f.path)} is listed twice in loop.json`;
     paths.add(f.path);
   }
@@ -92,25 +95,39 @@ function manifestProblem(x: unknown): string | null {
   return null;
 }
 
-/** A TarError said in the loop file's words. */
-function loopError(err: TarError): LoopFileError {
-  const p = err.problem;
+/** Why `x` is not a loop file manifest: the sentence to refuse it with; null when it is one. */
+function manifestProblem(x: unknown): string | null {
+  return isLoopManifest(x) ? filesProblem(x.files) : NOT_A_MANIFEST;
+}
+
+/** A tar problem said in the loop file's words. */
+function say(p: TarProblem): string {
   switch (p.kind) {
-    case "unreadable": return new LoopFileError(UNREADABLE);
-    case "missing": return new LoopFileError("there is no loop file there");
-    case "folder": return new LoopFileError("it is a folder, not a loop file");
-    case "too_large": return new LoopFileError(`the loop file is larger than the limit of ${p.max} bytes unpacked`);
-    case "link": return new LoopFileError(`${shown(p.name)} is a link; a loop file holds only regular files`);
-    case "not_regular": return new LoopFileError(`${shown(p.name)} is not a regular file; a loop file holds only regular files`);
-    case "bad_name": return new LoopFileError(`${shown(p.name)}: ${nameProblem(p.name) ?? p.problem}`);
-    case "twice": return new LoopFileError(`${shown(p.name)} appears twice in the loop file`);
-    case "long_name": return new LoopFileError(`${shown(p.name)} is too long a path for a loop file`);
-    case "member_too_large": return new LoopFileError(`${shown(p.name)} is too large for a loop file`);
-    case "wrong_size": return new LoopFileError(`${shown(p.name)} changed while the loop file was written`);
-    case "exists": return new LoopFileError(`${basename(p.dest)} already exists`);
-    case "write": return new LoopFileError(`the loop file could not be written: ${p.reason}`);
+    case "unreadable": return UNREADABLE;
+    case "missing": return "there is no loop file there";
+    case "folder": return "it is a folder, not a loop file";
+    case "too_large": return `the loop file is larger than the limit of ${p.max} bytes unpacked`;
+    case "link": return `${shown(p.name)} is a link; a loop file holds only regular files`;
+    case "not_regular": return `${shown(p.name)} is not a regular file; a loop file holds only regular files`;
+    case "bad_name": return `${shown(p.name)}: ${nameProblem(p.name) ?? p.problem}`;
+    case "twice": return `${shown(p.name)} appears twice in the loop file`;
+    case "long_name": return `${shown(p.name)} is too long a path for a loop file`;
+    case "member_too_large": return `${shown(p.name)} is too large for a loop file`;
+    case "wrong_size": return `${shown(p.name)} changed while the loop file was written`;
+    case "exists": return `${basename(p.dest)} already exists`;
+    case "write": return `the loop file could not be written: ${p.reason}`;
   }
 }
+
+/** The loop file as packfile.ts packs and reads it. */
+const LOOP_KIND: PackKind<LoopFileManifest> = {
+  manifest: MANIFEST_NAME, manifest_max: MAX_LOOP_FILE_BYTES, prefix: PREFIX, isManifest: isLoopManifest,
+  filesProblem: (files) => filesProblem(files), pathProblem: nameProblem, say, error: LoopFileError,
+  words: {
+    file: "a loop file", manifest: "loop file", whole: "the loop file", packed: "the loop", written: "the loop", folder: "the loop file",
+    journal: "the loop file holds a ledger journal", not_manifest: NOT_A_MANIFEST,
+  },
+};
 
 // ---------- writing ----------
 
@@ -128,22 +145,14 @@ export async function writeLoopFile(
   };
   const problem = manifestProblem(JSON.parse(JSON.stringify(manifest)));
   if (problem !== null) throw new LoopFileError(problem === NOT_A_MANIFEST ? "the loop's details do not make a loop file manifest" : problem);
-  const text = canonical(manifest as unknown as Json);
-  const json = enc.encode(text);
+  const json = enc.encode(canonical(manifest as unknown as Json));
   if (sorted.reduce((n, f) => n + f.bytes.length, json.length) > MAX_LOOP_FILE_BYTES) {
     throw new LoopFileError(`the loop file is larger than the limit of ${MAX_LOOP_FILE_BYTES} bytes unpacked`);
   }
-  const members: TarMember[] = [
-    { name: MANIFEST_NAME, size: json.length, open: () => [json] },
-    ...sorted.map((f): TarMember => ({ name: PREFIX + f.path, size: f.bytes.length, open: () => [f.bytes] })),
-  ];
+  const bytesOf = new Map(sorted.map((f) => [f.path, f.bytes]));
   // a name of its own beside dest, so a stop leaves no half-written file under dest's name
   const tmp = join(dirname(dest), `.${basename(dest)}.${crypto.randomUUID()}.partial`);
-  try {
-    await writeTarGz(tmp, members);
-  } catch (err) {
-    throw err instanceof TarError ? loopError(err) : err instanceof LoopFileError ? err : new LoopFileError(`the loop file could not be written: ${reasonOf(err)}`);
-  }
+  const written = await writePackMembers(LOOP_KIND, tmp, manifest, (f) => [bytesOf.get(f.path)!], "the loop's details do not make a loop file manifest");
   try {
     // a link, not a rename: it does not write over a file already at dest
     linkSync(tmp, dest);
@@ -158,89 +167,17 @@ export async function writeLoopFile(
   } catch {
     // a folder that cannot be flushed: the file itself was flushed before it was linked
   }
-  return JSON.parse(text) as LoopFileManifest;
+  return written;
 }
 
 // ---------- reading ----------
 
-/** What a caller's `each` threw, carried out of the reader untouched. */
-class FromEach {
-  constructor(readonly err: unknown) {}
-}
-
-/**
- * The one reader, through readTarGz: the tar code checks every header (kind, name, a name twice, the running total against 16 MiB) before
- * its body is read; then here, loop.json first, every other member under manifests/, listed, of the listed size, and of the listed hash.
- * `each` is handed a member's bytes only once they are checked. Writes nothing.
- */
-async function readArchive(file: string, each: ((entry: LoopFileEntry, bytes: Uint8Array) => void) | null): Promise<LoopFileManifest> {
-  let manifest: LoopFileManifest | null = null;
-  let listed = new Map<string, LoopFileEntry>();
-  const seen = new Set<string>();
-  const sink: TarSink = {
-    open(name, size) {
-      if (manifest === null) {
-        if (name !== MANIFEST_NAME) throw new LoopFileError("loop.json is not the first member");
-        const pieces: Uint8Array[] = [];
-        return {
-          write: (p) => void pieces.push(p.slice()),
-          end: () => {
-            const body = new Uint8Array(size);
-            let at = 0;
-            for (const p of pieces) { body.set(p, at); at += p.length; }
-            let parsed: unknown;
-            try {
-              parsed = JSON.parse(strict.decode(body));
-            } catch {
-              throw new LoopFileError(NOT_A_MANIFEST);
-            }
-            const problem = manifestProblem(parsed);
-            if (problem !== null) throw new LoopFileError(problem);
-            manifest = parsed as LoopFileManifest;
-            listed = new Map(manifest.files.map((f) => [f.path, f]));
-          },
-        };
-      }
-      if (!name.startsWith(PREFIX)) throw new LoopFileError(`${shown(name)} is outside manifests/`);
-      const entry = listed.get(name.slice(PREFIX.length));
-      if (entry === undefined) throw new LoopFileError(`${shown(name)} is not listed in loop.json`);
-      if (size !== entry.bytes) throw new LoopFileError(`${shown(name)} is not the size loop.json lists`);
-      seen.add(entry.path);
-      const pieces: Uint8Array[] = [];
-      return {
-        write: (p) => void pieces.push(p.slice()),
-        end: () => {
-          const bytes = new Uint8Array(size);
-          let at = 0;
-          for (const p of pieces) { bytes.set(p, at); at += p.length; }
-          if (sha256Hex(bytes) !== entry.sha256) throw new LoopFileError(`${shown(name)} is not what loop.json lists`);
-          if (each !== null) {
-            try { each(entry, bytes); } catch (err) { throw new FromEach(err); }
-          }
-        },
-      };
-    },
-  };
-  try {
-    await readTarGz(file, { max: MAX_LOOP_FILE_BYTES, sink, unreadable: UNREADABLE });
-  } catch (err) {
-    if (err instanceof FromEach) throw err.err;
-    if (err instanceof LoopFileError) throw err;
-    if (err instanceof TarError) throw loopError(err);
-    throw new LoopFileError(UNREADABLE);
-  }
-  const found = manifest as LoopFileManifest | null;
-  if (found === null) throw new LoopFileError("loop.json is not the first member");
-  for (const f of found.files) if (!seen.has(f.path)) throw new LoopFileError(`${shown(f.path)} is listed in loop.json and is not in the file`);
-  return found;
-}
-
-/** Reads the file once and writes nothing. Throws LoopFileError for everything "A loop file" lists. */
+/** Reads the file once and writes nothing: packfile.ts's reader, in the loop file's words. Throws LoopFileError for everything "A loop file" lists. */
 export async function checkLoopFile(file: string): Promise<LoopFileManifest> {
-  return readArchive(file, null);
+  return readPackFile(LOOP_KIND, file, { max: MAX_LOOP_FILE_BYTES });
 }
 
-/** The same reader; hands each checked member's bytes to `each`. What `each` throws is passed on as it was thrown. */
+/** The same reader; hands each member's bytes to `each` once its size and hash are checked. What `each` throws is passed on as it was thrown. */
 export async function readLoopFile(file: string, each: (entry: LoopFileEntry, bytes: Uint8Array) => void): Promise<LoopFileManifest> {
-  return readArchive(file, each);
+  return readPackFile(LOOP_KIND, file, { max: MAX_LOOP_FILE_BYTES, out: intoMemory((_path, bytes, entry) => each(entry as LoopFileEntry, bytes)) });
 }

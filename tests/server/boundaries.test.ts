@@ -280,6 +280,24 @@ test("the case file, the store, the tar code and the loop file are never importe
   expect(caseFileStaysOnServer("src/server/x.ts", `import { checkCaseFile } from "../core/casefile";`)).toEqual([]);
 });
 
+/** readTarGz and writeTarGz are named only by tar.ts (which defines them) and packfile.ts (the one packer and reader of every packed file). */
+const TAR_RW = /\b(?:readTarGz|writeTarGz)\b/;
+const tarOnlyThroughPackfile: Rule = (path, text) =>
+  path !== "src/core/tar.ts" && path !== "src/core/packfile.ts" && TAR_RW.test(text) ? [`${path} names ${text.match(TAR_RW)![0]}`] : [];
+
+test("src/core/loopfile.ts imports no reader or writer of tar: it reads and writes through packfile.ts", () => {
+  const loopfile = sources.find((f) => f.path === "src/core/loopfile.ts")!;
+  expect(loopfile).toBeDefined();
+  // its imports from ./tar are types and `shown` only
+  const fromTar = [...loopfile.text.matchAll(/^import\s+(type\s+)?\{([^}]*)\}\s+from\s+"\.\/tar";$/gm)];
+  expect(fromTar.length).toBeGreaterThan(0);
+  expect(fromTar.filter((m) => m[1] === undefined).flatMap((m) => m[2]!.split(",").map((s) => s.trim()))).toEqual(["shown"]);
+  expect(imports(loopfile.text)).toContain("./packfile");
+  expect(sources.flatMap((f) => tarOnlyThroughPackfile(f.path, f.text))).toEqual([]);
+  expect(tarOnlyThroughPackfile("src/core/loopfile.ts", `import { readTarGz } from "./tar";`)).toHaveLength(1);
+  expect(tarOnlyThroughPackfile("src/core/packfile.ts", `import { readTarGz, writeTarGz } from "./tar";`)).toEqual([]);
+});
+
 // ---------- what the security notes claim, over a real socket on 127.0.0.1 ----------
 
 const SECRET = "planted-secret-value-91d7", SECRET_NAME = "SAMPLE_PLANTED_SECRET";

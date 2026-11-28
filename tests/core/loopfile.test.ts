@@ -104,6 +104,60 @@ test("the same header and files write the same tar bytes inside the gzip", async
   expect(gunzipSync(readFileSync(a))).toEqual(gunzipSync(readFileSync(b)));
 });
 
+// ---- slice 14 Task 0: the loop file is read and written by packfile.ts; these held before the change and hold after it
+
+test("a loop file written for a fixed loop has the bytes it had: its sha256 is the one this test holds", async () => {
+  const a = join(dir, "a.loop.tar.gz");
+  const b = join(dir, "b.loop.tar.gz");
+  await writeLoopFile(a, header(), files());
+  await writeLoopFile(b, header(), [...files()].reverse());
+  // the tar inside the gzip (gzip's own bytes are zlib's), with the workbench version masked so the hash outlives a version bump of the same length
+  const masked = (f: string): string => sha256Hex(Buffer.from(Buffer.from(gunzipSync(readFileSync(f))).toString("latin1")
+    .replace(`"workbench":"${WORKBENCH_VERSION}"`, `"workbench":"${"#".repeat(WORKBENCH_VERSION.length)}"`), "latin1"));
+  expect(WORKBENCH_VERSION).toHaveLength(6);
+  expect(masked(a)).toBe(masked(b));
+  expect(masked(a)).toBe(LOOP_FILE_SHA256);
+});
+const LOOP_FILE_SHA256 = "61d99eea1224d2ab87d34bdcde449c2eea4482cb4b501caaa89579eabb09d8c8";
+
+test("every refusal of tests/core/loopfile.test.ts is said in the same words", async () => {
+  const body = "kind: persona\n";
+  const e = entryOf("p.md", body);
+  const big = 17 * 1024 * 1024;
+  const cases: [string, Parameters<typeof rawCaseFile>[1], string][] = [
+    ["link", [{ name: "loop.json", body: manifestFor([e]) }, { name: "manifests/p.md", type: "2", link: "/etc/passwd" }], "manifests/p.md is a link; a loop file holds only regular files"],
+    ["folder", [{ name: "loop.json", body: manifestFor([e]) }, { name: "manifests/p.md", type: "5" }], "manifests/p.md is not a regular file; a loop file holds only regular files"],
+    ["up", [{ name: "loop.json", body: manifestFor([e]) }, { name: "manifests/../x", body }], "manifests/../x: a path that leaves the loop file"],
+    ["nul", [{ name: "loop.json", body: manifestFor([e]) }, { name: "manifests/p\0.md", body }], "manifests/p�.md: a NUL in a path"],
+    ["backslash", [{ name: "loop.json", body: manifestFor([e]) }, { name: "manifests\\p.md", body }], "manifests\\p.md: a backslash in a path"],
+    ["outside", [{ name: "loop.json", body: manifestFor([e]) }, { name: "p.md", body }], "p.md is outside manifests/"],
+    ["unlisted", [{ name: "loop.json", body: manifestFor([e]) }, { name: "manifests/q.md", body }], "manifests/q.md is not listed in loop.json"],
+    ["absent", [{ name: "loop.json", body: manifestFor([e]) }], "p.md is listed in loop.json and is not in the file"],
+    ["size", [{ name: "loop.json", body: manifestFor([e]) }, { name: "manifests/p.md", body: body + "x" }], "manifests/p.md is not the size loop.json lists"],
+    ["hash", [{ name: "loop.json", body: manifestFor([e]) }, { name: "manifests/p.md", body: body.replace("p", "q") }], "manifests/p.md is not what loop.json lists"],
+    ["twice", [{ name: "loop.json", body: manifestFor([e]) }, { name: "manifests/p.md", body }, { name: "manifests/p.md", body }], "manifests/p.md appears twice in the loop file"],
+    ["listed-twice", [{ name: "loop.json", body: manifestFor([e, e]) }], "p.md is listed twice in loop.json"],
+    ["too-large", [{ name: "loop.json", body: manifestFor([{ ...e, bytes: big }]) }, { name: "manifests/p.md", size: big }], "the loop file is larger than the limit of 16777216 bytes unpacked"],
+    ["not-first", [{ name: "manifests/p.md", body }, { name: "loop.json", body: manifestFor([e]) }], "loop.json is not the first member"],
+    ["format", [{ name: "loop.json", body: manifestFor([e], { format: 2 }) }, { name: "manifests/p.md", body }], "loop.json is not a loop file manifest of format 1"],
+  ];
+  for (const [name, ms, said] of cases) {
+    const f = join(dir, `${name}.loop.tar.gz`);
+    rawCaseFile(f, ms);
+    expect([name, await refused(checkLoopFile(f))]).toEqual([name, said]);
+    expect([name, await refused(readLoopFile(f, () => {}))]).toEqual([name, said]);
+  }
+});
+
+test("what readLoopFile's caller throws is passed on as it was thrown", async () => {
+  const f = join(dir, "good.loop.tar.gz");
+  await writeLoopFile(f, header(), files());
+  const mine = new Error("the caller's own");
+  let caught: unknown;
+  try { await readLoopFile(f, () => { throw mine; }); } catch (err) { caught = err; }
+  expect(caught).toBe(mine);
+});
+
 // ---- Step 5: a hostile file
 
 test("a first member that is not loop.json, and a loop.json that is not a manifest of format 1, are refused", async () => {
