@@ -12,8 +12,8 @@ import { sha256Hex } from "../core/hash";
 import { Refused } from "../core/refused";
 import type { CaseSession } from "../core/session";
 import { builderMarking, cardRefs } from "../core/state";
-import type { BuilderChange, BuilderProbe } from "../core/state";
-import type { Actor, ModelChoice } from "../core/types";
+import type { BuilderChange, BuilderProbe, CaseState } from "../core/state";
+import type { Actor, EntryInput, ModelChoice } from "../core/types";
 import type { Workbench } from "../core/workbench";
 import type { BuilderFileView, BuilderView, DiffLine } from "../core/wire";
 import { ContextError, casePart, loadProfile, packPart, stageParts } from "../agents/context";
@@ -28,7 +28,7 @@ import type { BuilderTools, ToolContext } from "../agents/tools";
 import { hideCredentials } from "../agents/tools/builder";
 import { scrub } from "../agents/tools/kit";
 import { rootsOf } from "../modules/config";
-import { checkChange, saveManifests, writeRoot } from "../modules/loop-write";
+import { checkChange, planChange, saveManifests, writeRoot } from "../modules/loop-write";
 import type { ManifestFile, SaveDeps } from "../modules/loop-write";
 import { parseManifestFile, pivotWeight } from "../modules/manifests";
 import { bindPivot, PivotError } from "../modules/pivots";
@@ -542,6 +542,62 @@ export function builderDecide(ctx: BuilderContext, change: string, file: number,
   const written = check.files.find((x) => x.path === f.path)!.hash;
   session.commit(() => [{ type: "builder.decided", actor: ctx.actor, payload: { ...payload, accepted: true, written } }]);
   ctx.reload();
+}
+
+/**
+ * The person's decision on a whole change at once (slice 14: an improve case's chosen candidate is adopted all or nothing). An accept needs every
+ * file undecided and none stale (`opts.stale` is said for one that is); with `opts.expect` the root as it is now, with every file laid over it, must
+ * give loop `expect.loop` the hash `expect.hash` (else `expect.refusal`), so only the version that was probed is written. It then writes every file
+ * in one saveManifests as the person (why builder) and reloads. A rejection decides every file still undecided. Each builder.decided and what
+ * `opts.with` adds are one commit; nothing is written when anything is refused.
+ */
+export function builderDecideAll(
+  ctx: BuilderContext, change: string, accept: boolean,
+  opts: { stale?: string; expect?: { loop: string; hash: string; refusal: string }; with?: (state: Readonly<CaseState>) => EntryInput[] } = {},
+): void {
+  const { session } = ctx;
+  const changes = session.state.builder.changes;
+  if (typeof change !== "string" || !Object.hasOwn(changes, change)) throw new BuilderRefused(`there is no change ${JSON.stringify(String(change).slice(0, 40))} in this session`);
+  const c = changes[change]!;
+  if (accept) {
+    const decided = c.files.find((f) => f.decided !== null);
+    if (decided !== undefined) throw new BuilderRefused(`${decided.path} of change ${change} is decided already`);
+  }
+  const undecided = c.files.map((f, file) => ({ f, file })).filter(({ f }) => f.decided === null);
+  let written = new Map<string, string>();
+  if (accept) {
+    const deps = { ...ctx.deps };
+    const root = rootPathOf(deps, c.root);
+    if (root === null) throw new BuilderRefused(`the root ${c.root} is not a trusted root of the configuration now`);
+    const texts = bundleOf(session, c);
+    const laid: ManifestFile[] = [];
+    for (const { f } of undecided) {
+      const now = onDisk(root, f.path);
+      if ((now?.hash ?? null) !== f.before) throw new BuilderRefused(opts.stale ?? STALE);
+      const text = texts.get(f.path);
+      if (text === undefined || sha256Hex(enc.encode(text)) !== f.after) throw new BuilderRefused("the proposed text of this file is not in this session");
+      if (MARKS.some((m) => text.includes(m))) throw new BuilderRefused("this file holds the mark of text kept from the builder; ask it to propose the file again");
+      laid.push({ path: f.path, text });
+    }
+    const saveDeps = saveDepsOf({ deps, wb: ctx.wb }, ctx.secrets());
+    const refuse = (problems: string[]): never => {
+      const reasons = problems.map((p) => shown(deps, p));
+      throw new BuilderRefused(reasons[0] ?? "the save's check refused it", reasons);
+    };
+    if (opts.expect !== undefined) {
+      const planned = planChange(saveDeps, root, laid, { loop: opts.expect.loop });
+      if (!planned.check.ok) refuse(planned.check.problems);
+      if (planned.lock?.hash !== opts.expect.hash) throw new BuilderRefused(opts.expect.refusal);
+    }
+    const check = saveManifests(saveDeps, root, laid, { actor: ctx.actor, why: "builder", session: session.state.meta!.id });
+    if (!check.ok) refuse(check.problems);
+    written = new Map(check.files.map((x) => [x.path, x.hash]));
+  }
+  session.commit((state) => [
+    ...undecided.map(({ f, file }): EntryInput => ({ type: "builder.decided", actor: ctx.actor, payload: { change, file, accepted: accept, written: accept ? written.get(f.path) ?? null : null } })),
+    ...(opts.with?.(state) ?? []),
+  ]);
+  if (accept) ctx.reload();
 }
 
 // ---------- probe ----------

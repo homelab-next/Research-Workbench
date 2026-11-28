@@ -4,6 +4,7 @@ import { validate } from "../core/schema";
 import { latestDraft, runConflicts } from "../core/state";
 import type { Schema } from "../core/schema";
 import type { CaseSession } from "../core/session";
+import type { Workbench } from "../core/workbench";
 import { MARKINGS } from "../core/types";
 import type { Actor, Marking, ModelChoice, Product } from "../core/types";
 import { THEN_ADVANCE } from "../pipeline/contract";
@@ -14,7 +15,11 @@ import type { CaseHub } from "./hub";
 import { addLane, discardCard, keepCard, moveCard, pinCard, removeLane, renameLane, restoreCard, sendBackCard, setTarget, undo } from "./triage";
 import { modelsFor } from "./views";
 
-export interface CommandContext { hub: CaseHub; case: string; session: CaseSession; engine: Engine; deps: EngineDeps; actor: Extract<Actor, { kind: "human" }> }
+export interface CommandContext {
+  hub: CaseHub; case: string; session: CaseSession; engine: Engine; deps: EngineDeps; actor: Extract<Actor, { kind: "human" }>;
+  /** The workbench, compose's reload (the roots again, in place, after a file is written into one; the new problems) and the value of every secret the workbench holds. */
+  wb: Workbench; reload: () => string[]; secrets: () => readonly string[];
+}
 export interface CommandDef {
   /** JSON Schema (src/core/schema.ts) for the args object; additionalProperties is always false. */
   args: Schema;

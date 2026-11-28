@@ -173,6 +173,9 @@ test("every new route is refused for another Host, another Origin, a cross-site 
     { method: "POST", path: "/api/store/load", body: { file: "CASE-1.TLP-GREEN.tar.gz" } },
     { method: "POST", path: "/api/store/delete", body: { file: "CASE-1.TLP-GREEN.tar.gz", id: "CASE-1" } },
     { method: "POST", path: "/api/settings", body: { key: "cases.on_complete", value: "unload" } },
+    // slice 14: the improve routes
+    { method: "POST", path: "/api/improve", body: { loop: "investigation", case_type: "unknown-device", tasks: 1, candidates: 1, marking: "TLP:AMBER" } },
+    { method: "GET", path: `/api/cases/${id}/improve`, body: null },
   ];
   const r = await served({ role: "requester" });
   try {

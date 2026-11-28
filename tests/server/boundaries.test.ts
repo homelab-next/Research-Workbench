@@ -118,6 +118,22 @@ const probesGoThroughTheRunner: Rule = (path, text) => {
   return found;
 };
 
+// ---------- slice 14: only the person passes the adopt gate, in src/server/improve.ts ----------
+
+/** The one file that passes an improve case's adopt gate. */
+const IMPROVE_SERVER = "src/server/improve.ts";
+/** An entry literal of a pass of the adopt gate, from its type to the end of its line. */
+const ADOPT_PASS = /type:\s*["']gate\.passed["'][^\n]*\bgate:\s*["']adopt["'][^\n]*/g;
+const adoptIsThePersons: Rule = (path, text) => {
+  if (!/^src\//.test(path) || /^src\/(?:core|web)\//.test(path)) return [];
+  const found: string[] = [];
+  for (const m of text.matchAll(ADOPT_PASS)) {
+    if (path !== IMPROVE_SERVER) found.push(`${path} passes the adopt gate`);
+    else if (!/\bactor:\s*ctx\.actor\b/.test(m[0])) found.push(`${path} passes the adopt gate with an actor that is not the request's person`);
+  }
+  return found;
+};
+
 const RULES: [string, Rule][] = [
   ["no file under src/server or src/web imports from src/modules/connectors", noConnectorImports],
   ["no file under src/web except build.ts imports from src/server, src/modules, src/agents, src/pipeline or src/cli", webIsIsolated],
@@ -128,6 +144,7 @@ const RULES: [string, Rule][] = [
   ["no route handler takes an actor from a request: every new route names the person itself", serverNamesTheActor],
   ["builder.decided and builder.probe_decided are written only in src/server/builder.ts, with the request's person as actor", decisionsAreThePersons],
   ["runQuery and runPivot are the only senders of a probe: src/server/builder.ts imports no connector", probesGoThroughTheRunner],
+  ["gate.passed for the adopt gate is written only in src/server/improve.ts, with the request's person as actor", adoptIsThePersons],
 ];
 
 const sources = files(SRC).map((f) => ({ path: rel(f), text: readFileSync(f, "utf8") }));
@@ -210,6 +227,12 @@ test("each rule catches a planted violation", () => {
   expect(probesGoThroughTheRunner(BUILDER_SERVER, `const pool = new ConnectorPool(ctx);\n${sends}`)).toEqual([`${BUILDER_SERVER} names ConnectorPool`]);
   expect(probesGoThroughTheRunner(BUILDER_SERVER, `const rows = await source.query(text);`)).toEqual([`${BUILDER_SERVER} does not send a probe through runQuery`]);
   expect(probesGoThroughTheRunner("src/server/seek.ts", `deps.runner.pool.get(x)`)).toEqual([]);
+  // slice 14: only the person passes the adopt gate
+  const pass = `return { type: "gate.passed", actor: ctx.actor, payload: { gate: "adopt" }, run };`;
+  expect(adoptIsThePersons(IMPROVE_SERVER, pass)).toEqual([]);
+  expect(adoptIsThePersons("src/pipeline/improve/adopt.ts", pass)).toEqual(["src/pipeline/improve/adopt.ts passes the adopt gate"]);
+  expect(adoptIsThePersons(IMPROVE_SERVER, `return { type: "gate.passed", actor: ENGINE, payload: { gate: "adopt" } };`)).toEqual([`${IMPROVE_SERVER} passes the adopt gate with an actor that is not the request's person`]);
+  expect(adoptIsThePersons("src/pipeline/publish.ts", `const entries = [{ type: "gate.passed", actor, payload: { gate: "publish" } }];`)).toEqual([]);
 });
 
 test("the slice 12 rules see what they are about: the three writers write, the agents and stages exist, and the loop routes name the person", () => {
@@ -546,4 +569,37 @@ test("every memory route is in the app's table behind the role check, and no mem
     expect(((await res.json()) as { refused: string[] }).refused).toEqual(["the server names the actor"]);
   }
   expect(s.wb.memory.head()).toEqual(before);
+});
+
+// ---------- slice 14: the improve routes and commands ----------
+
+test("both improve routes are in the app's table behind the role check, and no improve route or command reads an actor from its body", async () => {
+  const app = sources.find((f) => f.path === "src/server/app.ts")!.text;
+  const table = app.slice(app.indexOf("const routes: Route[] = ["));
+  expect(table).toContain("...improveTable,");
+  expect(app).toMatch(/const improveTable = improveRoutes\(\{[^}]*human: \(\) => \(\{ kind: "human", id: config\.user \}\)/);
+  const routes = sources.find((f) => f.path === "src/server/improve-routes.ts")!.text;
+  const literals = [...routes.matchAll(/\{\s*method:\s*"(GET|POST)",\s*path[^\n]*/g)].map((m) => m[0]);
+  expect(literals.length).toBe(2);
+  for (const l of literals) expect(l).toMatch(/needs: \{ (read: "improve"|command: "create_improve") \}/);
+  for (const path of ["src/server/improve-routes.ts", IMPROVE_SERVER]) expect(serverNamesTheActor(path, sources.find((f) => f.path === path)!.text)).toEqual([]);
+  // the person the routes name is the server's, and a case command's is the one app.ts names
+  expect([...routes.matchAll(/actor:\s*([^,}\n]+)/g)].map((m) => m[1]!.trim())).toEqual(["ctx.actor"]);
+  expect(routes).toContain("d.human()");
+
+  // the same, from outside: a requester may not read an improve view, make an improve case or decide at Adopt
+  const t = await served({ listen: true, role: "requester" });
+  try {
+    for (const [method, path, body] of [
+      ["GET", "/api/cases/CASE-1/improve"], ["POST", "/api/improve", { loop: "investigation", case_type: "unknown-device", tasks: 1, candidates: 1, marking: "TLP:AMBER" }],
+      ["POST", "/api/cases/CASE-1/commands", { command: "adopt_decide", args: { change: "chg-1", accept: true } }],
+      ["POST", "/api/cases/CASE-1/commands", { command: "set_known_answer", args: { product: 1, text: "x", findings: [], marking: "TLP:RED" } }],
+    ] as [string, string, unknown?][]) {
+      const res = await fetch(`${t.origin}${path}`, method === "GET" ? {} : { method, headers: { origin: t.origin, "content-type": "application/json" }, body: JSON.stringify(body) });
+      expect(`${method} ${path}: ${res.status}`).toBe(`${method} ${path}: 403`);
+    }
+    expect(t.wb.listCases()).toEqual([]);
+  } finally {
+    await t.close();
+  }
 });

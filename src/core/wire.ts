@@ -2,7 +2,7 @@
  * What crosses between the server and the browser besides entries. Types and one constant, browser-safe: the server and src/web/ both import from here.
  */
 import type { Json } from "./canonical";
-import type { RunState } from "./state";
+import type { RunState, ScoreSheet } from "./state";
 import type { EmptyMeans, Marking, ModelChoice, Observable, StageDef, TimeWindow, Trigger, Where } from "./types";
 
 /** The id of the playbook the server makes on the spot for "does it belong?"; no manifest may take it. pivot owns the name. */
@@ -72,6 +72,22 @@ export interface BuilderSummaryView { id: string; title: string; loop: string | 
 /** A builder session as its page shows it: what it proposed, file by file, and the probes it asked for with what the person decided. */
 export interface BuilderView { id: string; loop: string | null; marking: Marking; model: ModelChoice | null; changes: { id: string; title: string; why: string; files: BuilderFileView[] }[];
   probes: { id: string; kind: "pivot" | "query"; source: string; pivot: string | null; value: Observable | null; text: string | null; why: string; costly: boolean; decided: null | { approved: boolean; outcome: string; detail: string; card: string | null } }[] }
+// ---------- the improve loop (slice 14) ----------
+/** What the person asks of a new improve case (POST /api/improve): the loop to improve, the case type it improves for, how many tasks and candidates, and its marking. */
+export interface NewImproveInput { loop: string; case_type: string; tasks: number; candidates: number; marking: Marking }
+/** An improve case as its lens shows it. It holds no known answer: an expected finding is named by its number, and the scores are code's. */
+export interface ImproveView {
+  request: { target: string; case_type: string; tasks: number; candidates: number } | null;
+  selected: null | { target: string; version: number; loop_hash: string; tasks: { task: string; case: string; marking: Marking }[]; left_out: { case: string; why: string }[] };
+  candidates: { candidate: string; change: string; title: string; why: string; status: "staged" | "dropped"; reason: string; files: BuilderFileView[] }[];
+  probes: { probe: string; candidate: string; task: string; child: string; head: { seq: number; hash: string } | null; outcome: "drafted" | "incomplete" | null; reason: string; lookups: number | null; tokens: number | null }[];
+  chosen: { candidate: string | null; why: string } | null;
+  /** Null until judge.scored. */
+  scores: ScoreSheet | null;
+  lessons: { lesson: string; title: string }[];
+  /** The chosen candidate, offered whole at the adopt gate: the person accepts or rejects all of its files at once. */
+  adopt: { waiting: boolean; candidate: string; change: string; undecided: number } | null;
+}
 // ---------- memory (slice 13) ----------
 /** A lesson of the shared store, as the Memory page shows it. Every text is shown scrubbed. */
 export interface LessonView {

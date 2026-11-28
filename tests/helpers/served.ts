@@ -188,3 +188,26 @@ export function withMemoryLoop(root: string, opts: { case_type?: string } = {}):
   const framing = script.turns.filter((t) => t.actor === "orchestrator").map((t) => (t.reply.content === undefined ? t : { ...t, reply: { content: JSON.stringify({ ...JSON.parse(t.reply.content) as object, case_type: "unknown-device" }) } }));
   writeFileSync(join(root, "scripts", "memo-frame.yaml"), JSON.stringify({ kind: "script", id: "memo-frame", title: "Memo Frame", turns: [...framing, ...framing, ...framing] }));
 }
+
+const IMPROVE_ROLES = ["select", "propose", "probe", "compose", "judge", "reflect", "adopt"] as const;
+const IMPROVE_TITLES: Record<string, string> = { select: "Select", propose: "Propose", probe: "Probe", compose: "Compose", judge: "Judge", reflect: "Reflect", adopt: "Adopt" };
+
+/**
+ * The sample's root with an improve loop: the loop `improve` of seven inline stages, one of each improve role in order (Probe accepts its
+ * children's plan gate; Adopt waits at the adopt gate), and its profile. The sample's own loops, stages and profile are as they were.
+ */
+export function withImproveLoop(root: string): void {
+  const stages = IMPROVE_ROLES.map((role, i) => {
+    const agent = role === "propose" || role === "compose" || role === "reflect";
+    return {
+      id: role, title: IMPROVE_TITLES[role]!, order: i + 1, runs: agent ? "agent" : role === "adopt" ? "human" : "script", role, gate: role === "adopt" ? "adopt" : null, reviews: false,
+      tools: [], schema: null, model: agent ? { provider: "scripted", model: "sample-device", effort: null } : null, on_pass: IMPROVE_ROLES[i + 1] ?? null, on_fail: null,
+      ...(role === "probe" ? { probe: { plan_gate: "accept" } } : {}),
+    };
+  });
+  writeFileSync(join(root, "loops", "improve.yaml"), JSON.stringify({ kind: "loop", id: "improve", title: "Improve", version: 1, profile: "improve-test", entry: "select", stages }, null, 2));
+  writeFileSync(join(root, "context", "improve-test-profile.yaml"), JSON.stringify({
+    kind: "profile", id: "improve-test", title: "Improve (test)", rules: "base-rules", framework: "intel-cycle", standard: "icd203",
+    stages: Object.fromEntries(["propose", "compose", "reflect"].map((id) => [id, { agent: "analyst", persona: "analyst", goal: `The ${id} stage of the test.` }])),
+  }, null, 2));
+}

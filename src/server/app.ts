@@ -29,6 +29,7 @@ import { deleteRoute, loadRoute, settingsRoute, storeRoute, unloadRoute } from "
 import { loopRoutes } from "./loop-routes";
 import { builderRoutes } from "./builder-routes";
 import { memoryRoutes } from "./memory-routes";
+import { improveRoutes } from "./improve-routes";
 import type { StoreRouteDeps } from "./store-routes";
 import { agentView } from "./converse";
 import { routesFor } from "./seek";
@@ -197,6 +198,10 @@ export function createApp(opts: AppOptions): App {
     config, wb, hub, deps, human: () => ({ kind: "human", id: config.user }), shown: (r) => shown(deps, r), secrets: () => opts.secrets?.() ?? [],
   });
 
+  const improveTable = improveRoutes({
+    wb, hub, deps, human: () => ({ kind: "human", id: config.user }), shown: (r) => shown(deps, r), secrets: () => opts.secrets?.() ?? [],
+  });
+
   const routes: Route[] = [
     { method: "GET", path: /^\/$/, needs: { read: "page" }, kind: "page", handle: () => text(assets.html, "text/html; charset=utf-8") },
     { method: "GET", path: /^\/app\.js$/, needs: { read: "page" }, kind: "api", handle: () => text(assets.js, "text/javascript; charset=utf-8") },
@@ -329,7 +334,10 @@ export function createApp(opts: AppOptions): App {
             const engine = hub.engine(id);
             const session = hub.read(id);
             // the case's own loop version: the one its run bound, else the one a new run would bind
-            const ctx: CommandContext = { hub, case: id, session, engine, deps: engine.bound, actor: { kind: "human", id: config.user } };
+            const ctx: CommandContext = {
+              hub, case: id, session, engine, deps: engine.bound, actor: { kind: "human", id: config.user },
+              wb, reload: () => { reloadRoots(); return opts.problems; }, secrets: () => opts.secrets?.() ?? [],
+            };
             await def.perform(ctx, args as Record<string, never>, prepared);
             if (def.then === "advance") hub.drive(id);
             return { ok: true, seq: session.head().seq };
@@ -344,6 +352,7 @@ export function createApp(opts: AppOptions): App {
     ...loopsTable,
     ...buildersTable,
     ...memoryTable,
+    ...improveTable,
   ];
 
   async function route(req: Request): Promise<{ res: Response; kind: Kind }> {
