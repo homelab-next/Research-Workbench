@@ -110,6 +110,8 @@ async function theAdopt(path: string): Promise<void> {
   await tab.reducedMotion(true);
   const text = (selector: string): Promise<string> => tab.evaluate<string>(`(document.querySelector(${JSON.stringify(selector)})?.textContent ?? "")`);
   await tab.waitFor(`document.querySelector("[data-area=incoming]") !== null`);
+  // the Improve lens is on the shelf only once the case's entries have come in: a key pressed before then opens nothing
+  await tab.waitFor(`document.querySelector(".shelf [data-lens=improve]") !== null`);
   await tab.press("i");
   // the gate is drawn once the server's view (the diff, whether a file is stale) has come in: Accept is on only then
   await tab.waitFor(`document.querySelector(".lens-improve [data-action=adopt-accept]:not([disabled])") !== null`);
