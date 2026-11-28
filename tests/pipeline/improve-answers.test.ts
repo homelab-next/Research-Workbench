@@ -149,16 +149,25 @@ test("withdrawKnownAnswer removes it; with no reason, or for a product with none
   const { s } = published("TLP:GREEN", "TLP:AMBER", 2);
   setKnownAnswer(s, deps, input(), SCALE);
   const before = s.entries().length;
-  expect(() => withdrawKnownAnswer(s, { product: 1, reason: "  ", actor: human })).toThrow("withdrawing a known answer needs a reason");
-  expect(() => withdrawKnownAnswer(s, { product: 2, reason: "wrong", actor: human })).toThrow("there is no known answer for product 2");
-  expect(() => withdrawKnownAnswer(s, { product: 1, reason: "wrong", actor: assembler })).toThrow(AnswerRefused);
+  expect(() => withdrawKnownAnswer(s, deps, { product: 1, reason: "  ", actor: human })).toThrow("withdrawing a known answer needs a reason");
+  expect(() => withdrawKnownAnswer(s, deps, { product: 2, reason: "wrong", actor: human })).toThrow("there is no known answer for product 2");
+  expect(() => withdrawKnownAnswer(s, deps, { product: 1, reason: "wrong", actor: assembler })).toThrow(AnswerRefused);
   expect(s.entries().length).toBe(before);
-  withdrawKnownAnswer(s, { product: 1, reason: "it was a different host", actor: human });
+  withdrawKnownAnswer(s, deps, { product: 1, reason: "it was a different host", actor: human });
   const last = s.entries().at(-1)!;
   expect(last.type).toBe("answer.withdrawn");
   expect(last.payload).toEqual({ product: 1, reason: "it was a different host" });
   expect(s.state.answers).toEqual({});
-  expect(() => withdrawKnownAnswer(s, { product: 1, reason: "again", actor: human })).toThrow("there is no known answer for product 1");
+  expect(() => withdrawKnownAnswer(s, deps, { product: 1, reason: "again", actor: human })).toThrow("there is no known answer for product 1");
+});
+
+test("a secret value in a withdraw reason is written redacted and never reaches the ledger", () => {
+  const { s } = published();
+  setKnownAnswer(s, deps, input(), SCALE);
+  withdrawKnownAnswer(s, deps, { product: 1, reason: `the key ${SECRET} was in it`, actor: human });
+  const last = s.entries().at(-1)!;
+  expect(last.payload).toEqual({ product: 1, reason: "the key [redacted secret] was in it" });
+  expect(JSON.stringify(s.entries())).not.toContain(SECRET);
 });
 
 test("answeredProducts lists number, draft hash, marking, seq and hash and nothing of the text", () => {

@@ -72,9 +72,11 @@ export function setKnownAnswer(session: CaseSession, deps: Pick<EngineDeps, "run
   });
 }
 
-/** Writes answer.withdrawn by the person, with the reason. Throws AnswerRefused, writing nothing. */
-export function withdrawKnownAnswer(session: CaseSession, input: { product: number; reason: string; actor: Actor }): void {
-  if (input.actor?.kind !== "human") throw new AnswerRefused("only a person withdraws a known answer");
+/** Writes answer.withdrawn by the person, with the reason, every secret value in it redacted. Throws AnswerRefused, writing nothing. */
+export function withdrawKnownAnswer(session: CaseSession, deps: Pick<EngineDeps, "runner">, given: { product: number; reason: string; actor: Actor }): void {
+  if (given.actor?.kind !== "human") throw new AnswerRefused("only a person withdraws a known answer");
+  // redacted here, before the checks: the caller is not trusted to have done it
+  const input = { ...given, reason: typeof given.reason === "string" ? redactSecrets(given.reason, deps.runner.secrets?.() ?? []) : given.reason };
   session.commit((state) => {
     if (!Object.hasOwn(state.answers, String(input.product))) throw new AnswerRefused(`there is no known answer for product ${String(input.product)}`);
     if (typeof input.reason !== "string" || input.reason.trim() === "") throw new AnswerRefused("withdrawing a known answer needs a reason");
