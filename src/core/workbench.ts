@@ -388,9 +388,11 @@ export class Workbench {
    * TypeError, having written nothing, for what the fold would not read: a link without a loop, a malformed link or card, cards without a link,
    * a child less strictly marked than its link's floor or than a card it is given, a child whose loop is not its link's. `type`: the case's type,
    * recorded as case.type_set in the commit of case.created (after subloop.child, before the cards): by `actor` for a case a person makes, by the
-   * engine for a child; a type that is not a case type's id, or an agent as the actor, is a TypeError.
+   * engine for a child. `type_by`: the system actor that stands for a type the person did not choose (a loop's default, or one inherited from a
+   * parent); case.type_set is then by it, not by `actor` or the engine. A type that is not a case type's id, an agent as the actor, a `type_by`
+   * that is not a system actor, or a `type_by` with no `type`, is a TypeError.
    */
-  createCase(input: NewCase, actor: Actor, opts: { loop?: string; default_loop?: string; link?: ChildLink; cards?: Card[]; type?: string } = {}): CaseSession {
+  createCase(input: NewCase, actor: Actor, opts: { loop?: string; default_loop?: string; link?: ChildLink; cards?: Card[]; type?: string; type_by?: Actor } = {}): CaseSession {
     this.open();
     if (!isMarking(input?.marking)) throw new TypeError(`unknown marking ${JSON.stringify(input?.marking)}`);
     const { loop, link } = opts;
@@ -401,6 +403,8 @@ export class Workbench {
     const { type } = opts;
     if (type !== undefined && !(typeof type === "string" && CASE_TYPE_ID.test(type))) throw new TypeError("a case's type is a case type's id");
     if (type !== undefined && actor?.kind === "agent") throw new TypeError("a case's type is set by a person or the workbench");
+    const { type_by } = opts;
+    if (type_by !== undefined && (type === undefined || type_by?.kind !== "system")) throw new TypeError("a type's actor is a system actor, and only for a type");
     if (link !== undefined) {
       if (loop === undefined) throw new TypeError("a child case names the loop it is for");
       if (!isChildLink(link)) throw new TypeError("a child's link names its parent, run, stage, attempt (1 or more), loop, input hash, depth and floor marking");
@@ -441,7 +445,7 @@ export class Workbench {
           const { parent, run, stage, attempt, input_hash, depth, floor } = link;
           entries.push({ type: "subloop.child", payload: { parent, run, stage, attempt, loop: link.loop, input_hash, depth, floor }, actor: ENGINE });
         }
-        if (type !== undefined) entries.push({ type: "case.type_set", payload: { type }, actor: link === undefined ? actor : ENGINE });
+        if (type !== undefined) entries.push({ type: "case.type_set", payload: { type }, actor: type_by ?? (link === undefined ? actor : ENGINE) });
         for (const c of cards) entries.push({ type: "card.created", payload: { card: { ...c, id: ids.next("card") } }, actor: ENGINE });
         return entries;
       });

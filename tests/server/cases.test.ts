@@ -274,12 +274,14 @@ test("a new case with a type records it; with none it takes its loop's; with non
   const typeSet = (id: string) => s.entries(id).filter((e) => e.type === "case.type_set");
   // in the commit of case.created, by the person
   expect(typeSet(named).map((e) => [e.seq, e.payload, e.actor])).toEqual([[2, { type: "phishing" }, { kind: "human", id: s.config.user }]]);
-  expect(typeSet(ofLoop).map((e) => e.payload)).toEqual([{ type: "unknown-device" }]);
+  // a loop's default is the workbench's choice, not the person's
+  expect(typeSet(ofLoop).map((e) => [e.payload, e.actor])).toEqual([[{ type: "unknown-device" }, { kind: "system", id: "loop-default" }]]);
   expect(typeSet(none)).toEqual([]);
   expect([named, ofLoop, none].map((id) => s.app.hub.read(id).state.memory.type)).toEqual(["phishing", "unknown-device", null]);
   // a type named wins over the loop's
   const both = await s.newCase({ loop: "memo", type: "phishing" });
   expect(s.app.hub.read(both).state.memory.type).toBe("phishing");
+  expect(typeSet(both).map((e) => e.actor)).toEqual([{ kind: "human", id: s.config.user }]);
 });
 
 test("a new case with a type that is not loaded is refused: there is no case type", async () => {

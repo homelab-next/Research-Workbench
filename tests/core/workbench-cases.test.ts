@@ -671,6 +671,21 @@ test("a child case's type is recorded by the engine, after subloop.child, and su
   expect(child.state.skipped).toEqual([]);
 });
 
+test("case.type_set is by the person only for a type the person chose; a loop's default and an inherited type are by a system actor", () => {
+  const byDefault: Actor = { kind: "system", id: "loop-default" };
+  const byParent: Actor = { kind: "system", id: "parent" };
+  const actorOf = (c: ReturnType<typeof wb.createCase>) => c.entries().filter((e) => e.type === "case.type_set").map((e) => e.actor);
+  expect(actorOf(wb.createCase(sample, person, { type: "unknown-device" }))).toEqual([person]);
+  expect(actorOf(wb.createCase(sample, person, { type: "unknown-device", type_by: byDefault }))).toEqual([byDefault]);
+  expect(actorOf(wb.createCase(sample, person, { type: "unknown-device", type_by: byParent }))).toEqual([byParent]);
+  const link = { parent: "CASE-1", run: "run-1", stage: "investigate", attempt: 1, loop: "investigation", input_hash: "c".repeat(64), depth: 1, floor: "TLP:GREEN" as const };
+  const engine: Actor = { kind: "system", id: "engine" };
+  expect(actorOf(wb.createCase(sample, engine, { loop: "investigation", link, type: "unknown-device", type_by: byParent }))).toEqual([byParent]);
+  // only a system actor may stand for a default or an inherited type
+  expect(() => wb.createCase(sample, person, { type: "unknown-device", type_by: person })).toThrow(TypeError);
+  expect(() => wb.createCase(sample, person, { type_by: byParent })).toThrow(TypeError);
+});
+
 test("createCase with a type that is not an id, or by an agent, throws and leaves no folder", () => {
   const agent: Actor = { kind: "agent", id: "frame", stage: "frame", profile: "p", model: "scripted-m", effort: null, where: "machine" };
   for (const type of ["Unknown Device", "", "-lead", "a".repeat(65), 7 as unknown as string]) {

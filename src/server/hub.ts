@@ -77,8 +77,10 @@ export class CaseHub {
     },
     create: (input: NewCase, link: ChildLink, cards: Card[]) => {
       // a child takes its own loop's case type, else its parent's
-      const type = loopCaseType(this.deps.loops, link.loop) ?? this.parentType(link.parent);
-      const made = this.wb.createCase(input, ENGINE, { loop: link.loop, link, cards, ...(type === null ? {} : { type }) });
+      const own = loopCaseType(this.deps.loops, link.loop);
+      const type = own ?? this.parentType(link.parent);
+      const type_by: Actor = { kind: "system", id: own === null ? "parent" : "loop-default" };
+      const made = this.wb.createCase(input, ENGINE, { loop: link.loop, link, cards, ...(type === null ? {} : { type, type_by }) });
       return { id: made.id, origin: made.entries(0, 1)[0]!.hash };
     },
     drive: async (ref: ChildRef, opts: { loop: ResolvedLoop }): Promise<RunSummary> => {
@@ -152,7 +154,9 @@ export class CaseHub {
   create(input: NewCase, actor: Actor, opts: { loop?: string; type?: string } = {}): CaseSession {
     const type = opts.type ?? loopCaseType(this.deps.loops, opts.loop ?? this.deps.config.loops.default);
     const where = opts.loop === undefined ? { default_loop: this.deps.config.loops.default } : { loop: opts.loop };
-    return this.wb.createCase(input, actor, { ...where, ...(type === null ? {} : { type }) });
+    // a loop's default is the workbench's, not the person's: only a type the person named is recorded as theirs
+    const by = opts.type === undefined ? { type_by: { kind: "system", id: "loop-default" } as Actor } : {};
+    return this.wb.createCase(input, actor, { ...where, ...(type === null ? {} : { type, ...by }) });
   }
 
   /** The type of a loaded case, for its child; null when it has none or is not loaded. */

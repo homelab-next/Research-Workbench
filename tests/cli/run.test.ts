@@ -322,6 +322,10 @@ const entriesOf = (e: Env, id: string, type: string): unknown[] => {
   const db = new Database(join(e.data, "cases", id, "ledger.sqlite"), { readonly: true });
   try { return (db.query("select payload from entries where type = ? order by seq").all(type) as { payload: string }[]).map((r) => JSON.parse(r.payload)); } finally { db.close(); }
 };
+const actorsOf = (e: Env, id: string, type: string): unknown[] => {
+  const db = new Database(join(e.data, "cases", id, "ledger.sqlite"), { readonly: true });
+  try { return (db.query("select actor from entries where type = ? order by seq").all(type) as { actor: string }[]).map((r) => JSON.parse(r.actor)); } finally { db.close(); }
+};
 const withLoop = (loop: string): string[] => [...START, "--loop", loop];
 
 test("start --loop triage makes a case for that loop and starts it; start with no --loop is as before", () => {
@@ -405,6 +409,7 @@ test("start --type unknown-device records the type; --type of no case type is a 
   expect(named.err).toBe("");
   expect(named.code).toBe(0);
   expect(entriesOf(e, "CASE-1", "case.type_set")).toEqual([{ type: "unknown-device" }]);
+  expect(actorsOf(e, "CASE-1", "case.type_set")).toEqual([{ kind: "human", id: "analyst" }]);
   expect(lines(named.out)).toContain("type unknown-device");
   expect(lines(cli(e, ["status", "CASE-1"], false).out)).toContain("type unknown-device");
   const unknown = cli(e, [...START, "--type", "no-such-type"]);
@@ -416,6 +421,7 @@ test("start --type unknown-device records the type; --type of no case type is a 
   const byLoop = cli(e, [...START, "--loop", "typed"]);
   expect(byLoop.err).toBe("");
   expect(entriesOf(e, "CASE-2", "case.type_set")).toEqual([{ type: "unknown-device" }]);
+  expect(actorsOf(e, "CASE-2", "case.type_set")).toEqual([{ kind: "system", id: "loop-default" }]);
   const plain = cli(e, START);
   expect(plain.code).toBe(0);
   expect(entriesOf(e, "CASE-3", "case.type_set")).toEqual([]);

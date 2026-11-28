@@ -247,7 +247,7 @@ test("a child case takes its own loop's case type, else its parent's", async () 
   await s.app.hub.idle();
   let child = (ofType(parent, "subloop.started")[0]!.payload as { child: string }).child;
   expect(s.app.hub.read(child).state.memory.type).toBe("phishing");
-  expect(ofType(child, "case.type_set").map((e) => [e.payload, e.actor])).toEqual([[{ type: "phishing" }, { kind: "system", id: "engine" }]]);
+  expect(ofType(child, "case.type_set").map((e) => [e.payload, e.actor])).toEqual([[{ type: "phishing" }, { kind: "system", id: "parent" }]]);
   await s.close();
   // the child's loop names one: the child takes its loop's
   s = await served({
@@ -263,4 +263,5 @@ test("a child case takes its own loop's case type, else its parent's", async () 
   await s.app.hub.idle();
   child = (ofType(parent, "subloop.started")[0]!.payload as { child: string }).child;
   expect(s.app.hub.read(child).state.memory.type).toBe("unknown-device");
+  expect(ofType(child, "case.type_set").map((e) => [e.payload, e.actor])).toEqual([[{ type: "unknown-device" }, { kind: "system", id: "loop-default" }]]);
 });

@@ -227,8 +227,10 @@ class Host implements ChildCases {
     // a child's type is its own loop's default, else its parent's
     let parentType: string | null = null;
     try { parentType = this.wb.session(link.parent).state.memory.type; } catch { /* the parent is not loaded: the child has none */ }
-    const type = loopCaseType(this.deps().loops, link.loop) ?? parentType;
-    const made = this.wb.createCase(input, { kind: "system", id: "engine" }, { loop: link.loop, link, cards, ...(type === null ? {} : { type }) });
+    const own = loopCaseType(this.deps().loops, link.loop);
+    const type = own ?? parentType;
+    const type_by: Actor = { kind: "system", id: own === null ? "parent" : "loop-default" };
+    const made = this.wb.createCase(input, { kind: "system", id: "engine" }, { loop: link.loop, link, cards, ...(type === null ? {} : { type, type_by }) });
     return { id: made.id, origin: made.entries(0, 1)[0]!.hash };
   }
   async drive(ref: ChildRef, opts: { loop: ResolvedLoop }): Promise<ReturnType<Engine["summary"]>> {
@@ -332,7 +334,9 @@ async function main(argv: string[]): Promise<number> {
       }
       // the type a person names, else the loop's default
       const type = named ?? loopCaseType(deps.loops, loopId ?? deps.config.loops.default);
-      session = wb.createCase({ ...input }, human, { ...(loopId === undefined ? { default_loop: deps.config.loops.default } : { loop: loopId }), ...(type === null ? {} : { type }) });
+      // a loop's default is the workbench's, not the person's: only a --type the person named is recorded as theirs
+      const by = named === undefined ? { type_by: { kind: "system", id: "loop-default" } as Actor } : {};
+      session = wb.createCase({ ...input }, human, { ...(loopId === undefined ? { default_loop: deps.config.loops.default } : { loop: loopId }), ...(type === null ? {} : { type, ...by }) });
     } else {
       session = wb.session(p.case!);
     }
