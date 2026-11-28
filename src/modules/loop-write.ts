@@ -22,7 +22,7 @@ import { toYaml } from "./yaml-write";
 import { rootRelative } from "../pipeline/components";
 import type { ResolveContext } from "../pipeline/components";
 import { DEFAULT_LOOP, IMPLICIT_NOTE, loadLoops } from "../pipeline/loops";
-import type { LoopCatalog, LoopManifest, ResolvedLoop } from "../pipeline/loops";
+import type { LoopCatalog, LoopLock, LoopManifest, ResolvedLoop } from "../pipeline/loops";
 import { stageFrom } from "../pipeline/manifests";
 import type { StageManifest } from "../pipeline/manifests";
 
@@ -35,7 +35,7 @@ export class WriteRefused extends Refused {
 
 export interface ManifestFile { path: string; text: string } // path is relative to the write root, `/` separated
 /** The kinds a save may write, and where: loop → loops/<id>.yaml; the builder's other kinds keep the path given. */
-export const WRITABLE_KINDS: readonly string[] = ["loop", "stage", "source", "pivots", "playbook", "skill"];
+export const WRITABLE_KINDS: readonly string[] = ["loop", "stage", "source", "pivots", "playbook", "skill", "procedure"];
 export interface ChangeCheck { ok: boolean; problems: string[]; files: { path: string; kind: string; id: string; hash: string; before: string | null }[] }
 export interface SaveDeps { config: Config; chain: Ledger; content: BlobStore; secrets: readonly string[] }
 /** A loop as the forms edit it: the manifest's fields, every stage inline. */
@@ -158,10 +158,18 @@ function implicitText(loop: ResolvedLoop): string {
   })}`;
 }
 
-/** checkChange, and the texts a save writes. */
-function plan(deps: SaveDeps, root: string, files: ManifestFile[]): { check: ChangeCheck; planned: Planned[] } {
-  const refused = (problems: string[], planned: Planned[] = []): { check: ChangeCheck; planned: Planned[] } => ({
-    check: { ok: false, problems, files: planned.map(({ text: _t, ...f }) => f) }, planned,
+interface Plan { check: ChangeCheck; planned: Planned[]; lock: LoopLock | null }
+
+/** Copies into `into` every byte `lock` reads that the content store lacks, from the check's own store. */
+function keepFor(lock: LoopLock, from: BlobStore, content: BlobStore, into: BlobStore): void {
+  const hashes = [...(lock.manifest.path === null ? [] : [lock.manifest.hash]), ...lock.items.filter((i) => i.source !== "memory").map((i) => i.hash)];
+  for (const h of hashes) if (content.check(h) !== "ok" && from.check(h) === "ok") into.put(from.get(h));
+}
+
+/** checkChange, the texts a save writes and, with `opts.loop`, that loop's lock in the copy (its bytes kept in `opts.into` when given). */
+function plan(deps: SaveDeps, root: string, files: ManifestFile[], opts: { into?: BlobStore; loop?: string } = {}): Plan {
+  const refused = (problems: string[], planned: Planned[] = []): Plan => ({
+    check: { ok: false, problems, files: planned.map(({ text: _t, ...f }) => f) }, planned, lock: null,
   });
   const rootConfig = deps.config.roots.find((r) => r.trusted && sameDir(r.path, root));
   if (rootConfig === undefined) return refused(["the folder to save into is not a trusted root of the configuration"]);
@@ -287,10 +295,24 @@ function plan(deps: SaveDeps, root: string, files: ManifestFile[]): { check: Cha
       const m = after.get("pivot", pv.id);
       problems.push(`${m === null ? "" : `${rootRelative(m.root, m.path)}: `}pivot "${pv.id}": ${shown(pv.problem)}`);
     }
-    return problems.length > 0 ? refused(problems, planned) : { check: { ok: true, problems: [], files: planned.map(({ text: _t, ...f }) => f) }, planned };
+    if (problems.length > 0) return refused(problems, planned);
+    // the lock of the loop asked for, as the copy resolves it; what it reads that the content store lacks is kept before the copy is removed
+    const lock = opts.loop === undefined ? null : afterLoops.current(opts.loop)?.lock ?? null;
+    if (lock !== null && opts.into !== undefined) keepFor(lock, content, deps.content, opts.into);
+    return { check: { ok: true, problems: [], files: planned.map(({ text: _t, ...f }) => f) }, planned, lock };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
+}
+
+/**
+ * plan(), exported. `opts.into`: the overlay's own store (kept; a check's temporary one when absent). `opts.loop`: the id of a loop whose lock,
+ * in the copy, is returned. The check is always made over a temporary store, and the copy of the root is always removed; only when the check
+ * passes are the bytes the returned lock reads that the content store lacks put into `opts.into`, so a refused change leaves it as it was.
+ */
+export function planChange(deps: SaveDeps, root: string, files: ManifestFile[], opts?: { into?: BlobStore; loop?: string }): { check: ChangeCheck; lock: LoopLock | null } {
+  const { check, lock } = plan(deps, root, files, opts);
+  return { check, lock };
 }
 
 /** Writes a file whole under a name the registry does not read, flushes it and renames it into place. */
@@ -377,6 +399,7 @@ function stageBody(s: StageManifest): Record<string, Json> {
     b.inputs = { ...s.subloop.inputs };
     b.returns = JSON.parse(JSON.stringify(s.subloop.returns)) as Json;
   }
+  if (s.probe != null) b.probe = { ...s.probe };
   return b;
 }
 

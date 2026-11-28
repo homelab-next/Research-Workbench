@@ -12,9 +12,11 @@ import { loadConfig } from "../../src/modules/config";
 import type { Config } from "../../src/modules/config";
 import { loadRegistry } from "../../src/modules/registry-record";
 import type { Registry } from "../../src/modules/registry";
-import { checkChange, copyLoop, copyOf, draftOf, loopText, saveLoop, saveManifests, WRITABLE_KINDS, WriteRefused, writeRoot } from "../../src/modules/loop-write";
+import { checkChange, copyLoop, copyOf, draftOf, keptStages, loopText, planChange, saveLoop, saveManifests, WRITABLE_KINDS, WriteRefused, writeRoot } from "../../src/modules/loop-write";
 import type { ManifestFile } from "../../src/modules/loop-write";
+import { BlobStore } from "../../src/core/blobs";
 import { IMPLICIT_NOTE, loadLoops } from "../../src/pipeline/loops";
+import { stageFrom } from "../../src/pipeline/manifests";
 import type { LoopCatalog, ResolvedLoop } from "../../src/pipeline/loops";
 import { copySample } from "../helpers/sample-root";
 
@@ -499,4 +501,45 @@ test("checkChange and saveManifests behave as they did (tests/modules/loop-write
   expect(snapshot(join(config.data_dir, "blobs"))).toEqual(blobs);
   expect(saveManifests(deps(), root, [{ path: "loops/triage.yaml", text }], { actor: human, why: "save", session: null }).ok).toBe(true);
   expect(load().loops.current("triage")).not.toBeNull();
+});
+
+// ---- slice 14: a check's plan, exported for staging; a procedure is written; a probe stage keeps its probe
+
+test("planChange gives checkChange's check and, for the loop asked for, its lock in the copy; its bytes the content store lacks are put in `into` only when the check passes", () => {
+  const skill = readFileSync(join(root, "context", "skills", "ask-the-person.md"), "utf8").replace("Ask one thing at a time, and ask early.", "Ask early.");
+  const files: ManifestFile[] = [{ path: "context/skills/ask-the-person.md", text: skill }];
+  const into = new BlobStore(join(dir, "into"));
+  const now = load().loops.current("investigation")!;
+  const blobs = snapshot(join(config.data_dir, "blobs"));
+  const got = planChange(deps(), root, files, { into, loop: "investigation" });
+  expect(got.check).toEqual(checkChange(deps(), root, files));
+  expect(got.lock).not.toBeNull();
+  expect(got.lock!.loop).toBe("investigation");
+  expect(got.lock!.hash).not.toBe(now.lock.hash);
+  expect(readdirSync(join(dir, "into"))).toEqual([sha256Hex(new TextEncoder().encode(skill))]);
+  expect(snapshot(join(config.data_dir, "blobs"))).toEqual(blobs);
+  expect(tmpOf()).toEqual([]);
+  // no loop asked for: no lock; a refused change: no lock, and `into` as it was
+  expect(planChange(deps(), root, files).lock).toBeNull();
+  const broken = planChange(deps(), root, [{ path: "stages/research.yaml", text: readFileSync(join(root, "stages", "research.yaml"), "utf8").replace("on_fail: plan", "on_fail: nowhere") }], { into, loop: "investigation" });
+  expect(broken.check.ok).toBe(false);
+  expect(broken.lock).toBeNull();
+  expect(readdirSync(join(dir, "into"))).toEqual([sha256Hex(new TextEncoder().encode(skill))]);
+  expect(tmpOf()).toEqual([]);
+  // and a procedure is a kind a save writes
+  expect(WRITABLE_KINDS).toContain("procedure");
+  const proc = readFileSync(join(root, "context", "procedures", "research.md"), "utf8").replace("Say what was not found.", "Say what was not found, and why.");
+  expect(checkChange(deps(), root, [{ path: "context/procedures/research.md", text: proc }])).toMatchObject({ ok: true, files: [{ kind: "procedure", id: "research-sop" }] });
+});
+
+test("copyOf, draftOf and keptStages keep a probe stage's probe", () => {
+  const probe = stageFrom({ kind: "stage", id: "probe", title: "Probe", order: 3, runs: "script", role: "probe", probe: { plan_gate: "accept" }, on_pass: null, on_fail: null }, "0".repeat(64), "Probe", true);
+  if (typeof probe === "string") throw new Error(probe);
+  // a loop that names the probe stage by id, as a stage manifest
+  const loop = { manifest: { ...investigation().manifest, stages: ["probe"] }, pipeline: { id: "x", hash: "0".repeat(64), legacy_hash: null, stages: [probe] } } as unknown as ResolvedLoop;
+  const body = copyOf(loop, "copy", "Copy").stages[0]!;
+  expect(body.probe).toEqual({ plan_gate: "accept" });
+  expect(typeof stageFrom({ ...body, kind: "stage" }, "0".repeat(64), "Probe", true)).toBe("object");
+  const draft = draftOf(loop);
+  expect(keptStages(draft, loop)).toEqual(["probe"]);
 });
