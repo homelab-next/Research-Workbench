@@ -371,11 +371,13 @@ bun run cases store delete CASE-1 --config ~/workbench/config.yaml
 
 A **loop** is the order of work a case follows: its stages, their gates, the context each stage is given, the checks that run on a draft, and which stage runs another loop. It is a manifest (`kind: loop`) in a module root's `loops/` folder, like any other. A case is made for one loop, and its run binds the loop's version when it starts: a `loop.bound` entry names the loop, its version and its pipeline hash, and the lock (every stage, persona, rules, skill, schema and check it resolved to, each with its hash) is a blob of the case. A loop edited while a case runs on it does not change that run; the case's next run binds the new version. A case made before loops existed goes on as it did, held to the hash it recorded.
 
-The sample has three loops:
+The sample has five loops:
 
 - **Investigation** (`sample/loops/investigation.yaml`): the nine stages, Frame to Feedback, with the plan gate and the publish gate. It is the default loop (`loops.default`), and every case made without `--loop` is one of it.
 - **Unknown device** (`sample/loops/unknown-device.yaml`): the investigation's nine stages written inline, for cases of the type `unknown-device`, with memory: Plan, Research and Assemble are given the shared lessons a person accepted for the type, Research and Assemble the case's notebook, Research may write a note, and Feedback proposes lessons. See [Memory](#memory).
 - **Triage** (`sample/loops/triage.yaml`): Sort, which turns a report into one question, then Investigate, which runs the investigation loop as a **child case** and brings its findings back. Triage has no gate of its own: the child's plan and publish gates are the person's, passed in the child, and while the child waits the triage case is paused, "waiting on child CASE-2". When the child publishes, its findings come back to the triage case as note cards that say where they came from (the child, its loop, its run, its head), carry the marking of the child's product, and cite nothing of the triage case. The triage run then ends as `completed`. Replaying the triage case reads the child's head and the hash of what came back from its own ledger; it never opens or re-runs the child.
+- **Device check** (`sample/loops/device-check.yaml`): six stages written inline, for cases of the type `device-check` ("Which device held this address?"), on its own script. It is the target of the sample's improve run.
+- **Improve** (`sample/loops/improve.yaml`): the improve loop's seven stages, Select to Adopt. See [Improve a loop](#improve-a-loop).
 
 The command line, with `--config <file>` on each and the server stopped:
 
@@ -467,6 +469,45 @@ memory:
   files: <data_dir>/memory-files    # where export writes and the Memory page lists memory files
   max_lessons: 12                   # the most shared lessons a run is given
   max_notes: 40                     # the most live notes a case's notebook holds
+```
+
+## Improve a loop
+
+The **improve loop** tries changed versions of a loop against cases whose right answer you know, scores them in code, and offers the best one for you to adopt. It never changes a loop by itself.
+
+1. **Known answers.** On a published product of a case, you set a **known answer**: a text (600 characters at most) and up to 12 expected findings, each a claim, a likelihood term of the case's standard and a confidence. It is an entry of that case's own ledger, in your name; a later one for the same product replaces it, and you may withdraw it. A case of the type with a known answer on a published product is a **task**.
+2. **An improve case.** "Improve this loop" (on a loop's page) or `bun run improve start` makes a case of the loop `improve` for a target loop and a case type, with how many tasks (1 to 8) and candidates (1 to 4) to try, and starts it. Its seven stages run in a fixed order:
+   - **Select** takes the newest tasks, up to the number asked, leaving out any stricter than the improve case, and records the target loop's version. It copies the seq and hash of each known answer, never its text.
+   - **Propose** is an agent with the loop builder's tools. Each change it proposes is checked as a save is, then by the candidate rules: it may change only a skill's or a procedure's text, a playbook's steps and end, a source's field notes, and a stage's tools, turn cap and efforts. A change that passes is **staged**: built beside the live loop, in `improve.staged` (`<data_dir>/staged`), without writing a root, the workbench chain or the content store. A staged version is never listed, current or bound by a case of yours.
+   - **Probe** runs every task again as a **probe child** under the unchanged loop (`base`) and under each candidate (`K1`, `K2`, …), so 3 tasks and 2 candidates make 9 children. A child's plan gate is the one gate code passes: free steps only, no budget, so nothing costly runs in a probe. Its queries go through the same runner and guard as a case's, against the live sources, and the children share `improve.probe_lookups` and `improve.probe_tokens` evenly. A child never publishes; it ends at its publish gate, and its latest draft is the output.
+   - **Compose** is an agent that compares the outputs and chooses a candidate, or none. It is told which output is the base's and nothing of the answers.
+   - **Judge** then scores each output against its task's known answer, in code, from 0 to 1000: a claim matched by shared words is worth 500, likelihood agreement up to 250, confidence agreement up to 250. The Judge is the only stage that reads an answer, and it runs only after Compose has chosen.
+   - **Reflect** is an agent given the comparisons and the scores, never an answer. It may propose lessons to the shared memory, which wait for a person like any other proposal.
+   - **Adopt** waits at the `adopt` gate, for you, when a candidate was chosen. You accept or reject the whole candidate. Accepting writes every file of it into the root in your name, as an accepted builder file is written, and only if the root still gives the version that was probed. The next case of the loop binds that version, a normal saved version. When the run ends the staging folder is removed; the probe children stay and verify on their own.
+
+The improve case's ledger records what Select took, each probe's output with the child's head, the choice, the answers' copy and the scores, so it replays and verifies without its children or its tasks. `bun run verify` also checks each probe against its child where the child is loaded, and recomputes the scores from the improve case alone.
+
+The command line, with `--config <file>` on each and the server stopped (it decides nothing at Adopt: that is the browser's Improve lens):
+
+```bash
+bun run improve answer CASE-1 --product 1 --text "..." --findings <file>.json --marking TLP:GREEN
+bun run improve withdraw CASE-1 --product 1 --reason "the device was renamed"
+bun run improve start device-check --type device-check --marking TLP:GREEN --tasks 3 --candidates 3
+bun run improve show CASE-4
+```
+
+`answer` sets the known answer on a published product; the findings file is a JSON list of `{ claim, likelihood, confidence }`. `start` makes the improve case, runs it as far as it goes and prints `show`, which gives the tasks, the candidates, each probe with its child and outcome, the choice and, once the Judge has run, the scores. The sample's Device check loop has a scripted improve run; [sample/README.md](sample/README.md) walks through it, and what the improve loop may and may not do is in [docs/security-notes.md](docs/security-notes.md).
+
+The configuration's `improve` block, with its defaults:
+
+```yaml
+improve:
+  max_tasks: 3                 # the most tasks one improve run selects
+  max_candidates: 3            # the most candidates one improve run tries
+  probe_lookups: 240           # the lookups all of one run's probe children share
+  probe_tokens: 1200000        # the tokens all of one run's probe children share
+  own_tokens: 400000           # the improve case's own run budget
+  staged: <data_dir>/staged    # where staged candidates are built; a cache
 ```
 
 ## Known limits

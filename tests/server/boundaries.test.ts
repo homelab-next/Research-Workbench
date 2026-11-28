@@ -603,3 +603,88 @@ test("both improve routes are in the app's table behind the role check, and no i
     await t.close();
   }
 });
+
+// ---------- slice 14 (Task 22): code passes a gate in exactly one function, and only a person decides a builder's change ----------
+
+/** Each top-level declaration of a file (a function or a const), with where its text starts and ends. */
+function declarations(text: string): { name: string; start: number; end: number }[] {
+  const heads = [...text.matchAll(/^(?:export\s+)?(?:async\s+)?(?:function\s+(\w+)|const\s+(\w+)\s*[:=])/gm)];
+  return heads.map((m, i) => ({ name: (m[1] ?? m[2])!, start: m.index!, end: i + 1 < heads.length ? heads[i + 1]!.index! : text.length }));
+}
+const enclosing = (text: string, at: number): { name: string; body: string } | null => {
+  const d = declarations(text).filter((x) => x.start <= at).at(-1);
+  return d === undefined ? null : { name: d.name, body: text.slice(d.start, d.end) };
+};
+const PLANS = "src/pipeline/plans.ts";
+/** Every function that writes gate.passed, and what in its body makes its actor a person (null: writeAcceptance, whose actor is its caller's). */
+const GATE_WRITERS: Record<string, RegExp | null> = {
+  [`${PLANS} writeAcceptance`]: null,
+  [`${PLANS} requestReplan`]: /\bonlyAPerson\(input\.actor\)/,
+  ["src/pipeline/publish.ts approve"]: /\batGate\(session, actor\)/,
+  [`${IMPROVE_SERVER} passAdopt`]: /\bactor:\s*ctx\.actor\b/,
+};
+/** The callers of writeAcceptance, and what each must hold: a person's check before it, or the probe child's policy and the probe's actor. */
+const ACCEPTANCE_CALLERS: Record<string, RegExp[]> = {
+  acceptPlan: [/\bonlyAPerson\(input\.actor\);[\s\S]*\bwriteAcceptance\([^)]*\binput\.actor\)/],
+  probeAcceptPlan: [/probe_of\?\.plan_gate !== "accept"\) throw/, /\bwriteAcceptance\([^)]*\bPROBE_ACTOR\)/],
+};
+const GATE_PASS = /\btype:\s*["']gate\.passed["']/g;
+const gatesArePassedByAPerson: Rule = (path, text) => {
+  if (!/^src\//.test(path) || /^src\/(?:core|web)\//.test(path)) return [];
+  const found: string[] = [];
+  for (const m of text.matchAll(GATE_PASS)) {
+    const fn = enclosing(text, m.index!);
+    const key = `${path} ${fn?.name ?? "(top level)"}`;
+    if (!Object.hasOwn(GATE_WRITERS, key)) { found.push(`${key} writes gate.passed`); continue; }
+    const guard = GATE_WRITERS[key]!;
+    if (guard !== null && !guard.test(fn!.body)) found.push(`${key} writes gate.passed without a person's check`);
+    if (guard !== null && /\bPROBE_ACTOR\b|["']improve-probe["']/.test(fn!.body)) found.push(`${key} names the probe's actor`);
+  }
+  for (const m of text.matchAll(/\bwriteAcceptance\s*\(/g)) {
+    const fn = enclosing(text, m.index!);
+    if (fn === null || /^(?:export\s+)?function\s+writeAcceptance\b/.test(fn.body)) continue;
+    if (path !== PLANS || !Object.hasOwn(ACCEPTANCE_CALLERS, fn.name)) { found.push(`${path} ${fn.name} calls writeAcceptance`); continue; }
+    for (const re of ACCEPTANCE_CALLERS[fn.name]!) if (!re.test(fn.body)) found.push(`${path} ${fn.name} calls writeAcceptance without ${re.source}`);
+  }
+  if (/^\s*export\s+function\s+writeAcceptance\b/m.test(text)) found.push(`${path} exports writeAcceptance`);
+  return found;
+};
+/** The functions that hand writeAcceptance an actor that is not the caller's checked person: the code-passed gate. */
+const codePassers = (path: string, text: string): string[] =>
+  [...text.matchAll(/\bwriteAcceptance\s*\(([^)]*)\)/g)].filter((m) => /\bPROBE_ACTOR\b/.test(m[1]!)).map((m) => `${path} ${enclosing(text, m.index!)!.name}`);
+
+test("gate.passed is written by a non-person in exactly one function, probeAcceptPlan", () => {
+  expect(sources.flatMap((s) => gatesArePassedByAPerson(s.path, s.text))).toEqual([]);
+  expect(sources.flatMap((s) => codePassers(s.path, s.text))).toEqual([`${PLANS} probeAcceptPlan`]);
+  // every writer the table names is there: the table is not stale
+  const writers = sources.flatMap((s) => [...s.text.matchAll(GATE_PASS)].map((m) => `${s.path} ${enclosing(s.text, m.index!)?.name}`)).filter((k) => !/^src\/(?:core|web)\//.test(k));
+  expect([...new Set(writers)].sort()).toEqual(Object.keys(GATE_WRITERS).sort());
+  // the probe's actor is the system's improve-probe, defined once
+  const plans = sources.find((s) => s.path === PLANS)!.text;
+  expect(plans).toMatch(/export const PROBE_ACTOR: Actor = \{ kind: "system", id: "improve-probe" \};/);
+  expect(sources.filter((s) => /\bPROBE_ACTOR\s*(?::\s*Actor\s*)?=/.test(s.text)).map((s) => s.path)).toEqual([PLANS]);
+  // planted: a stage that passes a gate, a writer that lost its check, another caller of writeAcceptance, and the probe's actor on another gate
+  expect(gatesArePassedByAPerson("src/pipeline/stages/x.ts", `export function pass(s) {\n  s.commit(() => [{ type: "gate.passed", actor: ENGINE, payload: { gate: "plan" } }]);\n}\n`)).toEqual(["src/pipeline/stages/x.ts pass writes gate.passed"]);
+  expect(gatesArePassedByAPerson(PLANS, `export function requestReplan(session, input) {\n  session.commit(() => [{ type: "gate.passed", actor: input.actor, payload: { gate: "plan" } }]);\n}\n`)).toEqual([`${PLANS} requestReplan writes gate.passed without a person's check`]);
+  expect(gatesArePassedByAPerson(PLANS, `export function autoAccept(session) {\n  writeAcceptance(session, plan, steps, {}, ENGINE);\n}\n`)).toEqual([`${PLANS} autoAccept calls writeAcceptance`]);
+  expect(gatesArePassedByAPerson("src/pipeline/engine.ts", `function go() {\n  writeAcceptance(session, plan, steps, {}, PROBE_ACTOR);\n}\n`)).toEqual(["src/pipeline/engine.ts go calls writeAcceptance"]);
+  expect(gatesArePassedByAPerson(PLANS, `export function probeAcceptPlan(session) {\n  writeAcceptance(session, plan, steps, {}, PROBE_ACTOR);\n}\n`)).toHaveLength(1);
+  expect(gatesArePassedByAPerson("src/pipeline/publish.ts", `export function approve(session, deps, input) {\n  atGate(session, actor);\n  const e = [{ type: "gate.passed", actor: PROBE_ACTOR, payload }];\n}\n`)).toEqual(["src/pipeline/publish.ts approve names the probe's actor"]);
+  expect(gatesArePassedByAPerson(PLANS, `export function writeAcceptance() {}\n`)).toEqual([`${PLANS} exports writeAcceptance`]);
+  expect(codePassers(PLANS, `function a() {\n  writeAcceptance(s, p, x, {}, PROBE_ACTOR);\n}\nfunction b() {\n  writeAcceptance(s, p, x, b, input.actor);\n}\n`)).toEqual([`${PLANS} a`]);
+});
+
+test("builder.decided is written only in src/server/builder.ts", () => {
+  const WRITE = /\btype:\s*["']builder\.decided["']/g;
+  const found = sources.flatMap((s) => [...s.text.matchAll(WRITE)].map(() => s.path));
+  expect(found.length).toBeGreaterThan(0);
+  expect([...new Set(found)]).toEqual([BUILDER_SERVER]);
+  // and each one there is the request's person's (the slice 12 rule), in builderDecide or builderDecideAll
+  const builder = sources.find((s) => s.path === BUILDER_SERVER)!.text;
+  expect(decisionsAreThePersons(BUILDER_SERVER, builder)).toEqual([]);
+  expect([...new Set([...builder.matchAll(WRITE)].map((m) => enclosing(builder, m.index!)!.name))].sort()).toEqual(["builderDecide", "builderDecideAll"]);
+  // the improve loop's accept reaches it only through builderDecideAll, as the person
+  const improve = sources.find((s) => s.path === IMPROVE_SERVER)!.text;
+  expect(improve).toMatch(/\bbuilderDecideAll\(ctx,/);
+  expect(sources.filter((s) => s.path.startsWith("src/pipeline/") || s.path.startsWith("src/agents/")).filter((s) => /\bbuilderDecide(?:All)?\b/.test(s.text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, ""))).map((s) => s.path)).toEqual([]);
+});

@@ -149,3 +149,98 @@ test("lesson.accepted, lesson.rejected and lesson.retired are written only in sr
   const store = readFileSync(join(SRC, "core", "memstore.ts"), "utf8");
   expect(store).toMatch(/kind\s*!==\s*["']human["']/);
 });
+
+// ---------- slice 14 (Task 22): the judge is blind until it runs; the improve loop shares and stages nothing by itself ----------
+
+/** A file's code, comments taken out, so a word in a doc comment is not mistaken for code. */
+const codeOf = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+const ANSWER_READERS = ["src/pipeline/improve/answers.ts", "src/pipeline/improve/judge.ts"];
+/** A read of a value of a state's answers: anything but its keys (Object.keys, Object.hasOwn, `in`). */
+const ANSWERS_OF_STATE = /\b(?:state|st|s|view\.state|session\.state)\.answers\b/g;
+const readsAnAnswer = (path: string, text: string): string[] => {
+  if (ANSWER_READERS.includes(path)) return [];
+  const code = codeOf(text);
+  const found: string[] = [];
+  if (/\bknownAnswerOf\b/.test(code)) found.push(`${path} names knownAnswerOf`);
+  if (/["']answer\.known["']/.test(code)) found.push(`${path} names the entry answer.known`);
+  for (const m of code.matchAll(ANSWERS_OF_STATE)) {
+    const before = code.slice(Math.max(0, m.index! - 20), m.index!);
+    if (/Object\.(?:keys|hasOwn)\(\s*$/.test(before)) continue;
+    found.push(`${path} reads ${m[0]}${code.slice(m.index! + m[0].length, m.index! + m[0].length + 12)}`);
+  }
+  return found;
+};
+
+test("an answer's text and findings are read only in src/pipeline/improve/answers.ts and judge.ts: no other file under src/pipeline or src/agents names knownAnswerOf or reads a value of state.answers", () => {
+  const all = [...files(join(SRC, "pipeline")), ...files(join(SRC, "agents"))];
+  for (const f of ANSWER_READERS) expect(all.map(relOf)).toContain(f);
+  expect(all.flatMap((f) => readsAnAnswer(relOf(f), readFileSync(f, "utf8")))).toEqual([]);
+  // the one reader is there and the Judge is its one caller
+  expect(readFileSync(join(ROOT, ANSWER_READERS[0]!), "utf8")).toMatch(/export function knownAnswerOf\(/);
+  expect(codeOf(readFileSync(join(ROOT, ANSWER_READERS[1]!), "utf8"))).toMatch(/\bknownAnswerOf\(/);
+  // Select copies only the seq and hash of the answer's entry
+  const select = codeOf(readFileSync(join(SRC, "pipeline", "improve", "select.ts"), "utf8"));
+  expect(select).not.toMatch(/\.text\b[^\n]*answer|answer[^\n]*\.findings\b/);
+  // planted
+  expect(readsAnAnswer("src/pipeline/improve/propose.ts", `import { knownAnswerOf } from "./answers";`)).toEqual(["src/pipeline/improve/propose.ts names knownAnswerOf"]);
+  expect(readsAnAnswer("src/pipeline/improve/compose.ts", `const a = session.state.answers["1"]!.text;`)).toHaveLength(1);
+  expect(readsAnAnswer("src/agents/x.ts", `for (const a of Object.values(view.state.answers)) parts.push(a.text);`)).toHaveLength(1);
+  expect(readsAnAnswer("src/pipeline/improve/reflect.ts", `const e = entries.filter((x) => x.type === "answer.known");`)).toEqual(["src/pipeline/improve/reflect.ts names the entry answer.known"]);
+  expect(readsAnAnswer("src/pipeline/improve/select.ts", `const have = Object.keys(state.answers).length;`)).toEqual([]);
+  expect(readsAnAnswer("src/pipeline/improve/select.ts", `// state.answers holds the text; knownAnswerOf reads it\nconst x = 1;`)).toEqual([]);
+  expect(readsAnAnswer("src/pipeline/improve/judge.ts", `const k = knownAnswerOf(entries, at);`)).toEqual([]);
+});
+
+/** Whether an import specifier of `file` lands in src/server. */
+const namesServer = (file: string, spec: string): boolean => spec.startsWith(".") && /^src\/server(?:\/|$)/.test(relOf(join(file, "..", spec)));
+
+test("src/pipeline/improve imports neither src/core/memstore.ts nor src/server", () => {
+  const all = files(join(SRC, "pipeline", "improve"));
+  expect(all.map(relOf)).toContain("src/pipeline/improve/reflect.ts");
+  for (const f of all) {
+    for (const spec of imports(readFileSync(f, "utf8"))) {
+      expect(`${relOf(f)}: ${spec} ${namesMemstore(f, spec)}`).toBe(`${relOf(f)}: ${spec} false`);
+      expect(`${relOf(f)}: ${spec} ${namesServer(f, spec)}`).toBe(`${relOf(f)}: ${spec} false`);
+    }
+  }
+  // the check sees such an import
+  expect(namesServer(join(SRC, "pipeline", "improve", "x.ts"), "../../server/builder")).toBe(true);
+  expect(namesServer(join(SRC, "pipeline", "improve", "x.ts"), "../../server")).toBe(true);
+  expect(namesMemstore(join(SRC, "pipeline", "improve", "x.ts"), "../../core/memstore")).toBe(true);
+  expect(namesServer(join(SRC, "pipeline", "improve", "x.ts"), "../engine")).toBe(false);
+});
+
+const WORKBENCH_HOST = "src/pipeline/improve/workbench-host.ts";
+const LOOP_STAGE = "src/modules/loop-stage.ts";
+/** A call of stageCandidate outside workbench-host.ts, or of planChange with `into` outside stageCandidate in loop-stage.ts. */
+const stagesOnlyThere = (path: string, text: string): string[] => {
+  const code = codeOf(text);
+  const found: string[] = [];
+  for (const m of code.matchAll(/\bstageCandidate\s*\(/g)) {
+    const at = code.slice(Math.max(0, m.index! - 16), m.index!);
+    if (/function\s+$/.test(at)) continue;
+    if (path !== WORKBENCH_HOST) found.push(`${path} calls stageCandidate`);
+  }
+  for (const m of code.matchAll(/\bplanChange\s*\(([^)]*)\)/g)) {
+    if (/function\s+$/.test(code.slice(Math.max(0, m.index! - 16), m.index!))) continue;
+    if (!/\binto\b/.test(m[1]!)) continue;
+    const owner = [...code.slice(0, m.index!).matchAll(/^(?:export\s+)?function\s+(\w+)/gm)].at(-1)?.[1];
+    if (path !== LOOP_STAGE || owner !== "stageCandidate") found.push(`${path} calls planChange with into`);
+  }
+  return found;
+};
+
+test("stageCandidate and planChange with `into` are called only from src/pipeline/improve/workbench-host.ts", () => {
+  const all = files(SRC);
+  const found = all.flatMap((f) => stagesOnlyThere(relOf(f), readFileSync(f, "utf8")));
+  expect(found).toEqual([]);
+  // they are called: once by the host, and planChange with into once, by stageCandidate itself, which only the host calls
+  expect(codeOf(readFileSync(join(ROOT, WORKBENCH_HOST), "utf8"))).toMatch(/\bstageCandidate\(deps, path, files, target, host\.staged\(improve\)\)/);
+  expect(codeOf(readFileSync(join(ROOT, LOOP_STAGE), "utf8"))).toMatch(/\bplanChange\(deps, root, files, \{ into, loop: target \}\)/);
+  // planted
+  expect(stagesOnlyThere("src/pipeline/improve/propose.ts", `const r = stageCandidate(deps, root, files, target, store);`)).toEqual(["src/pipeline/improve/propose.ts calls stageCandidate"]);
+  expect(stagesOnlyThere("src/server/builder.ts", `const p = planChange(saveDeps, root, laid, { into: store });`)).toEqual(["src/server/builder.ts calls planChange with into"]);
+  expect(stagesOnlyThere(LOOP_STAGE, `export function other() {\n  planChange(deps, root, files, { into });\n}\n`)).toEqual([`${LOOP_STAGE} calls planChange with into`]);
+  expect(stagesOnlyThere("src/server/builder.ts", `const p = planChange(saveDeps, root, laid, { loop: x });`)).toEqual([]);
+  expect(stagesOnlyThere(LOOP_STAGE, `export function stageCandidate(deps, root, files, target, into) {\n  planChange(deps, root, files, { into, loop: target });\n}\n`)).toEqual([]);
+});

@@ -76,7 +76,7 @@ test("each documented command runs with --help as documented, and every flag and
 
 test("the README's sections come in order", () => {
   const heads = [...README.matchAll(/^## (.+)$/gm)].map((m) => m[1]!);
-  expect(heads).toEqual(["What this is", "Run the sample", "Point it at your own data", "The person", "Before a run", "Custody", "Cases: load and unload", "Loops", "Build a loop with help", "Memory", "Known limits"]);
+  expect(heads).toEqual(["What this is", "Run the sample", "Point it at your own data", "The person", "Before a run", "Custody", "Cases: load and unload", "Loops", "Build a loop with help", "Memory", "Improve a loop", "Known limits"]);
 });
 
 /** A root made from the README's own types, sources and pivots (with `edit` applied to the pivots), and preflight's checks on it. */

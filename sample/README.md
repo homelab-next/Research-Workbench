@@ -214,7 +214,7 @@ The three tasks are three cases of the loop, one for each of three addresses of 
 
 The person runs and publishes each case, then sets a known answer on its product: a text and one expected finding (a claim, a likelihood
 term of the sample's standard and a confidence). The known answers are the person's, so none is in the sample; the ones the tests use
-(`tests/sample/improve-sample.test.ts`) each hold a canary (`answer-key-1`, `-2`, `-3`) and a claim worded unlike any scripted finding.
+(`tests/sample/improve-sample.test.ts` and `tests/sample/improve-acceptance.test.ts`) each hold a canary and a claim worded unlike any scripted finding.
 
 The improve loop, `loops/improve.yaml` (**Improve**, profile `context/improve-profile.yaml`), has the seven stages in their fixed order:
 Select (a script), Propose (an agent with the four builder tools, schema `propose-output`, given the shared lessons of the type), Probe (a
@@ -232,3 +232,35 @@ script: the scores are code's), Reflect (an agent, `lessons-output`) and Adopt (
 
 With one expected finding per task, each matched at full agreement or not at all, the scores are `base` 333, `K1` 1000 and `K2` 333.
 Accepting K1 at Adopt writes the skill into the root, in the person's name; the next device-check case binds the new version.
+
+### Running it
+
+From the command line, with `--config <file>` on each (its first root a copy of this folder) and the server stopped, the three tasks are run,
+published and given their known answers (the first command generates the sample data if it is missing), then the improve case is started:
+
+```
+bun run investigate start --sample-fixture --loop device-check --title "Device at 192.0.2.14" --asked "Which device held 192.0.2.14?" --why demo \
+  --start address=192.0.2.14 --from 2026-11-17T00:00:00.000Z --to 2026-11-24T00:00:00.000Z --objective sample-objective --marking TLP:GREEN
+bun run investigate accept-plan CASE-1
+bun run investigate approve CASE-1
+bun run improve answer CASE-1 --product 1 --text "<what the right answer was>" --findings <file>.json --marking TLP:GREEN
+```
+
+and the same for `192.0.2.61` (CASE-2) and `192.0.2.62` (CASE-3). The findings file is a JSON list of `{ claim, likelihood, confidence }`,
+written by the person. Then:
+
+```
+bun run improve start device-check --type device-check --marking TLP:GREEN --tasks 3 --candidates 3
+```
+
+makes CASE-4 and runs it to the adopt gate: Select takes the three cases, newest first (so T1 is CASE-3), Propose stages K1 and K2, Probe
+makes nine children (CASE-5 to CASE-13, `base`, `K1` and `K2` on each task), Compose chooses K1, the Judge scores and Reflect proposes one
+lesson. It prints what `bun run improve show CASE-4` prints. The scores are the ones above only with known answers like the tests' (a claim
+that names the device the data shows for each address); with other claims they are other numbers. Adopt is decided in the browser: start
+`bun run serve`, open CASE-4, its **Improve** lens (`i`), and press **Accept** or **Reject** for the whole candidate. Until then K1 is only
+staged (`<data_dir>/staged`), and no loop of the workbench is changed; after an accept the next device-check case binds the new version, and
+the staging folder is gone.
+
+The same story runs end to end on the scripted model, through the server, in `tests/sample/improve-acceptance.test.ts`: it also checks
+that nothing before the Judge was shown a known answer, that the candidates stayed staged and never live, that the only gate code passed is
+each child's plan gate, the budgets, replay and verification of every case, a stop of the server in the middle of Probe, and the accept.

@@ -117,3 +117,21 @@ function listTs(dir: string): string[] {
   });
 }
 const relativeTo = (from: string, to: string): string => relative(from, to).split("\\").join("/");
+
+test("src/core/state/improve.ts and src/core/score.ts are browser-safe", async () => {
+  const IMPROVE = join(CORE, "state", "improve.ts");
+  const SCORE = join(CORE, "score.ts");
+  for (const f of [IMPROVE, SCORE]) expect(existsSync(f)).toBe(true);
+  const files = closure([IMPROVE, SCORE]);
+  expect(files).toContain(IMPROVE);
+  expect(files).toContain(SCORE);
+  expect(violations(files)).toEqual([]);
+  // nothing they reach is outside src/core, but pivot's shared vocabulary that core/types.ts takes
+  for (const f of files) expect(`${f}: ${f.startsWith(`${CORE}/`) || f.startsWith(`${PIVOT_SRC}/`)}`).toBe(`${f}: true`);
+  expect(files.some((f) => f.startsWith(`${WEB}/`))).toBe(false);
+  // the fold reaches the improve reducer, so it is in what the browser bundles
+  expect(closure(ENTRY_POINTS)).toContain(IMPROVE);
+  const result = await Bun.build({ entrypoints: [IMPROVE, SCORE], target: "browser", throw: false });
+  expect(result.logs.map((l) => l.message)).toEqual([]);
+  expect(result.success).toBe(true);
+});
