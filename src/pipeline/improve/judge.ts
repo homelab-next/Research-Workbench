@@ -100,10 +100,20 @@ export function matcherParts(session: CaseSession, answers: readonly AnswerCopy[
 export const MODEL_GAVE_NONE = "the stage's model gave no matching; the scores are the code's";
 const QUESTION = [
   "Compare each probe's findings with the expected findings listed for it.",
-  "For each expected finding that one of the probe's findings states in other words, give { probe, expected, produced }: the probe's id, the number of the expected finding and the id of that finding. Leave out an expected finding no finding states.",
+  "For each expected finding that one of the probe's findings states in other words, give { probe, expected, produced }: the probe's id exactly as written after \"Probe\", the number of the expected finding and the id of that finding. Leave out an expected finding no finding states.",
   "For a probe that lists a known answer, give { probe, verdict } with the verdict agrees, partly or disagrees.",
   "Give no number and no score.",
 ].join("\n");
+
+/**
+ * The asked probe a model's answer names: the probe itself, or, when the model wrote only the task ("T1" for "base/T1"), the one asked probe of
+ * that task; undefined when it names none, or a task two asked probes share.
+ */
+function probeNamed(name: string, asked: ReadonlyMap<string, Asked>): string | undefined {
+  if (asked.has(name)) return name;
+  const of = [...asked.keys()].filter((p) => p.slice(p.indexOf("/") + 1) === name);
+  return of.length === 1 ? of[0] : undefined;
+}
 
 /** What the model answered, kept only where it names something that was asked: a probe, an expected finding of it and a free finding of it. */
 function keep(answer: Json, asked: ReadonlyMap<string, Asked>): { extra: Map<string, ModelMatch[]>; texts: Map<string, Verdict> } {
@@ -112,14 +122,16 @@ function keep(answer: Json, asked: ReadonlyMap<string, Asked>): { extra: Map<str
   if (!isPlainObject(answer)) return { extra, texts };
   for (const m of Array.isArray(answer.matches) ? (answer.matches as unknown[]) : []) {
     if (!isPlainObject(m) || typeof m.probe !== "string" || typeof m.expected !== "number" || typeof m.produced !== "string") continue;
-    const a = asked.get(m.probe);
-    if (a === undefined || !a.expected.includes(m.expected) || !a.free.includes(m.produced)) continue;
-    extra.set(m.probe, [...(extra.get(m.probe) ?? []), { expected: m.expected, produced: m.produced }]);
+    const probe = probeNamed(m.probe, asked);
+    const a = probe === undefined ? undefined : asked.get(probe);
+    if (probe === undefined || a === undefined || !a.expected.includes(m.expected) || !a.free.includes(m.produced)) continue;
+    extra.set(probe, [...(extra.get(probe) ?? []), { expected: m.expected, produced: m.produced }]);
   }
   for (const v of Array.isArray(answer.texts) ? (answer.texts as unknown[]) : []) {
     if (!isPlainObject(v) || typeof v.probe !== "string" || typeof v.verdict !== "string" || !(VERDICTS as readonly string[]).includes(v.verdict)) continue;
-    if (asked.get(v.probe)?.text !== true || texts.has(v.probe)) continue;
-    texts.set(v.probe, v.verdict as Verdict);
+    const probe = probeNamed(v.probe, asked);
+    if (probe === undefined || asked.get(probe)?.text !== true || texts.has(probe)) continue;
+    texts.set(probe, v.verdict as Verdict);
   }
   return { extra, texts };
 }

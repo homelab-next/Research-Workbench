@@ -435,6 +435,36 @@ test("a model's match that names a finding the output does not have is dropped",
   expect(s.state.improve.scored!.matcher).toBe("code");
 });
 
+// Found on the owner's dev data (2026-11-28): the local model matched the right finding but wrote the probe as "T1", not "base/T1"
+test("a model's match that names only the task is kept when one asked probe has that task, and the prompt shows the ids to copy", async () => {
+  const r = rig(true);
+  const sc = oneTask(r);
+  const s = improveCase(r, 1);
+  const reply = { matches: [{ probe: "T1", expected: 0, produced: "f1" }], texts: [] };
+  const engine = engineFor(r, s, { select: recorded(r, 1, sc) }, providersOf([turn("judge", reply)]));
+  engine.start(human);
+  await engine.advance();
+  const asked = s.blobs.text((requestsOf(s)[0]!.payload as { messages: { blob: string } }).messages.blob);
+  expect(asked).toContain("the probe's id exactly as written after");
+  const sheet = readScoreSheet(s.blobs.get(s.state.improve.scored!.scores.blob))!;
+  const base = sheet.outputs.find((o) => o.probe === "base/T1")!;
+  expect(base.findings[0]).toMatchObject({ expected: 0, produced: "f1", by: "model", score: 1000 });
+  expect(s.state.improve.scored!.matcher).toBe("code+model");
+});
+
+test("a verdict that names only the task is dropped when two asked probes have that task", async () => {
+  const r = rig(true);
+  taskCase(r, 0, [], `${CANARY} It was a scheduled health check.`);
+  const s = improveCase(r, 1);
+  const sc: Record14 = { outputs: { "base/T1": outputOf([finding("f1", "a health check ran")]), "K1/T1": outputOf([finding("f1", "a health check ran")]) }, chosen: true, candidate: true };
+  const reply = { matches: [], texts: [{ probe: "T1", verdict: "agrees" }] };
+  const engine = engineFor(r, s, { select: recorded(r, 1, sc) }, providersOf([turn("judge", reply)]));
+  engine.start(human);
+  await engine.advance();
+  expect(s.state.improve.scored!.summary).toEqual([{ candidate: "base", score: 0, drafted: 1, tasks: 1 }, { candidate: "K1", score: 0, drafted: 1, tasks: 1 }]);
+  expect(s.state.improve.scored!.matcher).toBe("code");
+});
+
 test("an answer with no expected finding is scored from the model's verdict on its text", async () => {
   const r = rig(true);
   taskCase(r, 0, [], `${CANARY} It was a scheduled health check.`);
