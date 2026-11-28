@@ -21,6 +21,7 @@ import { rootComponents } from "../pipeline/components";
 import type { EngineDeps } from "../pipeline/engine";
 import type { Pipeline } from "../pipeline/manifests";
 import { IMPLICIT_NOTE, loadLoops } from "../pipeline/loops";
+import { sweepStaged } from "../pipeline/improve/workbench-host";
 import { storeHost } from "../pipeline/memory";
 import { fileSeeds, loadSeeds } from "../modules/seeds";
 import type { LoopCatalog } from "../pipeline/loops";
@@ -185,6 +186,7 @@ function build(config: Config, wb: Workbench, opts: { refuse_hosts?: () => reado
  * usable loop whose version is new to the chain is recorded as loop.recorded. Throws ComposeError when there is no seeker; every manifest
  * problem short of that is returned in `problems`. A default loop that is not usable is one of them (`defaultLoopProblem`): the deps then carry
  * a pipeline with no stage, so a run on it is refused with the loop's problem, while reads, loads, unloads and fixing the loop all work.
+ * Once the roots are loaded, the staging folders of improve runs that are over are swept (sweepStaged), adding nothing to the problems.
  *
  * `reload()` loads the roots again and replaces, in place on the same deps object, the registry, the runner, the seeker, the providers, the
  * loops, the components, the pipeline and the profile. The old connector pool is closed once nothing holds it: each run bound to the deps it
@@ -196,6 +198,10 @@ function build(config: Config, wb: Workbench, opts: { refuse_hosts?: () => reado
  */
 export function compose(config: Config, wb: Workbench, opts: { refuse_hosts?: () => readonly string[] } = {}): { deps: EngineDeps; problems: string[]; close(): void; reload(): string[]; secrets(): string[] } {
   const first = build(config, wb, opts);
+  // the staging folders are a cache: one whose improve run is over, or that names no case, is removed once, now; a reload sweeps nothing
+  try {
+    sweepStaged(config, wb);
+  } catch { /* a folder that could not be removed is swept at the next start */ }
   /** A pool, how many runs hold it, and whether a reload has replaced it (then it is closed when the last holder lets go). */
   interface Held { pool: ConnectorPool; holders: number; replaced: boolean; closed: boolean }
   const shut = (h: Held): void => {

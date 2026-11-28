@@ -1,7 +1,22 @@
 import { afterEach, expect, test } from "bun:test";
-import { copyFileSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { SAMPLE_START, SAMPLE_WINDOW } from "../../scripts/make-sample-data";
+import { compose } from "../../src/cli/compose";
+import { canonical } from "../../src/core/canonical";
+import type { Json } from "../../src/core/canonical";
+import { sha256Hex } from "../../src/core/hash";
+import type { CaseSession } from "../../src/core/session";
+import type { TaskInputs } from "../../src/core/state";
+import type { Actor, EntryInput } from "../../src/core/types";
 import type { Entry } from "../../src/core/types";
+import { Workbench } from "../../src/core/workbench";
+import { Engine } from "../../src/pipeline/engine";
+import type { EngineDeps, StageEnv, StageRunner } from "../../src/pipeline/engine";
+import { stagedFolder } from "../../src/pipeline/improve/workbench-host";
+import { IMPROVE_ROLES } from "../../src/pipeline/manifests";
+import type { Role } from "../../src/pipeline/manifests";
+import { CaseHub } from "../../src/server/hub";
 import type { AgentView, LoopView, ModelView, Preview } from "../../src/core/wire";
 import { CASE_TYPES, served } from "../helpers/served";
 import type { Served } from "../helpers/served";
@@ -264,4 +279,183 @@ test("a child case takes its own loop's case type, else its parent's", async () 
   child = (ofType(parent, "subloop.started")[0]!.payload as { child: string }).child;
   expect(s.app.hub.read(child).state.memory.type).toBe("unknown-device");
   expect(ofType(child, "case.type_set").map((e) => [e.payload, e.actor])).toEqual([[{ type: "unknown-device" }, { kind: "system", id: "loop-default" }]]);
+});
+
+// ---------- slice 14: the hub hosts improve runs ----------
+
+const HUMAN: Actor = { kind: "human", id: "analyst" };
+const SYSTEM_ENGINE: Actor = { kind: "system", id: "engine" };
+const PROBE_ACTOR: Actor = { kind: "system", id: "improve-probe" };
+const TARGET = "investigation";
+const TYPE = "unknown-device";
+const PROCEDURE = "context/procedures/research.md";
+const STOP_AFTER_PROBE = "the test stops after Probe";
+const STAGE_TITLES: Record<string, string> = { select: "Select", propose: "Propose", probe: "Probe", compose: "Compose", judge: "Judge", reflect: "Reflect", adopt: "Adopt" };
+
+/** The root an improve run needs: an improve loop of seven inline stages, its profile, and the sample's reputation lookup made free (code accepts free steps only). */
+function writeImprove(root: string): void {
+  const stages = IMPROVE_ROLES.map((role, i): Record<string, Json> => {
+    const agent = role === "propose" || role === "compose" || role === "reflect";
+    return {
+      id: role, title: STAGE_TITLES[role]!, order: i + 1, runs: agent ? "agent" : role === "adopt" ? "human" : "script", role, gate: role === "adopt" ? "adopt" : null, reviews: false,
+      tools: [], schema: null, model: agent ? { provider: "scripted", model: "sample-device", effort: null } : null, on_pass: IMPROVE_ROLES[i + 1] ?? null, on_fail: null,
+      ...(role === "probe" ? { probe: { plan_gate: "accept" } } : {}),
+    };
+  });
+  writeFileSync(join(root, "loops", "improve.yaml"), JSON.stringify({ kind: "loop", id: "improve", title: "Improve", version: 1, profile: "improve-test", entry: "select", stages }, null, 2));
+  writeFileSync(join(root, "context", "improve-test-profile.yaml"), JSON.stringify({
+    kind: "profile", id: "improve-test", title: "Improve (test)", rules: "base-rules", framework: "intel-cycle", standard: "icd203",
+    stages: Object.fromEntries(["propose", "compose", "reflect"].map((id) => [id, { agent: "analyst", persona: "analyst", goal: `The ${id} stage of the test.` }])),
+  }, null, 2));
+  const rep = join(root, "sources", "reputation.yaml");
+  const text = readFileSync(rep, "utf8");
+  if (!text.includes("cost: { weight: 5, unit: lookups }")) throw new Error("the sample's reputation cost changed");
+  writeFileSync(rep, text.replace("cost: { weight: 5, unit: lookups }", "cost: { weight: 0, unit: lookups }"));
+}
+
+const blobOf = (x: CaseSession, v: unknown) => x.blobs.put(canonical(v as Json));
+const inRun = (env: StageEnv, make: (x: CaseSession, next: (kind: "change") => string) => EntryInput[]): void => {
+  env.session.commit((st, ids) => make(env.session, (kind) => ids.next(kind)).map((e) => ({ ...e, run: st.run.id, stage: env.stage.id })));
+};
+const passing = (action: (env: StageEnv) => void): StageRunner => async (env) => {
+  action(env);
+  return { kind: "finished", outcome: "pass", draft_hash: null, output: null, reason: null };
+};
+const taskInputsOf = (n: number): TaskInputs => ({
+  question: `Task ${n}: who is behind the traffic to 198.51.100.77?`, starting: [SAMPLE_START], window: SAMPLE_WINDOW, objective: "sample-objective", marking: "TLP:GREEN", title: `Task ${n}`,
+});
+/** The improve case's runners: Select and Propose write their record (one task, one candidate staged through the hub's host); Compose stops the run; Probe is the engine's own. */
+function improveRunners(deps: EngineDeps): Partial<Record<Role, StageRunner>> {
+  const live = () => deps.loops!.current(TARGET)!;
+  return {
+    select: passing((env) => inRun(env, (x) => [
+      { type: "improve.selected", actor: SYSTEM_ENGINE, payload: { target: TARGET, version: 1, loop_hash: live().pipeline.hash, lock: blobOf(x, live().lock), case_type: TYPE, scale: ["unlikely", "likely"], left_out: [] } },
+      {
+        type: "improve.task", actor: SYSTEM_ENGINE,
+        payload: {
+          task: "T1", case: "CASE-90", origin: "f".repeat(64), head: { seq: 9, hash: "9".repeat(64) }, product: { n: 1, draft_hash: "d".repeat(64) },
+          answer: { seq: 8, hash: "8".repeat(64) }, marking: "TLP:GREEN", inputs: blobOf(x, taskInputsOf(1)), record: blobOf(x, { record: 1 }),
+        },
+      },
+    ])),
+    propose: passing((env) => {
+      const root = deps.config.roots[0]!.path;
+      const before = readFileSync(join(root, ...PROCEDURE.split("/")), "utf8");
+      const files = [{ path: PROCEDURE, text: before.replace("Say what was not found.", "Say what was not found, and why.") }];
+      const staged = deps.improve!.stage({ case: env.session.id, origin: env.session.entries(0, 1)[0]!.hash }, "sample", files, TARGET);
+      if (!staged.ok) throw new Error(staged.problems.join(" | "));
+      inRun(env, (x, next) => [
+        {
+          type: "builder.proposed", actor: { kind: "agent", id: "propose", stage: "propose", profile: "improve-test", model: "sample-device", effort: null, where: "machine" },
+          payload: {
+            change: next("change"), title: "Say why", why: "fewer misses", root: "sample",
+            files: [{ path: PROCEDURE, kind: "procedure", id: "research-sop", before: sha256Hex(before), after: sha256Hex(files[0]!.text) }],
+            bundle: blobOf(x, { files }),
+          },
+        },
+        { type: "improve.candidate", actor: SYSTEM_ENGINE, payload: { candidate: "K1", change: "chg-1", status: "staged", loop_hash: staged.loop.pipeline.hash, lock: blobOf(x, staged.loop.lock), reason: "" } },
+      ]);
+    }),
+    compose: async () => ({ kind: "stalled", reason: STOP_AFTER_PROBE }),
+  };
+}
+const improveIn = (wb: Workbench): CaseSession => wb.createCase(
+  { title: "Improve", asked: "Improve the investigation loop", why: "test", starting: [SAMPLE_START], window: SAMPLE_WINDOW, objective: null, marking: "TLP:AMBER" },
+  HUMAN, { loop: "improve", improve: { target: TARGET, case_type: TYPE, tasks: 1, candidates: 1 }, type: TYPE },
+);
+const typed = <T extends Entry["type"]>(x: CaseSession, type: T): Extract<Entry, { type: T }>[] => x.entries().filter((e): e is Extract<Entry, { type: T }> => e.type === type);
+const stagingOf = (x: CaseSession): string => join(s!.config.improve.staged, stagedFolder({ case: x.id, origin: x.entries(0, 1)[0]!.hash }));
+
+test("a hub's deps carry the improve host, and an improve case's run reaches Probe through it", async () => {
+  s = await served({ before: writeImprove, onError: (e) => { errors.push(e); } });
+  const deps = s.app.hub.deps;
+  expect(deps.improve).toBeDefined();
+  expect(deps.children).toBe(s.app.hub.children);
+  const imp = improveIn(s.wb);
+  const e = Engine.open(imp, deps, { runners: improveRunners(deps) });
+  try {
+    e.start(HUMAN);
+    await e.advance();
+    expect(imp.state.run.pause_reason).toBe(STOP_AFTER_PROBE);
+    // the candidate was staged into this improve case's staging folder
+    expect(existsSync(join(stagingOf(imp), "blobs"))).toBe(true);
+    const started = typed(imp, "probe.started").map((x) => x.payload);
+    expect(started.map((p) => p.probe)).toEqual(["base/T1", "K1/T1"]);
+    const k1 = imp.state.improve.candidates.K1!;
+    for (const p of started) {
+      const c = s.app.hub.read(p.child);
+      expect(c.state.improve.probe_of).toMatchObject({ improve: imp.id, probe: p.probe });
+      expect(c.state.memory.type).toBe(TYPE);
+      expect(c.state.loop.bound?.hash).toBe(p.candidate === "base" ? imp.state.improve.selected!.loop_hash : k1.loop_hash!);
+      // driven to its publish gate with its plan accepted by code, then ended by improve-probe; nothing published
+      expect(c.entries().filter((x) => x.type === "plan.accepted").map((x) => x.actor)).toEqual([PROBE_ACTOR]);
+      expect(c.entries().filter((x) => x.type === "run.finished").map((x) => x.actor)).toEqual([PROBE_ACTOR]);
+      expect(c.entries().some((x) => x.type === "product.published")).toBe(false);
+    }
+    expect(typed(imp, "probe.finished").map((x) => [x.payload.probe, x.payload.outcome])).toEqual([["base/T1", "drafted"], ["K1/T1", "drafted"]]);
+    // the improve run ended: the host clears its staging folder
+    e.stop(HUMAN, "enough");
+    expect(existsSync(stagingOf(imp))).toBe(false);
+  } finally {
+    e.close();
+  }
+});
+
+test("a new hub over the same data folder, mid-probe: the child's engine rebuilds its staged version and the probe is finished", async () => {
+  s = await served({ before: writeImprove, onError: (e) => { errors.push(e); } });
+  const first = s;
+  const imp = improveIn(first.wb);
+  const e = Engine.open(imp, first.app.hub.deps, { runners: improveRunners(first.app.hub.deps) });
+  // the process stops as the K1 probe is recorded: its child waits at its publish gate, on the staged version
+  const commit = imp.commit.bind(imp);
+  let armed = true;
+  imp.commit = ((fn: Parameters<CaseSession["commit"]>[0]) => commit((state, ids) => {
+    const out = fn(state, ids);
+    if (armed && out.some((x) => x.type === "probe.finished" && (x.payload as { probe: string }).probe === "K1/T1")) {
+      armed = false;
+      throw new Error("the process stopped");
+    }
+    return out;
+  })) as CaseSession["commit"];
+  e.start(HUMAN);
+  await e.advance();
+  e.close();
+  expect(imp.state.run.status).toBe("paused");
+  const k1 = imp.state.improve.candidates.K1!;
+  const childId = typed(imp, "probe.started").find((x) => x.payload.probe === "K1/T1")!.payload.child;
+  expect(first.app.hub.read(childId).state.run.waiting).toBe("publish");
+  const id = imp.id;
+  const folder = stagingOf(imp);
+  await first.app.close();
+  first.wb.close();
+
+  const config = first.config;
+  const wb2 = Workbench.open(config.data_dir, { onError: () => {}, store: config.cases.store, max_case_bytes: config.cases.max_bytes, memory: config.memory.store });
+  const composed2 = compose(config, wb2);
+  const later: Engine[] = [];
+  try {
+    // compose's sweep kept the folder: its improve run is in progress
+    expect(existsSync(folder)).toBe(true);
+    const hub2 = new CaseHub(wb2, composed2.deps, (err) => { errors.push(err); });
+    expect(composed2.deps.improve).toBeDefined();
+    // the child's engine in the new hub binds the candidate's staged version
+    expect(hub2.engine(childId).bound.pipeline.hash).toBe(k1.loop_hash!);
+    const imp2 = wb2.session(id);
+    const e2 = Engine.open(imp2, hub2.deps, { runners: improveRunners(hub2.deps) });
+    later.push(e2);
+    await e2.resume(HUMAN);
+    expect(imp2.state.run.pause_reason).toBe(STOP_AFTER_PROBE);
+    expect(typed(imp2, "probe.started")).toHaveLength(2);
+    const finished = typed(imp2, "probe.finished").map((x) => x.payload);
+    expect(finished.map((p) => [p.probe, p.child, p.outcome])).toEqual([["base/T1", finished[0]!.child, "drafted"], ["K1/T1", childId, "drafted"]]);
+    const c = wb2.session(childId);
+    expect(c.entries().filter((x) => x.type === "run.finished").map((x) => x.actor)).toEqual([PROBE_ACTOR]);
+    for (const x of wb2.listCases()) expect(wb2.session(x.id).state.skipped).toEqual([]);
+  } finally {
+    for (const x of later) x.close();
+    composed2.close();
+    wb2.close();
+    await first.close();
+    s = undefined;
+  }
 });

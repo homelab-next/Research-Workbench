@@ -9,6 +9,7 @@ import { CaseNotFoundError, CaseRefused, unloadProblem } from "../core/workbench
 import type { ChildLink, NewCase, UnloadResult, Workbench } from "../core/workbench";
 import { Engine } from "../pipeline/engine";
 import type { EngineDeps, RunSummary } from "../pipeline/engine";
+import { improveHost } from "../pipeline/improve/workbench-host";
 import type { ResolvedLoop } from "../pipeline/loops";
 import { loopCaseType } from "../pipeline/memory";
 import { notTheChild, readChild } from "../pipeline/subloop";
@@ -47,10 +48,14 @@ export class CaseHub {
 
   /**
    * The deps are the server's own (compose's, which a reload changes in place). The hub gives them the way a sub-loop stage reaches its
-   * child cases (`children`) and the way a run's outputs reach the workbench chain (`onOutputs`, as loop.output).
+   * child cases (`children`), the way an improve run reaches its tasks, staging stores and probe children (`improve`, over the hub's engines), and
+   * the way a run's outputs reach the workbench chain (`onOutputs`, as loop.output).
    */
   constructor(private readonly wb: Workbench, readonly deps: EngineDeps, private readonly onError: (error: unknown) => void) {
     deps.children = this.children;
+    deps.improve = improveHost({
+      wb, deps: () => this.deps, engine: (id) => this.engine(id), secrets: () => this.deps.runner.secrets?.() ?? [], onError: (error) => this.onError(error),
+    });
     deps.onOutputs = (o) => {
       const inputs: Parameters<Workbench["chain"]["appendMany"]>[0] = [];
       for (const output of Object.keys(o.outputs).sort()) {

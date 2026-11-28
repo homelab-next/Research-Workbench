@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SAMPLE_START, SAMPLE_WINDOW } from "../../scripts/make-sample-data";
@@ -11,6 +11,7 @@ import type { Config } from "../../src/modules/config";
 import { draftOf, saveLoop } from "../../src/modules/loop-write";
 import { Engine } from "../../src/pipeline/engine";
 import type { EngineDeps } from "../../src/pipeline/engine";
+import { stagedFolder, sweepStaged } from "../../src/pipeline/improve/workbench-host";
 import { sampleRoot } from "../helpers/sample-root";
 
 const human: Actor = { kind: "human", id: "analyst" };
@@ -28,7 +29,7 @@ beforeEach(() => {
   const base = loadConfig({ env: {}, home: dir, repoRoot: dir });
   config = {
     ...base, data_dir: join(dir, "wb"), roots: [{ path: sample.root, trusted: true, credentials: [] }], research: { parallel: 1 },
-    loops: { ...base.loops, store: join(dir, "wb", "loops"), imports: join(dir, "wb", "imported") },
+    loops: { ...base.loops, store: join(dir, "wb", "loops"), imports: join(dir, "wb", "imported") }, improve: { ...base.improve, staged: join(dir, "wb", "staged") },
   };
   wb = Workbench.open(config.data_dir, { onError: () => {} });
   composed = compose(config, wb);
@@ -195,4 +196,64 @@ test("a seed that is not a lesson is one of compose's problems, and the workbenc
   Engine.open(session, composed.deps).start(human);
   expect(session.state.run.status).toBe("running");
   expect(session.state.skipped).toEqual([]);
+});
+
+// ---------- slice 14: compose sweeps the staging folders once ----------
+
+const ENGINE: Actor = { kind: "system", id: "engine" };
+/** An improve case whose run is in progress (`running`), finished, or never started (`none`), and its staging folder, made with a blob in it. */
+function improveWithFolder(run: "running" | "finished" | "none"): { id: string; folder: string } {
+  const s = wb.createCase(
+    { title: "Improve", asked: "Improve", why: "test", starting: [SAMPLE_START], window: SAMPLE_WINDOW, objective: null, marking: "TLP:AMBER" },
+    human, { loop: "improve", improve: { target: "investigation", case_type: "unknown-device", tasks: 1, candidates: 1 }, type: "unknown-device" },
+  );
+  if (run !== "none") s.commit((_, ids) => [{ type: "run.started", actor: ENGINE, payload: { run: ids.next("run"), pipeline: "improve", pipeline_hash: "a".repeat(64), stages: [] } }]);
+  if (run === "finished") s.commit((st) => [{ type: "run.finished", actor: ENGINE, run: st.run.id!, payload: { outcome: "stopped", reason: "test" } }]);
+  const folder = join(config.improve.staged, stagedFolder({ case: s.id, origin: s.entries(0, 1)[0]!.hash }));
+  mkdirSync(join(folder, "blobs"), { recursive: true });
+  writeFileSync(join(folder, "blobs", "x"), "staged bytes");
+  expect(s.state.skipped).toEqual([]);
+  return { id: s.id, folder };
+}
+const folderNamed = (name: string): string => {
+  const at = join(config.improve.staged, name);
+  mkdirSync(join(at, "blobs"), { recursive: true });
+  return at;
+};
+
+test("sweepStaged removes the folder of a finished improve case and of no case, and keeps the folder of a run in progress and of a case that is not loaded", () => {
+  const finished = improveWithFolder("finished");
+  const never = improveWithFolder("none");
+  const running = improveWithFolder("running");
+  const notLoaded = folderNamed("CASE-77-0123456789ab");
+  const stray = folderNamed("not-a-case");
+  const removed = sweepStaged(config, wb);
+  expect([...removed].sort()).toEqual([finished.folder, never.folder, stray].sort());
+  expect(existsSync(finished.folder)).toBe(false);
+  expect(existsSync(never.folder)).toBe(false);
+  expect(existsSync(stray)).toBe(false);
+  expect(existsSync(running.folder)).toBe(true);
+  expect(existsSync(notLoaded)).toBe(true);
+  // a second sweep has nothing to remove
+  expect(sweepStaged(config, wb)).toEqual([]);
+  // with no staging folder at all, nothing
+  rmSync(config.improve.staged, { recursive: true, force: true });
+  expect(sweepStaged(config, wb)).toEqual([]);
+});
+
+test("compose sweeps once and a reload does not", () => {
+  const finished = improveWithFolder("finished");
+  const stray = folderNamed("not-a-case");
+  const problems = composed.reload();
+  expect(existsSync(finished.folder)).toBe(true);
+  expect(existsSync(stray)).toBe(true);
+  const again = compose(config, wb);
+  try {
+    expect(existsSync(finished.folder)).toBe(false);
+    expect(existsSync(stray)).toBe(false);
+    // the sweep adds nothing to the problems
+    expect(again.problems).toEqual(problems);
+  } finally {
+    again.close();
+  }
 });
