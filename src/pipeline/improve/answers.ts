@@ -102,3 +102,12 @@ export function knownAnswerOf(entries: readonly Entry[], at: { seq: number; hash
     text: held.text, findings: held.findings.map((f) => ({ claim: f.claim, likelihood: f.likelihood, confidence: f.confidence })), marking: held.marking, product: held.product,
   };
 }
+
+/**
+ * Whether the person withdrew the known answer of `product` after the entry at `at.seq` (the one Select named): an answer.withdrawn of that
+ * product the fold took (a person's), later in the ledger. A later answer.known replacing it is not a withdrawal: Select's entry is still read.
+ */
+export function withdrawnSince(entries: readonly Entry[], at: { seq: number }, product: number): boolean {
+  const skipped = new Set(fold(entries as Entry[]).skipped.map((x) => x.seq));
+  return entries.some((e) => e.seq > at.seq && e.type === "answer.withdrawn" && e.payload.product === product && !skipped.has(e.seq));
+}

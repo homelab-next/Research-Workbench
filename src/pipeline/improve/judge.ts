@@ -16,7 +16,7 @@ import type { PackPart } from "../../agents/context";
 import { scrub } from "../../agents/tools/kit";
 import type { StageEnd, StageEnv, StageRunner } from "../engine";
 import type { ImproveHost } from "./host";
-import { knownAnswerOf } from "./answers";
+import { knownAnswerOf, withdrawnSince } from "./answers";
 import { stageAgent } from "../stages/agent";
 
 const ENGINE: Actor = { kind: "system", id: "engine" };
@@ -26,14 +26,21 @@ type Verdict = (typeof VERDICTS)[number];
 /** What a model is asked of one probe: the expected findings code left unmatched, the produced findings no expected one took, and whether it gives a verdict on the answer's text. */
 interface Asked { expected: number[]; free: string[]; text: boolean }
 
-/** The answers Select named, read from their tasks' ledgers by seq and hash; the sentence when one cannot be read. */
-export function answersOf(state: Readonly<CaseState>, host: Pick<ImproveHost, "task">): AnswerCopy[] | string {
+/** Why a task's outputs are unscored: its answer was withdrawn once Select had named it. */
+export const withdrawnReason = (task: string, caseId: string): string => `the known answer of task ${task} (${caseId}) was withdrawn after Select; its outputs are unscored`;
+
+/**
+ * The answers Select named, read from their tasks' ledgers by seq and hash; the sentence when one cannot be read. A task whose answer the person
+ * withdrew since is left out (its outputs are unscored and its answer is not copied); its reason is added to `withdrawn`.
+ */
+export function answersOf(state: Readonly<CaseState>, host: Pick<ImproveHost, "task">, withdrawn: string[] = []): AnswerCopy[] | string {
   const out: AnswerCopy[] = [];
   for (const task of state.improve.task_order) {
     const t = state.improve.tasks[task];
     if (t === undefined) continue;
     const view = host.task({ case: t.case, origin: t.origin });
     if (view === null) return `task ${t.case} is not loaded; load it from the store so its known answer can be read`;
+    if (withdrawnSince(view.entries(), t.answer, t.product.n)) { withdrawn.push(withdrawnReason(task, t.case)); continue; }
     const known = knownAnswerOf(view.entries(), t.answer);
     if (known === null) return `the known answer Select named is not in ${t.case}'s ledger`;
     out.push({ task, seq: t.answer.seq, hash: t.answer.hash, text: known.text, findings: known.findings, marking: known.marking });
@@ -125,7 +132,8 @@ export const judgeRunner: StageRunner = async (env: StageEnv): Promise<StageEnd>
   if (first.improve.scored !== null) return passed({ matcher: first.improve.scored.matcher, summary: first.improve.scored.summary, reason: null });
   if (first.improve.selected === null || first.improve.chosen === null) return { kind: "stalled", reason: AFTER_CHOICE };
   if (deps.improve === undefined) return { kind: "stalled", reason: "this workbench has no improve host: the Judge cannot read the tasks" };
-  const answers = answersOf(first, deps.improve);
+  const withdrawn: string[] = [];
+  const answers = answersOf(first, deps.improve, withdrawn);
   if (typeof answers === "string") return { kind: "stalled", reason: answers };
 
   const scale = first.improve.selected.scale;
@@ -175,5 +183,7 @@ export const judgeRunner: StageRunner = async (env: StageEnv): Promise<StageEnd>
     if (s.run.id !== first.run.id || s.run.status === "finished" || s.improve.scored !== null || s.improve.chosen === null) return [];
     return [{ type: "judge.scored", actor: ENGINE, run: s.run.id, stage: stage.id, payload: { answers: answersBlob, scores: sheetBlob, matcher, summary: sheet.summary } }];
   });
-  return passed({ matcher, summary: sheet.summary, reason }, reason);
+  const said = [...withdrawn, ...(reason === null ? [] : [reason])];
+  const why = said.length === 0 ? null : said.join("; ");
+  return passed({ matcher, summary: sheet.summary, reason: why }, why);
 };

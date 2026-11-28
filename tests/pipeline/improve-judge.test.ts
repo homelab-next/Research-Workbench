@@ -23,7 +23,7 @@ import { loadConfig } from "../../src/modules/config";
 import type { Config } from "../../src/modules/config";
 import { Engine } from "../../src/pipeline/engine";
 import type { EngineDeps, StageEnv, StageRunner } from "../../src/pipeline/engine";
-import { setKnownAnswer } from "../../src/pipeline/improve/answers";
+import { setKnownAnswer, withdrawKnownAnswer } from "../../src/pipeline/improve/answers";
 import type { ImproveHost, TaskRef, TaskView } from "../../src/pipeline/improve/host";
 import { answersOf, judgeRunner, matcherParts } from "../../src/pipeline/improve/judge";
 import { IMPROVE_ROLES } from "../../src/pipeline/manifests";
@@ -280,6 +280,27 @@ test("a task that is not loaded, or whose ledger holds no such entry, is the sen
     task: (ref) => ({ ref, state: task.state, head: task.head(), entries: () => task.entries().filter((e) => e.type !== "answer.known") }),
   };
   expect(answersOf(s.state, stale)).toBe(`the known answer Select named is not in ${task.id}'s ledger`);
+});
+
+test("a task whose known answer was withdrawn after Select is unscored, with the reason; its answer is not copied", async () => {
+  const r = rig(false);
+  for (let i = 0; i < 3; i++) taskCase(r, i);
+  const s = improveCase(r, 3);
+  // the person withdraws task 1's answer once Select has named it, before the Judge runs
+  const withdraw = () => withdrawKnownAnswer(r.tasks[0]!, secrets, { product: 1, reason: "it was wrong", actor: human });
+  const engine = engineFor(r, s, { select: recorded(r, 3, scenario()), compose: withdraw });
+  engine.start(human);
+  await engine.advance();
+  expect(r.tasks[0]!.state.answers).toEqual({});
+  const scored = s.state.improve.scored!;
+  const answers = readAnswers(s.blobs.get(scored.answers.blob))!;
+  expect(answers.map((a) => a.task)).toEqual(["T2", "T3"]);
+  expect(JSON.stringify(answers)).not.toContain("task 1");
+  const sheet = readScoreSheet(s.blobs.get(scored.scores.blob))!;
+  expect(sheet.outputs.map((o) => o.probe)).toEqual(["base/T2", "base/T3", "K1/T2", "K1/T3"]);
+  expect(scored.summary).toEqual([{ candidate: "base", score: 0, drafted: 2, tasks: 2 }, { candidate: "K1", score: 1000, drafted: 2, tasks: 2 }]);
+  const fin = s.entries().find((x) => x.type === "stage.finished" && x.payload.stage === "judge")!;
+  expect((fin.payload as { reason: string | null }).reason).toBe(`the known answer of task T1 (${r.tasks[0]!.id}) was withdrawn after Select; its outputs are unscored`);
 });
 
 // ---- the runner
