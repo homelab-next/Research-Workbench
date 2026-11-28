@@ -11,7 +11,10 @@ import { entryHash, InvalidEntryError, Ledger } from "../../src/core/ledger";
 import { lessonHash } from "../../src/core/lessons";
 import type { LessonDraft, LessonState } from "../../src/core/lessons";
 import { MemoryStore } from "../../src/core/memstore";
-import { formatReport, linkLines, UnreadableLedgerError, verifyCase, verifyLedger, verifyLinks, verifyMemory, verifyMemoryLinks, verifyPublished } from "../../src/core/verify";
+import { formatReport, linkLines, probeLines, scoreLines, UnreadableLedgerError, verifyCase, verifyLedger, verifyLinks, verifyMemory, verifyMemoryLinks, verifyProbes, verifyPublished, verifyScores } from "../../src/core/verify";
+import { scoreOutput, scoreSheet } from "../../src/core/score";
+import { fold, probeOutputOf } from "../../src/core/state";
+import type { AnswerCopy, ProbeOutput, ScoreSheet } from "../../src/core/state/improve";
 import { Workbench } from "../../src/core/workbench";
 import type { CaseSession } from "../../src/core/session";
 import type { BlobRef, Product } from "../../src/core/types";
@@ -743,4 +746,231 @@ test("verifyCase of a case with a memory.bound checks the lock blob as it checks
   const r = verifyCase(dir);
   expect(r.ok).toBe(false);
   expect(r.blobs.bad).toEqual([{ blob: lock.blob, state: "missing", seq: ledger.head().seq }]);
+});
+
+// ---------- an improve case and its probe children (slice 14) ----------
+
+const probeActorId = { kind: "system", id: "improve-probe" } as const;
+const improveWords = { title: "Improve", asked: "", why: "", starting: [], window: { from: null, to: null }, objective: null, marking: "TLP:AMBER" as const };
+const probeTask = { title: "Probe", asked: "Is 192.0.2.10 beaconing?", why: "probe", starting: [{ type: "ip", value: "192.0.2.10" }], window: { from: null, to: null }, objective: null, marking: "TLP:AMBER" as const };
+const BASE_HASH = "b".repeat(64);
+const CAND_HASH = "c".repeat(64);
+const improveRequest = { target: "investigation", case_type: "beaconing", tasks: 1, candidates: 1 };
+
+interface Probed { improve: CaseSession; children: Record<string, CaseSession>; cases: string }
+/**
+ * An improve case with a base probe and a K1 probe on task T1, each with a child that bound its loop version and a probe.finished that records the
+ * child's head and output as they are when the entries are written. `over` changes what a probe's child holds or what its probe.finished says.
+ */
+function probedCase(wb: Workbench, over: { child?: (probe: string) => Record<string, unknown>; finished?: (probe: string, c: CaseSession) => Record<string, unknown>; bound?: (probe: string) => string; started?: (probe: string) => Record<string, unknown>; output?: (probe: string) => string | undefined } = {}): Probed {
+  const improve = wb.createCase(improveWords, human, { loop: "improve", type: "beaconing", improve: improveRequest });
+  improve.commit((_s, ids) => [
+    { type: "run.started", actor: human, payload: { run: ids.next("run"), pipeline: "improve", pipeline_hash: "a".repeat(64), stages: linkStages } },
+    { type: "improve.selected", actor: engineActor, payload: { target: "investigation", version: 1, loop_hash: BASE_HASH, lock: improve.blobs.put("{}"), case_type: "beaconing", scale: ["unlikely", "likely"], left_out: [] } },
+    { type: "improve.candidate", actor: engineActor, payload: { candidate: "K1", change: "CHG-1", status: "staged", loop_hash: CAND_HASH, lock: improve.blobs.put("{}"), reason: "" } },
+  ]);
+  const children: Record<string, CaseSession> = {};
+  for (const probe of ["base/T1", "K1/T1"]) {
+    const [candidate, task] = probe.split("/") as [string, string];
+    const loopHash = candidate === "base" ? BASE_HASH : CAND_HASH;
+    const link = { parent: improve.id, run: "run-1", stage: "probe", attempt: 1, loop: "investigation", input_hash: sha256Hex(probe), depth: 1, floor: "TLP:AMBER" as const };
+    const mark = { improve: improve.id, origin: improve.entries()[0]!.hash, probe, candidate, task, plan_gate: "accept" as const, max_lookups: 5, max_tokens: 5000, ...(over.child?.(probe) ?? {}) };
+    const child = wb.createCase(probeTask, engineActor, { loop: "investigation", link, type: "beaconing", probe: mark });
+    child.commit((_s, ids) => [
+      { type: "loop.bound", actor: engineActor, payload: { loop: "investigation", version: 1, hash: over.bound?.(probe) ?? loopHash, lock: child.blobs.put("{}") } },
+      { type: "run.started", actor: engineActor, payload: { run: ids.next("run"), pipeline: "investigation", pipeline_hash: loopHash, stages: linkStages } },
+    ]);
+    children[probe] = child;
+    const output = over.output?.(probe) ?? canonical(probeOutputOf(child.state) as never);
+    improve.commit(() => [
+      { type: "probe.started", actor: engineActor, payload: { probe, candidate, task, child: child.id, origin: child.entries()[0]!.hash, loop_hash: loopHash, input_hash: link.input_hash, budgets: { lookups: 5, tokens: 5000 }, ...(over.started?.(probe) ?? {}) } },
+    ]);
+    improve.commit(() => [
+      { type: "probe.finished", actor: engineActor, payload: { probe, child: child.id, child_run: "run-1", head: child.head(), outcome: "incomplete", reason: "it is still running", draft_hash: null, output_hash: sha256Hex(output), output: improve.blobs.put(output), lookups: 0, tokens: 0, ...(over.finished?.(probe, child) ?? {}) } },
+    ]);
+  }
+  // the fold may skip these hand-made entries (no change was proposed, no plan was made): verify reads the rows
+  return { improve, children, cases: join(root, "wb", "cases") };
+}
+
+test("verifyProbes matches each probe of a finished improve case against its child at the recorded head", () => {
+  const wb = Workbench.open(join(root, "wb"), { onError: () => {} });
+  try {
+    const p = probedCase(wb);
+    const r = verifyProbes(p.improve.dir, p.cases);
+    expect(r).toEqual({ ok: true, probes: [
+      { probe: "base/T1", child: p.children["base/T1"]!.id, status: "matches" },
+      { probe: "K1/T1", child: p.children["K1/T1"]!.id, status: "matches" },
+    ] });
+    expect(probeLines(r)[0]).toBe(`probe base/T1: ${p.children["base/T1"]!.id} matches`);
+    // a case with no probes has nothing to report
+    expect(verifyProbes(dir, p.cases)).toEqual({ ok: true, probes: [] });
+  } finally {
+    wb.close();
+  }
+});
+
+test("a child whose ledger was cut before the head, whose probe.child names another probe, or whose run bound another version is reported as such", () => {
+  const wb = Workbench.open(join(root, "wb"), { onError: () => {} });
+  try {
+    // the head the improve case recorded is past the child's last entry
+    const cut = probedCase(wb, { finished: (_p, c) => ({ head: { seq: c.head().seq + 3, hash: c.head().hash } }) });
+    expect(verifyProbes(cut.improve.dir, cut.cases)).toMatchObject({ ok: false, probes: [{ status: "head_differs" }, { status: "head_differs" }] });
+    // the head's hash is another entry's
+    const forged = probedCase(wb, { finished: (_p, c) => ({ head: { seq: c.head().seq, hash: "0".repeat(64) } }) });
+    expect(verifyProbes(forged.improve.dir, forged.cases).probes.map((x) => x.status)).toEqual(["head_differs", "head_differs"]);
+    // probe.child names another probe, or another improve case's origin
+    const other = probedCase(wb, { child: (probe) => (probe === "K1/T1" ? { probe: "K1/T9", task: "T9" } : {}) });
+    expect(verifyProbes(other.improve.dir, other.cases).probes.map((x) => x.status)).toEqual(["matches", "not_its_child"]);
+    const origin = probedCase(wb, { child: (probe) => (probe === "base/T1" ? { origin: "7".repeat(64) } : {}) });
+    expect(verifyProbes(origin.improve.dir, origin.cases).probes.map((x) => x.status)).toEqual(["not_its_child", "matches"]);
+    // the child's first entry is not the origin probe.started recorded
+    const start = probedCase(wb, { started: (probe) => (probe === "base/T1" ? { origin: "6".repeat(64) } : {}) });
+    expect(verifyProbes(start.improve.dir, start.cases).probes.map((x) => x.status)).toEqual(["not_its_child", "matches"]);
+    // the run bound another version than the one probe.started recorded
+    const drift = probedCase(wb, { bound: (probe) => (probe === "K1/T1" ? "d".repeat(64) : probe === "base/T1" ? BASE_HASH : CAND_HASH) });
+    const r = verifyProbes(drift.improve.dir, drift.cases);
+    expect(r.ok).toBe(false);
+    expect(r.probes.map((x) => x.status)).toEqual(["matches", "version_differs"]);
+    expect(probeLines(r)[1]).toContain("BROKEN");
+    // probe.started records the version the candidate's staging recorded: a probe of K1 under another hash than improve.candidate holds is a version difference
+    const wrong = probedCase(wb, { started: (probe) => (probe === "K1/T1" ? { loop_hash: "e".repeat(64) } : {}), bound: (probe) => (probe === "K1/T1" ? "e".repeat(64) : BASE_HASH) });
+    expect(verifyProbes(wrong.improve.dir, wrong.cases).probes.map((x) => x.status)).toEqual(["matches", "version_differs"]);
+  } finally {
+    wb.close();
+  }
+});
+
+test("an output blob that is not what the child's fold at that head gives is output_differs", () => {
+  const wb = Workbench.open(join(root, "wb"), { onError: () => {} });
+  try {
+    const edited = canonical({ ...probeOutputOf(fold([], 0)), reason: "edited" } as never);
+    // the blob and its hash both name an output the child's state does not give
+    const p = probedCase(wb, { output: (probe) => (probe === "base/T1" ? edited : undefined) });
+    expect(verifyProbes(p.improve.dir, p.cases).probes.map((x) => x.status)).toEqual(["output_differs", "matches"]);
+    // output_hash that is not the hash of the output blob
+    const q = probedCase(wb, { finished: (probe) => (probe === "K1/T1" ? { output_hash: "9".repeat(64) } : {}) });
+    expect(verifyProbes(q.improve.dir, q.cases).probes.map((x) => x.status)).toEqual(["matches", "output_differs"]);
+  } finally {
+    wb.close();
+  }
+});
+
+test("a child that is not in the folder is not_loaded and the report is ok", () => {
+  const wb = Workbench.open(join(root, "wb"), { onError: () => {} });
+  try {
+    const p = probedCase(wb);
+    for (const c of Object.values(p.children)) { c.close(); rmSync(c.dir, { recursive: true, force: true }); }
+    const r = verifyProbes(p.improve.dir, p.cases);
+    expect(r.ok).toBe(true);
+    expect(r.probes.map((x) => x.status)).toEqual(["not_loaded", "not_loaded"]);
+    expect(probeLines(r)[0]).toContain("not loaded here, not checked");
+  } finally {
+    wb.close();
+  }
+});
+
+// ---- the scores
+
+const FINDING = { id: "F1", statement: "the host beacons to the relay", likelihood: "likely", confidence: "moderate" as const, confidence_basis: "two sources", cites: ["C1"], assumptions: [], reasoning: "seen" };
+const scoredOutput: ProbeOutput = {
+  format: 1, outcome: "drafted", reason: "", draft_hash: "d".repeat(64),
+  product: { objective: "Decide", question: "q", marking: "TLP:AMBER", summary: "s", key_findings: [FINDING], gaps_and_limits: "g", alternatives: "a", assessment: "x", sources: [], assumptions: [], change: "" },
+  stats: { lookups: 1, tokens: 10, model_calls: 1, stages: [] },
+};
+const knownAnswer: AnswerCopy = { task: "T1", seq: 9, hash: "a".repeat(64), text: "It beacons.", findings: [{ claim: "the host beacons to the relay", likelihood: "likely", confidence: "high" }], marking: "TLP:AMBER" };
+
+/** An improve case that holds two probe outputs and a judge.scored over them; `edit` may change the recorded sheet. */
+function scoredCase(wb: Workbench, edit: (sheet: ScoreSheet) => ScoreSheet = (s) => s): { improve: CaseSession; sheet: ScoreSheet } {
+  const improve = wb.createCase(improveWords, human, { loop: "improve", type: "beaconing", improve: improveRequest });
+  const outputs: Record<string, ProbeOutput> = { "base/T1": { ...scoredOutput, product: { ...scoredOutput.product!, key_findings: [{ ...FINDING, statement: "an unrelated finding" }] } }, "K1/T1": scoredOutput };
+  const sheet = scoreSheet(Object.entries(outputs).map(([probe, o]) => scoreOutput({ probe, candidate: probe.split("/")[0]!, task: "T1" }, o, knownAnswer, ["unlikely", "likely"])), ["unlikely", "likely"], ["base", "K1"]);
+  for (const [probe, o] of Object.entries(outputs)) {
+    const bytes = canonical(o as never);
+    improve.commit(() => [{ type: "probe.finished", actor: engineActor, payload: { probe, child: "CASE-9", child_run: null, head: { seq: 1, hash: "1".repeat(64) }, outcome: "drafted", reason: "", draft_hash: o.draft_hash, output_hash: sha256Hex(bytes), output: improve.blobs.put(bytes), lookups: 1, tokens: 10 } }]);
+  }
+  const recorded = edit(sheet);
+  improve.commit(() => [{ type: "judge.scored", actor: engineActor, payload: { answers: improve.blobs.put(canonical([knownAnswer] as never)), scores: improve.blobs.put(canonical(recorded as never)), matcher: "code", summary: recorded.summary } }]);
+  return { improve, sheet };
+}
+
+test("verifyScores is ok for a recorded sheet and names the first score that differs when a score was edited", () => {
+  const wb = Workbench.open(join(root, "wb"), { onError: () => {} });
+  try {
+    const good = scoredCase(wb);
+    expect(verifyScores(good.improve.dir)).toEqual({ ok: true, scored: true, problem: null });
+    // an output's score edited in the sheet (and the summary kept as the sheet's)
+    const edited = scoredCase(wb, (s) => ({ ...s, outputs: s.outputs.map((o) => (o.probe === "K1/T1" ? { ...o, score: 1000 } : o)) }));
+    const r = verifyScores(edited.improve.dir);
+    expect(r.ok).toBe(false);
+    expect(r.scored).toBe(true);
+    expect(r.problem).toContain("K1/T1");
+    // a summary that is not the sheet's
+    const summed = scoredCase(wb, (s) => ({ ...s, summary: s.summary.map((x) => (x.candidate === "base" ? { ...x, score: 999 } : x)) }));
+    expect(verifyScores(summed.improve.dir)).toMatchObject({ ok: false, scored: true });
+    expect(verifyScores(summed.improve.dir).problem).toContain("base");
+    // a case that was never judged is ok and not scored
+    expect(verifyScores(dir)).toEqual({ ok: true, scored: false, problem: null });
+    expect(scoreLines({ ok: true, scored: false, problem: null })).toEqual([]);
+    expect(scoreLines(r)[0]).toContain("BROKEN");
+  } finally {
+    wb.close();
+  }
+});
+
+test("verifyScores reads no other case: with every child and task removed it gives the same answer", () => {
+  const wb = Workbench.open(join(root, "wb"), { onError: () => {} });
+  try {
+    const p = probedCase(wb);
+    const good = scoredCase(wb);
+    const before = verifyScores(good.improve.dir);
+    for (const c of Object.values(p.children)) { c.close(); rmSync(c.dir, { recursive: true, force: true }); }
+    expect(verifyScores(good.improve.dir)).toEqual(before);
+    // copied alone into an empty folder it is the same
+    const alone = join(root, "alone");
+    cpSync(good.improve.dir, join(alone, "CASE-1"), { recursive: true });
+    expect(verifyScores(join(alone, "CASE-1"))).toEqual(before);
+  } finally {
+    wb.close();
+  }
+});
+
+test("the verify command prints the probes' and the scores' lines for an improve case and nothing more for any other", () => {
+  const wb = Workbench.open(join(root, "wb"), { onError: () => {} });
+  let improveDir: string;
+  let scoredDir: string;
+  let child: string;
+  try {
+    const p = probedCase(wb);
+    improveDir = p.improve.dir;
+    child = p.children["base/T1"]!.id;
+    scoredDir = scoredCase(wb, (s) => ({ ...s, outputs: s.outputs.map((o) => (o.probe === "K1/T1" ? { ...o, score: 1000 } : o)) })).improve.dir;
+  } finally {
+    wb.close();
+  }
+  const out = run(improveDir).stdout.toString().split("\n").filter((l) => l !== "");
+  expect(out.some((l) => l === `probe base/T1: ${child} matches`)).toBe(true);
+  expect(out.filter((l) => l.startsWith("probe ")).length).toBe(2);
+  expect(out.some((l) => l.startsWith("scores:"))).toBe(false);
+  expect(run(improveDir).exitCode).toBe(0);
+  const bad = run(scoredDir);
+  expect(bad.stdout.toString()).toContain("scores: BROKEN");
+  expect(bad.exitCode).toBe(1);
+  // a plain case and a linked parent print neither
+  const plain = run(dir).stdout.toString();
+  expect(plain).not.toContain("probe ");
+  expect(plain).not.toContain("scores:");
+});
+
+test("a probe child holding a gate passed by improve-probe other than its plan gate is not_its_child", () => {
+  const wb = Workbench.open(join(root, "wb"), { onError: () => {} });
+  try {
+    const p = probedCase(wb, { child: () => ({}) });
+    // the child gets a publish pass by code after the recorded head: the head still matches, the child is not what a probe may be
+    const c = p.children["base/T1"]!;
+    c.commit(() => [{ type: "gate.passed", actor: probeActorId, payload: { gate: "publish" } }]);
+    expect(verifyProbes(p.improve.dir, p.cases).probes.map((x) => x.status)).toEqual(["not_its_child", "matches"]);
+  } finally {
+    wb.close();
+  }
 });

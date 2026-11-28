@@ -9,7 +9,10 @@ import { checkRow } from "./ledger";
 import { foldLessons, lessonHash } from "./lessons";
 import type { LessonDraft } from "./lessons";
 import { MEMORY_CHAIN } from "./memstore";
+import { rescore } from "./score";
+import { fold, probeOutputOf } from "./state";
 import { isObj } from "./state/guards";
+import { readAnswers, readProbeOutput, readScoreSheet } from "./state/improve";
 import type { LedgerRow, RowFault } from "./ledger";
 import { BLOB_FIELDS, blobFieldNullable } from "./types";
 import type { Actor, Entry, EntryType } from "./types";
@@ -343,6 +346,154 @@ export function linkLines(r: LinkReport): string[] {
     version_differs: "BROKEN: its run bound another version of its loop than this case recorded",
   };
   return r.links.map((l) => `link ${l.key}: ${l.child} ${said[l.status]}`);
+}
+
+// ---------- an improve case and its probe children (slice 14) ----------
+
+export interface ProbeReport { ok: boolean; probes: { probe: string; child: string; status: "matches" | "not_loaded" | "head_differs" | "not_its_child" | "version_differs" | "output_differs" }[] }
+
+/** The bytes of a blob of a case folder, read-only (a store that is not there is made by nothing here); null when it is missing or corrupt. */
+function blobOf(caseDir: string, ref: unknown): Uint8Array | null {
+  const dir = join(caseDir, "blobs");
+  if (!isObj(ref) || typeof ref.blob !== "string" || !existsSync(dir)) return null;
+  try {
+    return new BlobStore(dir).get(ref.blob);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * For each probe.finished of an improve case: the version the probe ran under is the one the case recorded for it (the selected loop for `base`, the
+ * staged candidate's otherwise); and, when the child is in `casesDir`, its ledger holds an entry of the recorded seq and hash, its probe.child and
+ * subloop.child name this case, probe, candidate and task, its first entry is the origin probe.started recorded, the run it ran bound the loop version
+ * probe.started names, no entry of improve-probe in it passes any gate but the plan gate, and the output the case recorded is the output of the
+ * child's fold at that head (both the blob's bytes and output_hash). A child that is not in `casesDir` is not_loaded and does not fail the report.
+ * Reads only. The first failing check names the status.
+ */
+export function verifyProbes(caseDir: string, casesDir: string): ProbeReport {
+  const parent = rowsOf(join(caseDir, "ledger.sqlite"));
+  const started = new Map<string, Record<string, unknown>>();
+  let selected: string | null = null;
+  let candidates = new Map<string, string | null>();
+  const probes: ProbeReport["probes"] = [];
+  for (const r of parent.rows) {
+    const p = r.payload;
+    if (!isObj(p)) continue;
+    if (r.type === "improve.selected") { selected = typeof p.loop_hash === "string" ? p.loop_hash : null; candidates = new Map(); started.clear(); continue; }
+    if (r.type === "improve.candidate" && typeof p.candidate === "string") { candidates.set(p.candidate, p.status === "staged" && typeof p.loop_hash === "string" ? p.loop_hash : null); continue; }
+    if (r.type === "probe.started" && typeof p.probe === "string") { started.set(p.probe, p); continue; }
+    if (r.type !== "probe.finished" || typeof p.probe !== "string" || typeof p.child !== "string") continue;
+    const opened = started.get(p.probe) ?? null;
+    const status = ((): ProbeReport["probes"][number]["status"] => {
+      if (opened === null || opened.child !== p.child || !CHILD_ID.test(p.child) || typeof opened.candidate !== "string" || typeof opened.task !== "string" || typeof opened.loop_hash !== "string") return "not_its_child";
+      const expected = opened.candidate === "base" ? selected : (candidates.get(opened.candidate) ?? null);
+      if (expected === null || opened.loop_hash !== expected) return "version_differs";
+      const ledgerPath = join(casesDir, p.child, "ledger.sqlite");
+      if (!existsSync(ledgerPath)) return "not_loaded";
+      let child: ReturnType<typeof rowsOf>;
+      try {
+        child = rowsOf(ledgerPath);
+      } catch {
+        return "head_differs";
+      }
+      const mark = child.rows.find((x) => x.type === "probe.child")?.payload;
+      const link = child.rows.find((x) => x.type === "subloop.child" && x.seq <= 3)?.payload;
+      const stray = child.rows.some((x) => x.type === "gate.passed" && isObj(x.payload) && x.payload.gate !== "plan" && isStrayActor(ledgerPath, x.seq));
+      if (child.case !== p.child || !isObj(mark) || !isObj(link) || link.parent !== parent.case || mark.improve !== parent.case || mark.origin !== parent.rows[0]?.hash
+        || mark.probe !== p.probe || mark.candidate !== opened.candidate || mark.task !== opened.task || child.rows[0]?.hash !== opened.origin || stray) return "not_its_child";
+      if (typeof p.child_run === "string") {
+        const at = child.rows.findIndex((x) => x.type === "run.started" && isObj(x.payload) && x.payload.run === p.child_run);
+        const bound = at > 0 && child.rows[at - 1]!.type === "loop.bound" ? child.rows[at - 1]!.payload : null;
+        if (!(isObj(bound) && bound.hash === opened.loop_hash)) return "version_differs";
+      }
+      const head = isHead(p.head) ? p.head : null;
+      const there = head === null ? undefined : child.rows.find((x) => x.seq === head.seq);
+      if (head === null || there === undefined || there.hash !== head.hash) return "head_differs";
+      const bytes = blobOf(caseDir, p.output);
+      if (bytes === null || typeof p.output_hash !== "string" || sha256Hex(bytes) !== p.output_hash) return "output_differs";
+      let again: string;
+      try {
+        again = canonical(probeOutputOf(fold(entriesOf(ledgerPath), head.seq)) as unknown as Json);
+      } catch {
+        return "output_differs";
+      }
+      return sha256Hex(again) === p.output_hash ? "matches" : "output_differs";
+    })();
+    probes.push({ probe: p.probe, child: p.child, status });
+  }
+  return { ok: probes.every((x) => x.status === "matches" || x.status === "not_loaded"), probes };
+}
+
+/** True when the entry at `seq` of the ledger was written by the system actor improve-probe. */
+function isStrayActor(ledgerPath: string, seq: number): boolean {
+  const db = new Database(ledgerPath, { readonly: true });
+  try {
+    const row = db.query("SELECT actor FROM entries WHERE seq = ?").get(seq) as { actor: string } | null;
+    const actor = row === null ? null : parseJson(row.actor)?.value;
+    return isObj(actor) && actor.kind === "system" && actor.id === "improve-probe";
+  } finally {
+    db.close();
+  }
+}
+
+/** One line per probe: `probe <probe>: <child> <status>`. */
+export function probeLines(r: ProbeReport): string[] {
+  const said: Record<ProbeReport["probes"][number]["status"], string> = {
+    matches: "matches", not_loaded: "not loaded here, not checked", head_differs: "BROKEN: its ledger does not hold the recorded head",
+    not_its_child: "BROKEN: it is not the child this case recorded for the probe", version_differs: "BROKEN: the version it ran is not the one this case recorded for the probe",
+    output_differs: "BROKEN: its output at the recorded head is not the output this case recorded",
+  };
+  return r.probes.map((x) => `probe ${x.probe}: ${x.child} ${said[x.status]}`);
+}
+
+export interface ScoreReport { ok: boolean; scored: boolean; problem: string | null }
+
+/**
+ * Recomputes the sheet of an improve case's last judge.scored from the case's own blobs (the answers, each probe's recorded output) and the matches the
+ * sheet records, and compares it with the one recorded; the entry's summary must be the sheet's. Reads no other case. A case never judged is ok and not scored.
+ */
+export function verifyScores(caseDir: string): ScoreReport {
+  const rows = rowsOf(join(caseDir, "ledger.sqlite")).rows;
+  const judged = rows.findLast((r) => r.type === "judge.scored" && isObj(r.payload));
+  if (judged === undefined) return { ok: true, scored: false, problem: null };
+  const bad = (problem: string): ScoreReport => ({ ok: false, scored: true, problem });
+  const p = judged.payload as Record<string, unknown>;
+  const answersBytes = blobOf(caseDir, p.answers);
+  const answers = answersBytes === null ? null : readAnswers(answersBytes);
+  if (answers === null) return bad("the answers blob is missing or is not a list of known answers");
+  const sheetBytes = blobOf(caseDir, p.scores);
+  const sheet = sheetBytes === null ? null : readScoreSheet(sheetBytes);
+  if (sheet === null) return bad("the scores blob is missing or is not a score sheet");
+  const outputs: Record<string, NonNullable<ReturnType<typeof readProbeOutput>>> = {};
+  for (const r of rows) {
+    if (r.seq >= judged.seq) break;
+    if (r.type !== "probe.finished" || !isObj(r.payload) || typeof r.payload.probe !== "string") continue;
+    const bytes = blobOf(caseDir, r.payload.output);
+    const output = bytes === null ? null : readProbeOutput(bytes);
+    if (output === null) delete outputs[r.payload.probe];
+    else outputs[r.payload.probe] = output;
+  }
+  const again = rescore(sheet, outputs, answers);
+  for (const o of sheet.outputs) {
+    const now = again.outputs.find((x) => x.probe === o.probe);
+    if (now === undefined) return bad(`${o.probe}: its output or its known answer is not in this case`);
+    if (canonical(now as unknown as Json) !== canonical(o as unknown as Json)) {
+      return bad(`${o.probe}: the recorded score is ${o.score === null ? "none" : o.score}, recomputed ${now.score === null ? "none" : now.score}${o.score === now.score ? " (its matches differ)" : ""}`);
+    }
+  }
+  for (const row of again.summary) {
+    const was = sheet.summary.find((x) => x.candidate === row.candidate);
+    if (was === undefined || canonical(was as unknown as Json) !== canonical(row as unknown as Json)) return bad(`summary of ${row.candidate}: the sheet records ${was === undefined ? "none" : was.score}, recomputed ${row.score}`);
+  }
+  if (!Array.isArray(p.summary) || canonical(p.summary as Json) !== canonical(sheet.summary as unknown as Json)) return bad("the summary judge.scored records is not the sheet's");
+  return { ok: true, scored: true, problem: null };
+}
+
+/** No line for a case never judged; else one line: `scores: ok` or `scores: BROKEN: <the first score that differs>`. */
+export function scoreLines(r: ScoreReport): string[] {
+  if (!r.scored) return [];
+  return [r.ok ? "scores: ok, recomputed from the case's own blobs" : `scores: BROKEN: ${r.problem ?? "they differ"}`];
 }
 
 // ---------- the memory store (slice 13) ----------
