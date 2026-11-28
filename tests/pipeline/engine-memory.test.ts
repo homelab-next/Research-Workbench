@@ -8,6 +8,8 @@ import { join } from "node:path";
 import { SAMPLE_START, SAMPLE_WINDOW } from "../../scripts/make-sample-data";
 import { compose } from "../../src/cli/compose";
 import { readMemoryLock } from "../../src/core/lessons";
+import { MemoryRefused, MemoryStore } from "../../src/core/memstore";
+import { Refused } from "../../src/core/refused";
 import type { LessonDraft, MemoryLock } from "../../src/core/lessons";
 import type { CaseSession } from "../../src/core/session";
 import { fold } from "../../src/core/state";
@@ -494,4 +496,28 @@ test("setCaseType(null) during a run binds a lock with no lessons", () => {
   expect(s.state.memory.bound!.lessons).toEqual([]);
   const marking: Marking = lockOf(s, last).facts.marking;
   expect(marking).toBe("TLP:GREEN");
+});
+
+test("a store that cannot be reached when a lesson is filed (an export packing it) is a fault the run pauses on, not a refusal that drops the lesson", () => {
+  const host = storeHost(() => { throw new MemoryRefused("the memory store is being exported; try again when that is done"); });
+  let caught: unknown = null;
+  try {
+    host.propose({ case_type: "unknown-device", title: "t", text: "x", triggers: [], marking: "TLP:GREEN", supersedes: null }, { kind: "person" });
+  } catch (err) {
+    caught = err;
+  }
+  expect(caught).toBeInstanceOf(Error);
+  expect(caught).not.toBeInstanceOf(Refused);
+  expect((caught as Error).message).toContain("being exported");
+  // a store closed under the host (a load swapped it) is the same fault
+  const closed = MemoryStore.open(join(dir, "closed-store"));
+  closed.close();
+  let again: unknown = null;
+  try {
+    storeHost(() => closed).propose({ case_type: "unknown-device", title: "t", text: "x", triggers: [], marking: "TLP:GREEN", supersedes: null }, { kind: "person" });
+  } catch (err) {
+    again = err;
+  }
+  expect(again).toBeInstanceOf(Error);
+  expect(again).not.toBeInstanceOf(Refused);
 });

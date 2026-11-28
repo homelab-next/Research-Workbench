@@ -55,6 +55,8 @@ test("set_case_type confirms what Frame proposed, during the run, and the next s
   const written = s.entries(id).slice(n);
   expect(written.slice(0, 4).map((e) => [e.type, e.actor.kind])).toEqual([["case.type_set", "human"], ["memory.bound", "human"], ["card.created", "human"], ["question.answered", "human"]]);
   expect(written.some((e) => e.type === "run.resumed" && e.actor.kind === "human")).toBe(true);
+  // the answer card is the person's, and says the workbench worded it (final review Minor 8)
+  expect((written[2]!.payload as { card: { why: string } }).card.why).toBe("did not say how: the workbench worded this answer from the case type the person set");
   const st = s.app.hub.read(id).state;
   expect(st.memory.type).toBe("unknown-device");
   expect(Object.values(st.questions).find((q) => q.why === CASE_TYPE_WHY)!.waived).toBeNull();

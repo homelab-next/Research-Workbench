@@ -2,7 +2,7 @@
 // the same store only.
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonical } from "../../src/core/canonical";
@@ -11,7 +11,8 @@ import type { LessonDraft } from "../../src/core/lessons";
 import { checkMemoryFile, extractMemoryFile, MemoryFileError, memoryFileName, writeMemoryFile } from "../../src/core/memfile";
 import { MemoryRefused, MemoryStore } from "../../src/core/memstore";
 import { Refused } from "../../src/core/refused";
-import type { Actor } from "../../src/core/types";
+import type { Actor, Payloads } from "../../src/core/types";
+import { Ledger } from "../../src/core/ledger";
 import { verifyMemory } from "../../src/core/verify";
 import { Workbench } from "../../src/core/workbench";
 import { sha256Hex } from "../../src/core/hash";
@@ -302,6 +303,9 @@ test("a store of seeds a person has accepted, rejected or retired one of, or hol
     ["rejected", (w) => w.memory.reject("LESSON-1", { actor: person, reason: "not here" })],
     ["retired", (w) => { w.memory.accept("LESSON-1", { actor: person, hash: w.memory.state.lessons["LESSON-1"]!.hash }); w.memory.retire("LESSON-1", { actor: person, reason: "old" }); }],
     ["a person's proposal", (w) => w.memory.propose(draft("A person's own"), { kind: "person" }, person)],
+    ["a Feedback proposal", (w) => w.memory.propose(draft("From a case"), {
+      kind: "case", case: "CASE-1", origin: "a".repeat(64), run: "run-1", head: { seq: 4, hash: "b".repeat(64) }, product: null, stage: "feedback", model: true,
+    }, { kind: "system", id: "feedback" })],
   ];
   for (const [name, touch] of touched) {
     const o = another(`t-${name.replace(/[^a-z]/g, "")}`);
@@ -312,4 +316,40 @@ test("a store of seeds a person has accepted, rejected or retired one of, or hol
     expect({ origin: o.memory.origin(), head: o.memory.head(), state: o.memory.state }, name).toEqual(before);
     expect(o.chain.read().some((e) => e.type === "memory.loaded"), name).toBe(false);
   }
+});
+
+// ---------- final review Minor 4: a blob no entry names ----------
+
+test("a file holding a blob no entry of the store names is refused at load, and nothing of it lands in the store", async () => {
+  share(wb, "Check the lobby access point first");
+  const made = await wb.exportMemory(join(files(), "1"), { actor: person });
+  const m = await checkMemoryFile(made.path);
+  const src = join(dir, "junk-store");
+  await extractMemoryFile(made.path, src);
+  mkdirSync(join(src, "blobs"), { recursive: true });
+  writeFileSync(join(src, "blobs", "junk.bin"), "junk");
+  const junk = join(dir, "junk.memory.tar.gz");
+  await writeMemoryFile(src, junk, { origin: m.origin, head: m.head, entries: m.entries, lessons: m.lessons, marking: m.marking, exported_ts: m.exported_ts });
+  expect((await checkMemoryFile(junk)).files.map((f) => f.path)).toEqual(["blobs/junk.bin", "ledger.sqlite"]);
+  const b = another("b");
+  expect(await refused(b.loadMemory(junk, { actor: person }), MemoryFileError)).toBe("blobs/junk.bin is a blob no entry of the memory store names; this file cannot be loaded");
+  expect(b.memory.head().seq).toBe(0);
+  expect(ls(join(dir, "b", "memory", "blobs"))).toEqual([]);
+  expect(ls(join(dir, "b")).filter((n) => n.startsWith(".memory-"))).toEqual([]);
+});
+
+test("a store whose ledger holds a seed's proposal written by a person (a ledger other code wrote) is not a store of untouched seeds", async () => {
+  share(wb, "Check the lobby access point first");
+  const made = await wb.exportMemory(join(files(), "1"), { actor: person });
+  const o = another("raw");
+  fileSeeds(o.memory, seeds());
+  const ledger = Ledger.open(join(dir, "raw", "memory", "ledger.sqlite"), "memory");
+  try {
+    const [first] = ledger.read(0, 1);
+    ledger.append({ type: "lesson.proposed", actor: person, payload: { ...(first!.payload as Payloads["lesson.proposed"]), lesson: "LESSON-3", title: "A seed by a person" } });
+  } finally {
+    ledger.close();
+  }
+  expect(o.memory.state.skipped.map((k) => k.reason)).toEqual(["a lesson's origin is recorded by who filed it"]);
+  expect(await refused(o.loadMemory(made.path, { actor: person }))).toBe("this file is another workbench's memory store, and stores are not merged; to use it, start from an empty store");
 });

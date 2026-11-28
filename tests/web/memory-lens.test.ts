@@ -440,3 +440,12 @@ test("saving a loop from the edit form keeps its case type and its memory compon
   expect(JSON.stringify(after.draft.components)).toContain("\"memory\":\"shared/*\"");
   expect(JSON.stringify(after.draft.components)).toContain("\"memory\":\"case/notes\"");
 });
+
+test("after a resume that waived the question of the case's type, the lens says what the run went on without", async () => {
+  await open();
+  const id = await heldOnType();
+  expect((await pg().s.command(id, "resume")).status).toBe(200);
+  await pg().s.app.hub.idle();
+  await openLens(id);
+  expect(text(part("type").querySelector(".type-gap"))).toBe("The run went on without the case's type: no case type confirmed; no shared lessons loaded.");
+});

@@ -931,6 +931,9 @@ export class Workbench {
       const marking = strictest(...folded.order.map((id) => folded.lessons[id]!.marking));
       if (canonical(counts) !== canonical(m.lessons) || marking !== m.marking) throw new MemoryFileError("memory.json does not say what its ledger holds; this file cannot be loaded");
       lessons = folded.order.length;
+      // no entry of the store's ledger names a blob (a lesson's text is in its payload): a file that holds one holds bytes nothing reads
+      const blob = m.files.find((f) => f.path.startsWith("blobs/"));
+      if (blob !== undefined) throw new MemoryFileError(`${blob.path} is a blob no entry of the memory store names; this file cannot be loaded`);
       // 4. only an empty store, a store of untouched seed proposals, or this store further on
       this.open();
       const here = this.memory;

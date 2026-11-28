@@ -7,7 +7,7 @@ import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { isPlainObject } from "../core/canonical";
 import { isTrigger, readMemoryLock, triggerWords } from "../core/lessons";
-import { fold } from "../core/state";
+import { fold, runQuestions } from "../core/state";
 import type { LessonDraft, LessonState, MemoryLock } from "../core/lessons";
 import { checkMemoryFile, parseMemoryFileName } from "../core/memfile";
 import { MemoryRefused } from "../core/memstore";
@@ -20,6 +20,7 @@ import { tooStrict } from "../agents/pack";
 import type { Config } from "../modules/config";
 import type { EngineDeps } from "../pipeline/engine";
 import { memoryUses } from "../pipeline/loops";
+import { isCaseTypeQuestion, TYPE_GAP } from "../pipeline/memory";
 import type { CaseHub } from "./hub";
 import type { Reading } from "./roles";
 
@@ -199,12 +200,13 @@ function caseMemoryView(d: MemoryRouteDeps, id: string, at: number | null = null
     proposed_type: m.proposed_type === null ? null : { type: m.proposed_type.type, title: titleOf(m.proposed_type.type) ?? m.proposed_type.type, why: d.shown(m.proposed_type.why) },
     reads: { shared: uses.some((u) => u.store === "shared"), notes: uses.some((u) => u.store === "case") },
     bound, proposed,
+    gap: m.type === null && runQuestions(st).some((q) => isCaseTypeQuestion(q) && q.answer === null && q.waived !== null) ? TYPE_GAP : null,
   };
 }
 
 // ---------- the bodies a person sends ----------
 
-const PROPOSAL_FIELDS = ["case_type", "title", "text", "triggers", "marking", "supersedes", "case", "item"];
+const PROPOSAL_FIELDS = ["case_type", "title", "text", "triggers", "marking", "supersedes", "case"];
 
 /** A proposal's draft and the case it is from, or why the body is not one. */
 function proposalOf(fields: Record<string, unknown>): { draft: LessonDraft; case: string | null } | string {
@@ -216,7 +218,6 @@ function proposalOf(fields: Record<string, unknown>): { draft: LessonDraft; case
   if (supersedes !== null && typeof supersedes !== "string") return "supersedes must be a lesson's id or null";
   const from = fields.case ?? null;
   if (from !== null && typeof from !== "string") return "case must be a case's id";
-  if (fields.item !== undefined && (typeof fields.item !== "string" || from === null)) return "item names a note of the case the lesson is from";
   return {
     draft: {
       case_type: fields.case_type as string, title: fields.title as string, text: fields.text as string,

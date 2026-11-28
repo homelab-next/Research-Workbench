@@ -140,6 +140,7 @@ function proposedProblem(s: StoreState, actor: Actor, p: Payloads["lesson.propos
   if (actor.kind === "agent") return "a lesson is filed by the workbench or a person, never by a model";
   if (p.lesson !== `LESSON-${s.count + 1}`) return "a lesson's id is the next number";
   if (p.supersedes !== null && lessonOf(s, p.supersedes)?.status !== "accepted") return "a lesson supersedes one that is shared";
+  if (p.supersedes !== null && lessonOf(s, p.supersedes)?.case_type !== p.case_type) return "a lesson supersedes one of its own case type";
   if ((p.from.kind === "person" && actor.kind !== "human") || (p.from.kind === "seed" && actor.kind !== "system")) return "a lesson's origin is recorded by who filed it";
   return null;
 }

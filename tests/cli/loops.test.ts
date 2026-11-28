@@ -194,3 +194,12 @@ test("every form says the workbench is held when another process holds it, and e
     await holder.exited;
   }
 });
+
+test("a loop that reads the shared lessons of a case type no root loads is not usable here, as compose finds it", async () => {
+  const text = readFileSync(join(sampleRoot, "loops", "unknown-device.yaml"), "utf8").replace("id: unknown-device", "id: ghost-type").replaceAll("shared/unknown-device", "shared/no-such-type");
+  writeFileSync(join(sampleRoot, "loops", "ghost-type.yaml"), text);
+  expect(await run(a, "list")).toBe(0);
+  expect(out.some((l) => /^ghost-type {2}not usable: \S/.test(l))).toBe(true);
+  expect(await run(a, "show", "ghost-type")).toBe(1);
+  expect(err.join("\n")).toContain('there is no case type "no-such-type"');
+});

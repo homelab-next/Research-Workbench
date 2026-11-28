@@ -4,7 +4,9 @@
 import { afterEach, expect, test } from "bun:test";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { shared } from "../../src/core/lessons";
+import { canonical } from "../../src/core/canonical";
+import type { Json } from "../../src/core/canonical";
+import { readMemoryLock, shared } from "../../src/core/lessons";
 import type { LessonDraft } from "../../src/core/lessons";
 import type { Actor } from "../../src/core/types";
 import type { CaseMemoryView, MemoryView } from "../../src/core/wire";
@@ -173,7 +175,7 @@ test("a case of the investigation loop reads no memory: reads is { shared: false
   const id = await s.newCase();
   await s.toPlanGate(id);
   expect(await getJson<CaseMemoryView>(s, `/api/cases/${id}/memory`)).toEqual({
-    type: null, type_title: null, proposed_type: null, reads: { shared: false, notes: false }, bound: null, proposed: [],
+    type: null, type_title: null, proposed_type: null, reads: { shared: false, notes: false }, bound: null, proposed: [], gap: null,
   });
   expect((await s.get("/api/cases/CASE-99/memory")).status).toBe(404);
 });
@@ -210,7 +212,7 @@ test("a proposal from a case names the case and its product, and a marking below
   expect(low.status).toBe(409);
   expect(await low.json()).toEqual({ ok: false, refused: [`a lesson from ${id} is marked at least TLP:GREEN`] });
   expect(s.wb.memory.head().seq).toBe(0);
-  const res = await proposeRoute(s, { case: id, item: "m1" });
+  const res = await proposeRoute(s, { case: id });
   expect(res.status).toBe(200);
   const lesson = s.wb.memory.state.lessons["LESSON-1"]!;
   expect(lesson.from).toEqual({
@@ -419,4 +421,54 @@ test("a reject or retire reason holding a credential's value is stored redacted:
   const { file } = (await res.json()) as { file: string };
   const unpacked = new TextDecoder("latin1").decode(Bun.gunzipSync(readFileSync(join(s.config.memory.files, file))));
   expect(unpacked).not.toContain(value);
+});
+
+// ---------- final review Minors 1 and 7 ----------
+
+test("Frame's pause names what a resume without the type waives, and after such a resume the case's view says it: no case type confirmed; no shared lessons loaded", async () => {
+  const s = await open();
+  const { id } = await heldOnType(s);
+  expect(s.app.hub.read(id).state.run.pause_reason).toContain("no case type confirmed; no shared lessons loaded");
+  expect((await getJson<CaseMemoryView>(s, `/api/cases/${id}/memory`)).gap).toBeNull();
+  expect((await s.command(id, "resume")).status).toBe(200);
+  await s.app.hub.idle();
+  const view = await getJson<CaseMemoryView>(s, `/api/cases/${id}/memory`);
+  expect(view.type).toBeNull();
+  expect(view.gap).toBe("no case type confirmed; no shared lessons loaded");
+});
+
+test("a proposal's body may not name a note: item is not a field of it", async () => {
+  const s = await open();
+  expect(await (await proposeRoute(s, { item: "m1" })).json()).toEqual({ ok: false, refused: ["the body has a field it should not have: item"] });
+  expect(s.wb.memory.head().seq).toBe(0);
+});
+
+// ---------- final review Minor 6: the case view never shows a lesson stricter than the case ----------
+
+test("a lock that holds a lesson stricter than the case (a ledger written by other code) does not show it, and a stricter proposal from the case is named by its marking only", async () => {
+  const s = await open();
+  shareDirect(s, { triggers: [{ observable: "address" }] });
+  const { id, question } = await heldOnType(s);
+  expect((await s.command(id, "answer_question", { question, answer: "yes" })).status).toBe(200);
+  await s.app.hub.idle();
+  const session = s.app.hub.read(id);
+  const bound = session.state.memory.bound!;
+  const lock = readMemoryLock(session.blobs.get(bound.lock.blob))!;
+  const red = { ...lock.lessons[0]!, lesson: "LESSON-9", title: "REDTITLE", text: "REDMARKER: watched.", marking: "TLP:RED" as const };
+  const ref = session.blobs.put(canonical({ ...lock, lessons: [...lock.lessons, red] } as unknown as Json));
+  session.commit((st) => [{
+    type: "memory.bound", actor: { kind: "system", id: "engine" }, run: st.run.id,
+    payload: { lock: ref, store: bound.store, case_type: bound.case_type, lessons: [...bound.lessons, { lesson: red.lesson, hash: red.hash }] },
+  }]);
+  expect(session.state.memory.bound!.lock.blob).toBe(ref.blob);
+  const origin = session.entries(0, 1)[0]!.hash;
+  const head = session.head();
+  s.wb.memory.propose({ ...draft(), title: "REDPROPOSAL", marking: "TLP:RED" }, {
+    kind: "case", case: id, origin, run: session.state.run.id, head: { seq: head.seq, hash: head.hash }, product: null, stage: null, model: false,
+  }, person(s));
+  const view = await getJson<CaseMemoryView>(s, `/api/cases/${id}/memory`);
+  expect(view.bound!.lessons.map((l) => l.id)).toEqual([lock.lessons[0]!.lesson]);
+  expect(view.proposed).toEqual([{ id: "LESSON-2", title: "a lesson marked TLP:RED, stricter than this case", status: "proposed" }]);
+  const text = JSON.stringify(view);
+  for (const marker of ["REDTITLE", "REDMARKER", "REDPROPOSAL"]) expect(text).not.toContain(marker);
 });

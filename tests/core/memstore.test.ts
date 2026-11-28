@@ -247,3 +247,27 @@ test("a reason is at most 500 characters: a longer one is refused and writes not
   expect(s.lessons["LESSON-1"]!.status).toBe("proposed");
   expect(s.skipped.map((k) => k.seq)).toEqual([2]);
 });
+
+// ---------- final review Minors 3 and 10 ----------
+
+test("a lesson supersedes only a lesson of its own case type: refused at propose and at accept, and the fold skips one", () => {
+  const store = fresh();
+  store.propose(draft(), PERSON, person);
+  store.accept("LESSON-1", { actor: person, hash: lessonHash(draft()) });
+  const other = draft({ case_type: "phishing", title: "Read the headers", supersedes: "LESSON-1" });
+  expect(refusal(() => store.propose(other, PERSON, person))).toBe("LESSON-2 supersedes LESSON-1, a lesson of another case type");
+  expect(store.entries().length).toBe(2);
+  const [p1, a1] = store.entries();
+  const forged = { ...p1!, seq: 3, payload: { ...(p1!.payload as object), lesson: "LESSON-2", case_type: "phishing", title: "Read the headers", supersedes: "LESSON-1", hash: lessonHash(other) } } as typeof p1;
+  const st = foldLessons([p1!, a1!, forged!]);
+  expect(st.skipped).toEqual([{ seq: 3, type: "lesson.proposed", reason: "a lesson supersedes one of its own case type" }]);
+  expect(st.lessons["LESSON-1"]!.status).toBe("accepted");
+});
+
+test("a proposal holding a secret value as it is escaped inside a JSON string is refused too", () => {
+  const store = fresh();
+  const secret = "tok\"en-synthetic-0123";
+  const escaped = JSON.stringify(secret).slice(1, -1);
+  expect(refusal(() => store.propose(draft({ text: `The key is ${escaped}.` }), PERSON, person, { secrets: [secret] }))).toBe("the lesson holds a secret value");
+  expect(store.entries()).toEqual([]);
+});

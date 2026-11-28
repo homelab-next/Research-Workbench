@@ -48,6 +48,8 @@ test("isCaseManifest accepts a written manifest and refuses a wrong format, a mi
   for (const path of ["../ledger.sqlite", "/ledger.sqlite", "a//b", "a\\b"]) expect(isCaseManifest({ ...manifest(), files: [{ path, sha256: H("e"), bytes: 1 }] })).toBe(false);
   // case.json is not one of its own files, a path is not both a file and a folder, and the list is sorted with no name twice.
   expect(isCaseManifest({ ...manifest(), files: [{ path: "case.json", sha256: H("e"), bytes: 1 }] })).toBe(false);
+  // nor is a ledger journal (final review I3: the rule is packfile.ts's, a memory file's too)
+  for (const path of ["ledger.sqlite-journal", "ledger.sqlite-shm", "ledger.sqlite-wal"]) expect(isCaseManifest({ ...manifest(), files: [{ path, sha256: H("e"), bytes: 1 }] })).toBe(false);
   expect(isCaseManifest({ ...manifest(), files: [{ path: "a", sha256: H("e"), bytes: 1 }, { path: "a/b", sha256: H("e"), bytes: 1 }] })).toBe(false);
   expect(isCaseManifest({ ...manifest(), files: [{ path: "b", sha256: H("e"), bytes: 1 }, { path: "a", sha256: H("e"), bytes: 1 }] })).toBe(false);
   expect(isCaseManifest({ ...manifest(), files: [{ path: "a", sha256: H("e"), bytes: 1 }, { path: "a", sha256: H("e"), bytes: 1 }] })).toBe(false);

@@ -225,7 +225,7 @@ export function memoryView(shell: Shell): Screen {
     const body = {
       case_type: draft.case_type, title: draft.title, text: draft.text, marking: draft.marking, triggers: draft.triggers.map(triggerOf),
       ...(draft.supersedes === null ? {} : { supersedes: draft.supersedes }),
-      ...(draft.from === null ? {} : { case: draft.from.case, item: draft.from.item }),
+      ...(draft.from === null ? {} : { case: draft.from.case }),
     };
     if (busy.has("propose")) return;
     busy.add("propose"); said.delete("propose"); refused.delete("propose"); paintForm();

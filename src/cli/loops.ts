@@ -13,6 +13,7 @@ import { saveTrustedRoot } from "../modules/config-write";
 import { exportLoop, importLoop, trustProblems } from "../modules/loop-import";
 import { loadRegistry } from "../modules/registry-record";
 import type { Registry } from "../modules/registry";
+import { loadCaseTypes } from "../modules/case-types";
 import { Secrets } from "../modules/secrets";
 import { loadLoops } from "../pipeline/loops";
 import type { LoopCatalog, ResolvedLoop } from "../pipeline/loops";
@@ -103,7 +104,7 @@ function catalogOf(config: Config, wb: Workbench): { registry: Registry; loops: 
   const registry = loadRegistry(roots, { chain: wb.chain, content: wb.chainBlobs });
   const ctx: ResolveContext = {
     registry, content: wb.chainBlobs, chain: wb.chain, trusted: roots.filter((r) => r.trusted).map((r) => r.path),
-    output: (loop, output) => latestOutput(wb.chain, wb.chainBlobs, loop, output),
+    output: (loop, output) => latestOutput(wb.chain, wb.chainBlobs, loop, output), caseTypes: loadCaseTypes(registry).types.map((t) => t.id),
   };
   const loops = loadLoops(registry, ctx, { max_depth: config.loops.max_depth, max_children: config.loops.max_children });
   recordLoops(loops, wb.chain, wb.chainBlobs);

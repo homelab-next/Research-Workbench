@@ -124,7 +124,8 @@ export function makeMemory(ui: Ui, open: Open): View {
           on: { click: () => { const v = typeChoice ?? m.type ?? ""; send("set-type", "set_case_type", { type: v === "" ? null : v }, () => { typeChoice = null; }); } },
         }, "Set"),
         refusalLine(h, refused.get("set-type"), `memory:${store.id}:set-type`)),
-      view !== null && view.reads.shared && m.type === null ? h("p", { class: "no-shared muted" }, "This case has no type, so no shared lesson is offered to it.") : null));
+      view !== null && view.reads.shared && m.type === null ? h("p", { class: "no-shared muted" }, "This case has no type, so no shared lesson is offered to it.") : null,
+      view === null || view.gap === null ? null : h("p", { class: "type-gap" }, `The run went on without the case's type: ${view.gap}.`)));
   };
 
   // ---------- the notebook ----------
@@ -273,7 +274,7 @@ export function makeMemory(ui: Ui, open: Open): View {
   /** Draws what changed; focus (and a field's caret) stays where it was. */
   function paint(): void {
     const m = store.shown.memory;
-    const type = changed("type", [m, store.at, view?.reads.shared ?? null, local]);
+    const type = changed("type", [m, store.at, view?.reads.shared ?? null, view?.gap ?? null, local]);
     const notes = changed("notes", [m, store.at, view?.reads.notes ?? null, local]);
     const lessons = changed("lessons", [store.shown.memory.bound, store.at, view, viewAt, failed, local]);
     if (!type && !notes && !lessons) return;

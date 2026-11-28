@@ -26,7 +26,7 @@ import { acceptPlan, denyPlan, requestReplan, spendPlanBudget } from "./plans";
 import { answerChallenge, reviseDraft } from "./revise";
 import { gateSendBack, overrule, overruleSendBack } from "./overrule";
 import { preparedAnswer, waitingReason } from "./questions";
-import { bindEntry, isCaseTypeQuestion, typeOfAnswer } from "./memory";
+import { bindEntry, isCaseTypeQuestion, TYPE_GAP, typeOfAnswer } from "./memory";
 import { assembleRunner } from "./stages/assemble";
 import { challengeRunner } from "./stages/challenge";
 import { checksRunner } from "./stages/checks";
@@ -115,6 +115,9 @@ const firstProblem = (loops: LoopCatalog, id: string): string => loops.problems(
 /** The most of a reason a stage.finished or run.paused keeps: a stage's reason can be a model's text, and an entry has a size limit. */
 export const REASON_CHARS = 4000;
 const clipReason = (reason: string): string => (reason.length > REASON_CHARS ? `${reason.slice(0, REASON_CHARS - 1)}…` : reason);
+
+/** The detail of the answer card a person's set_case_type writes: the sentence is the workbench's, the type the person's. */
+export const WORDED = "the workbench worded this answer from the case type the person set";
 
 export class Engine {
   private inflight: Promise<RunSummary> | null = null;
@@ -270,7 +273,7 @@ export class Engine {
     this.mayType(actor, type);
     const open = this.openTypeQuestion();
     const statement = type === null ? "This case has no case type." : `This is a ${this.deps.case_types?.find((t) => t.id === type)?.title ?? type} case (case type ${type}).`;
-    const answer = open === null ? null : preparedAnswer(this.session, this.deps.runner, { actor, question: open, answer: statement, basis: "unstated", detail: "", about: null, marking: null });
+    const answer = open === null ? null : preparedAnswer(this.session, this.deps.runner, { actor, question: open, answer: statement, basis: "unstated", detail: WORDED, about: null, marking: null });
     this.bind();
     this.session.commit((s, ids) => {
       if (s.memory.type === type) throw new RunRefused("that is already this case's type");
@@ -631,7 +634,9 @@ export class Engine {
           // a pass with a blocking question of this stage unanswered stands, and the run waits for the answer before the next stage (controller
           // ruling 4): an answer or a person's resume takes it on, and a resume without the answer waives the question; the stage does not run again
           const waiting = end.outcome === "pass" ? waitingOn(s, stageId) : [];
-          if (waiting.length > 0) out.push(this.paused(ENGINE, waitingReason(waiting), { kind: "question", stage: stageId }));
+          // a resume that waives the question of the case's type goes on with no lessons: the pause says so
+          const gap = waiting.some(isCaseTypeQuestion) ? ` A resume without the case's type goes on with ${TYPE_GAP}.` : "";
+          if (waiting.length > 0) out.push(this.paused(ENGINE, `${waitingReason(waiting)}${gap}`, { kind: "question", stage: stageId }));
           return out;
         });
         return written.length > 0 && written.at(-1)!.type !== "run.paused";

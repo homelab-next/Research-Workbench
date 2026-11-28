@@ -3,12 +3,11 @@
 // fold (lessons.ts) skips those entries from anyone else. Every refusal writes nothing.
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { MIN_SECRET_LENGTH } from "pivot/secrets";
 import { BlobStore } from "./blobs";
 import { Ledger } from "./ledger";
 import { applyLesson, draftProblem, initialStore, isLessonOrigin, lessonHash, REASON_MAX } from "./lessons";
 import type { LessonDraft, LessonState, StoreState } from "./lessons";
-import { redactSecrets } from "./redact";
+import { holdsSecret, redactSecrets } from "./redact";
 import { Refused } from "./refused";
 import { MARKINGS, isMarking } from "./types";
 import type { Actor, Entry, EntryInput, LessonOrigin, Marking, Trigger } from "./types";
@@ -92,9 +91,7 @@ export class MemoryStore {
     if ((from.kind === "person" && actor.kind !== "human") || (from.kind === "seed" && actor.kind !== "system")) {
       throw new MemoryRefused("a lesson's origin is recorded by who filed it");
     }
-    const secrets = (opts.secrets ?? []).filter((v) => v.length >= MIN_SECRET_LENGTH);
-    const texts = [draft.title, draft.text, ...draft.triggers.map(triggerValue)];
-    if (secrets.some((v) => texts.some((t) => t.includes(v)))) throw new MemoryRefused("the lesson holds a secret value");
+    if (holdsSecret([draft.title, draft.text, ...draft.triggers.map(triggerValue)], opts.secrets ?? [])) throw new MemoryRefused("the lesson holds a secret value");
     if (opts.case_types !== undefined && !opts.case_types.includes(draft.case_type)) throw new MemoryRefused(`there is no case type "${draft.case_type}"`);
     if (opts.observables !== undefined) {
       for (const t of draft.triggers) {
@@ -110,7 +107,7 @@ export class MemoryStore {
       if (same !== undefined) throw new MemoryRefused(`that lesson is already ${same.id}`);
     }
     const id = `LESSON-${s.count + 1}`;
-    if (draft.supersedes !== null) this.mustBeShared(s, id, draft.supersedes);
+    if (draft.supersedes !== null) this.mustBeShared(s, id, draft.supersedes, draft.case_type);
     const entry = this.write({
       type: "lesson.proposed", actor,
       payload: {
@@ -131,7 +128,7 @@ export class MemoryStore {
     const marking = by.marking ?? l.proposed_marking;
     if (!isMarking(marking)) throw new MemoryRefused("unknown marking");
     if (rank(marking) < rank(l.proposed_marking)) throw new MemoryRefused("a lesson's marking is raised, never lowered");
-    if (l.supersedes !== null) this.mustBeShared(s, l.id, l.supersedes);
+    if (l.supersedes !== null) this.mustBeShared(s, l.id, l.supersedes, l.case_type);
     const entry = this.write({ type: "lesson.accepted", actor: by.actor, payload: { lesson: l.id, hash: l.hash, marking } });
     return this.lessonAfter(entry, l.id);
   }
@@ -181,9 +178,10 @@ export class MemoryStore {
     return s.lessons[id]!;
   }
 
-  private mustBeShared(s: StoreState, id: string, other: string): void {
+  private mustBeShared(s: StoreState, id: string, other: string, caseType: string): void {
     if (!Object.hasOwn(s.lessons, other)) throw new MemoryRefused(`there is no lesson ${other}`);
     if (s.lessons[other]!.status !== "accepted") throw new MemoryRefused(`${id} supersedes ${other}, which is not shared`);
+    if (s.lessons[other]!.case_type !== caseType) throw new MemoryRefused(`${id} supersedes ${other}, a lesson of another case type`);
   }
 
   private write(input: EntryInput): Entry {

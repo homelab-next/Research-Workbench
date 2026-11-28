@@ -96,6 +96,8 @@ export interface CaseMemoryView {
   bound: null | { seq: number; store_head: number; lessons: { id: string; title: string; text: string; marking: Marking; matched: string[]; stages: string[]; from: string; still_shared: boolean }[]; left_out: { marking: number; trigger: number; cap: number } };
   /** Lessons proposed from this case. */
   proposed: { id: string; title: string; status: LessonView["status"] }[];
+  /** TYPE_GAP when the person resumed the run without answering the question of the case's type and the case still has none; else null. */
+  gap: string | null;
 }
 
 export interface SourceView { id: string; title: string; connector: string; marking: Marking; where: Where; confirmed: boolean; adhoc: boolean; cost: { weight: number; unit: string }; quality: string }

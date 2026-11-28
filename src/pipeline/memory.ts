@@ -149,6 +149,9 @@ export const CASE_TYPE_WHY = "The stages after Frame are given the shared lesson
 /** How many case type ids the question lists before it says how many more there are. */
 const LISTED = 12;
 
+/** What a run goes on without when the person resumes it without answering the question of the case's type. */
+export const TYPE_GAP = "no case type confirmed; no shared lessons loaded";
+
 /** True for the question of the case's type. */
 export const isCaseTypeQuestion = (q: { why: string }): boolean => q.why === CASE_TYPE_WHY;
 
@@ -183,7 +186,15 @@ export function storeHost(get: () => MemoryStore, opts: { secrets?: () => readon
       return { state: store.state, origin: store.origin(), head: store.head() };
     },
     propose: (draft, from) => {
-      const r = get().propose(draft, from, { kind: "system", id: "feedback" }, {
+      // a store that cannot be reached now (an export packing it, a load replacing it) is a fault the run pauses on, not a refusal of the lesson
+      let store: MemoryStore;
+      try {
+        store = get();
+      } catch (err) {
+        throw new Error(`the memory store could not be reached to file a lesson: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+      }
+      if (!store.open) throw new Error("the memory store could not be reached to file a lesson: it is closed");
+      const r = store.propose(draft, from, { kind: "system", id: "feedback" }, {
         ...(opts.secrets === undefined ? {} : { secrets: opts.secrets() }),
         ...(opts.case_types === undefined ? {} : { case_types: opts.case_types() }),
         ...(opts.observables === undefined ? {} : { observables: opts.observables() }),
