@@ -11,15 +11,19 @@ import { CASE_ID, CaseFileError, caseFileName, MAX_CASE_NUMBER, checkCaseFile, D
 import type { CaseManifest, ManifestHeader } from "./casefile";
 import { ignoreThrow, logToStderr } from "./deliver";
 import { Ledger, ledgerSchemaProblem } from "./ledger";
+import { foldLessons } from "./lessons";
+import { checkMemoryFile, extractMemoryFile, MemoryFileError, memoryFileName, writeMemoryFile } from "./memfile";
+import type { MemoryFileManifest } from "./memfile";
+import { MemoryRefused, MemoryStore } from "./memstore";
 import { Refused } from "./refused";
 import { CaseSession } from "./session";
-import { builderMarking, builderOpen, caseFields, fold, isCard, isCaseCreated, unloadDue } from "./state";
+import { builderMarking, builderOpen, CASE_TYPE_ID, caseFields, fold, isCard, isCaseCreated, unloadDue } from "./state";
 import type { CaseState, RunState } from "./state";
 import { CaseStoreFolder } from "./store";
 import type { StoreListing } from "./store";
 import { isMarking, strictest } from "./types";
 import type { Actor, Card, Entry, EntryInput, Marking, Observable, TimeWindow } from "./types";
-import { formatReport, verifyCase } from "./verify";
+import { formatReport, verifyCase, verifyMemory } from "./verify";
 
 export class CaseNotFoundError extends Error {
   constructor(id: string) {
@@ -67,7 +71,9 @@ export interface CaseSummary { id: string; title: string; marking: Marking; crea
   /** The case whose run made this one (state.loop.parent?.case); null for a case no case started. */
   parent: string | null;
   /** The child a pause of this case's run waits on (a `child` hold); null otherwise. */
-  waiting_on: string | null }
+  waiting_on: string | null;
+  /** The case's type (state.memory.type); null for a case with none. */
+  type: string | null }
 /** What a child case's first commit names of the stage that made it: subloop.child's payload. */
 export interface ChildLink { parent: string; run: string; stage: string; attempt: number; loop: string; input_hash: string; depth: number; floor: Marking }
 export type ErrorHandler = (error: unknown, entry?: Entry) => void;
@@ -82,6 +88,8 @@ export interface WorkbenchOptions {
   store?: string;
   /** The size cap of a case file (cases.max_bytes). */
   max_case_bytes?: number;
+  /** The shared store's folder; join(dataDir, "memory") when not given. */
+  memory?: string;
   /** For tests: called before each step of an unload with the temporary file's path; a throw is that step failing. */
   beforeUnloadStep?: (step: UnloadStep, part: string) => void;
 }
@@ -325,6 +333,11 @@ export class Workbench {
   private readonly unloading = new Map<string, { state: Readonly<CaseState>; created_ts: string }>();
   /** What checkedStore learned of each store file, so a file that has not changed is not read again. */
   private readonly storeChecks: StoreChecks = new Map();
+  /** The shared memory store's folder, and the store once it is opened (on first use). */
+  private readonly memoryDir: string;
+  private memoryStore: MemoryStore | null = null;
+  /** True while an export packs the store, which is then closed: nothing opens it again until the file is written. */
+  private memoryPacking = false;
 
   private constructor(dataDir: string, chain: Ledger, opts: WorkbenchOptions, onError: ErrorHandler, lock: Database, lockKey: string) {
     this.dataDir = dataDir;
@@ -334,6 +347,7 @@ export class Workbench {
     this.now = opts.now;
     this.onError = onError;
     this.maxCaseBytes = opts.max_case_bytes ?? DEFAULT_MAX_CASE_BYTES;
+    this.memoryDir = resolve(opts.memory ?? join(dataDir, "memory"));
     this.beforeUnloadStep = opts.beforeUnloadStep;
     this.lock = lock;
     this.lockKey = lockKey;
@@ -343,6 +357,7 @@ export class Workbench {
   static open(dataDir: string, opts: WorkbenchOptions = {}): Workbench {
     if (typeof dataDir !== "string" || dataDir === "") throw new TypeError("dataDir must be a non-empty string");
     if (opts.store !== undefined && (typeof opts.store !== "string" || opts.store === "")) throw new TypeError("store must be a non-empty string");
+    if (opts.memory !== undefined && (typeof opts.memory !== "string" || opts.memory === "")) throw new TypeError("memory must be a non-empty string");
     if (opts.max_case_bytes !== undefined && !(Number.isSafeInteger(opts.max_case_bytes) && opts.max_case_bytes >= 1)) throw new TypeError("max_case_bytes must be a positive integer");
     const onError: ErrorHandler = opts.onError ?? logToStderr("workbench");
     mkdirSync(dataDir, { recursive: true });
@@ -353,6 +368,7 @@ export class Workbench {
       mkdirSync(join(dataDir, "blobs"), { recursive: true });
       sweep(join(dataDir, "cases"), onError);
       if (existsSync(join(dataDir, BUILDERS))) sweep(join(dataDir, BUILDERS), onError);
+      repairMemory(resolve(opts.memory ?? join(dataDir, "memory")), onError);
       const chain = Ledger.open(join(dataDir, "workbench.sqlite"), "workbench", { ...(opts.now ? { now: opts.now } : {}), onError });
       return new Workbench(dataDir, chain, opts, onError, lock, held);
     } catch (err) {
@@ -370,9 +386,11 @@ export class Workbench {
    * configuration's default loop, recorded as case.created's `loop` (still one entry); with neither, none is recorded and the case is read as
    * the default loop's when its run starts. `link` and `cards`: a child case, with subloop.child and one card.created per card its inputs name, both by the engine. Throws
    * TypeError, having written nothing, for what the fold would not read: a link without a loop, a malformed link or card, cards without a link,
-   * a child less strictly marked than its link's floor or than a card it is given, a child whose loop is not its link's.
+   * a child less strictly marked than its link's floor or than a card it is given, a child whose loop is not its link's. `type`: the case's type,
+   * recorded as case.type_set in the commit of case.created (after subloop.child, before the cards): by `actor` for a case a person makes, by the
+   * engine for a child; a type that is not a case type's id, or an agent as the actor, is a TypeError.
    */
-  createCase(input: NewCase, actor: Actor, opts: { loop?: string; default_loop?: string; link?: ChildLink; cards?: Card[] } = {}): CaseSession {
+  createCase(input: NewCase, actor: Actor, opts: { loop?: string; default_loop?: string; link?: ChildLink; cards?: Card[]; type?: string } = {}): CaseSession {
     this.open();
     if (!isMarking(input?.marking)) throw new TypeError(`unknown marking ${JSON.stringify(input?.marking)}`);
     const { loop, link } = opts;
@@ -380,6 +398,9 @@ export class Workbench {
     if (loop !== undefined && !(typeof loop === "string" && loop !== "")) throw new TypeError("a case's loop is a non-empty string");
     if (loop !== undefined && actor?.kind === "agent") throw new TypeError("a case's loop is chosen by a person or the workbench");
     if (!Array.isArray(cards)) throw new TypeError("cards must be a list");
+    const { type } = opts;
+    if (type !== undefined && !(typeof type === "string" && CASE_TYPE_ID.test(type))) throw new TypeError("a case's type is a case type's id");
+    if (type !== undefined && actor?.kind === "agent") throw new TypeError("a case's type is set by a person or the workbench");
     if (link !== undefined) {
       if (loop === undefined) throw new TypeError("a child case names the loop it is for");
       if (!isChildLink(link)) throw new TypeError("a child's link names its parent, run, stage, attempt (1 or more), loop, input hash, depth and floor marking");
@@ -419,8 +440,9 @@ export class Workbench {
         if (link !== undefined) {
           const { parent, run, stage, attempt, input_hash, depth, floor } = link;
           entries.push({ type: "subloop.child", payload: { parent, run, stage, attempt, loop: link.loop, input_hash, depth, floor }, actor: ENGINE });
-          for (const c of cards) entries.push({ type: "card.created", payload: { card: { ...c, id: ids.next("card") } }, actor: ENGINE });
         }
+        if (type !== undefined) entries.push({ type: "case.type_set", payload: { type }, actor: link === undefined ? actor : ENGINE });
+        for (const c of cards) entries.push({ type: "card.created", payload: { card: { ...c, id: ids.next("card") } }, actor: ENGINE });
         return entries;
       });
     } catch (err) {
@@ -468,6 +490,7 @@ export class Workbench {
           loop: s.loop.id,
           parent: s.loop.parent?.case ?? null,
           waiting_on: waitingOn(s),
+          type: s.memory.type,
         });
       } catch (err) {
         this.reportError(new Error(`case ${id} could not be loaded: ${err instanceof Error ? err.message : String(err)}`, { cause: err }));
@@ -675,6 +698,8 @@ export class Workbench {
       delete this.builders[id];
       attempt(() => s.close());
     }
+    attempt(() => this.memoryStore?.close());
+    this.memoryStore = null;
     attempt(() => this.chain.close());
     attempt(() => {
       try {
@@ -688,6 +713,17 @@ export class Workbench {
 
   private open(): void {
     if (this.closed) throw new WorkbenchClosedError();
+  }
+
+  /**
+   * The shared store, opened on first use and closed with the workbench. After loadMemory it is the loaded one: do not keep it (an export closes
+   * it while it packs it, and opens it again as a new object). While an export packs it, it is refused.
+   */
+  get memory(): MemoryStore {
+    this.open();
+    if (this.memoryPacking) throw new MemoryRefused("the memory store is being exported; try again when that is done");
+    this.memoryStore ??= MemoryStore.open(this.memoryDir, { ...(this.now ? { now: this.now } : {}), onError: this.onError });
+    return this.memoryStore;
   }
 
   /** The state of a case: from its open session if there is one, else read from its ledger, which is closed again. */
@@ -794,6 +830,170 @@ export class Workbench {
       throw err;
     }
     syncDir(dir);
+  }
+
+  /**
+   * Packs the store into `toDir` and records memory.exported on the chain. Throws MemoryRefused for an empty store or an actor that is not a
+   * person. The store is closed while it is packed, then opened again: it is left in place, unchanged. The order: write
+   * `<toDir>/.tmp-memory-<pid>-<uuid>.part`; read it back with checkMemoryFile and compare; rename it to its name (an existing file of that name
+   * with the same bytes is kept); open the store again; append memory.exported.
+   */
+  async exportMemory(toDir: string, by: { actor: Actor }): Promise<{ file: string; path: string; manifest: MemoryFileManifest }> {
+    this.open();
+    if (typeof toDir !== "string" || toDir === "") throw new MemoryRefused("a memory file is written to a folder");
+    if (by?.actor?.kind !== "human") throw new MemoryRefused("only a person exports the memory store");
+    if (within(realOf(toDir), realOf(this.memoryDir))) throw new MemoryRefused("a memory file may not be written inside the memory store's folder; choose a folder outside it");
+    const store = this.memory;
+    const head = store.head();
+    const origin = store.origin();
+    if (head.seq === 0 || origin === null) throw new MemoryRefused("the memory store is empty; there is nothing to export");
+    const state = store.state;
+    const lessons = { proposed: 0, accepted: 0, rejected: 0, retired: 0, superseded: 0 };
+    for (const id of state.order) lessons[state.lessons[id]!.status] += 1;
+    const marking = strictest(...state.order.map((id) => state.lessons[id]!.marking));
+    const exported_ts = this.now?.() ?? new Date().toISOString();
+    const file = memoryFileName(marking, head.hash);
+    const dest = join(toDir, file);
+    const part = join(toDir, `.tmp-memory-${process.pid}-${randomUUID()}.part`);
+    let manifest: MemoryFileManifest;
+    // closed while it is packed, so no write lands between the listing and the archive
+    this.closeMemory();
+    this.memoryPacking = true;
+    try {
+      mkdirSync(toDir, { recursive: true });
+      manifest = await writeMemoryFile(this.memoryDir, part, { origin, head, entries: head.seq, lessons, marking, exported_ts });
+      const back = await checkMemoryFile(part);
+      if (canonical(back as unknown as Json) !== canonical(manifest as unknown as Json)) throw new MemoryFileError("the memory file did not read back as written");
+      if (existsSync(dest) && sameBytes(dest, part)) rmSync(part, { force: true });
+      else renameSync(part, dest);
+      syncDir(toDir);
+    } catch (err) {
+      rmSync(part, { force: true });
+      throw err;
+    } finally {
+      this.memoryPacking = false;
+      if (!this.closed) void this.memory;
+    }
+    this.open();
+    this.chain.append({ type: "memory.exported", payload: { file, origin, head, lessons: state.order.length }, actor: by.actor });
+    return { file, path: dest, manifest };
+  }
+
+  /**
+   * Replaces the store with the file's, when the store here is empty or the file is this store further on; records memory.loaded. Throws
+   * MemoryFileError or MemoryRefused, and then the store is what it was. Stores are not merged: a file of another store, of this store behind or
+   * beside it, or at its head is refused.
+   */
+  async loadMemory(file: string, by: { actor: Actor }): Promise<{ origin: string; head: { seq: number; hash: string }; lessons: number }> {
+    this.open();
+    if (typeof file !== "string" || file === "") throw new TypeError("file must be a non-empty string");
+    if (by?.actor?.kind !== "human") throw new MemoryRefused("only a person loads a memory store");
+    // 1. the whole archive against its memory.json; nothing is written
+    const m = await checkMemoryFile(file);
+    this.open();
+    const parent = dirname(this.memoryDir);
+    mkdirSync(parent, { recursive: true });
+    const tmp = join(parent, `.memory-loading-${randomUUID()}`);
+    let before: { seq: number; hash: string };
+    let lessons: number;
+    try {
+      // 2. extracted beside the store; the second pass must read the file the first one checked
+      const second = await extractMemoryFile(file, tmp);
+      if (canonical(second as unknown as Json) !== canonical(m as unknown as Json)) throw new MemoryFileError("the file changed while it was loaded");
+      mkdirSync(join(tmp, "blobs"), { recursive: true });
+      // 3. the ledger is exactly what Ledger.open makes, it verifies, and it holds what memory.json says
+      const ledgerPath = join(tmp, "ledger.sqlite");
+      const schema = readOnly(ledgerPath, ledgerSchemaProblem);
+      if (schema !== null) throw new MemoryFileError(`the memory store's ledger is not one this workbench writes: ${schema}`);
+      let report: ReturnType<typeof verifyMemory>;
+      try {
+        report = verifyMemory(tmp);
+      } catch (err) {
+        throw new MemoryFileError(`the memory store in the file does not verify: ${firstLine(err)}`);
+      }
+      if (!report.ok) {
+        const why = report.case !== "memory" ? `its ledger is ${report.case}, not a memory store`
+          : !report.lessons.ok && report.firstBad === null && report.blobs.bad.length === 0
+            ? report.lessons.bad.length > 0 ? `${report.lessons.bad[0]!.lesson}: ${report.lessons.bad[0]!.reason}` : `${report.lessons.skipped} entries its fold does not read`
+            : formatReport(report).split("\n")[0]!;
+        throw new MemoryFileError(`the memory store in the file does not verify: ${why}`);
+      }
+      if (report.head !== m.head.hash || report.entries !== m.entries) throw new MemoryFileError("the memory store in the file does not verify: its head is not the one memory.json names");
+      if (hashAt(ledgerPath, 1) !== m.origin) throw new MemoryFileError("the memory store in the file does not verify: its first entry is not the one memory.json names");
+      const folded = foldLessons(this.ledgerEntries(ledgerPath));
+      const counts = { proposed: 0, accepted: 0, rejected: 0, retired: 0, superseded: 0 };
+      for (const id of folded.order) counts[folded.lessons[id]!.status] += 1;
+      const marking = strictest(...folded.order.map((id) => folded.lessons[id]!.marking));
+      if (canonical(counts) !== canonical(m.lessons) || marking !== m.marking) throw new MemoryFileError("memory.json does not say what its ledger holds; this file cannot be loaded");
+      lessons = folded.order.length;
+      // 4. only an empty store, or this store further on
+      this.open();
+      const here = this.memory;
+      before = here.head();
+      if (before.seq > 0) {
+        if (here.origin() !== m.origin) throw new MemoryRefused("this file is another workbench's memory store, and stores are not merged; to use it, start from an empty store");
+        if (before.seq === m.head.seq && before.hash === m.head.hash) throw new MemoryRefused("this memory store is already at the file's head");
+        if (m.head.seq <= before.seq || hashAt(ledgerPath, before.seq) !== before.hash) {
+          throw new MemoryRefused("this workbench's memory store has entries the file does not hold; stores are not merged");
+        }
+      }
+      // 5. the swap: the store renamed away, the extracted folder renamed into place
+      this.closeMemory();
+      const replaced = join(parent, `.memory-replaced-${randomUUID()}`);
+      const had = existsSync(this.memoryDir);
+      if (had) renameSync(this.memoryDir, replaced);
+      try {
+        renameSync(tmp, this.memoryDir);
+      } catch (err) {
+        if (had) renameSync(replaced, this.memoryDir);
+        throw err;
+      }
+      syncDir(parent);
+      try {
+        this.open();
+        void this.memory;
+        this.chain.append({ type: "memory.loaded", payload: { file: basename(file), origin: m.origin, head: { seq: m.head.seq, hash: m.head.hash }, before }, actor: by.actor });
+      } catch (err) {
+        // the load is not recorded, so it is undone: the store that was here is put back
+        this.closeMemory();
+        try {
+          renameSync(this.memoryDir, tmp);
+          if (had) renameSync(replaced, this.memoryDir);
+          syncDir(parent);
+        } catch (undo) {
+          this.reportError(new Error(`the memory load could not be recorded, nor undone; ${replaced} holds the store that was here: ${firstLine(undo)}`, { cause: undo }));
+        }
+        throw err;
+      }
+      try {
+        if (had) rmSync(replaced, { recursive: true, force: true });
+      } catch (err) {
+        this.reportError(new Error(`the memory store was loaded, but ${replaced} could not be removed (it goes when the workbench next opens): ${firstLine(err)}`, { cause: err }));
+      }
+    } catch (err) {
+      rmSync(tmp, { recursive: true, force: true });
+      // the store as it was, open again when it was closed for the swap
+      if (!this.closed) void this.memory;
+      throw err;
+    }
+    return { origin: m.origin, head: { seq: m.head.seq, hash: m.head.hash }, lessons };
+  }
+
+  /** Every entry of a ledger file, read through Ledger and closed again. */
+  private ledgerEntries(path: string): Entry[] {
+    const ledger = Ledger.open(path, "memory", { onError: this.onError });
+    try {
+      return ledger.read();
+    } finally {
+      ledger.close();
+    }
+  }
+
+  /** Closes the shared store, if it is open; the next use of `memory` opens it again. */
+  private closeMemory(): void {
+    const s = this.memoryStore;
+    this.memoryStore = null;
+    s?.close();
   }
 
   /** The hash of entry 1 of the loaded case `id`, read without opening a session or writing anything; null when no case has that id here. */
@@ -1065,6 +1265,60 @@ function sweep(cases: string, onError: ErrorHandler): void {
       if (!name.startsWith(`${MARK_FILE}.`)) ignoreThrow(() => onError(new Error(`removed ${name} from ${cases}: a load or an unload stopped before it finished`)));
     } catch (err) {
       ignoreThrow(() => onError(new Error(`${name} in ${cases} could not be removed: ${firstLine(err)}`, { cause: err })));
+    }
+  }
+}
+
+/** True when the two files hold the same bytes. */
+function sameBytes(a: string, b: string): boolean {
+  try {
+    return Buffer.compare(readFileSync(a), readFileSync(b)) === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Repairs a load of the memory store that stopped part way. No store folder and one `.memory-replaced-*` folder beside it: the load stopped
+ * between its two renames, and that folder is renamed back. A `.memory-replaced-*` folder beside a store folder is what a load that finished left
+ * behind, and is removed; so is every `.memory-loading-*`. Each is reported through `onError`.
+ */
+function repairMemory(memoryDir: string, onError: ErrorHandler): void {
+  const parent = dirname(memoryDir);
+  let names: string[];
+  try {
+    names = readdirSync(parent).sort();
+  } catch {
+    return;
+  }
+  const say = (message: string, cause?: unknown): void => ignoreThrow(() => onError(new Error(message, cause === undefined ? undefined : { cause })));
+  const replaced = names.filter((n) => n.startsWith(".memory-replaced-"));
+  if (!existsSync(memoryDir) && replaced.length === 1) {
+    try {
+      renameSync(join(parent, replaced[0]!), memoryDir);
+      syncDir(parent);
+      say(`the memory store was put back from ${replaced[0]}: a load stopped before it finished`);
+    } catch (err) {
+      say(`${replaced[0]} in ${parent} could not be put back as the memory store: ${firstLine(err)}`, err);
+    }
+  } else if (existsSync(memoryDir)) {
+    for (const n of replaced) {
+      try {
+        rmSync(join(parent, n), { recursive: true, force: true });
+        say(`removed ${n} from ${parent}: the store a finished load replaced`);
+      } catch (err) {
+        say(`${n} in ${parent} could not be removed: ${firstLine(err)}`, err);
+      }
+    }
+  } else if (replaced.length > 1) {
+    say(`there is no memory store in ${parent}, and ${replaced.length} stores a load set aside; none is put back: choose one and rename it to ${basename(memoryDir)}`);
+  }
+  for (const n of names.filter((x) => x.startsWith(".memory-loading-"))) {
+    try {
+      rmSync(join(parent, n), { recursive: true, force: true });
+      say(`removed ${n} from ${parent}: a load of the memory store stopped before it finished`);
+    } catch (err) {
+      say(`${n} in ${parent} could not be removed: ${firstLine(err)}`, err);
     }
   }
 }

@@ -8,7 +8,10 @@ import { GENESIS } from "../../src/core/hash";
 import { canonical } from "../../src/core/canonical";
 import { sha256Hex } from "../../src/core/hash";
 import { entryHash, InvalidEntryError, Ledger } from "../../src/core/ledger";
-import { formatReport, linkLines, UnreadableLedgerError, verifyCase, verifyLedger, verifyLinks, verifyPublished } from "../../src/core/verify";
+import { lessonHash } from "../../src/core/lessons";
+import type { LessonDraft, LessonState } from "../../src/core/lessons";
+import { MemoryStore } from "../../src/core/memstore";
+import { formatReport, linkLines, UnreadableLedgerError, verifyCase, verifyLedger, verifyLinks, verifyMemory, verifyMemoryLinks, verifyPublished } from "../../src/core/verify";
 import { Workbench } from "../../src/core/workbench";
 import type { CaseSession } from "../../src/core/session";
 import type { BlobRef, Product } from "../../src/core/types";
@@ -650,4 +653,94 @@ test("the verify command prints one line per link after the case's own report", 
   expect(run(parentDir).exitCode).toBe(0);
   // the plain case of this file has no links, and prints no link line
   expect(run(dir).stdout.toString()).not.toContain("link ");
+});
+
+// ---------- the memory store (slice 13) ----------
+
+const memDraft = (title: string): LessonDraft => ({
+  case_type: "unknown-device", title, text: "A device seen only on AP-3 is usually a guest in the lobby.", triggers: [{ observable: "address" }], marking: "TLP:GREEN", supersedes: null,
+});
+/** A store of two shared lessons and one rejected, written through MemoryStore, closed. */
+function memoryStoreAt(d: string): { lessons: LessonState[]; origin: string; head: { seq: number; hash: string } } {
+  const s = MemoryStore.open(d, { now: () => new Date(Date.UTC(2026, 10, 27, 10, 0, tick++)).toISOString() });
+  const out: LessonState[] = [];
+  for (const title of ["Check the lobby access point first", "Read the connection message before the lease"]) {
+    const l = s.propose(memDraft(title), { kind: "person" }, human).lesson;
+    out.push(s.accept(l.id, { actor: human, hash: l.hash }));
+  }
+  const r = s.propose(memDraft("Not so"), { kind: "person" }, human).lesson;
+  s.reject(r.id, { actor: human, reason: "not so" });
+  const result = { lessons: out, origin: s.origin()!, head: s.head() };
+  s.close();
+  return result;
+}
+/** memory.bound, appended to the case of beforeEach with its lock blob, naming these lessons of a store of that origin. */
+function bindMemory(origin: string, head: { seq: number; hash: string }, lessons: { lesson: string; hash: string }[]): BlobRef {
+  const lock = blobs.put(JSON.stringify({ format: 1, store: { origin, head }, case_type: "unknown-device",
+    facts: { type: "unknown-device", marking: "TLP:GREEN", observables: [], sources: [], findings: [] }, lessons: [], left_out: [] }), "application/json");
+  ledger.append({ type: "memory.bound", payload: { lock, store: { origin, head }, case_type: "unknown-device", lessons }, actor: { kind: "system", id: "engine" } });
+  return lock;
+}
+
+test("verifyMemory is ok for a store written through MemoryStore", () => {
+  const d = join(root, "memory");
+  const { head } = memoryStoreAt(d);
+  const r = verifyMemory(d);
+  expect(r).toMatchObject({ ok: true, case: "memory", entries: head.seq, head: head.hash, firstBad: null, lessons: { ok: true, bad: [], skipped: 0 } });
+  // an empty store verifies too
+  const e = join(root, "empty");
+  MemoryStore.open(e).close();
+  expect(verifyMemory(e)).toMatchObject({ ok: true, entries: 0, lessons: { ok: true, bad: [], skipped: 0 } });
+});
+
+test("a lesson whose text was edited in the ledger file fails the chain; one whose recorded hash is not the hash of what it says is listed as bad", () => {
+  const d = join(root, "memory");
+  memoryStoreAt(d);
+  rawSql(d, "UPDATE entries SET payload = replace(payload, 'lobby', 'attic') WHERE seq = 1");
+  const edited = verifyMemory(d);
+  expect(edited.ok).toBe(false);
+  expect(edited.firstBad).toEqual({ seq: 1, reason: "hash_mismatch" });
+  // a chain that holds, whose proposal records a hash that is not lessonHash of what it says
+  const w = join(root, "wrong");
+  const s = MemoryStore.open(w);
+  s.close();
+  const l = Ledger.open(join(w, "ledger.sqlite"), "memory");
+  const p = memDraft("Check the lobby access point first");
+  l.append({ type: "lesson.proposed", actor: human, payload: { lesson: "LESSON-1", ...p, hash: lessonHash({ ...p, title: "Another title" }), from: { kind: "person" } } });
+  l.append({ type: "lesson.accepted", actor: { kind: "system", id: "engine" }, payload: { lesson: "LESSON-1", hash: "0".repeat(64), marking: "TLP:GREEN" } });
+  l.close();
+  const r = verifyMemory(w);
+  expect(r.firstBad).toBeNull();
+  expect(r.ok).toBe(false);
+  expect(r.lessons).toEqual({ ok: false, bad: [{ lesson: "LESSON-1", reason: "its recorded hash is not the hash of what it says" }], skipped: 1 });
+});
+
+test("verifyMemoryLinks: a locked lesson the store holds with that hash matches; one the store holds with another hash is store_differs and fails; a lock from another store is not_this_store and does not fail", () => {
+  const d = join(root, "memory");
+  const { lessons, origin, head } = memoryStoreAt(d);
+  const at = ledger.head().seq;
+  bindMemory(origin, head, lessons.map((l) => ({ lesson: l.id, hash: l.hash })));
+  bindMemory("e".repeat(64), { seq: 3, hash: "f".repeat(64) }, [{ lesson: "LESSON-1", hash: "1".repeat(64) }]);
+  ledger.close();
+  const r = verifyMemoryLinks(dir, d);
+  expect(r).toEqual({ ok: true, links: [
+    { seq: at + 1, lesson: "LESSON-1", status: "matches" }, { seq: at + 1, lesson: "LESSON-2", status: "matches" },
+    { seq: at + 2, lesson: "LESSON-1", status: "not_this_store" },
+  ] });
+  ledger = Ledger.open(join(dir, "ledger.sqlite"), "CASE-1");
+  bindMemory(origin, head, [{ lesson: "LESSON-1", hash: "2".repeat(64) }, { lesson: "LESSON-9", hash: "3".repeat(64) }]);
+  const bad = verifyMemoryLinks(dir, d);
+  expect(bad.ok).toBe(false);
+  expect(bad.links.slice(3)).toEqual([{ seq: at + 3, lesson: "LESSON-1", status: "store_differs" }, { seq: at + 3, lesson: "LESSON-9", status: "not_in_store" }]);
+  // a store folder that is not there: every lock is another store's
+  expect(verifyMemoryLinks(dir, join(root, "no-store")).links.map((l) => l.status)).toEqual(["not_this_store", "not_this_store", "not_this_store", "not_this_store", "not_this_store"]);
+});
+
+test("verifyCase of a case with a memory.bound checks the lock blob as it checks every typed blob", () => {
+  const lock = bindMemory("e".repeat(64), { seq: 1, hash: "f".repeat(64) }, []);
+  expect(verifyCase(dir)).toMatchObject({ ok: true, blobs: { referenced: 2, bad: [] } });
+  rmSync(join(dir, "blobs", lock.blob));
+  const r = verifyCase(dir);
+  expect(r.ok).toBe(false);
+  expect(r.blobs.bad).toEqual([{ blob: lock.blob, state: "missing", seq: ledger.head().seq }]);
 });

@@ -645,3 +645,45 @@ test("every step of an unload that throws leaves the case loaded", async () => {
   if (r.ok) throw new Error("unloaded");
   expectStillLoaded(r.reason);
 });
+
+// ---------- a case's type (slice 13) ----------
+
+test("createCase with a type records case.type_set by the person in the commit of case.created", () => {
+  const session = wb.createCase(sample, person, { type: "unknown-device" });
+  expect(session.entries().map((e) => e.type)).toEqual(["case.created", "case.type_set"]);
+  expect(session.entries()[1]).toMatchObject({ actor: person, payload: { type: "unknown-device" } });
+  expect(session.state.memory.type).toBe("unknown-device");
+  expect(session.state.memory.type_by).toEqual({ actor: "analyst", seq: 2 });
+  expect(session.state.skipped).toEqual([]);
+});
+
+test("a child case's type is recorded by the engine, after subloop.child, and subloop.child is still read", () => {
+  const engine: Actor = { kind: "system", id: "engine" };
+  wb.createCase(sample, person, { loop: "triage" });
+  const link = { parent: "CASE-1", run: "run-1", stage: "investigate", attempt: 1, loop: "investigation", input_hash: "c".repeat(64), depth: 1, floor: "TLP:GREEN" as const };
+  const child = wb.createCase(sample, engine, { loop: "investigation", link, type: "unknown-device" });
+  expect(child.entries().map((e) => e.type)).toEqual(["case.created", "case.loop_set", "subloop.child", "case.type_set"]);
+  expect(child.entries()[2]!.seq).toBeLessThanOrEqual(3);
+  expect(child.entries()[3]).toMatchObject({ actor: engine, payload: { type: "unknown-device" } });
+  expect(child.state.loop.parent).not.toBeNull();
+  expect(child.state.memory.type).toBe("unknown-device");
+  expect(wb.findChild(link)).toBe(child.id);
+  expect(child.state.skipped).toEqual([]);
+});
+
+test("createCase with a type that is not an id, or by an agent, throws and leaves no folder", () => {
+  const agent: Actor = { kind: "agent", id: "frame", stage: "frame", profile: "p", model: "scripted-m", effort: null, where: "machine" };
+  for (const type of ["Unknown Device", "", "-lead", "a".repeat(65), 7 as unknown as string]) {
+    expect(() => wb.createCase(sample, person, { type })).toThrow(TypeError);
+  }
+  expect(() => wb.createCase(sample, person, { type: "bad id" })).toThrow("a case's type is a case type's id");
+  expect(() => wb.createCase(sample, agent, { type: "unknown-device" })).toThrow(TypeError);
+  expect(ls(cases()).filter((n) => n.startsWith("CASE-"))).toEqual([]);
+  expect(wb.listCases()).toEqual([]);
+});
+
+test("listCases says each case's type, null for a case with none", () => {
+  wb.createCase(sample, person, { type: "unknown-device" });
+  newCase();
+  expect(wb.listCases().map((c) => [c.id, c.type])).toEqual([["CASE-2", null], ["CASE-1", "unknown-device"]]);
+});

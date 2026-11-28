@@ -6,9 +6,13 @@ import { canonical, parseJson } from "./canonical";
 import type { Json } from "./canonical";
 import { GENESIS, sha256Hex } from "./hash";
 import { checkRow } from "./ledger";
+import { foldLessons, lessonHash } from "./lessons";
+import type { LessonDraft } from "./lessons";
+import { MEMORY_CHAIN } from "./memstore";
 import { isObj } from "./state/guards";
 import type { LedgerRow, RowFault } from "./ledger";
 import { BLOB_FIELDS, blobFieldNullable } from "./types";
+import type { Actor, Entry, EntryType } from "./types";
 import type { PublishedReport } from "./wire";
 
 export interface VerifyReport {
@@ -339,6 +343,77 @@ export function linkLines(r: LinkReport): string[] {
     version_differs: "BROKEN: its run bound another version of its loop than this case recorded",
   };
   return r.links.map((l) => `link ${l.key}: ${l.child} ${said[l.status]}`);
+}
+
+// ---------- the memory store (slice 13) ----------
+
+/** Every entry of a ledger file, read-only, as Ledger reads them: a row whose actor or payload is not JSON has them null, so the fold skips it. */
+function entriesOf(ledgerPath: string): Entry[] {
+  const db = new Database(ledgerPath, { readonly: true });
+  try {
+    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    const meta = db.query("SELECT value FROM meta WHERE key = 'case_id'").get() as { value: string } | null;
+    return (db.query("SELECT * FROM entries ORDER BY seq ASC").all() as LedgerRow[]).map((row): Entry => {
+      const actor = parseJson(row.actor);
+      const payload = parseJson(row.payload);
+      return {
+        seq: row.seq, ts: row.ts, case: meta?.value ?? "", actor: (actor?.value ?? null) as unknown as Actor, type: row.type as EntryType,
+        payload: (actor === null || payload === null ? null : payload.value) as unknown as Entry["payload"],
+        cause: row.cause, run: row.run, stage: row.stage, job: row.job, prev_hash: row.prev_hash, hash: row.hash,
+      } as Entry;
+    });
+  } finally {
+    db.close();
+  }
+}
+
+const NOT_ITS_HASH = "its recorded hash is not the hash of what it says";
+
+/** The store's chain and blobs (verifyLedger), and each lesson: its recorded hash is lessonHash of what was proposed, and nothing was skipped by the fold. */
+export function verifyMemory(storeDir: string): VerifyReport & { lessons: { ok: boolean; bad: { lesson: string; reason: string }[]; skipped: number } } {
+  const ledgerPath = join(storeDir, "ledger.sqlite");
+  const report = verifyLedger(ledgerPath, join(storeDir, "blobs"));
+  const entries = entriesOf(ledgerPath);
+  const bad: { lesson: string; reason: string }[] = [];
+  for (const e of entries) {
+    if (e.type !== "lesson.proposed" || !isObj(e.payload)) continue;
+    const p = e.payload as unknown as LessonDraft & { lesson: unknown; hash: unknown };
+    let hash: string | null;
+    try {
+      hash = lessonHash({ case_type: p.case_type, title: p.title, text: p.text, triggers: p.triggers, marking: p.marking, supersedes: p.supersedes });
+    } catch {
+      hash = null;
+    }
+    if (hash !== p.hash) bad.push({ lesson: typeof p.lesson === "string" ? p.lesson : `entry ${e.seq}`, reason: NOT_ITS_HASH });
+  }
+  const skipped = foldLessons(entries).skipped.length;
+  const lessons = { ok: bad.length === 0 && skipped === 0, bad, skipped };
+  return { ...report, ok: report.ok && report.case === MEMORY_CHAIN && lessons.ok, lessons };
+}
+
+export interface MemoryLinkReport { ok: boolean; links: { seq: number; lesson: string; status: "matches" | "store_differs" | "not_this_store" | "not_in_store" }[] }
+
+/** For each memory.bound of the case, each locked lesson against the store here. A lock from another store (another origin) is `not_this_store` and does not fail the report. */
+export function verifyMemoryLinks(caseDir: string, storeDir: string): MemoryLinkReport {
+  const bound = rowsOf(join(caseDir, "ledger.sqlite")).rows.filter((r) => r.type === "memory.bound");
+  const storeLedger = join(storeDir, "ledger.sqlite");
+  // read-only: a store that is not there is made by nothing here, and every lock is then another store's
+  const entries = existsSync(storeLedger) ? entriesOf(storeLedger) : [];
+  const origin = entries[0]?.hash ?? null;
+  const state = foldLessons(entries);
+  const links: MemoryLinkReport["links"] = [];
+  for (const r of bound) {
+    const p = r.payload;
+    if (!isObj(p) || !isObj(p.store) || !Array.isArray(p.lessons)) continue;
+    const ours = origin !== null && p.store.origin === origin;
+    for (const l of p.lessons) {
+      if (!isObj(l) || typeof l.lesson !== "string" || typeof l.hash !== "string") continue;
+      const held = Object.hasOwn(state.lessons, l.lesson) ? state.lessons[l.lesson]! : null;
+      const status = !ours ? "not_this_store" : held === null ? "not_in_store" : held.hash === l.hash ? "matches" : "store_differs";
+      links.push({ seq: r.seq, lesson: l.lesson, status });
+    }
+  }
+  return { ok: links.every((l) => l.status === "matches" || l.status === "not_this_store"), links };
 }
 
 export function hasLedger(caseDir: string): boolean {
