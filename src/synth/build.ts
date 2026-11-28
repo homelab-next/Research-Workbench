@@ -48,17 +48,23 @@ function regularOnly(dir: string, what: string): void {
   }
 }
 
-/** The configuration a command would load with no --config, or null when none loads. */
-export function ambientConfig(): Config | null {
+/**
+ * The configuration a command would load with no --config: the environment's, the home's, or the defaults when neither names one. A
+ * configuration that is named but does not load is refused, naming it: the build could not tell the setup's folder from its folders, and a
+ * check that took any folder then would let a setup be built in the data folder it was to keep away from.
+ */
+export function ambientConfig(opts: { env?: Record<string, string | undefined>; home?: string } = {}): Config {
   try {
-    return loadConfig();
+    return loadConfig(opts);
   } catch (err) {
-    if (err instanceof ConfigError) return null;
+    if (err instanceof ConfigError) {
+      throw new SynthRefused(`the configuration in use does not load (${err.message}); fix it, or name one that loads with RESEARCH_WORKBENCH_CONFIG, so the build can keep the setup apart from its folders`);
+    }
     throw err;
   }
 }
 
-/** Builds a self-contained synthetic setup in `dir`. Throws SynthRefused, leaving nothing behind, when the place or the parameters are refused or the root it made does not load clean. */
+/** Builds a self-contained synthetic setup in `dir`; `ambient` null (a test's) checks no configuration's folders. Throws SynthRefused, leaving nothing behind, when the place or the parameters are refused or the root it made does not load clean. */
 export function buildSetup(dir: string, opts: BuildOptions, ambient: Config | null = ambientConfig()): Built {
   const problem = placeProblem(dir, REPO, ambient);
   if (problem !== null) throw new SynthRefused(problem);

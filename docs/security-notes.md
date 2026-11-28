@@ -76,8 +76,11 @@ being measured. `<synth>` is the setup's folder, `<data>` its data folder, `<lak
 
 - **A setup shares nothing with yours.** `bun run synth build <synth>` refuses a folder that is not empty, a folder inside the repository,
   and a folder that is, holds or sits inside any folder of the configuration the workbench would load with no `--config` (the data folder,
-  a root, the case store, the loop store, the imports folder, a memory folder). It writes only inside `<synth>`, and a refusal part-way
-  leaves nothing behind. The setup's configuration names its own data folder and its one trusted root, both inside `<synth>`. (`tests/synth/setup.test.ts`, `tests/synth/build.test.ts`, `tests/cli/synth.test.ts`.)
+  a root, the case store, the loop store, the imports folder, a memory folder, the staged folder). It fails closed: a configuration that is
+  named (by the environment or the home's file) but does not load refuses the build, naming it, since the folders to keep apart are then
+  unknown. It writes only inside `<synth>`, and a refusal part-way leaves nothing behind. The setup's configuration names its own data folder
+  and its one trusted root, both inside `<synth>`, and the other forms refuse a setup whose configuration puts its data folder, a root, a
+  store, the imports or the staged folder outside `<synth>`. (`tests/synth/setup.test.ts`, `tests/synth/fail-closed.test.ts`, `tests/synth/build.test.ts`, `tests/cli/synth.test.ts`.)
 - **The other forms work only in a setup.** `synth show`, `tasks`, `answer` and `seed-tasks` require `--config` and refuse a configuration
   with no `synth.json` beside it (or one of another format) before a workbench is opened; the environment's and the home's configuration are
   never used for them. So a synthetic case is never made in a data folder that is not a setup's. (`tests/synth/setup.test.ts`, `tests/cli/synth.test.ts`.)
@@ -104,8 +107,11 @@ being measured. `<synth>` is the setup's folder, `<data>` its data folder, `<lak
   is read as any known answer is, by the improve loop's Judge alone. (`tests/server/boundaries.test.ts`, `tests/synth/build.test.ts`, `tests/synth/tasks.test.ts`, `tests/synth/answer.test.ts`, `tests/synth/seed.test.ts`, `tests/synth/seed-script.test.ts`.)
 - **A person's gates stay a person's.** `synth seed-tasks` accepts a plan and approves a product as the person who runs it, through the
   engine calls `investigate accept-plan` and `investigate approve` use, with no budget, so nothing costly runs in a seed. (`tests/synth/seed.test.ts`.)
-- **The commands do not spoil the cases.** `synth build` and `synth show` print storyline ids, counts and the cases each became, never a
-  verdict, a storyline's title or a truth's summary; `synth show --reveal` prints them after a warning line. (`tests/cli/synth.test.ts`.)
+- **Nothing an agent sees, and no ordinary output, names a storyline.** A storyline's id or title says what its case will be found to be,
+  so a synthetic case's why is `synthetic task, seed N` and every pack part and Frame's task holds no id, title or verdict. `synth build`,
+  `show`, `tasks`, `seed-tasks` and `answer` name a storyline by a neutral label (`story-1` to `story-9`, in the order of the SHA-256 of
+  `<seed>:<id>`), never its id, a verdict, its title or a truth's summary; `--only` takes a label and refuses an id as it refuses an unknown
+  label. `synth show --reveal` maps the labels after a warning line; otherwise the id is kept only in `<data>/synth-truth/index.json`. (`tests/synth/blind.test.ts`, `tests/cli/synth.test.ts`.)
 - **What this does not do.** The separation is by folders and by the configuration the command loads. A setup is still files that you own:
   nothing stops you, or a process of yours, from reading `<synth>/truth/` and giving it to a model by hand.
 

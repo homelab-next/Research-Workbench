@@ -24,6 +24,12 @@ lake, which nothing here touches.
 - `<synth>/data/`, `<synth>/config.yaml` (its own data folder, its one trusted root, port 4757) and `<synth>/synth.json`, which says the
   folder is a synthetic setup and which every other form of `bun run synth` looks for.
 
+The build refuses a folder that is not empty, a folder inside `<repo>`, and a folder that is, holds or sits inside any folder of the
+configuration the workbench would load with no `--config` (the data folder, a root, the case store, the loop store, the imports folder, a
+memory folder, the staged folder). It fails closed: when that configuration is named (by `RESEARCH_WORKBENCH_CONFIG` or the home's file)
+but does not load, the build is refused, naming it, rather than built anywhere. Every other form refuses a setup whose configuration puts
+its data folder, a root, a store, the imports or the staged folder outside the setup's own folder.
+
 ## The thirteen sources
 
 One table each, all in the one lake file. Seven are costly, five are free, and one bills a fixed price a lookup.
@@ -65,10 +71,17 @@ benign look-alike, are its answer.
 | `smart-tv` | `unknown-device` |
 | `cloud-key` | `cloud-activity` |
 
-Several are look-alikes of one another on purpose: a case type holds both a harmful story and a harmless one where it can. `bun run synth
-build` and `bun run synth show` print storyline ids, counts and the cases each became, never a verdict or a title. `bun run synth show
---config <synth>/config.yaml --reveal` prints each storyline's verdict and truth summary, after a warning line that this spoils the cases:
-do not show it to whoever works them.
+Several are look-alikes of one another on purpose: a case type holds both a harmful story and a harmless one where it can. An id says
+what its case will be found to be as surely as a verdict does, so nothing an investigating agent sees names one: a case's why is
+`synthetic task, seed N`, and its title, question, starting values, window and objective come from the storyline's public task. Every
+command but `show --reveal` names a storyline by a neutral label, `story-1` to `story-9`, numbered in the order of the SHA-256 of
+`<seed>:<id>`: fixed for a setup, and neither the ids' order nor grouped by verdict. `bun run synth build`, `show`, `tasks`, `seed-tasks`
+and `answer` print labels, case types, counts and the cases each became, never an id, a verdict or a title; why a storyline was left out
+is told by `--reveal` too, since the reason may name a cast role. `tasks` and `seed-tasks` take `--only story-2,story-5`; an id there is
+refused in the sentence an unknown label gets, so no ordinary output confirms which ids a setup holds. (`build --only` takes ids: it
+chooses what is placed, before there are labels.) `bun run synth show --config <synth>/config.yaml --reveal` maps each label to its id,
+verdict, title and truth summary, after a warning line that this spoils the cases: do not show it to whoever works them. The id is kept
+otherwise only in `<data>/synth-truth/index.json`, beside the cases, which no agent reads.
 
 ## The mess
 

@@ -42,7 +42,7 @@ function isSetup(x: unknown): x is SynthSetup {
   return x.model === "scripted" || (isObj(x.model) && typeof x.model.provider === "string" && typeof x.model.model === "string");
 }
 
-/** The setup a configuration belongs to: the synth.json beside its file. Throws SynthRefused "this configuration is not a synthetic setup's (no synth.json beside it); give --config <synth>/config.yaml" for a configuration with no file, or none beside it, or one that is not a setup of this format. */
+/** The setup a configuration belongs to: the synth.json beside its file. Throws SynthRefused "this configuration is not a synthetic setup's (no synth.json beside it); give --config <synth>/config.yaml" for a configuration with no file, or none beside it, or one that is not a setup of this format; and one whose data folder, a root, a store, the imports or the staged folder lies outside the setup's folder. */
 export function setupOf(config: Config): { dir: string; setup: SynthSetup } {
   if (config.path === null) throw new SynthRefused(NOT_A_SETUP);
   const dir = dirname(config.path);
@@ -54,6 +54,11 @@ export function setupOf(config: Config): { dir: string; setup: SynthSetup } {
     throw new SynthRefused(NOT_A_SETUP);
   }
   if (!isSetup(parsed)) throw new SynthRefused(NOT_A_SETUP);
+  // a setup keeps everything in its own folder: a configuration beside a synth.json that reaches outside it could make a synthetic case in a real data folder
+  const home = realish(dir);
+  for (const [what, folder] of foldersOf(config)) {
+    if (!within(realish(folder), home)) throw new SynthRefused(`this synthetic setup's configuration puts ${what} (${folder}) outside the setup's folder ${dir}; a synthetic setup keeps everything in its own`);
+  }
   return { dir, setup: parsed };
 }
 
@@ -76,22 +81,27 @@ const within = (a: string, b: string): boolean => {
   return r === "" || (r !== ".." && !r.startsWith(`..${sep}`) && !isAbsolute(r));
 };
 
-/** Why `dir` may not hold a synthetic setup; null when it may. `ambient` is the configuration the command would load with no --config, or null when none loads. */
+/** Every folder a configuration keeps things in, with what it is: the data folder, each root, each store, the imports and the staged folder. */
+function foldersOf(config: Config): [string, string][] {
+  return [
+    ["the data folder", config.data_dir],
+    ...config.roots.map((r): [string, string] => ["a root", r.path]),
+    ["the case store", config.cases.store],
+    ["the loop store", config.loops.store],
+    ["the imports folder", config.loops.imports],
+    ["a memory folder", config.memory.store],
+    ["a memory folder", config.memory.files],
+    ["the staged folder", config.improve.staged],
+  ];
+}
+
+/** Why `dir` may not hold a synthetic setup; null when it may. `ambient` is the configuration the command would load with no --config; null (a test's) checks none. */
 export function placeProblem(dir: string, repo: string, ambient: Config | null): string | null {
   if (existsSync(dir) && (!statSync(dir).isDirectory() || readdirSync(dir).length > 0)) return `${dir} already exists and is not empty`;
   const at = realish(dir);
   if (within(at, realish(repo))) return `${dir} is inside the repository: build the setup outside it`;
   if (ambient === null) return null;
-  const kept: [string, string][] = [
-    ["the data folder", ambient.data_dir],
-    ...ambient.roots.map((r): [string, string] => ["a root", r.path]),
-    ["the case store", ambient.cases.store],
-    ["the loop store", ambient.loops.store],
-    ["the imports folder", ambient.loops.imports],
-    ["a memory folder", ambient.memory.store],
-    ["a memory folder", ambient.memory.files],
-  ];
-  for (const [what, folder] of kept) {
+  for (const [what, folder] of foldersOf(ambient)) {
     const p = realish(folder);
     if (within(at, p) || within(p, at)) return `${dir} shares a folder with the configuration in use (${what}): a synthetic setup has its own`;
   }

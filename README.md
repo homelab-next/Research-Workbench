@@ -529,8 +529,10 @@ bun run synth build <synth> --base-url http://127.0.0.1:1234/v1 --model example/
 ```
 
 The build refuses a folder that is not empty, a folder inside this repository, and a folder that is, holds or sits inside the data folder, a
-root or a store of the configuration the workbench would load with no `--config`. It prints the tables with their simulated sizes and the
-storylines placed by id and case type, never whether one is malicious. A `--scripted` setup's stages name the scripted model `synth-run`,
+root or a store of the configuration the workbench would load with no `--config`, and it fails closed: when that configuration is named
+but does not load, the build is refused, naming it. It prints the tables with their simulated sizes and the storylines placed by a neutral
+label (`story-1` … `story-9`) and case type, never an id, a title or whether one is malicious: an agent working a case is never told which
+storyline it is. A `--scripted` setup's stages name the scripted model `synth-run`,
 which is not shipped: write `<synth>/root/scripts/synth-run.yaml` before a run. Every other form takes the setup's own configuration and
 refuses one with no `synth.json` beside it, so a synthetic case is never made in your data folder:
 
@@ -548,7 +550,8 @@ Work the case as any other; once it is published, `synth answer` sets its known 
 each storyline, a case of the scripted seed loop `synth-seed`, accepts its plan with no budget, approves its product and sets its known answer:
 a task for the improve loop at once, with nothing costly run. Its product judges nothing (it is not the answer, so Propose is never shown the
 truth). `improve start` then tries changed versions of the investigation loop against those tasks. `bun run synth show --config
-<synth>/config.yaml` prints the setup and the case each storyline became; `--reveal` prints the verdicts, and spoils the cases.
+<synth>/config.yaml` prints the setup and the case each storyline label became; `tasks --only story-2` and `seed-tasks --only` take labels;
+`--reveal` maps each label to its storyline and verdict, and spoils the cases.
 
 **What costs money there.** Nothing is real money: the `fakeathena` connector bills in simulated USD, as a scanning lake does. Seven sources
 are costly (`signins`, `process`, `dns`, `proxy`, `flows`, `email`, `cloud`): 5 USD a terabyte of the simulated bytes a statement reads, only
